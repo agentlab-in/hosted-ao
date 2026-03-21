@@ -13,6 +13,8 @@ interface ProjectSidebarProps {
   sessions: DashboardSession[];
   activeProjectId: string | undefined;
   activeSessionId: string | undefined;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 type ProjectHealth = "red" | "yellow" | "green" | "gray";
@@ -84,6 +86,8 @@ export function ProjectSidebar({
   sessions,
   activeProjectId,
   activeSessionId,
+  collapsed = false,
+  onToggleCollapsed,
 }: ProjectSidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -125,6 +129,50 @@ export function ProjectSidebar({
     const level = getAttentionLevel(s);
     return level === "review" || level === "pending";
   }).length;
+
+  if (collapsed) {
+    return (
+      <aside className="project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3">
+        <div className="flex flex-1 flex-col items-center gap-3">
+          {projects.map((project) => {
+            const health = computeProjectHealth(sessions.filter((s) => s.projectId === project.id));
+            const isActive = activeProjectId === project.id;
+            return (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => router.push(pathname + `?project=${encodeURIComponent(project.id)}`)}
+                className={cn(
+                  "project-sidebar__collapsed-project",
+                  isActive && "project-sidebar__collapsed-project--active",
+                )}
+                title={project.name}
+              >
+                <HealthDot health={health} />
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className="project-sidebar__collapsed-toggle mt-auto"
+          aria-label="Show project sidebar"
+        >
+          <svg
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            viewBox="0 0 24 24"
+            className="h-4 w-4"
+          >
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+            <path d="M9 4.5v15M12 10l3 2-3 2" />
+          </svg>
+        </button>
+      </aside>
+    );
+  }
 
   return (
     <aside className="project-sidebar flex h-full w-[244px] flex-col">
@@ -279,6 +327,21 @@ export function ProjectSidebar({
           );
         })}
       </nav>
+      <div className="border-t border-[var(--color-border-subtle)] p-2">
+        <button type="button" onClick={onToggleCollapsed} className="project-sidebar__collapse-btn">
+          <svg
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            viewBox="0 0 24 24"
+            className="h-3.5 w-3.5"
+          >
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+            <path d="M9 4.5v15M15 10l-3 2 3 2" />
+          </svg>
+          Hide sidebar
+        </button>
+      </div>
     </aside>
   );
 }

@@ -69,6 +69,7 @@ export function Dashboard({
     useState<DashboardOrchestratorLink[]>(orchestratorLinks);
   const [spawningProjectIds, setSpawningProjectIds] = useState<string[]>([]);
   const [spawnErrors, setSpawnErrors] = useState<Record<string, string>>({});
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const showSidebar = projects.length > 1;
   const allProjectsView = showSidebar && projectId === undefined;
 
@@ -262,6 +263,8 @@ export function Dashboard({
           sessions={sessions}
           activeProjectId={projectId}
           activeSessionId={activeSessionId}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
         />
       )}
       <div className="dashboard-main flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-5">

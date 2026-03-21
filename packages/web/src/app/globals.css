@@ -1036,6 +1036,10 @@ html.light .xterm .xterm-viewport::-webkit-scrollbar-thumb:active {
   );
 }
 
+.project-sidebar--collapsed {
+  align-items: center;
+}
+
 .project-sidebar__header {
   border-bottom: 1px solid var(--color-border-subtle);
   background: linear-gradient(
@@ -1223,6 +1227,63 @@ html.light .xterm .xterm-viewport::-webkit-scrollbar-thumb:active {
   border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border-subtle));
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
   color: var(--color-accent);
+}
+
+.project-sidebar__collapse-btn,
+.project-sidebar__collapsed-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-bg-base) 40%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.project-sidebar__collapse-btn {
+  padding: 9px 10px;
+}
+
+.project-sidebar__collapsed-toggle {
+  width: 36px;
+  height: 36px;
+}
+
+.project-sidebar__collapse-btn:hover,
+.project-sidebar__collapsed-toggle:hover {
+  border-color: var(--color-border-default);
+  background: var(--color-hover-overlay);
+  color: var(--color-text-primary);
+}
+
+.project-sidebar__collapsed-project {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.project-sidebar__collapsed-project:hover {
+  border-color: var(--color-border-subtle);
+  background: var(--color-hover-overlay);
+}
+
+.project-sidebar__collapsed-project--active {
+  border-color: color-mix(in srgb, var(--color-accent) 22%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 /* ── Kanban board ────────────────────────────────────────────────────── */
