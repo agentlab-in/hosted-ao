@@ -81,7 +81,15 @@ function HealthDot({ health }: { health: ProjectHealth }) {
   );
 }
 
-export function ProjectSidebar({
+export function ProjectSidebar(props: ProjectSidebarProps) {
+  if (props.projects.length <= 1) {
+    return null;
+  }
+
+  return <ProjectSidebarInner {...props} />;
+}
+
+function ProjectSidebarInner({
   projects,
   sessions,
   activeProjectId,
@@ -118,10 +126,6 @@ export function ProjectSidebar({
     toggleExpand(projectId);
     router.push(pathname + `?project=${encodeURIComponent(projectId)}`);
   };
-
-  if (projects.length <= 1) {
-    return null;
-  }
 
   const sessionsByProject = useMemo(() => {
     const map = new Map<string, { all: DashboardSession[]; workers: DashboardSession[] }>();
