@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   type DashboardSession,
   type DashboardStats,
@@ -10,14 +11,16 @@ import {
   type DashboardOrchestratorLink,
   getAttentionLevel,
   isPRRateLimited,
+  CI_STATUS,
 } from "@/lib/types";
-import { CI_STATUS } from "@composio/ao-core/types";
 import { AttentionZone } from "./AttentionZone";
 import { PRTableRow } from "./PRStatus";
 import { DynamicFavicon } from "./DynamicFavicon";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { ProjectSidebar } from "./ProjectSidebar";
+import { ThemeToggle } from "./ThemeToggle";
 import type { ProjectInfo } from "@/lib/project-name";
+import { EmptyState } from "./Skeleton";
 
 interface DashboardProps {
   initialSessions: DashboardSession[];
@@ -58,6 +61,8 @@ export function Dashboard({
     initialGlobalPause,
     projectId,
   );
+  const searchParams = useSearchParams();
+  const activeSessionId = searchParams.get("session") ?? undefined;
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
   const [globalPauseDismissed, setGlobalPauseDismissed] = useState(false);
   const [activeOrchestrators, setActiveOrchestrators] =
@@ -66,6 +71,11 @@ export function Dashboard({
   const [spawnErrors, setSpawnErrors] = useState<Record<string, string>>({});
   const showSidebar = projects.length > 1;
   const allProjectsView = showSidebar && projectId === undefined;
+
+  const displaySessions = useMemo(() => {
+    if (allProjectsView || !activeSessionId) return sessions;
+    return sessions.filter((s) => s.id === activeSessionId);
+  }, [sessions, allProjectsView, activeSessionId]);
 
   useEffect(() => {
     setActiveOrchestrators((current) => mergeOrchestrators(current, orchestratorLinks));
@@ -80,11 +90,11 @@ export function Dashboard({
       working: [],
       done: [],
     };
-    for (const session of sessions) {
+    for (const session of displaySessions) {
       zones[getAttentionLevel(session)].push(session);
     }
     return zones;
-  }, [sessions]);
+  }, [displaySessions]);
 
   const sessionsByProject = useMemo(() => {
     const groupedSessions = new Map<string, DashboardSession[]>();
@@ -100,14 +110,14 @@ export function Dashboard({
   }, [sessions]);
 
   const openPRs = useMemo(() => {
-    return sessions
+    return displaySessions
       .filter(
         (session): session is DashboardSession & { pr: DashboardPR } =>
           session.pr?.state === "open",
       )
       .map((session) => session.pr)
       .sort((a, b) => mergeScore(a) - mergeScore(b));
-  }, [sessions]);
+  }, [displaySessions]);
 
   const projectOverviews = useMemo(() => {
     if (!allProjectsView) return [];
@@ -214,7 +224,7 @@ export function Dashboard({
     }
   };
 
-  const hasKanbanSessions = KANBAN_LEVELS.some((level) => grouped[level].length > 0);
+  const hasAnySessions = sessions.length > 0;
 
   const anyRateLimited = useMemo(
     () => sessions.some((session) => session.pr && isPRRateLimited(session.pr)),
@@ -245,22 +255,45 @@ export function Dashboard({
   }, [globalPause?.pausedUntil, globalPause?.reason, globalPause?.sourceSessionId]);
 
   return (
-    <div className="flex h-screen">
-      {showSidebar && <ProjectSidebar projects={projects} activeProjectId={projectId} />}
-      <div className="flex-1 overflow-y-auto px-8 py-7">
+    <div className="dashboard-shell flex h-screen">
+      {showSidebar && (
+        <ProjectSidebar
+          projects={projects}
+          sessions={sessions}
+          activeProjectId={projectId}
+          activeSessionId={activeSessionId}
+        />
+      )}
+      <div className="dashboard-main flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-5">
         <DynamicFavicon sessions={sessions} projectName={projectName} />
-        <div className="mb-8 flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-6">
-          <div className="flex items-center gap-6">
-            <h1 className="text-[17px] font-semibold tracking-[-0.02em] text-[var(--color-text-primary)]">
-              {projectName ?? "Orchestrator"}
-            </h1>
-            <StatusLine stats={liveStats} />
+        <section className="dashboard-hero mb-5">
+          <div className="dashboard-hero__backdrop" />
+          <div className="dashboard-hero__content">
+            <div className="dashboard-hero__heading">
+              <div className="dashboard-eyebrow">
+                <span className="dashboard-eyebrow__dot" />
+                Overview
+              </div>
+              <div>
+                <h1 className="dashboard-title">{projectName ?? "Orchestrator"}</h1>
+                <p className="dashboard-subtitle">
+                  Live sessions, review pressure, and merge readiness.
+                </p>
+              </div>
+            </div>
+
+            <div className="dashboard-hero__meta">
+              <StatusLine stats={liveStats} />
+              <div className="flex items-center gap-3">
+                {!allProjectsView && <OrchestratorControl orchestrators={activeOrchestrators} />}
+                <ThemeToggle />
+              </div>
+            </div>
           </div>
-          {!allProjectsView && <OrchestratorControl orchestrators={activeOrchestrators} />}
-        </div>
+        </section>
 
         {globalPause && !globalPauseDismissed && (
-          <div className="mb-6 flex items-center gap-2.5 rounded border border-[rgba(239,68,68,0.25)] bg-[rgba(239,68,68,0.05)] px-3.5 py-2.5 text-[11px] text-[var(--color-status-error)]">
+          <div className="dashboard-alert mb-6 flex items-center gap-2.5 rounded border border-[color-mix(in_srgb,var(--color-status-error)_25%,transparent)] bg-[var(--color-tint-red)] px-3.5 py-2.5 text-[11px] text-[var(--color-status-error)]">
             <svg
               className="h-3.5 w-3.5 shrink-0"
               fill="none"
@@ -299,7 +332,7 @@ export function Dashboard({
         )}
 
         {anyRateLimited && !rateLimitDismissed && (
-          <div className="mb-6 flex items-center gap-2.5 rounded border border-[rgba(245,158,11,0.25)] bg-[rgba(245,158,11,0.05)] px-3.5 py-2.5 text-[11px] text-[var(--color-status-attention)]">
+          <div className="dashboard-alert mb-6 flex items-center gap-2.5 rounded border border-[color-mix(in_srgb,var(--color-status-attention)_25%,transparent)] bg-[var(--color-tint-yellow)] px-3.5 py-2.5 text-[11px] text-[var(--color-status-attention)]">
             <svg
               className="h-3.5 w-3.5 shrink-0"
               fill="none"
@@ -341,39 +374,25 @@ export function Dashboard({
           />
         )}
 
-        {!allProjectsView && hasKanbanSessions && (
-          <div className="mb-8 flex gap-4 overflow-x-auto pb-2">
-            {KANBAN_LEVELS.map((level) =>
-              grouped[level].length > 0 ? (
-                <div key={level} className="min-w-[200px] flex-1">
-                  <AttentionZone
-                    level={level}
-                    sessions={grouped[level]}
-                    variant="column"
-                    onSend={handleSend}
-                    onKill={handleKill}
-                    onMerge={handleMerge}
-                    onRestore={handleRestore}
-                  />
-                </div>
-              ) : null,
-            )}
+        {!allProjectsView && hasAnySessions && (
+          <div className="kanban-board-wrap">
+            <div className="kanban-board">
+              {KANBAN_LEVELS.map((level) => (
+                <AttentionZone
+                  key={level}
+                  level={level}
+                  sessions={grouped[level]}
+                  onSend={handleSend}
+                  onKill={handleKill}
+                  onMerge={handleMerge}
+                  onRestore={handleRestore}
+                />
+              ))}
+            </div>
           </div>
         )}
 
-        {!allProjectsView && grouped.done.length > 0 && (
-          <div className="mb-8">
-            <AttentionZone
-              level="done"
-              sessions={grouped.done}
-              variant="grid"
-              onSend={handleSend}
-              onKill={handleKill}
-              onMerge={handleMerge}
-              onRestore={handleRestore}
-            />
-          </div>
-        )}
+        {!allProjectsView && !hasAnySessions && <EmptyState />}
 
         {openPRs.length > 0 && (
           <div className="mx-auto max-w-[900px]">
@@ -615,19 +634,17 @@ function StatusLine({ stats }: { stats: DashboardStats }) {
   ];
 
   return (
-    <div className="flex items-baseline gap-0.5">
+    <div className="dashboard-stats">
       {parts.map((part, index) => (
-        <span key={part.label} className="flex items-baseline">
-          {index > 0 && (
-            <span className="mx-3 text-[11px] text-[var(--color-border-strong)]">·</span>
-          )}
+        <span key={part.label} className="dashboard-stat">
           <span
-            className="text-[20px] font-bold tabular-nums tracking-tight"
+            className="dashboard-stat__value"
             style={{ color: part.color ?? "var(--color-text-primary)" }}
           >
             {part.value}
           </span>
-          <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">{part.label}</span>
+          <span className="dashboard-stat__label">{part.label}</span>
+          {index < parts.length - 1 && <span className="dashboard-stat__divider" />}
         </span>
       ))}
     </div>
