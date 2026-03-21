@@ -42,6 +42,7 @@ describe("Dashboard empty state", () => {
             issueId: null,
             issueUrl: null,
             issueLabel: null,
+            issueTitle: null,
             summary: "Working on it",
             summaryIsFallback: false,
             createdAt: new Date().toISOString(),

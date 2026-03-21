@@ -247,7 +247,7 @@ describe("SessionCard", () => {
     });
     const session = makeSession({ status: "mergeable", activity: "idle", pr });
     render(<SessionCard session={session} />);
-    expect(screen.getByText("Merge PR #42")).toBeInTheDocument();
+    expect(screen.getByText("Merge PR")).toBeInTheDocument();
   });
 
   it("calls onMerge when merge button is clicked", () => {
@@ -265,7 +265,7 @@ describe("SessionCard", () => {
     });
     const session = makeSession({ status: "mergeable", activity: "idle", pr });
     render(<SessionCard session={session} onMerge={onMerge} />);
-    fireEvent.click(screen.getByText("Merge PR #42"));
+    fireEvent.click(screen.getByText("Merge PR"));
     expect(onMerge).toHaveBeenCalledWith(42);
   });
 
@@ -396,7 +396,7 @@ describe("SessionCard", () => {
     expect(screen.getByText("ask to fix")).toBeInTheDocument();
   });
 
-  it("hides action buttons when agent is active", () => {
+  it("shows action buttons even when agent is active", () => {
     const pr = makePR({
       state: "open",
       ciStatus: "failing",
@@ -412,7 +412,7 @@ describe("SessionCard", () => {
     });
     const session = makeSession({ activity: "active", pr });
     render(<SessionCard session={session} />);
-    expect(screen.queryByText("ask to fix")).not.toBeInTheDocument();
+    expect(screen.getByText("ask to fix")).toBeInTheDocument();
   });
 
   it("expands detail panel on click", () => {
@@ -444,9 +444,9 @@ describe("AttentionZone", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
-  it("renders nothing when sessions array is empty", () => {
-    const { container } = render(<AttentionZone level="respond" sessions={[]} />);
-    expect(container.firstElementChild).toBeNull();
+  it("renders empty state when sessions array is empty", () => {
+    render(<AttentionZone level="respond" sessions={[]} />);
+    expect(screen.getByText("No sessions")).toBeInTheDocument();
   });
 
   it("shows session cards when not collapsed", () => {
@@ -463,27 +463,11 @@ describe("AttentionZone", () => {
     expect(screen.getByText("Working")).toBeInTheDocument();
   });
 
-  it("done zone is collapsed by default", () => {
+  it("done zone always shows sessions (kanban columns are always expanded)", () => {
     const sessions = [makeSession({ id: "s1" })];
     render(<AttentionZone level="done" sessions={sessions} />);
-    // done is defaultCollapsed: true, so session id should not be visible
-    expect(screen.queryByText("s1")).not.toBeInTheDocument();
     expect(screen.getByText("Done")).toBeInTheDocument();
-  });
-
-  it("toggles collapsed state on click", () => {
-    const sessions = [makeSession({ id: "s1" })];
-    render(<AttentionZone level="done" sessions={sessions} />);
-    // done starts collapsed
-    expect(screen.queryByText("s1")).not.toBeInTheDocument();
-
-    // Click the zone header to expand
-    fireEvent.click(screen.getByText("Done"));
     expect(screen.getByText("s1")).toBeInTheDocument();
-
-    // Click again to collapse
-    fireEvent.click(screen.getByText("Done"));
-    expect(screen.queryByText("s1")).not.toBeInTheDocument();
   });
 
   it("passes callbacks to SessionCards", () => {
