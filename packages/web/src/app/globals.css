@@ -401,7 +401,7 @@ body {
 
 /* Light mode: solid white, NO gradient */
 html:not(.dark) body {
-  background: #ffffff !important;
+  background: #ffffff;
 }
 
 /* Radial gradient only for dark mode */

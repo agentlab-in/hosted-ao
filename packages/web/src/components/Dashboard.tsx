@@ -225,7 +225,7 @@ export function Dashboard({
     }
   };
 
-  const hasAnySessions = sessions.length > 0;
+  const hasAnySessions = displaySessions.length > 0;
 
   const anyRateLimited = useMemo(
     () => sessions.some((session) => session.pr && isPRRateLimited(session.pr)),

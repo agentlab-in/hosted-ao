@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 import type { ProjectInfo } from "@/lib/project-name";
@@ -123,19 +123,40 @@ export function ProjectSidebar({
     return null;
   }
 
-  const totalWorkerSessions = sessions.filter((s) => !isOrchestratorSession(s)).length;
-  const needsInputCount = sessions.filter((s) => getAttentionLevel(s) === "respond").length;
-  const reviewLoadCount = sessions.filter((s) => {
-    const level = getAttentionLevel(s);
-    return level === "review" || level === "pending";
-  }).length;
+  const sessionsByProject = useMemo(() => {
+    const map = new Map<string, { all: DashboardSession[]; workers: DashboardSession[] }>();
+    let totalWorkers = 0;
+    let needsInput = 0;
+    let reviewLoad = 0;
+
+    for (const s of sessions) {
+      let entry = map.get(s.projectId);
+      if (!entry) {
+        entry = { all: [], workers: [] };
+        map.set(s.projectId, entry);
+      }
+      entry.all.push(s);
+      if (!isOrchestratorSession(s)) {
+        entry.workers.push(s);
+        totalWorkers++;
+      }
+      const lvl = getAttentionLevel(s);
+      if (lvl === "respond") needsInput++;
+      if (lvl === "review" || lvl === "pending") reviewLoad++;
+    }
+
+    return { map, totalWorkers, needsInput, reviewLoad };
+  }, [sessions]);
+
+  const { totalWorkers: totalWorkerSessions, needsInput: needsInputCount, reviewLoad: reviewLoadCount } = sessionsByProject;
 
   if (collapsed) {
     return (
       <aside className="project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3">
         <div className="flex flex-1 flex-col items-center gap-3">
           {projects.map((project) => {
-            const health = computeProjectHealth(sessions.filter((s) => s.projectId === project.id));
+            const entry = sessionsByProject.map.get(project.id);
+            const health = entry ? computeProjectHealth(entry.all) : ("gray" as ProjectHealth);
             const isActive = activeProjectId === project.id;
             return (
               <button
@@ -236,8 +257,9 @@ export function ProjectSidebar({
         <div className="project-sidebar__divider mx-2 my-2" />
 
         {projects.map((project) => {
-          const projectSessions = sessions.filter((s) => s.projectId === project.id);
-          const workerSessions = projectSessions.filter((s) => !isOrchestratorSession(s));
+          const entry = sessionsByProject.map.get(project.id);
+          const projectSessions = entry?.all ?? [];
+          const workerSessions = entry?.workers ?? [];
           const health = computeProjectHealth(projectSessions);
           const isExpanded = expandedProjects.has(project.id);
           const isActive = activeProjectId === project.id;
@@ -277,7 +299,7 @@ export function ProjectSidebar({
 
               {isExpanded && workerSessions.length > 0 && (
                 <div className="project-sidebar__children ml-3 py-0.5">
-                  {workerSessions.map((session) => {
+                  {workerSessions.filter((s) => getAttentionLevel(s) !== "done").map((session) => {
                     const level = getAttentionLevel(session);
                     const isSessionActive = activeSessionId === session.id;
                     const title = getSessionTitle(session);
