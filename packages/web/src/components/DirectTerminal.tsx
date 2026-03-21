@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useTheme } from "next-themes";
 import { cn } from "@/lib/cn";
 
 // Import xterm CSS (must be imported in client component)
@@ -9,6 +10,7 @@ import "xterm/css/xterm.css";
 
 // Dynamically import xterm types for TypeScript
 import type { Terminal as TerminalType } from "xterm";
+import type { ITheme } from "xterm";
 import type { FitAddon as FitAddonType } from "@xterm/addon-fit";
 
 interface DirectTerminalProps {
@@ -35,6 +37,68 @@ interface DirectTerminalWsUrlOptions {
   sessionId: string;
   proxyWsPath?: string;
   directTerminalPort?: string;
+}
+
+type TerminalVariant = "agent" | "orchestrator";
+
+export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; light: ITheme } {
+  const agentAccent = { cursor: "#5b7ef8", selDark: "rgba(91, 126, 248, 0.30)", selLight: "rgba(91, 126, 248, 0.25)" };
+  const orchAccent = { cursor: "#a371f7", selDark: "rgba(163, 113, 247, 0.25)", selLight: "rgba(130, 80, 223, 0.20)" };
+  const accent = variant === "orchestrator" ? orchAccent : agentAccent;
+
+  const dark: ITheme = {
+    background: "#0a0a0f",
+    foreground: "#d4d4d8",
+    cursor: accent.cursor,
+    cursorAccent: "#0a0a0f",
+    selectionBackground: accent.selDark,
+    selectionInactiveBackground: "rgba(128, 128, 128, 0.2)",
+    // ANSI colors — slightly warmer than pure defaults
+    black: "#1a1a24",
+    red: "#ef4444",
+    green: "#22c55e",
+    yellow: "#f59e0b",
+    blue: "#5b7ef8",
+    magenta: "#a371f7",
+    cyan: "#22d3ee",
+    white: "#d4d4d8",
+    brightBlack: "#50506a",
+    brightRed: "#f87171",
+    brightGreen: "#4ade80",
+    brightYellow: "#fbbf24",
+    brightBlue: "#7b9cfb",
+    brightMagenta: "#c084fc",
+    brightCyan: "#67e8f9",
+    brightWhite: "#eeeef5",
+  };
+
+  const light: ITheme = {
+    background: "#fafafa",
+    foreground: "#383a42",
+    cursor: accent.cursor,
+    cursorAccent: "#fafafa",
+    selectionBackground: accent.selLight,
+    selectionInactiveBackground: "rgba(128, 128, 128, 0.15)",
+    // ANSI colors — One Light inspired, tuned for #fafafa background
+    black: "#383a42",
+    red: "#e45649",
+    green: "#50a14f",
+    yellow: "#c18401",
+    blue: "#4078f2",
+    magenta: "#a626a4",
+    cyan: "#0184bc",
+    white: "#a0a1a7",
+    brightBlack: "#696c77",
+    brightRed: "#ca1243",
+    brightGreen: "#2da44e",
+    brightYellow: "#986801",
+    brightBlue: "#4078f2",
+    brightMagenta: "#a626a4",
+    brightCyan: "#0070a8",
+    brightWhite: "#fafafa",
+  };
+
+  return { dark, light };
 }
 
 export function buildDirectTerminalWsUrl({
@@ -78,6 +142,8 @@ export function DirectTerminal({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { resolvedTheme } = useTheme();
+  const terminalThemes = useMemo(() => buildTerminalThemes(variant), [variant]);
 
   const terminalRef = useRef<HTMLDivElement>(null);
   const terminalInstance = useRef<TerminalType | null>(null);
@@ -164,45 +230,20 @@ export function DirectTerminal({
       import("xterm").then((mod) => mod.Terminal),
       import("@xterm/addon-fit").then((mod) => mod.FitAddon),
       import("@xterm/addon-web-links").then((mod) => mod.WebLinksAddon),
+      document.fonts.ready,
     ])
       .then(([Terminal, FitAddon, WebLinksAddon]) => {
         if (!mounted || !terminalRef.current) return;
 
-        // Cursor and selection color differ by variant:
-        // agent = blue (#5b7ef8), orchestrator = violet (#a371f7)
-        const cursorColor = variant === "orchestrator" ? "#a371f7" : "#5b7ef8";
-        const selectionColor =
-          variant === "orchestrator" ? "rgba(163, 113, 247, 0.25)" : "rgba(91, 126, 248, 0.3)";
+        const isDark = resolvedTheme !== "light";
+        const activeTheme = isDark ? terminalThemes.dark : terminalThemes.light;
 
         // Initialize xterm.js Terminal
         const terminal = new Terminal({
           cursorBlink: true,
           fontSize: 13,
-          fontFamily: '"IBM Plex Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
-          theme: {
-            background: "#0a0a0f",
-            foreground: "#d4d4d8",
-            cursor: cursorColor,
-            cursorAccent: "#0a0a0f",
-            selectionBackground: selectionColor,
-            // ANSI colors — slightly warmer than pure defaults
-            black: "#1a1a24",
-            red: "#ef4444",
-            green: "#22c55e",
-            yellow: "#f59e0b",
-            blue: "#5b7ef8",
-            magenta: "#a371f7",
-            cyan: "#22d3ee",
-            white: "#d4d4d8",
-            brightBlack: "#50506a",
-            brightRed: "#f87171",
-            brightGreen: "#4ade80",
-            brightYellow: "#fbbf24",
-            brightBlue: "#7b9cfb",
-            brightMagenta: "#c084fc",
-            brightCyan: "#67e8f9",
-            brightWhite: "#eeeef5",
-          },
+          fontFamily: 'var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
+          theme: activeTheme,
           scrollback: 10000,
           allowProposedApi: true,
           fastScrollModifier: "alt",
@@ -457,6 +498,14 @@ export function DirectTerminal({
     };
   }, [sessionId, variant]);
 
+  // Live theme switching without terminal recreation
+  useEffect(() => {
+    const terminal = terminalInstance.current;
+    if (!terminal) return;
+    const isDark = resolvedTheme !== "light";
+    terminal.options.theme = isDark ? terminalThemes.dark : terminalThemes.light;
+  }, [resolvedTheme, terminalThemes]);
+
   // Re-fit terminal when fullscreen changes
   useEffect(() => {
     const fit = fitAddon.current;
@@ -572,7 +621,7 @@ export function DirectTerminal({
     <div
       className={cn(
         "overflow-hidden rounded-[6px] border border-[var(--color-border-default)]",
-        "bg-[#0a0a0f]",
+        resolvedTheme === "light" ? "bg-[#fafafa]" : "bg-[#0a0a0f]",
         fullscreen && "fixed inset-0 z-50 rounded-none border-0",
       )}
     >
