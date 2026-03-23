@@ -160,56 +160,61 @@ function ProjectSidebarInner({
 
   if (collapsed) {
     return (
-      <aside className={cn("project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3", mobileOpen && "project-sidebar--mobile-open")}>
-        <div className="flex flex-1 flex-col items-center gap-2">
-          {projects.map((project) => {
-            const entry = sessionsByProject.map.get(project.id);
-            const health = entry ? computeProjectHealth(entry.all) : ("gray" as ProjectHealth);
-            const isActive = activeProjectId === project.id;
-            const initial = project.name.charAt(0).toUpperCase();
-            return (
-              <button
-                key={project.id}
-                type="button"
-                onClick={() => router.push(pathname + `?project=${encodeURIComponent(project.id)}`)}
-                className={cn(
-                  "project-sidebar__collapsed-project",
-                  isActive && "project-sidebar__collapsed-project--active",
-                )}
-                title={project.name}
-              >
-                <span className="project-sidebar__avatar">{initial}</span>
-                {health !== "gray" && (
-                  <span
-                    className={cn(
-                      "project-sidebar__health-indicator",
-                      health === "red" && "animate-[activity-pulse_2s_ease-in-out_infinite]",
-                    )}
-                    style={{ background: healthDotColor[health] }}
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="project-sidebar__collapsed-toggle mt-auto"
-          aria-label="Show project sidebar"
-        >
-          <svg
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            viewBox="0 0 24 24"
-            className="h-4 w-4"
+      <>
+        {mobileOpen && (
+          <div className="sidebar-mobile-backdrop" onClick={onMobileClose} />
+        )}
+        <aside className={cn("project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3", mobileOpen && "project-sidebar--mobile-open")}>
+          <div className="flex flex-1 flex-col items-center gap-2">
+            {projects.map((project) => {
+              const entry = sessionsByProject.map.get(project.id);
+              const health = entry ? computeProjectHealth(entry.all) : ("gray" as ProjectHealth);
+              const isActive = activeProjectId === project.id;
+              const initial = project.name.charAt(0).toUpperCase();
+              return (
+                <button
+                  key={project.id}
+                  type="button"
+                  onClick={() => router.push(pathname + `?project=${encodeURIComponent(project.id)}`)}
+                  className={cn(
+                    "project-sidebar__collapsed-project",
+                    isActive && "project-sidebar__collapsed-project--active",
+                  )}
+                  title={project.name}
+                >
+                  <span className="project-sidebar__avatar">{initial}</span>
+                  {health !== "gray" && (
+                    <span
+                      className={cn(
+                        "project-sidebar__health-indicator",
+                        health === "red" && "animate-[activity-pulse_2s_ease-in-out_infinite]",
+                      )}
+                      style={{ background: healthDotColor[health] }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="project-sidebar__collapsed-toggle mt-auto"
+            aria-label="Show project sidebar"
           >
-            <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
-            <path d="M9 4.5v15M12 10l3 2-3 2" />
-          </svg>
-        </button>
-      </aside>
+            <svg
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+            >
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+              <path d="M9 4.5v15M12 10l3 2-3 2" />
+            </svg>
+          </button>
+        </aside>
+      </>
     );
   }
 
