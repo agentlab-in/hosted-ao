@@ -7,7 +7,6 @@ import { CI_STATUS } from "@composio/ao-core/types";
 import { cn } from "@/lib/cn";
 import { CICheckList } from "./CIBadge";
 import { DirectTerminal } from "./DirectTerminal";
-import { ActivityDot } from "./ActivityDot";
 
 interface OrchestratorZones {
   merge: number;
@@ -34,14 +33,6 @@ const activityMeta: Record<string, { label: string; color: string }> = {
   blocked: { label: "Blocked", color: "var(--color-status-error)" },
   exited: { label: "Exited", color: "var(--color-status-error)" },
 };
-
-function humanizeStatus(status: string): string {
-  return status
-    .replace(/_/g, " ")
-    .replace(/\bci\b/gi, "CI")
-    .replace(/\bpr\b/gi, "PR")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 function getSessionHeadline(session: DashboardSession): string {
   return session.issueTitle ?? session.summary ?? session.id;
