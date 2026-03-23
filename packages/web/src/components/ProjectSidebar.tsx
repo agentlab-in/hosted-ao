@@ -15,6 +15,8 @@ interface ProjectSidebarProps {
   activeSessionId: string | undefined;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 type ProjectHealth = "red" | "yellow" | "green" | "gray";
@@ -96,6 +98,8 @@ function ProjectSidebarInner({
   activeSessionId,
   collapsed = false,
   onToggleCollapsed,
+  mobileOpen = false,
+  onMobileClose,
 }: ProjectSidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -156,7 +160,7 @@ function ProjectSidebarInner({
 
   if (collapsed) {
     return (
-      <aside className="project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3">
+      <aside className={cn("project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3", mobileOpen && "project-sidebar--mobile-open")}>
         <div className="flex flex-1 flex-col items-center gap-2">
           {projects.map((project) => {
             const entry = sessionsByProject.map.get(project.id);
@@ -210,7 +214,11 @@ function ProjectSidebarInner({
   }
 
   return (
-    <aside className="project-sidebar flex h-full w-[244px] flex-col">
+    <>
+      {mobileOpen && (
+        <div className="sidebar-mobile-backdrop" onClick={onMobileClose} />
+      )}
+      <aside className={cn("project-sidebar flex h-full w-[244px] flex-col", mobileOpen && "project-sidebar--mobile-open")}>
       <div className="project-sidebar__header px-4 pb-3 pt-4">
         <div className="project-sidebar__eyebrow">Portfolio</div>
         <div className="project-sidebar__title-row">
@@ -379,5 +387,6 @@ function ProjectSidebarInner({
         </button>
       </div>
     </aside>
+    </>
   );
 }

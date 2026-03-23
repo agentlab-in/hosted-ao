@@ -1874,3 +1874,245 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     min-height: 244px;
   }
 }
+
+/* ── Mobile hamburger toggle ─────────────────────────────────────────── */
+
+.mobile-menu-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.mobile-menu-toggle:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-hover-overlay);
+  color: var(--color-text-primary);
+}
+
+/* ── Mobile breakpoint — 768px (tablet / landscape phone) ────────────── */
+
+@media (max-width: 767px) {
+  /* -- Hamburger button visible -- */
+  .mobile-menu-toggle {
+    display: inline-flex;
+  }
+
+  /* -- Sidebar: off-canvas drawer -- */
+  .project-sidebar,
+  .project-sidebar.project-sidebar--collapsed {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: var(--z-overlay);
+    height: 100vh;
+    height: 100dvh;
+    width: 280px;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .project-sidebar--mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-overlay) - 1);
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+
+  /* -- Dashboard main -- */
+  .dashboard-main {
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  /* -- Hero section stacks vertically -- */
+  .dashboard-hero__content {
+    flex-direction: column;
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .dashboard-hero__primary {
+    flex-direction: column;
+    flex-basis: auto;
+    gap: 12px;
+  }
+
+  .dashboard-stat-cards {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .dashboard-hero__meta {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  /* -- Kanban board: stack columns vertically -- */
+  .kanban-board {
+    flex-direction: column;
+    height: auto;
+    min-height: auto;
+    overflow-x: visible;
+    gap: 12px;
+  }
+
+  .kanban-column {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .kanban-column-body {
+    max-height: 400px;
+  }
+
+  .board-section-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .board-section-head__legend {
+    flex-wrap: wrap;
+  }
+
+  /* -- Session cards: flexible height + touch targets -- */
+  .session-card--fixed {
+    height: auto;
+    min-height: 180px;
+  }
+
+  .session-card--alert-frame {
+    min-height: 220px;
+  }
+
+  .session-card--merge-frame {
+    min-height: 200px;
+  }
+
+  .session-card__control,
+  .session-card__merge-control,
+  .session-card__terminate,
+  .done-restore-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .session-card__footer {
+    min-height: 44px;
+  }
+
+  .session-card__footer a,
+  .session-card__footer button {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* -- Session detail page -- */
+  .session-detail-page .mx-auto {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .session-page-header {
+    padding: 12px;
+  }
+
+  .session-page-header__meta {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .session-page-header__crumbs {
+    font-size: 10px;
+  }
+
+  .session-detail-link-pill {
+    min-height: 36px;
+  }
+
+  /* -- Touch targets for interactive elements -- */
+  .orchestrator-btn,
+  .board-legend-item {
+    min-height: 44px;
+  }
+
+  .project-sidebar__item {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  .project-sidebar__session {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  /* -- PR table: horizontal scroll on mobile -- */
+  .mx-auto.max-w-\[900px\] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* -- Alert banners -- */
+  .dashboard-alert {
+    font-size: 11px;
+    padding: 10px 12px;
+  }
+}
+
+/* ── Phone breakpoint — 480px ────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .dashboard-title {
+    font-size: 20px;
+  }
+
+  .dashboard-stat-cards {
+    flex-direction: column;
+  }
+
+  .dashboard-stat-card {
+    width: 100%;
+  }
+
+  .kanban-column-body {
+    max-height: 300px;
+  }
+
+  .kanban-column__title {
+    font-size: 16px;
+  }
+
+  .session-page-header h1 {
+    font-size: 15px;
+  }
+
+  /* Session detail terminal full-width */
+  .session-detail-page .mx-auto {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
