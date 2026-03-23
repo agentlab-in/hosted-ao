@@ -225,7 +225,9 @@ export function Dashboard({
     }
   };
 
-  const hasAnySessions = displaySessions.length > 0;
+  const hasAnySessions = KANBAN_LEVELS.some(
+    (level) => grouped[level].length > 0,
+  );
 
   const anyRateLimited = useMemo(
     () => sessions.some((session) => session.pr && isPRRateLimited(session.pr)),
