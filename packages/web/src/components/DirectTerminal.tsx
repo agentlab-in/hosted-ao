@@ -9,8 +9,7 @@ import { cn } from "@/lib/cn";
 import "xterm/css/xterm.css";
 
 // Dynamically import xterm types for TypeScript
-import type { Terminal as TerminalType } from "xterm";
-import type { ITheme } from "xterm";
+import type { ITheme, Terminal as TerminalType } from "xterm";
 import type { FitAddon as FitAddonType } from "@xterm/addon-fit";
 
 interface DirectTerminalProps {
@@ -42,8 +41,16 @@ interface DirectTerminalWsUrlOptions {
 type TerminalVariant = "agent" | "orchestrator";
 
 export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; light: ITheme } {
-  const agentAccent = { cursor: "#5b7ef8", selDark: "rgba(91, 126, 248, 0.30)", selLight: "rgba(91, 126, 248, 0.25)" };
-  const orchAccent = { cursor: "#a371f7", selDark: "rgba(163, 113, 247, 0.25)", selLight: "rgba(130, 80, 223, 0.20)" };
+  const agentAccent = {
+    cursor: "#5b7ef8",
+    selDark: "rgba(91, 126, 248, 0.30)",
+    selLight: "rgba(91, 126, 248, 0.25)",
+  };
+  const orchAccent = {
+    cursor: "#a371f7",
+    selDark: "rgba(163, 113, 247, 0.25)",
+    selLight: "rgba(130, 80, 223, 0.20)",
+  };
   const accent = variant === "orchestrator" ? orchAccent : agentAccent;
 
   const dark: ITheme = {
@@ -74,28 +81,28 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
 
   const light: ITheme = {
     background: "#fafafa",
-    foreground: "#383a42",
+    foreground: "#24292f",
     cursor: accent.cursor,
     cursorAccent: "#fafafa",
     selectionBackground: accent.selLight,
     selectionInactiveBackground: "rgba(128, 128, 128, 0.15)",
-    // ANSI colors — One Light inspired, tuned for #fafafa background
-    black: "#383a42",
-    red: "#e45649",
-    green: "#50a14f",
-    yellow: "#c18401",
-    blue: "#4078f2",
-    magenta: "#a626a4",
-    cyan: "#0184bc",
-    white: "#a0a1a7",
-    brightBlack: "#696c77",
-    brightRed: "#ca1243",
-    brightGreen: "#2da44e",
-    brightYellow: "#986801",
-    brightBlue: "#4078f2",
-    brightMagenta: "#a626a4",
-    brightCyan: "#0070a8",
-    brightWhite: "#fafafa",
+    // ANSI colors — darkened for legibility on #fafafa terminal background
+    black: "#24292f",
+    red: "#b42318",
+    green: "#1f7a3d",
+    yellow: "#8a5a00",
+    blue: "#175cd3",
+    magenta: "#8e24aa",
+    cyan: "#0b7285",
+    white: "#4b5563",
+    brightBlack: "#374151",
+    brightRed: "#912018",
+    brightGreen: "#176639",
+    brightYellow: "#6f4a00",
+    brightBlue: "#1d4ed8",
+    brightMagenta: "#7b1fa2",
+    brightCyan: "#155e75",
+    brightWhite: "#374151",
   };
 
   return { dark, light };
@@ -242,8 +249,12 @@ export function DirectTerminal({
         const terminal = new Terminal({
           cursorBlink: true,
           fontSize: 13,
-          fontFamily: 'var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
+          fontFamily:
+            'var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
           theme: activeTheme,
+          // Light mode needs an explicit contrast floor because agent UIs often emit
+          // dim/faint ANSI sequences that become unreadable on a near-white background.
+          minimumContrastRatio: isDark ? 1 : 7,
           scrollback: 10000,
           allowProposedApi: true,
           fastScrollModifier: "alt",
@@ -504,6 +515,7 @@ export function DirectTerminal({
     if (!terminal) return;
     const isDark = resolvedTheme !== "light";
     terminal.options.theme = isDark ? terminalThemes.dark : terminalThemes.light;
+    terminal.options.minimumContrastRatio = isDark ? 1 : 7;
   }, [resolvedTheme, terminalThemes]);
 
   // Re-fit terminal when fullscreen changes
@@ -620,7 +632,7 @@ export function DirectTerminal({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-[6px] border border-[var(--color-border-default)]",
+        "overflow-hidden border border-[var(--color-border-default)]",
         resolvedTheme === "light" ? "bg-[#fafafa]" : "bg-[#0a0a0f]",
         fullscreen && "fixed inset-0 z-50 rounded-none border-0",
       )}
@@ -638,7 +650,7 @@ export function DirectTerminal({
         </span>
         {/* XDA clipboard badge */}
         <span
-          className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
+          className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
           style={{
             color: accentColor,
             background: `color-mix(in srgb, ${accentColor} 12%, transparent)`,
@@ -652,7 +664,7 @@ export function DirectTerminal({
             disabled={reloading || status !== "connected"}
             title="Restart OpenCode session (/exit then resume mapped session)"
             aria-label="Restart OpenCode session"
-            className="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-70"
+            className="ml-auto flex items-center gap-1 px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-70"
           >
             {reloading ? (
               <>
@@ -695,7 +707,7 @@ export function DirectTerminal({
         <button
           onClick={() => setFullscreen(!fullscreen)}
           className={cn(
-            "flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)]",
+            "flex items-center gap-1 px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)]",
             !isOpenCodeSession && "ml-auto",
           )}
         >

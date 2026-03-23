@@ -22,7 +22,7 @@ const zoneConfig: Record<
   }
 > = {
   merge: {
-    label: "Merge Ready",
+    label: "Ready",
     color: "var(--color-status-ready)",
     caption: "Cleared to land",
   },

@@ -157,11 +157,12 @@ function ProjectSidebarInner({
   if (collapsed) {
     return (
       <aside className="project-sidebar project-sidebar--collapsed flex h-full w-[56px] flex-col items-center py-3">
-        <div className="flex flex-1 flex-col items-center gap-3">
+        <div className="flex flex-1 flex-col items-center gap-2">
           {projects.map((project) => {
             const entry = sessionsByProject.map.get(project.id);
             const health = entry ? computeProjectHealth(entry.all) : ("gray" as ProjectHealth);
             const isActive = activeProjectId === project.id;
+            const initial = project.name.charAt(0).toUpperCase();
             return (
               <button
                 key={project.id}
@@ -173,7 +174,16 @@ function ProjectSidebarInner({
                 )}
                 title={project.name}
               >
-                <HealthDot health={health} />
+                <span className="project-sidebar__avatar">{initial}</span>
+                {health !== "gray" && (
+                  <span
+                    className={cn(
+                      "project-sidebar__health-indicator",
+                      health === "red" && "animate-[activity-pulse_2s_ease-in-out_infinite]",
+                    )}
+                    style={{ background: healthDotColor[health] }}
+                  />
+                )}
               </button>
             );
           })}

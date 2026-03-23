@@ -247,7 +247,7 @@ describe("SessionCard", () => {
     });
     const session = makeSession({ status: "mergeable", activity: "idle", pr });
     render(<SessionCard session={session} />);
-    expect(screen.getByText("Merge PR")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /merge/i })).toBeInTheDocument();
   });
 
   it("calls onMerge when merge button is clicked", () => {
@@ -265,7 +265,7 @@ describe("SessionCard", () => {
     });
     const session = makeSession({ status: "mergeable", activity: "idle", pr });
     render(<SessionCard session={session} onMerge={onMerge} />);
-    fireEvent.click(screen.getByText("Merge PR"));
+    fireEvent.click(screen.getByRole("button", { name: /merge/i }));
     expect(onMerge).toHaveBeenCalledWith(42);
   });
 
@@ -415,21 +415,16 @@ describe("SessionCard", () => {
     expect(screen.getByText("ask to fix")).toBeInTheDocument();
   });
 
-  it("expands detail panel on click", () => {
+  it("shows issue details in the compact card footer", () => {
     const session = makeSession({ id: "test-1", issueId: "INT-100", pr: null });
-    const { container } = render(<SessionCard session={session} />);
-    expect(screen.queryByText("INT-100")).not.toBeInTheDocument();
-    // Click the card (not a button/link)
-    fireEvent.click(container.firstElementChild!);
-    expect(screen.getByText("INT-100")).toBeInTheDocument();
-    expect(screen.getByText("No PR associated with this session.")).toBeInTheDocument();
+    render(<SessionCard session={session} />);
+    expect(screen.getAllByText("INT-100")).toHaveLength(2);
   });
 
-  it("shows terminate button in expanded view", () => {
+  it("shows icon-only terminate button in the footer", () => {
     const session = makeSession({ pr: null });
-    const { container } = render(<SessionCard session={session} />);
-    fireEvent.click(container.firstElementChild!);
-    expect(screen.getByText("terminate")).toBeInTheDocument();
+    render(<SessionCard session={session} />);
+    expect(screen.getByRole("button", { name: /terminate session/i })).toBeInTheDocument();
   });
 });
 

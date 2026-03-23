@@ -550,7 +550,11 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                 strokeWidth="2"
                 viewBox="0 0 24 24"
               >
-                <path d="M5 12h14M12 5l7 7-7 7" />
+                <circle cx="6" cy="6" r="2" />
+                <circle cx="18" cy="18" r="2" />
+                <circle cx="18" cy="6" r="2" />
+                <path d="M8 6h5a3 3 0 0 1 3 3v7" />
+                <path d="M8 6h5a3 3 0 0 0 3-3V8" />
               </svg>
               merge
             </button>
@@ -560,7 +564,8 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                 e.stopPropagation();
                 onKill?.(session.id);
               }}
-              className="session-card__control session-card__terminate inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border border-[color-mix(in_srgb,var(--color-status-error)_35%,transparent)] px-2.5 py-1 text-[11px] text-[var(--color-status-error)] transition-colors hover:border-[var(--color-status-error)] hover:bg-[var(--color-tint-red)] hover:underline"
+              aria-label="Terminate session"
+              className="session-card__control session-card__terminate inline-flex shrink-0 cursor-pointer items-center justify-center border border-[color-mix(in_srgb,var(--color-status-error)_35%,transparent)] px-2.5 py-1 text-[11px] text-[var(--color-status-error)] transition-colors hover:border-[var(--color-status-error)] hover:bg-[var(--color-tint-red)]"
             >
               <svg
                 className="session-card__control-icon"
@@ -569,9 +574,11 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                 strokeWidth="2"
                 viewBox="0 0 24 24"
               >
-                <path d="M18 6 6 18M6 6l12 12" />
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6M14 11v6" />
               </svg>
-              terminate
             </button>
           )}
         </div>

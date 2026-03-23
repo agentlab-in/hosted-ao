@@ -68,6 +68,32 @@ const ANSI_KEYS = [
   "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
 ] as const;
 
+function hexToRgb(hex: string): [number, number, number] {
+  return [
+    Number.parseInt(hex.slice(1, 3), 16),
+    Number.parseInt(hex.slice(3, 5), 16),
+    Number.parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+function toLinear(channel: number): number {
+  const normalized = channel / 255;
+  return normalized <= 0.04045
+    ? normalized / 12.92
+    : Math.pow((normalized + 0.055) / 1.055, 2.4);
+}
+
+function relativeLuminance(hex: string): number {
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+}
+
+function contrastRatio(a: string, b: string): number {
+  const lighter = Math.max(relativeLuminance(a), relativeLuminance(b));
+  const darker = Math.min(relativeLuminance(a), relativeLuminance(b));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 describe("buildTerminalThemes", () => {
   it("dark theme has valid hex colors for bg, fg, and all ANSI slots", () => {
     const { dark } = buildTerminalThemes("agent");
@@ -81,9 +107,16 @@ describe("buildTerminalThemes", () => {
   it("light theme has valid hex colors for bg, fg, and all ANSI slots", () => {
     const { light } = buildTerminalThemes("agent");
     expect(light.background).toBe("#fafafa");
-    expect(light.foreground).toBe("#383a42");
+    expect(light.foreground).toBe("#24292f");
     for (const key of ANSI_KEYS) {
       expect(light[key]).toMatch(HEX_RE);
+    }
+  });
+
+  it("light theme ANSI colors maintain readable contrast on the terminal background", () => {
+    const { light } = buildTerminalThemes("agent");
+    for (const key of ANSI_KEYS) {
+      expect(contrastRatio(light.background!, light[key]!)).toBeGreaterThanOrEqual(4);
     }
   });
 
