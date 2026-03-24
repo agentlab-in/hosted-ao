@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
@@ -22,6 +22,8 @@ import { ProjectSidebar } from "./ProjectSidebar";
 import { ThemeToggle } from "./ThemeToggle";
 import type { ProjectInfo } from "@/lib/project-name";
 import { EmptyState } from "./Skeleton";
+import { ToastProvider, useToast } from "./Toast";
+import { BottomSheet } from "./BottomSheet";
 
 interface DashboardProps {
   initialSessions: DashboardSession[];
@@ -50,7 +52,7 @@ function mergeOrchestrators(
   return [...merged.values()];
 }
 
-export function Dashboard({
+function DashboardInner({
   initialSessions,
   projectId,
   projectName,
@@ -77,6 +79,10 @@ export function Dashboard({
   const isMobile = useMediaQuery(767);
   const [expandedLevel, setExpandedLevel] = useState<AttentionLevel | null>(null);
   const showSidebar = projects.length > 1;
+  const { showToast } = useToast();
+  const [killTargetSession, setKillTargetSession] = useState<DashboardSession | null>(null);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const allProjectsView = showSidebar && projectId === undefined;
 
   const displaySessions = useMemo(() => {
@@ -192,32 +198,50 @@ export function Dashboard({
     }
   }, []);
 
-  const handleKill = useCallback(async (sessionId: string) => {
-    if (!confirm(`Kill session ${sessionId}?`)) return;
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
+  const handleKill = useCallback((sessionId: string) => {
+    const session = sessionsRef.current.find((s) => s.id === sessionId) ?? null;
+    setKillTargetSession(session);
+  }, []);
+
+  const handleKillConfirm = useCallback(async () => {
+    const session = killTargetSession;
+    setKillTargetSession(null);
+    if (!session) return;
+    const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/kill`, {
       method: "POST",
     });
     if (!res.ok) {
-      console.error(`Failed to kill ${sessionId}:`, await res.text());
+      const text = await res.text();
+      console.error(`Failed to kill ${session.id}:`, text);
+      showToast(`Terminate failed: ${text}`, "error");
+    } else {
+      showToast("Session terminated", "success");
     }
-  }, []);
+  }, [killTargetSession, showToast]);
 
   const handleMerge = useCallback(async (prNumber: number) => {
     const res = await fetch(`/api/prs/${prNumber}/merge`, { method: "POST" });
     if (!res.ok) {
-      console.error(`Failed to merge PR #${prNumber}:`, await res.text());
+      const text = await res.text();
+      console.error(`Failed to merge PR #${prNumber}:`, text);
+      showToast(`Merge failed: ${text}`, "error");
+    } else {
+      showToast(`PR #${prNumber} merged`, "success");
     }
-  }, []);
+  }, [showToast]);
 
   const handleRestore = useCallback(async (sessionId: string) => {
-    if (!confirm(`Restore session ${sessionId}?`)) return;
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {
       method: "POST",
     });
     if (!res.ok) {
-      console.error(`Failed to restore ${sessionId}:`, await res.text());
+      const text = await res.text();
+      console.error(`Failed to restore ${sessionId}:`, text);
+      showToast(`Restore failed: ${text}`, "error");
+    } else {
+      showToast("Session restored", "success");
     }
-  }, []);
+  }, [showToast]);
 
   const handleSpawnOrchestrator = async (project: ProjectInfo) => {
     setSpawningProjectIds((current) =>
@@ -290,6 +314,7 @@ export function Dashboard({
   }, [globalPause?.pausedUntil, globalPause?.reason, globalPause?.sourceSessionId]);
 
   return (
+    <>
     <div className="dashboard-shell flex h-screen">
       {showSidebar && (
         <ProjectSidebar
@@ -528,6 +553,20 @@ export function Dashboard({
         )}
       </div>
     </div>
+    <BottomSheet
+      session={killTargetSession}
+      onConfirm={handleKillConfirm}
+      onCancel={() => setKillTargetSession(null)}
+    />
+    </>
+  );
+}
+
+export function Dashboard(props: DashboardProps) {
+  return (
+    <ToastProvider>
+      <DashboardInner {...props} />
+    </ToastProvider>
   );
 }
 
