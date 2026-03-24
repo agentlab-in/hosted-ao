@@ -173,6 +173,14 @@ export function Dashboard({
     setExpandedLevel((current) => (current === level ? null : level));
   }, []);
 
+  const handlePillTap = useCallback((level: AttentionLevel) => {
+    setExpandedLevel(level);
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? ("instant" as ScrollBehavior)
+      : "smooth";
+    document.getElementById("mobile-board")?.scrollIntoView({ behavior, block: "start" });
+  }, []);
+
   const handleSend = useCallback(async (sessionId: string, message: string) => {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
       method: "POST",
@@ -330,10 +338,7 @@ export function Dashboard({
               {isMobile ? (
                 <MobileActionStrip
                   grouped={grouped}
-                  onPillTap={(level) => {
-                    setExpandedLevel(level);
-                    document.getElementById("mobile-board")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }}
+                  onPillTap={handlePillTap}
                 />
               ) : (
                 <StatusCards stats={liveStats} />
@@ -737,14 +742,14 @@ function MobileActionStrip({
 
   if (activePills.length === 0) {
     return (
-      <div className="mobile-action-strip mobile-action-strip--all-good">
+      <div role="status" className="mobile-action-strip mobile-action-strip--all-good">
         <span className="mobile-action-strip__all-good">All clear — agents are working</span>
       </div>
     );
   }
 
   return (
-    <div className="mobile-action-strip" role="navigation" aria-label="Urgency quick-nav">
+    <div className="mobile-action-strip" role="group" aria-label="Session priorities">
       {activePills.map(({ level, label, color }) => (
         <button
           key={level}

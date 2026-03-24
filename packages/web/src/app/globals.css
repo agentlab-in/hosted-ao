@@ -2041,6 +2041,11 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     border-color: var(--color-border-strong);
   }
 
+  .mobile-action-pill:focus-visible {
+    outline: 2px solid var(--color-accent-blue);
+    outline-offset: 2px;
+  }
+
   .mobile-action-pill__dot {
     width: 7px;
     height: 7px;
@@ -2189,6 +2194,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     flex-direction: column;
     gap: 0;
     margin-top: 8px;
+    scroll-margin-top: 56px;
   }
 
   .accordion-section {
