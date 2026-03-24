@@ -388,11 +388,18 @@
 
 /* ── Base styles ─────────────────────────────────────────────────────── */
 
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--color-bg-base);
   color: var(--color-text-primary);
   min-height: 100vh;
+  min-height: 100dvh;
   letter-spacing: -0.011em;
 }
 
@@ -1626,6 +1633,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   display: flex;
   gap: 8px;
   height: calc(100vh - 280px);
+  height: calc(100dvh - 280px);
   overflow-x: auto;
   padding-bottom: 8px;
 }
@@ -1920,6 +1928,9 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     width: 280px;
     transform: translateX(-100%);
     transition: transform 0.25s ease;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
   }
 
   .project-sidebar--mobile-open {
@@ -1937,10 +1948,10 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
   /* -- Dashboard main -- */
   .dashboard-main {
-    padding-left: 12px;
-    padding-right: 12px;
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
     padding-top: 12px;
-    padding-bottom: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
   }
 
   /* -- Hero section stacks vertically -- */
@@ -2081,6 +2092,11 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     font-size: 11px;
     padding: 10px 12px;
   }
+
+  /* -- iOS auto-zoom prevention on input focus -- */
+  input, textarea, select {
+    font-size: 16px;
+  }
 }
 
 /* ── Phone breakpoint — 480px ────────────────────────────────────────── */
@@ -2114,5 +2130,13 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   .session-detail-page .mx-auto {
     padding-left: 8px;
     padding-right: 8px;
+  }
+}
+
+/* ── PWA standalone mode ───────────────────────────────────────────── */
+
+@media (display-mode: standalone) {
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
   }
 }
