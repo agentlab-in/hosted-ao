@@ -24,6 +24,7 @@ import type { ProjectInfo } from "@/lib/project-name";
 import { EmptyState } from "./Skeleton";
 import { ToastProvider, useToast } from "./Toast";
 import { BottomSheet } from "./BottomSheet";
+import { ConnectionBar } from "./ConnectionBar";
 
 interface DashboardProps {
   initialSessions: DashboardSession[];
@@ -61,7 +62,7 @@ function DashboardInner({
   orchestrators,
 }: DashboardProps) {
   const orchestratorLinks = orchestrators ?? EMPTY_ORCHESTRATORS;
-  const { sessions, globalPause } = useSessionEvents(
+  const { sessions, globalPause, connectionStatus } = useSessionEvents(
     initialSessions,
     initialGlobalPause,
     projectId,
@@ -315,6 +316,7 @@ function DashboardInner({
 
   return (
     <>
+    <ConnectionBar status={connectionStatus} />
     <div className="dashboard-shell flex h-screen">
       {showSidebar && (
         <ProjectSidebar

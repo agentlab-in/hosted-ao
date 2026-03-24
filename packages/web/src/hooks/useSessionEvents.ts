@@ -6,19 +6,25 @@ import type { DashboardSession, GlobalPauseState, SSESnapshotEvent } from "@/lib
 const MEMBERSHIP_REFRESH_DELAY_MS = 120;
 const STALE_REFRESH_INTERVAL_MS = 15000;
 
+type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
+
 interface State {
   sessions: DashboardSession[];
   globalPause: GlobalPauseState | null;
+  connectionStatus: ConnectionStatus;
 }
 
 type Action =
   | { type: "reset"; sessions: DashboardSession[]; globalPause: GlobalPauseState | null }
-  | { type: "snapshot"; patches: SSESnapshotEvent["sessions"] };
+  | { type: "snapshot"; patches: SSESnapshotEvent["sessions"] }
+  | { type: "setConnection"; status: ConnectionStatus };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "reset":
-      return { sessions: action.sessions, globalPause: action.globalPause };
+      return { ...state, sessions: action.sessions, globalPause: action.globalPause };
+    case "setConnection":
+      return { ...state, connectionStatus: action.status };
     case "snapshot": {
       const patchMap = new Map(action.patches.map((p) => [p.id, p]));
       let changed = false;
@@ -62,6 +68,7 @@ export function useSessionEvents(
   const [state, dispatch] = useReducer(reducer, {
     sessions: initialSessions,
     globalPause: initialGlobalPause ?? null,
+    connectionStatus: "connected" as ConnectionStatus,
   });
   const sessionsRef = useRef(state.sessions);
   const refreshingRef = useRef(false);
@@ -169,7 +176,18 @@ export function useSessionEvents(
       }
     };
 
-    es.onerror = () => undefined;
+    es.onopen = () => {
+      if (!disposed) dispatch({ type: "setConnection", status: "connected" });
+    };
+
+    es.onerror = () => {
+      if (!disposed) {
+        dispatch({
+          type: "setConnection",
+          status: es.readyState === EventSource.CLOSED ? "disconnected" : "reconnecting",
+        });
+      }
+    };
 
     return () => {
       disposed = true;

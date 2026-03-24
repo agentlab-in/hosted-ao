@@ -334,6 +334,7 @@
   --z-modal: 200;
   --z-overlay: 300;
   --z-toast: 400;
+  --z-connection-bar: 500;
 
   /* Font-size scale — in :root to avoid --font-* font-family namespace in @theme */
   --font-size-xs: 10px;
@@ -2599,4 +2600,44 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
 .bottom-sheet__btn--danger:hover {
   opacity: 0.9;
+}
+
+/* ─── Connection Status Bar ───────────────────────────────────────────────── */
+
+.connection-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-connection-bar, 500);
+  height: 0;
+  overflow: hidden;
+  transition: height 0.2s ease, opacity 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.connection-bar--connected {
+  /* Invisible — no height, no color */
+}
+
+.connection-bar--reconnecting {
+  height: 4px;
+  background: #d4a017; /* amber — no token for this in the design system */
+  animation: connection-pulse 1.5s ease-in-out infinite;
+}
+
+.connection-bar--disconnected {
+  height: 32px;
+  background: var(--color-status-error); /* red */
+  color: #fff;
+  cursor: pointer;
+}
+
+@keyframes connection-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
