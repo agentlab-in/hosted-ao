@@ -1933,7 +1933,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     padding-left: env(safe-area-inset-left, 0px);
   }
 
-  .project-sidebar--mobile-open {
+  .project-sidebar.project-sidebar--mobile-open {
     transform: translateX(0);
   }
 

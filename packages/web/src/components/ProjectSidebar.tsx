@@ -198,7 +198,7 @@ function ProjectSidebarInner({
           </div>
           <button
             type="button"
-            onClick={onToggleCollapsed}
+            onClick={() => { onToggleCollapsed?.(); onMobileClose?.(); }}
             className="project-sidebar__collapsed-toggle mt-auto"
             aria-label="Show project sidebar"
           >
@@ -377,7 +377,7 @@ function ProjectSidebarInner({
         })}
       </nav>
       <div className="border-t border-[var(--color-border-subtle)] p-2">
-        <button type="button" onClick={onToggleCollapsed} className="project-sidebar__collapse-btn">
+        <button type="button" onClick={() => { onToggleCollapsed?.(); onMobileClose?.(); }} className="project-sidebar__collapse-btn">
           <svg
             fill="none"
             stroke="currentColor"
