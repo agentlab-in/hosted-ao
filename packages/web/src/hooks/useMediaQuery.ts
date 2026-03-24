@@ -30,11 +30,7 @@ function toQuery(queryOrBreakpoint: string | number): string {
 export function useMediaQuery(queryOrBreakpoint: string | number): boolean {
   const query = toQuery(queryOrBreakpoint);
 
-  const [matches, setMatches] = useState<boolean>(() => {
-    // SSR safety: window is not available on the server.
-    if (typeof window === "undefined") return false;
-    return window.matchMedia(query).matches;
-  });
+  const [matches, setMatches] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
