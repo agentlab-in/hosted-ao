@@ -38,6 +38,35 @@ export function BottomSheet({ session, onCancel, onConfirm }: BottomSheetProps) 
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [session, onCancel]);
 
+  useEffect(() => {
+    if (!session) return;
+    if (!sheetRef.current) return;
+
+    const focusable = sheetRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    if (first) first.focus();
+
+    function handleTabTrap(e: KeyboardEvent) {
+      if (e.key === "Tab") {
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    const sheet = sheetRef.current;
+    sheet.addEventListener("keydown", handleTabTrap);
+    return () => sheet.removeEventListener("keydown", handleTabTrap);
+  }, [session]);
+
   function handleTouchStart(e: React.TouchEvent) {
     touchStartYRef.current = e.touches[0]?.clientY ?? null;
   }

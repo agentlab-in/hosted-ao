@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useReducer,
   useRef,
 } from "react";
@@ -41,6 +42,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toast, dispatch] = useReducer(toastReducer, null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
 
   const showToast = useCallback((message: string, variant: ToastVariant = "info") => {
     if (timerRef.current !== null) {
