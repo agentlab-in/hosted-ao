@@ -94,9 +94,23 @@ function getDoneStatusInfo(session: DashboardSession): {
 function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: SessionCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [sendingAction, setSendingAction] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const level = getAttentionLevel(session);
   const pr = session.pr;
+
+  const handleQuickReply = (message: string) => {
+    if (!message.trim()) return;
+    onSend?.(session.id, message);
+  };
+
+  const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleQuickReply(replyText);
+      setReplyText("");
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -583,6 +597,42 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
           )}
         </div>
       </div>
+
+      {level === "respond" && (
+        <div className="quick-reply" onClick={(e) => e.stopPropagation()}>
+          {session.summary && !session.summaryIsFallback && (
+            <p className="quick-reply__summary">{session.summary}</p>
+          )}
+          <div className="quick-reply__presets">
+            <button
+              className="quick-reply__preset-btn"
+              onClick={() => handleQuickReply("continue")}
+            >
+              Continue
+            </button>
+            <button
+              className="quick-reply__preset-btn"
+              onClick={() => handleQuickReply("abort")}
+            >
+              Abort
+            </button>
+            <button
+              className="quick-reply__preset-btn"
+              onClick={() => handleQuickReply("skip")}
+            >
+              Skip
+            </button>
+          </div>
+          <textarea
+            className="quick-reply__input"
+            placeholder="Type a reply..."
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            onKeyDown={handleReplyKeyDown}
+            rows={1}
+          />
+        </div>
+      )}
     </div>
   );
 }
