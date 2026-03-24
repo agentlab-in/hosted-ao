@@ -626,6 +626,7 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
           <textarea
             className="quick-reply__input"
             placeholder="Type a reply..."
+            aria-label="Type a reply to the agent"
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
             onKeyDown={handleReplyKeyDown}
