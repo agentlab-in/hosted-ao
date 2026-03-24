@@ -1818,92 +1818,6 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
 /* Card glow effects removed for Linear-clean look */
 
-/* ── Mobile accordion board ─────────────────────────────────────────── */
-
-.accordion-board {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin-top: 8px;
-}
-
-.accordion-section {
-  border: 1px solid var(--color-border-default);
-  background: var(--color-bg-surface);
-  overflow: hidden;
-  transition: background 0.15s ease;
-}
-
-.accordion-section + .accordion-section {
-  margin-top: 6px;
-}
-
-.accordion-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 44px;
-  padding: 0 14px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  color: var(--color-text-primary);
-  transition: background 0.12s ease;
-}
-
-.accordion-header:hover {
-  background: var(--color-bg-hover);
-}
-
-.accordion-header__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  flex-shrink: 0;
-}
-
-.accordion-header__label {
-  font-size: 14px;
-  font-weight: 600;
-  flex: 1;
-  color: var(--color-text-primary);
-}
-
-.accordion-header__count {
-  font-size: 12px;
-  font-weight: 500;
-  min-width: 20px;
-  padding: 2px 6px;
-  background: color-mix(in srgb, var(--color-border-default) 60%, transparent);
-  border-radius: 999px;
-  text-align: center;
-  color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.accordion-header__chevron {
-  font-size: 10px;
-  color: var(--color-text-tertiary);
-  flex-shrink: 0;
-  transition: transform 0.25s ease;
-}
-
-/* Accordion body: hidden when collapsed, visible when expanded */
-.accordion-body {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows 0.25s ease;
-}
-
-.accordion-section--collapsed .accordion-body {
-  grid-template-rows: 0fr;
-}
-
-.accordion-section--collapsed .accordion-body > * {
-  overflow: hidden;
-}
 
 @media (max-width: 960px) {
   .dashboard-hero__content {
@@ -2182,6 +2096,98 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   /* -- iOS auto-zoom prevention on input focus -- */
   input, textarea, select {
     font-size: 16px;
+  }
+
+  /* ── Mobile accordion board ─────────────────────────────────────────── */
+
+  .accordion-board {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 8px;
+  }
+
+  .accordion-section {
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    overflow: hidden;
+    transition: background 0.15s ease;
+  }
+
+  .accordion-section + .accordion-section {
+    margin-top: 6px;
+  }
+
+  .accordion-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    color: var(--color-text-primary);
+    transition: background 0.12s ease;
+  }
+
+  .accordion-header:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .accordion-header__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+
+  .accordion-header__label {
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+    color: var(--color-text-primary);
+  }
+
+  .accordion-header__count {
+    font-size: 12px;
+    font-weight: 500;
+    min-width: 20px;
+    padding: 2px 6px;
+    background: color-mix(in srgb, var(--color-border-default) 60%, transparent);
+    border-radius: 999px;
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .accordion-header__chevron {
+    font-size: 10px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+    transition: transform 0.25s ease;
+  }
+
+  .accordion-section:not(.accordion-section--collapsed) .accordion-header__chevron {
+    transform: rotate(90deg);
+  }
+
+  /* Accordion body: hidden when collapsed, visible when expanded */
+  .accordion-body {
+    display: grid;
+    grid-template-rows: 1fr;
+    /* grid-template-rows animation: supported Chrome 107+, Firefox 107+, Safari 16+. Graceful snap on Safari 15-. */
+    transition: grid-template-rows 0.25s ease;
+  }
+
+  .accordion-section--collapsed .accordion-body {
+    grid-template-rows: 0fr;
+  }
+
+  .accordion-section--collapsed .accordion-body > * {
+    overflow: hidden;
   }
 }
 

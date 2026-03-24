@@ -107,13 +107,15 @@ export function Dashboard({
     return zones;
   }, [displaySessions]);
 
-  // Auto-expand the most urgent non-empty section when switching to mobile
-  // or when session data first loads. Only runs when isMobile is true.
+  // Auto-expand the most urgent non-empty section when switching to mobile.
+  // Intentionally seeded once per mobile mode change, not on every session update.
   useEffect(() => {
     if (!isMobile) return;
-    const firstNonEmpty = MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null;
-    setExpandedLevel(firstNonEmpty);
-  }, [isMobile, grouped]);
+    setExpandedLevel(
+      MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null,
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps — intentionally seeded once per mobile mode change, not on every session update
+  }, [isMobile]);
 
   const sessionsByProject = useMemo(() => {
     const groupedSessions = new Map<string, DashboardSession[]>();
@@ -166,6 +168,10 @@ export function Dashboard({
       };
     });
   }, [activeOrchestrators, allProjectsView, projects, sessionsByProject]);
+
+  const handleAccordionToggle = useCallback((level: AttentionLevel) => {
+    setExpandedLevel((current) => (current === level ? null : level));
+  }, []);
 
   const handleSend = useCallback(async (sessionId: string, message: string) => {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
@@ -443,9 +449,7 @@ export function Dashboard({
                     onMerge={handleMerge}
                     onRestore={handleRestore}
                     collapsed={expandedLevel !== level}
-                    onToggle={() =>
-                      setExpandedLevel((current) => (current === level ? null : level))
-                    }
+                    onToggle={handleAccordionToggle}
                   />
                 ))}
               </div>

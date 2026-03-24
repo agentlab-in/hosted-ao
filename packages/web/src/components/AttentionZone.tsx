@@ -14,7 +14,7 @@ interface AttentionZoneProps {
   /** Accordion mode: whether this section is collapsed (mobile only) */
   collapsed?: boolean;
   /** Accordion mode: called when the header is tapped to toggle */
-  onToggle?: () => void;
+  onToggle?: (level: AttentionLevel) => void;
 }
 
 const zoneConfig: Record<
@@ -88,15 +88,13 @@ function AttentionZoneView({
         <button
           type="button"
           className="accordion-header"
-          onClick={onToggle}
+          onClick={() => onToggle(level)}
           aria-expanded={!collapsed}
         >
           <span className="accordion-header__dot" style={{ background: config.color }} />
           <span className="accordion-header__label">{config.label}</span>
           <span className="accordion-header__count">{sessions.length}</span>
-          <span className="accordion-header__chevron" aria-hidden="true">
-            {collapsed ? "▶" : "▼"}
-          </span>
+          <span className="accordion-header__chevron" aria-hidden="true">▶</span>
         </button>
 
         <div className="accordion-body">
