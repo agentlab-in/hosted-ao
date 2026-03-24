@@ -2285,40 +2285,6 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   .accordion-section--collapsed .accordion-body > * {
     overflow: hidden;
   }
-}
-
-/* ── Phone breakpoint — 480px ────────────────────────────────────────── */
-
-@media (max-width: 480px) {
-  .dashboard-title {
-    font-size: 20px;
-  }
-
-  .dashboard-stat-cards {
-    flex-direction: column;
-  }
-
-  .dashboard-stat-card {
-    width: 100%;
-  }
-
-  .kanban-column-body {
-    max-height: 300px;
-  }
-
-  .kanban-column__title {
-    font-size: 16px;
-  }
-
-  .session-page-header h1 {
-    font-size: 15px;
-  }
-
-  /* Session detail terminal full-width */
-  .session-detail-page .mx-auto {
-    padding-left: 8px;
-    padding-right: 8px;
-  }
 
   /* -- Quick-reply section on respond cards -- */
   .quick-reply {
@@ -2388,6 +2354,40 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     border-color: var(--color-accent);
     height: 80px;
     overflow: auto;
+  }
+}
+
+/* ── Phone breakpoint — 480px ────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .dashboard-title {
+    font-size: 20px;
+  }
+
+  .dashboard-stat-cards {
+    flex-direction: column;
+  }
+
+  .dashboard-stat-card {
+    width: 100%;
+  }
+
+  .kanban-column-body {
+    max-height: 300px;
+  }
+
+  .kanban-column__title {
+    font-size: 16px;
+  }
+
+  .session-page-header h1 {
+    font-size: 15px;
+  }
+
+  /* Session detail terminal full-width */
+  .session-detail-page .mx-auto {
+    padding-left: 8px;
+    padding-right: 8px;
   }
 }
 
