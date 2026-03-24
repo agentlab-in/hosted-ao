@@ -327,7 +327,17 @@ export function Dashboard({
                   </p>
                 </div>
               </div>
-              <StatusCards stats={liveStats} />
+              {isMobile ? (
+                <MobileActionStrip
+                  grouped={grouped}
+                  onPillTap={(level) => {
+                    setExpandedLevel(level);
+                    document.getElementById("mobile-board")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                />
+              ) : (
+                <StatusCards stats={liveStats} />
+              )}
             </div>
 
             <div className="dashboard-hero__meta">
@@ -438,7 +448,7 @@ export function Dashboard({
             </div>
 
             {isMobile ? (
-              <div className="accordion-board">
+              <div id="mobile-board" className="accordion-board">
                 {MOBILE_KANBAN_ORDER.map((level) => (
                   <AttentionZone
                     key={level}
@@ -692,6 +702,68 @@ function ProjectMetric({ label, value, tone }: { label: string; value: number; t
       <div className="mt-1 text-[18px] font-semibold tabular-nums" style={{ color: tone }}>
         {value}
       </div>
+    </div>
+  );
+}
+
+const MOBILE_ACTION_STRIP_LEVELS = [
+  {
+    level: "respond" as const,
+    label: "respond",
+    color: "var(--color-status-error)",
+  },
+  {
+    level: "merge" as const,
+    label: "merge",
+    color: "var(--color-status-ready)",
+  },
+  {
+    level: "review" as const,
+    label: "review",
+    color: "var(--color-accent-orange)",
+  },
+] satisfies Array<{ level: AttentionLevel; label: string; color: string }>;
+
+function MobileActionStrip({
+  grouped,
+  onPillTap,
+}: {
+  grouped: Record<AttentionLevel, DashboardSession[]>;
+  onPillTap: (level: AttentionLevel) => void;
+}) {
+  const activePills = MOBILE_ACTION_STRIP_LEVELS.filter(
+    ({ level }) => grouped[level].length > 0,
+  );
+
+  if (activePills.length === 0) {
+    return (
+      <div className="mobile-action-strip mobile-action-strip--all-good">
+        <span className="mobile-action-strip__all-good">All clear — agents are working</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mobile-action-strip" role="navigation" aria-label="Urgency quick-nav">
+      {activePills.map(({ level, label, color }) => (
+        <button
+          key={level}
+          type="button"
+          className="mobile-action-pill"
+          onClick={() => onPillTap(level)}
+          aria-label={`${grouped[level].length} ${label} — scroll to section`}
+        >
+          <span
+            className="mobile-action-pill__dot"
+            style={{ background: color }}
+            aria-hidden="true"
+          />
+          <span className="mobile-action-pill__count" style={{ color }}>
+            {grouped[level].length}
+          </span>
+          <span className="mobile-action-pill__label">{label}</span>
+        </button>
+      ))}
     </div>
   );
 }

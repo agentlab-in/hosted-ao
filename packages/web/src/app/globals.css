@@ -1957,25 +1957,109 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
   /* -- Hero section stacks vertically -- */
   .dashboard-hero__content {
-    flex-direction: column;
-    padding: 12px;
-    gap: 12px;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    min-height: 44px;
   }
 
   .dashboard-hero__primary {
-    flex-direction: column;
+    flex-direction: row;
     flex-basis: auto;
-    gap: 12px;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
   }
 
+  .dashboard-hero__heading {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .dashboard-subtitle {
+    display: none;
+  }
+
+  /* Hide stat cards on mobile — replaced by the action strip */
   .dashboard-stat-cards {
-    width: 100%;
-    margin-left: 0;
+    display: none;
   }
 
   .dashboard-hero__meta {
-    width: 100%;
+    flex-shrink: 0;
     margin-left: 0;
+  }
+
+  /* ── Mobile action strip ─────────────────────────────────────────────── */
+
+  .mobile-action-strip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-shrink: 0;
+  }
+
+  .mobile-action-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-action-strip--all-good {
+    align-items: center;
+  }
+
+  .mobile-action-strip__all-good {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+  }
+
+  .mobile-action-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: 1px solid var(--color-border-default);
+    background: var(--color-bg-surface);
+    cursor: pointer;
+    white-space: nowrap;
+    min-height: 32px;
+    transition:
+      background 0.12s ease,
+      border-color 0.12s ease;
+  }
+
+  .mobile-action-pill:hover,
+  .mobile-action-pill:active {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+  }
+
+  .mobile-action-pill__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+
+  .mobile-action-pill__count {
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .mobile-action-pill__label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    text-transform: lowercase;
   }
 
   /* -- Kanban board: stack columns vertically -- */
