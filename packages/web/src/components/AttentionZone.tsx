@@ -11,6 +11,10 @@ interface AttentionZoneProps {
   onKill?: (sessionId: string) => void;
   onMerge?: (prNumber: number) => void;
   onRestore?: (sessionId: string) => void;
+  /** Accordion mode: whether this section is collapsed (mobile only) */
+  collapsed?: boolean;
+  /** Accordion mode: called when the header is tapped to toggle */
+  onToggle?: () => void;
 }
 
 const zoneConfig: Record<
@@ -56,6 +60,11 @@ const zoneConfig: Record<
 /**
  * Kanban column — always renders (even when empty) to preserve
  * the board shape. Cards scroll independently within each column.
+ *
+ * When `collapsed` and `onToggle` are provided the component renders
+ * in accordion mode (mobile): a 44 px tappable header only, with the
+ * card list hidden. Empty sections in accordion mode omit the dashed
+ * placeholder entirely — just the single-line header is shown.
  */
 function AttentionZoneView({
   level,
@@ -64,8 +73,51 @@ function AttentionZoneView({
   onKill,
   onMerge,
   onRestore,
+  collapsed,
+  onToggle,
 }: AttentionZoneProps) {
   const config = zoneConfig[level];
+  const isAccordion = onToggle !== undefined;
+
+  if (isAccordion) {
+    return (
+      <div
+        className={`accordion-section${collapsed ? " accordion-section--collapsed" : " accordion-section--expanded"}`}
+        data-level={level}
+      >
+        <button
+          type="button"
+          className="accordion-header"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+        >
+          <span className="accordion-header__dot" style={{ background: config.color }} />
+          <span className="accordion-header__label">{config.label}</span>
+          <span className="accordion-header__count">{sessions.length}</span>
+          <span className="accordion-header__chevron" aria-hidden="true">
+            {collapsed ? "▶" : "▼"}
+          </span>
+        </button>
+
+        <div className="accordion-body">
+          {sessions.length > 0 && (
+            <div className="flex flex-col gap-2 p-3">
+              {sessions.map((session) => (
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  onSend={onSend}
+                  onKill={onKill}
+                  onMerge={onMerge}
+                  onRestore={onRestore}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="kanban-column" data-level={level}>
@@ -105,6 +157,8 @@ function AttentionZoneView({
 function areAttentionZonePropsEqual(prev: AttentionZoneProps, next: AttentionZoneProps): boolean {
   return (
     prev.level === next.level &&
+    prev.collapsed === next.collapsed &&
+    prev.onToggle === next.onToggle &&
     prev.onSend === next.onSend &&
     prev.onKill === next.onKill &&
     prev.onMerge === next.onMerge &&

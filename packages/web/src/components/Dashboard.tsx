@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   type DashboardSession,
   type DashboardStats,
@@ -32,6 +33,8 @@ interface DashboardProps {
 }
 
 const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as const;
+/** Urgency-first order for the mobile accordion (reversed from desktop) */
+const MOBILE_KANBAN_ORDER = ["respond", "merge", "review", "pending", "working"] as const;
 const EMPTY_ORCHESTRATORS: DashboardOrchestratorLink[] = [];
 
 function mergeOrchestrators(
@@ -71,6 +74,8 @@ export function Dashboard({
   const [spawnErrors, setSpawnErrors] = useState<Record<string, string>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const isMobile = useMediaQuery(767);
+  const [expandedLevel, setExpandedLevel] = useState<AttentionLevel | null>(null);
   const showSidebar = projects.length > 1;
   const allProjectsView = showSidebar && projectId === undefined;
 
@@ -101,6 +106,14 @@ export function Dashboard({
     }
     return zones;
   }, [displaySessions]);
+
+  // Auto-expand the most urgent non-empty section when switching to mobile
+  // or when session data first loads. Only runs when isMobile is true.
+  useEffect(() => {
+    if (!isMobile) return;
+    const firstNonEmpty = MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null;
+    setExpandedLevel(firstNonEmpty);
+  }, [isMobile, grouped]);
 
   const sessionsByProject = useMemo(() => {
     const groupedSessions = new Map<string, DashboardSession[]>();
@@ -417,19 +430,40 @@ export function Dashboard({
                 <BoardLegendItem label="Ready to land" tone="var(--color-status-ready)" />
               </div>
             </div>
-            <div className="kanban-board">
-              {KANBAN_LEVELS.map((level) => (
-                <AttentionZone
-                  key={level}
-                  level={level}
-                  sessions={grouped[level]}
-                  onSend={handleSend}
-                  onKill={handleKill}
-                  onMerge={handleMerge}
-                  onRestore={handleRestore}
-                />
-              ))}
-            </div>
+
+            {isMobile ? (
+              <div className="accordion-board">
+                {MOBILE_KANBAN_ORDER.map((level) => (
+                  <AttentionZone
+                    key={level}
+                    level={level}
+                    sessions={grouped[level]}
+                    onSend={handleSend}
+                    onKill={handleKill}
+                    onMerge={handleMerge}
+                    onRestore={handleRestore}
+                    collapsed={expandedLevel !== level}
+                    onToggle={() =>
+                      setExpandedLevel((current) => (current === level ? null : level))
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="kanban-board">
+                {KANBAN_LEVELS.map((level) => (
+                  <AttentionZone
+                    key={level}
+                    level={level}
+                    sessions={grouped[level]}
+                    onSend={handleSend}
+                    onKill={handleKill}
+                    onMerge={handleMerge}
+                    onRestore={handleRestore}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
