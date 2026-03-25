@@ -435,6 +435,24 @@ function DashboardInner({
 
             <div className="dashboard-hero__meta">
               <div className="flex items-center gap-3">
+                {!isMobile ? (
+                  <a
+                    href={prsHref}
+                    className="orchestrator-btn flex items-center gap-2 px-4 py-2 text-[12px] font-semibold hover:no-underline"
+                  >
+                    <svg
+                      className="h-3.5 w-3.5 opacity-75"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="M4 6h16M4 12h16M4 18h10" />
+                    </svg>
+                    PRs
+                  </a>
+                ) : null}
                 {!allProjectsView && !isMobile ? (
                   <OrchestratorControl orchestrators={activeOrchestrators} />
                 ) : null}

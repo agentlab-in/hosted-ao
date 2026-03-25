@@ -420,6 +420,7 @@ export function SessionDetail({
           activeTab={isOrchestrator ? "orchestrator" : undefined}
           dashboardHref={dashboardHref}
           prsHref={prsHref}
+          showOrchestrator={orchestratorHref !== null}
           orchestratorHref={orchestratorHref}
         />
       ) : null}

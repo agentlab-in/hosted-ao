@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionDetail } from "../SessionDetail";
 import { makePR, makeSession } from "../../__tests__/helpers";
@@ -81,6 +81,32 @@ describe("SessionDetail mobile navbar", () => {
       "href",
       "/sessions/my-app-orchestrator",
     );
+  });
+
+  it("hides the orchestrator nav item when no orchestrator destination exists", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-4",
+          projectId: "my-app",
+          pr: makePR({ number: 56, title: "No orchestrator yet" }),
+        })}
+        projectOrchestratorId={null}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: /session navigation/i });
+
+    expect(within(nav).getByRole("link", { name: "Dashboard" })).toHaveAttribute(
+      "href",
+      "/?project=my-app",
+    );
+    expect(within(nav).getByRole("link", { name: "PRs" })).toHaveAttribute(
+      "href",
+      "/prs?project=my-app",
+    );
+    expect(within(nav).queryByRole("link", { name: "Orchestrator" })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "Orchestrator" })).not.toBeInTheDocument();
   });
 
   it("keeps branch and PR chips in the compact mobile header", () => {

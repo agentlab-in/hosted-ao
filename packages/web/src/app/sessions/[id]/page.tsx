@@ -53,7 +53,7 @@ export default function SessionPage() {
 
   const [session, setSession] = useState<DashboardSession | null>(null);
   const [zoneCounts, setZoneCounts] = useState<ZoneCounts | null>(null);
-  const [projectOrchestratorId, setProjectOrchestratorId] = useState<string | null>(null);
+  const [projectOrchestratorId, setProjectOrchestratorId] = useState<string | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const sessionProjectId = session?.projectId ?? null;
@@ -91,6 +91,7 @@ export default function SessionPage() {
 
   const fetchProjectSessions = useCallback(async () => {
     if (!sessionProjectId) return;
+    if (!sessionIsOrchestrator && projectOrchestratorId !== undefined) return;
     try {
       const res = await fetch(`/api/sessions?project=${encodeURIComponent(sessionProjectId)}`);
       if (!res.ok) return;
@@ -121,7 +122,7 @@ export default function SessionPage() {
     } catch {
       // non-critical - status strip just won't show
     }
-  }, [sessionIsOrchestrator, sessionProjectId]);
+  }, [projectOrchestratorId, sessionIsOrchestrator, sessionProjectId]);
 
   // Initial fetch — session first, zone counts after (avoids blocking on slow /api/sessions)
   useEffect(() => {

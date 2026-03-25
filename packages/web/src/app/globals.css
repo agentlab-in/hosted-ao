@@ -332,6 +332,7 @@
   --z-raised: 10;
   --z-nav: 100;
   --z-modal: 200;
+  --z-bottom-nav: 250;
   --z-overlay: 300;
   --z-toast: 400;
   --z-connection-bar: 500;
@@ -2168,7 +2169,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 250;
+    z-index: var(--z-bottom-nav);
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: 1fr;
@@ -2706,10 +2707,10 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     align-items: center;
     justify-content: center;
     align-self: start;
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
-    min-height: 30px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
     padding: 0;
     flex-shrink: 0;
     color: var(--color-accent);
