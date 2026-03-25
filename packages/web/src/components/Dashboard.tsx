@@ -6,16 +6,14 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   type DashboardSession,
   type DashboardStats,
-  type DashboardPR,
   type AttentionLevel,
   type GlobalPauseState,
   type DashboardOrchestratorLink,
   getAttentionLevel,
   isPRRateLimited,
-  CI_STATUS,
+  isPRMergeReady,
 } from "@/lib/types";
 import { AttentionZone } from "./AttentionZone";
-import { PRTableRow } from "./PRStatus";
 import { DynamicFavicon } from "./DynamicFavicon";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { ProjectSidebar } from "./ProjectSidebar";
@@ -25,6 +23,7 @@ import { EmptyState } from "./Skeleton";
 import { ToastProvider, useToast } from "./Toast";
 import { BottomSheet } from "./BottomSheet";
 import { ConnectionBar } from "./ConnectionBar";
+import { MobileBottomNav } from "./MobileBottomNav";
 
 interface DashboardProps {
   initialSessions: DashboardSession[];
@@ -38,6 +37,16 @@ interface DashboardProps {
 const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as const;
 /** Urgency-first order for the mobile accordion (reversed from desktop) */
 const MOBILE_KANBAN_ORDER = ["respond", "merge", "review", "pending", "working"] as const;
+const MOBILE_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "respond", label: "Respond" },
+  { value: "merge", label: "Ready" },
+  { value: "review", label: "Review" },
+  { value: "pending", label: "Pending" },
+  { value: "working", label: "Working" },
+] as const;
+type MobileAttentionLevel = (typeof MOBILE_KANBAN_ORDER)[number];
+type MobileFilterValue = (typeof MOBILE_FILTERS)[number]["value"];
 const EMPTY_ORCHESTRATORS: DashboardOrchestratorLink[] = [];
 
 function mergeOrchestrators(
@@ -51,6 +60,13 @@ function mergeOrchestrators(
   }
 
   return [...merged.values()];
+}
+
+function getProjectScopedHref(basePath: "/" | "/prs", projectId: string | undefined): string {
+  if (projectId) {
+    return `${basePath}?project=${encodeURIComponent(projectId)}`;
+  }
+  return `${basePath}?project=all`;
 }
 
 function DashboardInner({
@@ -78,13 +94,29 @@ function DashboardInner({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isMobile = useMediaQuery(767);
-  const [expandedLevel, setExpandedLevel] = useState<AttentionLevel | null>(null);
+  const [expandedLevel, setExpandedLevel] = useState<MobileAttentionLevel | null>(null);
+  const [mobileFilter, setMobileFilter] = useState<MobileFilterValue>("all");
   const showSidebar = projects.length > 1;
   const { showToast } = useToast();
-  const [killTargetSession, setKillTargetSession] = useState<DashboardSession | null>(null);
+  const [sheetState, setSheetState] = useState<{
+    session: DashboardSession;
+    mode: "preview" | "confirm-kill";
+  } | null>(null);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const allProjectsView = showSidebar && projectId === undefined;
+  const currentProjectOrchestrator = useMemo(
+    () =>
+      projectId
+        ? activeOrchestrators.find((orchestrator) => orchestrator.projectId === projectId) ?? null
+        : null,
+    [activeOrchestrators, projectId],
+  );
+  const dashboardHref = getProjectScopedHref("/", projectId);
+  const prsHref = getProjectScopedHref("/prs", projectId);
+  const orchestratorHref = currentProjectOrchestrator
+    ? `/sessions/${encodeURIComponent(currentProjectOrchestrator.id)}`
+    : null;
 
   const displaySessions = useMemo(() => {
     if (allProjectsView || !activeSessionId) return sessions;
@@ -124,6 +156,15 @@ function DashboardInner({
   // eslint-disable-next-line react-hooks/exhaustive-deps — intentionally seeded once per mobile mode change, not on every session update
   }, [isMobile]);
 
+  useEffect(() => {
+    if (!isMobile) return;
+    if (mobileFilter === "all") {
+      setExpandedLevel(MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null);
+      return;
+    }
+    setExpandedLevel(mobileFilter);
+  }, [grouped, isMobile, mobileFilter]);
+
   const sessionsByProject = useMemo(() => {
     const groupedSessions = new Map<string, DashboardSession[]>();
     for (const session of sessions) {
@@ -136,16 +177,6 @@ function DashboardInner({
     }
     return groupedSessions;
   }, [sessions]);
-
-  const openPRs = useMemo(() => {
-    return displaySessions
-      .filter(
-        (session): session is DashboardSession & { pr: DashboardPR } =>
-          session.pr?.state === "open",
-      )
-      .map((session) => session.pr)
-      .sort((a, b) => mergeScore(a) - mergeScore(b));
-  }, [displaySessions]);
 
   const projectOverviews = useMemo(() => {
     if (!allProjectsView) return [];
@@ -177,16 +208,22 @@ function DashboardInner({
   }, [activeOrchestrators, allProjectsView, projects, sessionsByProject]);
 
   const handleAccordionToggle = useCallback((level: AttentionLevel) => {
+    if (level === "done") return;
     setExpandedLevel((current) => (current === level ? null : level));
   }, []);
 
   const handlePillTap = useCallback((level: AttentionLevel) => {
+    if (level === "done") return;
+    setMobileFilter(level);
     setExpandedLevel(level);
     const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? ("instant" as ScrollBehavior)
       : "smooth";
     document.getElementById("mobile-board")?.scrollIntoView({ behavior, block: "start" });
   }, []);
+
+  const visibleMobileLevels =
+    mobileFilter === "all" ? MOBILE_KANBAN_ORDER : MOBILE_KANBAN_ORDER.filter((level) => level === mobileFilter);
 
   const handleSend = useCallback(async (sessionId: string, message: string) => {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
@@ -201,12 +238,23 @@ function DashboardInner({
 
   const handleKill = useCallback((sessionId: string) => {
     const session = sessionsRef.current.find((s) => s.id === sessionId) ?? null;
-    setKillTargetSession(session);
+    if (!session) return;
+    setSheetState({ session, mode: "confirm-kill" });
+  }, []);
+
+  const handlePreview = useCallback((session: DashboardSession) => {
+    setSheetState({ session, mode: "preview" });
+  }, []);
+
+  const handleRequestKillFromPreview = useCallback(() => {
+    setSheetState((current) =>
+      current ? { session: current.session, mode: "confirm-kill" } : current,
+    );
   }, []);
 
   const handleKillConfirm = useCallback(async () => {
-    const session = killTargetSession;
-    setKillTargetSession(null);
+    const session = sheetState?.session;
+    setSheetState(null);
     if (!session) return;
     const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/kill`, {
       method: "POST",
@@ -218,9 +266,10 @@ function DashboardInner({
     } else {
       showToast("Session terminated", "success");
     }
-  }, [killTargetSession, showToast]);
+  }, [sheetState, showToast]);
 
   const handleMerge = useCallback(async (prNumber: number) => {
+    setSheetState(null);
     const res = await fetch(`/api/prs/${prNumber}/merge`, { method: "POST" });
     if (!res.ok) {
       const text = await res.text();
@@ -331,6 +380,7 @@ function DashboardInner({
         />
       )}
       <div className="dashboard-main flex-1 overflow-y-auto px-4 py-4 md:px-7 md:py-6">
+        <div id="mobile-dashboard-anchor" aria-hidden="true" />
         <DynamicFavicon sessions={sessions} projectName={projectName} />
         <section className="dashboard-hero mb-5">
           <div className="dashboard-hero__backdrop" />
@@ -355,31 +405,54 @@ function DashboardInner({
             )}
             <div className="dashboard-hero__primary">
               <div className="dashboard-hero__heading">
-                <div>
-                  <h1 className="dashboard-title">{projectName ?? "Orchestrator"}</h1>
+                <div className="dashboard-hero__copy">
+                  <h1 className="dashboard-title">
+                    {isMobile ? "agent-orchestrator" : (projectName ?? "Orchestrator")}
+                  </h1>
                   <p className="dashboard-subtitle">
                     Live sessions, review pressure, and merge readiness.
                   </p>
                 </div>
               </div>
-              {isMobile ? (
-                <MobileActionStrip
-                  grouped={grouped}
-                  onPillTap={handlePillTap}
-                />
-              ) : (
-                <StatusCards stats={liveStats} />
-              )}
+              {!isMobile ? <StatusCards stats={liveStats} /> : null}
             </div>
 
             <div className="dashboard-hero__meta">
               <div className="flex items-center gap-3">
-                {!allProjectsView && <OrchestratorControl orchestrators={activeOrchestrators} />}
+                {!allProjectsView && !isMobile ? (
+                  <OrchestratorControl orchestrators={activeOrchestrators} />
+                ) : null}
                 <ThemeToggle />
               </div>
             </div>
           </div>
         </section>
+
+        {isMobile ? (
+          <section className="mobile-priority-row" aria-label="Needs attention">
+            <div className="mobile-priority-row__label">Needs attention</div>
+            <MobileActionStrip
+              grouped={grouped}
+              onPillTap={handlePillTap}
+            />
+          </section>
+        ) : null}
+
+        {isMobile ? (
+          <section className="mobile-filter-row" aria-label="Dashboard filters">
+            {MOBILE_FILTERS.map((filter) => (
+              <button
+                key={filter.value}
+                type="button"
+                className="mobile-filter-chip"
+                data-active={mobileFilter === filter.value ? "true" : "false"}
+                onClick={() => setMobileFilter(filter.value)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </section>
+        ) : null}
 
         {globalPause && !globalPauseDismissed && (
           <div className="dashboard-alert mb-6 flex items-center gap-2.5 border border-[color-mix(in_srgb,var(--color-status-error)_25%,transparent)] bg-[var(--color-tint-red)] px-3.5 py-2.5 text-[11px] text-[var(--color-status-error)]">
@@ -481,7 +554,7 @@ function DashboardInner({
 
             {isMobile ? (
               <div id="mobile-board" className="accordion-board">
-                {MOBILE_KANBAN_ORDER.map((level) => (
+                {visibleMobileLevels.map((level) => (
                   <AttentionZone
                     key={level}
                     level={level}
@@ -492,6 +565,8 @@ function DashboardInner({
                     onRestore={handleRestore}
                     collapsed={expandedLevel !== level}
                     onToggle={handleAccordionToggle}
+                    compactMobile
+                    onPreview={handlePreview}
                   />
                 ))}
               </div>
@@ -515,50 +590,28 @@ function DashboardInner({
 
         {!allProjectsView && !hasAnySessions && <EmptyState />}
 
-        {openPRs.length > 0 && (
-          <div className="mx-auto max-w-[900px]">
-            <h2 className="mb-3 px-1 text-[10px] font-bold uppercase tracking-[0.10em] text-[var(--color-text-tertiary)]">
-              Pull Requests
-            </h2>
-            <div className="overflow-hidden border border-[var(--color-border-default)]">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="border-b border-[var(--color-border-muted)]">
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      PR
-                    </th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      Title
-                    </th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      Size
-                    </th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      CI
-                    </th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      Review
-                    </th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                      Unresolved
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {openPRs.map((pr) => (
-                    <PRTableRow key={pr.number} pr={pr} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </div>
     </div>
+    {isMobile ? (
+      <MobileBottomNav
+        ariaLabel="Dashboard navigation"
+        activeTab="dashboard"
+        dashboardHref={dashboardHref}
+        prsHref={prsHref}
+        showOrchestrator={!allProjectsView}
+        orchestratorHref={orchestratorHref}
+      />
+    ) : null}
     <BottomSheet
-      session={killTargetSession}
+      session={sheetState?.session ?? null}
+      mode={sheetState?.mode ?? "preview"}
       onConfirm={handleKillConfirm}
-      onCancel={() => setKillTargetSession(null)}
+      onCancel={() => setSheetState(null)}
+      onRequestKill={handleRequestKillFromPreview}
+      onMerge={handleMerge}
+      isMergeReady={
+        sheetState?.session?.pr ? isPRMergeReady(sheetState.session.pr) : false
+      }
     />
     </>
   );
@@ -869,17 +922,4 @@ function BoardLegendItem({ label, tone }: { label: string; tone: string }) {
       {label}
     </span>
   );
-}
-
-function mergeScore(
-  pr: Pick<DashboardPR, "ciStatus" | "reviewDecision" | "mergeability" | "unresolvedThreads">,
-): number {
-  let score = 0;
-  if (!pr.mergeability.noConflicts) score += 40;
-  if (pr.ciStatus === CI_STATUS.FAILING) score += 30;
-  else if (pr.ciStatus === CI_STATUS.PENDING) score += 5;
-  if (pr.reviewDecision === "changes_requested") score += 20;
-  else if (pr.reviewDecision !== "approved") score += 10;
-  score += pr.unresolvedThreads * 5;
-  return score;
 }

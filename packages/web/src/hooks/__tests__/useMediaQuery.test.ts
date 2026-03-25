@@ -126,4 +126,25 @@ describe("useMediaQuery", () => {
       .calls[0][1];
     expect(addedListener).toBe(removedListener);
   });
+
+  it("falls back to addListener/removeListener when addEventListener is unavailable", async () => {
+    currentMQL = {
+      ...makeMQL(false),
+      addEventListener: undefined,
+      removeEventListener: undefined,
+    } as unknown as ReturnType<typeof makeMQL> & { _fire: (m: boolean) => void };
+
+    const { unmount } = renderHook(() => useMediaQuery("(max-width: 767px)"));
+
+    await act(async () => {});
+
+    expect(currentMQL.addListener).toHaveBeenCalledWith(expect.any(Function));
+
+    unmount();
+
+    expect(currentMQL.removeListener).toHaveBeenCalledWith(expect.any(Function));
+    const addedListener = (currentMQL.addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const removedListener = (currentMQL.removeListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addedListener).toBe(removedListener);
+  });
 });

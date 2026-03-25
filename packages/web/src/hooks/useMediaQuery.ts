@@ -44,10 +44,18 @@ export function useMediaQuery(queryOrBreakpoint: string | number): boolean {
       setMatches(event.matches);
     };
 
-    mediaQueryList.addEventListener("change", listener);
+    if (typeof mediaQueryList.addEventListener === "function") {
+      mediaQueryList.addEventListener("change", listener);
+
+      return () => {
+        mediaQueryList.removeEventListener("change", listener);
+      };
+    }
+
+    mediaQueryList.addListener(listener);
 
     return () => {
-      mediaQueryList.removeEventListener("change", listener);
+      mediaQueryList.removeListener(listener);
     };
   }, [query]);
 

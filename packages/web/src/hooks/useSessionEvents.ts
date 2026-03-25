@@ -5,6 +5,7 @@ import type { DashboardSession, GlobalPauseState, SSESnapshotEvent } from "@/lib
 
 const MEMBERSHIP_REFRESH_DELAY_MS = 120;
 const STALE_REFRESH_INTERVAL_MS = 15000;
+const DISCONNECTED_GRACE_PERIOD_MS = 4000;
 
 type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 
@@ -75,6 +76,7 @@ export function useSessionEvents(
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingMembershipKeyRef = useRef<string | null>(null);
   const lastRefreshAtRef = useRef(Date.now());
+  const disconnectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     sessionsRef.current = state.sessions;
@@ -94,6 +96,13 @@ export function useSessionEvents(
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
+      }
+    };
+
+    const clearDisconnectedTimer = () => {
+      if (disconnectedTimerRef.current) {
+        clearTimeout(disconnectedTimerRef.current);
+        disconnectedTimerRef.current = null;
       }
     };
 
@@ -177,15 +186,28 @@ export function useSessionEvents(
     };
 
     es.onopen = () => {
+      clearDisconnectedTimer();
       if (!disposed) dispatch({ type: "setConnection", status: "connected" });
     };
 
     es.onerror = () => {
-      if (!disposed) {
-        dispatch({
-          type: "setConnection",
-          status: es.readyState === EventSource.CLOSED ? "disconnected" : "reconnecting",
-        });
+      if (disposed) return;
+
+      if (es.readyState === EventSource.CLOSED) {
+        clearDisconnectedTimer();
+        dispatch({ type: "setConnection", status: "disconnected" });
+        return;
+      }
+
+      dispatch({ type: "setConnection", status: "reconnecting" });
+
+      if (disconnectedTimerRef.current === null) {
+        disconnectedTimerRef.current = setTimeout(() => {
+          disconnectedTimerRef.current = null;
+          if (!disposed && es.readyState !== EventSource.OPEN) {
+            dispatch({ type: "setConnection", status: "disconnected" });
+          }
+        }, DISCONNECTED_GRACE_PERIOD_MS);
       }
     };
 
@@ -196,6 +218,7 @@ export function useSessionEvents(
       refreshingRef.current = false;
       pendingMembershipKeyRef.current = null;
       clearRefreshTimer();
+      clearDisconnectedTimer();
       es.close();
     };
   }, [project]);

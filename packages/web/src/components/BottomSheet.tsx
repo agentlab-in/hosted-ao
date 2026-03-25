@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { DashboardSession } from "@/lib/types";
+import { getAttentionLevel, type DashboardSession } from "@/lib/types";
 import { getSessionTitle } from "@/lib/format";
 
 function getRelativeTime(dateStr: string): string {
@@ -18,13 +18,40 @@ function getRelativeTime(dateStr: string): string {
   return `${diffDay}d ago`;
 }
 
-interface BottomSheetProps {
-  session: DashboardSession | null;
-  onConfirm: () => void;
-  onCancel: () => void;
+function formatTagLabel(value: string): string {
+  return value.replaceAll("_", " ");
 }
 
-export function BottomSheet({ session, onCancel, onConfirm }: BottomSheetProps) {
+function isTag(
+  value:
+    | {
+        label: string;
+        tone: "accent" | "neutral" | "mono";
+      }
+    | null,
+): value is { label: string; tone: "accent" | "neutral" | "mono" } {
+  return value !== null;
+}
+
+interface BottomSheetProps {
+  session: DashboardSession | null;
+  mode: "preview" | "confirm-kill";
+  onConfirm: () => void;
+  onCancel: () => void;
+  onRequestKill?: () => void;
+  onMerge?: (prNumber: number) => void;
+  isMergeReady?: boolean;
+}
+
+export function BottomSheet({
+  session,
+  mode,
+  onCancel,
+  onConfirm,
+  onRequestKill,
+  onMerge,
+  isMergeReady = false,
+}: BottomSheetProps) {
   const touchStartYRef = useRef<number | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
 
@@ -83,8 +110,19 @@ export function BottomSheet({ session, onCancel, onConfirm }: BottomSheetProps) 
   if (!session) return null;
 
   const title = getSessionTitle(session);
-  const branch = session.branch ?? "—";
-  const runtime = getRelativeTime(session.createdAt);
+  const attention = getAttentionLevel(session);
+  const summary =
+    session.summary && !session.summaryIsFallback ? session.summary : null;
+  const hasLiveTerminateAction =
+    attention !== "done" && attention !== "merge" && session.status !== "terminated";
+  const tags = [
+    { label: formatTagLabel(attention), tone: "accent" as const },
+    { label: formatTagLabel(session.status), tone: "neutral" as const },
+    session.activity ? { label: formatTagLabel(session.activity), tone: "neutral" as const } : null,
+    session.branch ? { label: session.branch, tone: "mono" as const } : null,
+    session.pr ? { label: `PR #${session.pr.number}`, tone: "neutral" as const } : null,
+    session.issueLabel ? { label: session.issueLabel, tone: "neutral" as const } : null,
+  ].filter(isTag);
 
   return (
     <>
@@ -110,36 +148,90 @@ export function BottomSheet({ session, onCancel, onConfirm }: BottomSheetProps) 
 
         <div className="bottom-sheet__header">
           <h2 id="bottom-sheet-title" className="bottom-sheet__title">
-            Terminate session?
+            {mode === "confirm-kill" ? "Terminate session?" : title}
           </h2>
-          <p className="bottom-sheet__subtitle">This action cannot be undone.</p>
+          <p className="bottom-sheet__subtitle">
+            {mode === "confirm-kill"
+              ? "This action cannot be undone."
+              : `${attention} · started ${getRelativeTime(session.createdAt)}`}
+          </p>
         </div>
 
         <div className="bottom-sheet__session-info">
-          <div className="bottom-sheet__session-name">{title}</div>
+          {mode === "confirm-kill" ? (
+            <div className="bottom-sheet__session-name">{title}</div>
+          ) : null}
           <div className="bottom-sheet__session-meta">
-            {branch !== "—" && (
-              <span className="bottom-sheet__session-branch">{branch}</span>
-            )}
-            <span className="bottom-sheet__session-runtime">Started {runtime}</span>
+            {tags.map((tag) => (
+              <span
+                key={`${tag.tone}-${tag.label}`}
+                className={`bottom-sheet__tag bottom-sheet__tag--${tag.tone}`}
+              >
+                {tag.label}
+              </span>
+            ))}
           </div>
+          {summary ? <p className="bottom-sheet__summary">{summary}</p> : null}
         </div>
 
         <div className="bottom-sheet__actions">
-          <button
-            type="button"
-            className="bottom-sheet__btn bottom-sheet__btn--cancel"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="bottom-sheet__btn bottom-sheet__btn--danger"
-            onClick={onConfirm}
-          >
-            Terminate
-          </button>
+          {mode === "confirm-kill" ? (
+            <>
+              <button
+                type="button"
+                className="bottom-sheet__btn bottom-sheet__btn--cancel"
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="bottom-sheet__btn bottom-sheet__btn--danger"
+                onClick={onConfirm}
+              >
+                Terminate
+              </button>
+            </>
+          ) : (
+            <>
+              <a
+                href={`/sessions/${encodeURIComponent(session.id)}`}
+                className="bottom-sheet__btn bottom-sheet__btn--primary"
+              >
+                Open session
+              </a>
+              {isMergeReady && session.pr && onMerge ? (
+                <button
+                  type="button"
+                  className="bottom-sheet__btn bottom-sheet__btn--secondary"
+                  onClick={() => onMerge(session.pr!.number)}
+                >
+                  Merge
+                </button>
+              ) : hasLiveTerminateAction && onRequestKill ? (
+                <button
+                  type="button"
+                  className="bottom-sheet__btn bottom-sheet__btn--danger"
+                  onClick={onRequestKill}
+                >
+                  <svg
+                    className="bottom-sheet__btn-icon"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4h8v2" />
+                    <path d="M19 6l-1 14H6L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                  </svg>
+                  Terminate
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     </>

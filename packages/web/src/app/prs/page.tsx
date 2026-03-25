@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
+import { PullRequestsPage } from "@/components/PullRequestsPage";
+import { getDashboardPageData, resolveDashboardProjectFilter } from "@/lib/dashboard-page-data";
 
 export const dynamic = "force-dynamic";
-import { Dashboard } from "@/components/Dashboard";
-import { getDashboardPageData, resolveDashboardProjectFilter } from "@/lib/dashboard-page-data";
 
 export async function generateMetadata(props: {
   searchParams: Promise<{ project?: string }>;
@@ -10,20 +10,21 @@ export async function generateMetadata(props: {
   const searchParams = await props.searchParams;
   const projectFilter = resolveDashboardProjectFilter(searchParams.project);
   const pageData = await getDashboardPageData(projectFilter);
-  return { title: { absolute: `ao | ${pageData.projectName}` } };
+  return { title: { absolute: `ao | ${pageData.projectName} PRs` } };
 }
 
-export default async function Home(props: { searchParams: Promise<{ project?: string }> }) {
+export default async function PullRequestsRoute(props: {
+  searchParams: Promise<{ project?: string }>;
+}) {
   const searchParams = await props.searchParams;
   const pageData = await getDashboardPageData(searchParams.project);
 
   return (
-    <Dashboard
+    <PullRequestsPage
       initialSessions={pageData.sessions}
       projectId={pageData.selectedProjectId}
       projectName={pageData.projectName}
       projects={pageData.projects}
-      initialGlobalPause={pageData.globalPause}
       orchestrators={pageData.orchestrators}
     />
   );
