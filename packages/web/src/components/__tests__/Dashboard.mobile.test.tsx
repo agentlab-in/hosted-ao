@@ -214,4 +214,61 @@ describe("Dashboard mobile layout", () => {
 
     expect(screen.getByText("No sessions")).toBeInTheDocument();
   });
+
+  it("preserves a deliberate all-collapsed state across session updates", () => {
+    const { rerender } = render(
+      <Dashboard
+        initialSessions={[
+          makeSession({
+            id: "respond-1",
+            status: "needs_input",
+            activity: "waiting_input",
+            summary: "Need approval to proceed",
+          }),
+          makeSession({
+            id: "working-1",
+            status: "running",
+            activity: "active",
+            summary: "Implement dashboard filters",
+          }),
+        ]}
+      />,
+    );
+
+    const respondAccordion = screen.getByRole("button", { name: /respond 1/i });
+    expect(respondAccordion).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(respondAccordion);
+    expect(respondAccordion).toHaveAttribute("aria-expanded", "false");
+
+    rerender(
+      <Dashboard
+        initialSessions={[
+          makeSession({
+            id: "respond-1",
+            status: "needs_input",
+            activity: "waiting_input",
+            summary: "Need approval to proceed",
+            lastActivityAt: new Date(Date.now() + 1_000).toISOString(),
+          }),
+          makeSession({
+            id: "working-1",
+            status: "running",
+            activity: "active",
+            summary: "Implement dashboard filters",
+            lastActivityAt: new Date(Date.now() + 2_000).toISOString(),
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /respond 1/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: /working 1/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
 });

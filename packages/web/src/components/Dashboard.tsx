@@ -162,9 +162,10 @@ function DashboardInner({
       setExpandedLevel(mobileFilter);
       return;
     }
-    // Only auto-expand when the current section becomes empty — don't override a deliberate
-    // user collapse on every SSE poll.
+    // Preserve an explicit all-collapsed state. Only auto-expand when a specific expanded
+    // section becomes empty, so SSE regrouping does not override a deliberate user collapse.
     setExpandedLevel((current) => {
+      if (current === null) return current;
       if (current !== null && grouped[current].length > 0) return current;
       return MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null;
     });
