@@ -1,4 +1,4 @@
-/* globals self, caches, fetch, Response */
+/* globals self, caches, fetch, Response, URL, console */
 const CACHE_NAME = "ao-pwa-v2";
 const OFFLINE_URL = "/offline.html";
 
