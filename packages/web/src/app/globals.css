@@ -2124,6 +2124,11 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     display: none;
   }
 
+  /* Keep stat cards visible on pages without an action-strip replacement */
+  .dashboard-stat-cards--persist-mobile {
+    display: flex;
+  }
+
   .dashboard-hero__meta {
     display: flex;
     align-items: center;

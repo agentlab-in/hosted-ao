@@ -113,7 +113,7 @@ export function PullRequestsPage({
                   </p>
                 </div>
               </div>
-              <div className="dashboard-stat-cards">
+              <div className="dashboard-stat-cards dashboard-stat-cards--persist-mobile">
                 <div className="dashboard-stat-card">
                   <span className="dashboard-stat-card__value">{openPRs.length}</span>
                   <span className="dashboard-stat-card__label">Open PRs</span>
