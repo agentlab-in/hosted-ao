@@ -103,6 +103,7 @@ function DashboardInner({
     mode: "preview" | "confirm-kill";
   } | null>(null);
   const sessionsRef = useRef(sessions);
+  const hasSeededMobileExpansionRef = useRef(false);
   sessionsRef.current = sessions;
   const allProjectsView = showSidebar && projectId === undefined;
   const currentProjectOrchestrator = useMemo(
@@ -149,12 +150,17 @@ function DashboardInner({
   // Auto-expand the most urgent non-empty section when switching to mobile.
   // Intentionally seeded once per mobile mode change, not on every session update.
   useEffect(() => {
-    if (!isMobile) return;
+    if (!isMobile) {
+      hasSeededMobileExpansionRef.current = false;
+      return;
+    }
+    if (hasSeededMobileExpansionRef.current) return;
+
+    hasSeededMobileExpansionRef.current = true;
     setExpandedLevel(
       MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null,
     );
-  // eslint-disable-next-line react-hooks/exhaustive-deps — intentionally seeded once per mobile mode change, not on every session update
-  }, [isMobile]);
+  }, [grouped, isMobile]);
 
   useEffect(() => {
     if (!isMobile) return;

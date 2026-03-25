@@ -54,6 +54,7 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const touchStartYRef = useRef<number | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const mergePrNumber = session?.pr?.number ?? null;
 
   useEffect(() => {
     if (!session) return;
@@ -204,7 +205,11 @@ export function BottomSheet({
                 <button
                   type="button"
                   className="bottom-sheet__btn bottom-sheet__btn--secondary"
-                  onClick={() => onMerge(session.pr!.number)}
+                  onClick={() => {
+                    if (mergePrNumber !== null) {
+                      onMerge(mergePrNumber);
+                    }
+                  }}
                 >
                   Merge
                 </button>
