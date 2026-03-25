@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import { type DashboardSession, type DashboardPR, isPRMergeReady } from "@/lib/types";
 import { CI_STATUS } from "@composio/ao-core/types";
 import { cn } from "@/lib/cn";
@@ -322,7 +322,7 @@ export function SessionDetail({
   projectOrchestratorId = null,
 }: SessionDetailProps) {
   const searchParams = useSearchParams();
-  const isMobile = useMediaQuery(767);
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const startFullscreen = searchParams.get("fullscreen") === "true";
   const pr = session.pr;
   const activity = (session.activity && activityMeta[session.activity]) ?? {
@@ -414,13 +414,15 @@ export function SessionDetail({
           ) : null}
         </main>
       </div>
-      <MobileBottomNav
-        ariaLabel="Session navigation"
-        activeTab={isOrchestrator ? "orchestrator" : undefined}
-        dashboardHref={dashboardHref}
-        prsHref={prsHref}
-        orchestratorHref={orchestratorHref}
-      />
+      {isMobile ? (
+        <MobileBottomNav
+          ariaLabel="Session navigation"
+          activeTab={isOrchestrator ? "orchestrator" : undefined}
+          dashboardHref={dashboardHref}
+          prsHref={prsHref}
+          orchestratorHref={orchestratorHref}
+        />
+      ) : null}
     </div>
   );
 }

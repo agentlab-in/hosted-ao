@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 export type MobileBottomNavTab = "dashboard" | "prs" | "orchestrator";
 
 interface MobileBottomNavProps {
@@ -21,7 +23,7 @@ export function MobileBottomNav({
 }: MobileBottomNavProps) {
   return (
     <nav className="mobile-bottom-nav" aria-label={ariaLabel}>
-      <a
+      <Link
         href={dashboardHref}
         className="mobile-bottom-nav__item"
         data-active={activeTab === "dashboard" ? "true" : "false"}
@@ -31,8 +33,8 @@ export function MobileBottomNav({
           <path d="M3 13h8V3H3zm10 8h8V11h-8zM3 21h8v-6H3zm10-10h8V3h-8z" />
         </svg>
         <span>Dashboard</span>
-      </a>
-      <a
+      </Link>
+      <Link
         href={prsHref}
         className="mobile-bottom-nav__item"
         data-active={activeTab === "prs" ? "true" : "false"}
@@ -42,10 +44,10 @@ export function MobileBottomNav({
           <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
         </svg>
         <span>PRs</span>
-      </a>
+      </Link>
       {showOrchestrator ? (
         orchestratorHref ? (
-          <a
+          <Link
             href={orchestratorHref}
             className="mobile-bottom-nav__item"
             data-active={activeTab === "orchestrator" ? "true" : "false"}
@@ -56,7 +58,7 @@ export function MobileBottomNav({
               <path d="M9 9h6v6H9z" />
             </svg>
             <span>Orchestrator</span>
-          </a>
+          </Link>
         ) : (
           <button type="button" className="mobile-bottom-nav__item" disabled>
             <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">

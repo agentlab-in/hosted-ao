@@ -3,8 +3,11 @@
 import { useEffect, useReducer, useRef } from "react";
 import type { DashboardSession, GlobalPauseState, SSESnapshotEvent } from "@/lib/types";
 
+/** Debounce before fetching full session list after membership change. */
 const MEMBERSHIP_REFRESH_DELAY_MS = 120;
+/** Re-fetch full session list if no refresh has happened in this interval. */
 const STALE_REFRESH_INTERVAL_MS = 15000;
+/** Grace period before declaring "disconnected" (allows for transient reconnects). */
 const DISCONNECTED_GRACE_PERIOD_MS = 4000;
 
 type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
@@ -135,7 +138,10 @@ export function useSessionEvents(
               });
             },
           )
-          .catch(() => undefined)
+          .catch((err: unknown) => {
+            if (err instanceof DOMException && err.name === "AbortError") return;
+            console.warn("[useSessionEvents] refresh failed:", err);
+          })
           .finally(() => {
             if (activeRefreshController === refreshController) {
               activeRefreshController = null;

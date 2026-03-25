@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
   type DashboardSession,
   type DashboardStats,
@@ -24,6 +24,7 @@ import { ToastProvider, useToast } from "./Toast";
 import { BottomSheet } from "./BottomSheet";
 import { ConnectionBar } from "./ConnectionBar";
 import { MobileBottomNav } from "./MobileBottomNav";
+import { getProjectScopedHref } from "@/lib/project-utils";
 
 interface DashboardProps {
   initialSessions: DashboardSession[];
@@ -62,13 +63,6 @@ function mergeOrchestrators(
   return [...merged.values()];
 }
 
-function getProjectScopedHref(basePath: "/" | "/prs", projectId: string | undefined): string {
-  if (projectId) {
-    return `${basePath}?project=${encodeURIComponent(projectId)}`;
-  }
-  return `${basePath}?project=all`;
-}
-
 function DashboardInner({
   initialSessions,
   projectId,
@@ -93,7 +87,7 @@ function DashboardInner({
   const [spawnErrors, setSpawnErrors] = useState<Record<string, string>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const isMobile = useMediaQuery(767);
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const [expandedLevel, setExpandedLevel] = useState<MobileAttentionLevel | null>(null);
   const [mobileFilter, setMobileFilter] = useState<MobileFilterValue>("all");
   const showSidebar = projects.length > 1;
@@ -164,11 +158,16 @@ function DashboardInner({
 
   useEffect(() => {
     if (!isMobile) return;
-    if (mobileFilter === "all") {
-      setExpandedLevel(MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null);
+    if (mobileFilter !== "all") {
+      setExpandedLevel(mobileFilter);
       return;
     }
-    setExpandedLevel(mobileFilter);
+    // Only auto-expand when the current section becomes empty — don't override a deliberate
+    // user collapse on every SSE poll.
+    setExpandedLevel((current) => {
+      if (current !== null && grouped[current].length > 0) return current;
+      return MOBILE_KANBAN_ORDER.find((level) => grouped[level].length > 0) ?? null;
+    });
   }, [grouped, isMobile, mobileFilter]);
 
   const sessionsByProject = useMemo(() => {
@@ -413,7 +412,7 @@ function DashboardInner({
               <div className="dashboard-hero__heading">
                 <div className="dashboard-hero__copy">
                   <h1 className="dashboard-title">
-                    {isMobile ? "agent-orchestrator" : (projectName ?? "Orchestrator")}
+                    {projectName ?? "Orchestrator"}
                   </h1>
                   <p className="dashboard-subtitle">
                     Live sessions, review pressure, and merge readiness.

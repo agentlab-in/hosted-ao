@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { DashboardSession, DashboardOrchestratorLink } from "@/lib/types";
 import { getServices, getSCM } from "@/lib/services";
 import {
@@ -35,7 +36,7 @@ export function resolveDashboardProjectFilter(project?: string): string {
   return project ?? getPrimaryProjectId();
 }
 
-export async function getDashboardPageData(project?: string): Promise<DashboardPageData> {
+export const getDashboardPageData = cache(async function getDashboardPageData(project?: string): Promise<DashboardPageData> {
   const projectFilter = resolveDashboardProjectFilter(project);
   const pageData: DashboardPageData = {
     sessions: [],
@@ -72,29 +73,30 @@ export async function getDashboardPageData(project?: string): Promise<DashboardP
       const cached = prCache.get(cacheKey);
 
       if (cached) {
-        if (pageData.sessions[index].pr) {
-          pageData.sessions[index].pr.state = cached.state;
-          pageData.sessions[index].pr.title = cached.title;
-          pageData.sessions[index].pr.additions = cached.additions;
-          pageData.sessions[index].pr.deletions = cached.deletions;
-          pageData.sessions[index].pr.ciStatus = cached.ciStatus as
+        const sessionPR = pageData.sessions[index]?.pr;
+        if (sessionPR) {
+          sessionPR.state = cached.state;
+          sessionPR.title = cached.title;
+          sessionPR.additions = cached.additions;
+          sessionPR.deletions = cached.deletions;
+          sessionPR.ciStatus = cached.ciStatus as
             | "none"
             | "pending"
             | "passing"
             | "failing";
-          pageData.sessions[index].pr.reviewDecision = cached.reviewDecision as
+          sessionPR.reviewDecision = cached.reviewDecision as
             | "none"
             | "pending"
             | "approved"
             | "changes_requested";
-          pageData.sessions[index].pr.ciChecks = cached.ciChecks.map((check) => ({
+          sessionPR.ciChecks = cached.ciChecks.map((check) => ({
             name: check.name,
             status: check.status as "pending" | "running" | "passed" | "failed" | "skipped",
             url: check.url,
           }));
-          pageData.sessions[index].pr.mergeability = cached.mergeability;
-          pageData.sessions[index].pr.unresolvedThreads = cached.unresolvedThreads;
-          pageData.sessions[index].pr.unresolvedComments = cached.unresolvedComments;
+          sessionPR.mergeability = cached.mergeability;
+          sessionPR.unresolvedThreads = cached.unresolvedThreads;
+          sessionPR.unresolvedComments = cached.unresolvedComments;
         }
 
         if (
@@ -120,4 +122,4 @@ export async function getDashboardPageData(project?: string): Promise<DashboardP
   }
 
   return pageData;
-}
+});

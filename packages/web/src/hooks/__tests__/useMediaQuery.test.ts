@@ -101,7 +101,7 @@ describe("useMediaQuery", () => {
     expect(result.current).toBe(false);
 
     await act(async () => {
-      (currentMQL as unknown as { _fire: (m: boolean) => void })._fire(true);
+      currentMQL._fire(true);
     });
 
     expect(result.current).toBe(true);

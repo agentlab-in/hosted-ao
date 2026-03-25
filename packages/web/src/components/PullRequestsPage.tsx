@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
   type DashboardSession,
   type DashboardPR,
@@ -15,6 +15,7 @@ import { DynamicFavicon } from "./DynamicFavicon";
 import { PRCard, PRTableRow } from "./PRStatus";
 import { MobileBottomNav } from "./MobileBottomNav";
 import type { ProjectInfo } from "@/lib/project-name";
+import { getProjectScopedHref } from "@/lib/project-utils";
 
 interface PullRequestsPageProps {
   initialSessions: DashboardSession[];
@@ -25,13 +26,6 @@ interface PullRequestsPageProps {
 }
 
 const EMPTY_ORCHESTRATORS: DashboardOrchestratorLink[] = [];
-
-function getProjectScopedHref(basePath: "/" | "/prs", projectId: string | undefined): string {
-  if (projectId) {
-    return `${basePath}?project=${encodeURIComponent(projectId)}`;
-  }
-  return `${basePath}?project=all`;
-}
 
 export function PullRequestsPage({
   initialSessions,
@@ -45,7 +39,7 @@ export function PullRequestsPage({
   const searchParams = useSearchParams();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const isMobile = useMediaQuery(767);
+  const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
   const showSidebar = projects.length > 1;
   const allProjectsView = showSidebar && projectId === undefined;
   const currentProjectOrchestrator = useMemo(
@@ -149,7 +143,7 @@ export function PullRequestsPage({
           ) : isMobile ? (
             <div className="mobile-pr-list">
               {openPRs.map((pr) => (
-                <PRCard key={pr.number} pr={pr} />
+                <PRCard key={`${pr.owner}/${pr.repo}-${pr.number}`} pr={pr} />
               ))}
             </div>
           ) : (
@@ -179,7 +173,7 @@ export function PullRequestsPage({
                 </thead>
                 <tbody>
                   {openPRs.map((pr) => (
-                    <PRTableRow key={pr.number} pr={pr} />
+                    <PRTableRow key={`${pr.owner}/${pr.repo}-${pr.number}`} pr={pr} />
                   ))}
                 </tbody>
               </table>

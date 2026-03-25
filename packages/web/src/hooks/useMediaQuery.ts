@@ -13,6 +13,9 @@ function toQuery(queryOrBreakpoint: string | number): string {
   return queryOrBreakpoint;
 }
 
+/** Mobile breakpoint: viewport widths ≤ this value are treated as mobile. */
+export const MOBILE_BREAKPOINT = 767;
+
 /**
  * Detects whether the current viewport matches a media query.
  *

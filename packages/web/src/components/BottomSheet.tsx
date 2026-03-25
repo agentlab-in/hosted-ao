@@ -54,10 +54,14 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const touchStartYRef = useRef<number | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const mergePrNumber = session?.pr?.number ?? null;
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      sessionIdRef.current = null;
+      return;
+    }
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onCancel();
@@ -73,10 +77,15 @@ export function BottomSheet({
     const focusable = sheetRef.current.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
     );
+    if (focusable.length === 0) return;
+
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
 
-    if (first) first.focus();
+    // Only steal focus when the sheet first opens (new session id), not on SSE updates.
+    const isNewSession = sessionIdRef.current !== session.id;
+    sessionIdRef.current = session.id;
+    if (isNewSession) first.focus();
 
     function handleTabTrap(e: KeyboardEvent) {
       if (e.key === "Tab") {
@@ -93,7 +102,7 @@ export function BottomSheet({
     const sheet = sheetRef.current;
     sheet.addEventListener("keydown", handleTabTrap);
     return () => sheet.removeEventListener("keydown", handleTabTrap);
-  }, [session]);
+  }, [session, mode]);
 
   function handleTouchStart(e: React.TouchEvent) {
     touchStartYRef.current = e.touches[0]?.clientY ?? null;

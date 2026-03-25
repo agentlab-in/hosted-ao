@@ -5,17 +5,30 @@ interface ConnectionBarProps {
 }
 
 export function ConnectionBar({ status }: ConnectionBarProps) {
-  const isDisconnected = status === "disconnected";
+  if (status === "connected") return null;
+
+  if (status === "disconnected") {
+    return (
+      <button
+        type="button"
+        className="connection-bar connection-bar--disconnected"
+        aria-live="assertive"
+        aria-atomic="true"
+        onClick={() => window.location.reload()}
+      >
+        Offline · tap to retry
+      </button>
+    );
+  }
 
   return (
     <div
-      className={`connection-bar connection-bar--${status}`}
-      aria-live={isDisconnected ? "assertive" : "polite"}
+      className="connection-bar connection-bar--reconnecting"
+      role="status"
+      aria-live="polite"
       aria-atomic="true"
-      onClick={isDisconnected ? () => window.location.reload() : undefined}
-      role={isDisconnected ? "button" : undefined}
     >
-      {isDisconnected && "Offline · tap to retry"}
+      Reconnecting…
     </div>
   );
 }
