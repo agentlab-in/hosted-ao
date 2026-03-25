@@ -101,6 +101,42 @@ describe("Dashboard mobile layout", () => {
     expect(screen.queryByPlaceholderText("Type a reply...")).not.toBeInTheDocument();
   });
 
+  it("keeps the mobile preview sheet in sync with live session updates", () => {
+    const session = makeSession({
+      id: "respond-1",
+      status: "needs_input",
+      activity: "waiting_input",
+      summary: "Need approval to proceed",
+      branch: "feat/mobile-density",
+      issueLabel: "#557",
+    });
+
+    const { rerender } = render(<Dashboard initialSessions={[session]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /open need approval to proceed/i }));
+
+    expect(screen.getByRole("button", { name: "Terminate" })).toBeInTheDocument();
+    expect(screen.getAllByText("needs input").length).toBeGreaterThan(0);
+
+    rerender(
+      <Dashboard
+        initialSessions={[
+          {
+            ...session,
+            status: "terminated",
+            activity: "exited",
+            pr: makePR({ number: 87, state: "merged", reviewDecision: "approved" }),
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Terminate" })).not.toBeInTheDocument();
+    expect(screen.getByText("terminated")).toBeInTheDocument();
+    expect(screen.getByText("exited")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
+  });
+
   it("does not render embedded PR cards on the dashboard anymore", () => {
     const sessions = [
       makeSession({

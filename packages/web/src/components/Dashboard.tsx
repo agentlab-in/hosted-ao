@@ -93,7 +93,7 @@ function DashboardInner({
   const showSidebar = projects.length > 1;
   const { showToast } = useToast();
   const [sheetState, setSheetState] = useState<{
-    session: DashboardSession;
+    sessionId: string;
     mode: "preview" | "confirm-kill";
   } | null>(null);
   const sessionsRef = useRef(sessions);
@@ -117,6 +117,10 @@ function DashboardInner({
     if (allProjectsView || !activeSessionId) return sessions;
     return sessions.filter((s) => s.id === activeSessionId);
   }, [sessions, allProjectsView, activeSessionId]);
+  const sheetSession = useMemo(
+    () => (sheetState ? sessions.find((session) => session.id === sheetState.sessionId) ?? null : null),
+    [sessions, sheetState],
+  );
 
   useEffect(() => {
     setActiveOrchestrators((current) => mergeOrchestrators(current, orchestratorLinks));
@@ -125,6 +129,12 @@ function DashboardInner({
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [searchParams]);
+
+  useEffect(() => {
+    if (sheetState && sheetSession === null) {
+      setSheetState(null);
+    }
+  }, [sheetSession, sheetState]);
 
   const grouped = useMemo(() => {
     const zones: Record<AttentionLevel, DashboardSession[]> = {
@@ -245,21 +255,21 @@ function DashboardInner({
   const handleKill = useCallback((sessionId: string) => {
     const session = sessionsRef.current.find((s) => s.id === sessionId) ?? null;
     if (!session) return;
-    setSheetState({ session, mode: "confirm-kill" });
+    setSheetState({ sessionId: session.id, mode: "confirm-kill" });
   }, []);
 
   const handlePreview = useCallback((session: DashboardSession) => {
-    setSheetState({ session, mode: "preview" });
+    setSheetState({ sessionId: session.id, mode: "preview" });
   }, []);
 
   const handleRequestKillFromPreview = useCallback(() => {
     setSheetState((current) =>
-      current ? { session: current.session, mode: "confirm-kill" } : current,
+      current ? { sessionId: current.sessionId, mode: "confirm-kill" } : current,
     );
   }, []);
 
   const handleKillConfirm = useCallback(async () => {
-    const session = sheetState?.session;
+    const session = sheetSession;
     setSheetState(null);
     if (!session) return;
     const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/kill`, {
@@ -272,7 +282,7 @@ function DashboardInner({
     } else {
       showToast("Session terminated", "success");
     }
-  }, [sheetState, showToast]);
+  }, [sheetSession, showToast]);
 
   const handleMerge = useCallback(async (prNumber: number) => {
     setSheetState(null);
@@ -609,14 +619,14 @@ function DashboardInner({
       />
     ) : null}
     <BottomSheet
-      session={sheetState?.session ?? null}
+      session={sheetSession}
       mode={sheetState?.mode ?? "preview"}
       onConfirm={handleKillConfirm}
       onCancel={() => setSheetState(null)}
       onRequestKill={handleRequestKillFromPreview}
       onMerge={handleMerge}
       isMergeReady={
-        sheetState?.session?.pr ? isPRMergeReady(sheetState.session.pr) : false
+        sheetSession?.pr ? isPRMergeReady(sheetSession.pr) : false
       }
     />
     </>

@@ -17,7 +17,7 @@ import { getSizeLabel } from "./PRStatus";
 
 interface SessionCardProps {
   session: DashboardSession;
-  onSend?: (sessionId: string, message: string) => void;
+  onSend?: (sessionId: string, message: string) => Promise<void> | void;
   onKill?: (sessionId: string) => void;
   onMerge?: (prNumber: number) => void;
   onRestore?: (sessionId: string) => void;
@@ -94,35 +94,52 @@ function getDoneStatusInfo(session: DashboardSession): {
 function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: SessionCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [sendingAction, setSendingAction] = useState<string | null>(null);
+  const [sendingQuickReply, setSendingQuickReply] = useState<string | null>(null);
+  const [sentQuickReply, setSentQuickReply] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const actionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quickReplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const level = getAttentionLevel(session);
   const pr = session.pr;
 
-  const handleQuickReply = (message: string) => {
-    if (!message.trim()) return;
-    onSend?.(session.id, message);
+  const handleQuickReply = async (message: string): Promise<boolean> => {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || sendingQuickReply !== null) return false;
+
+    setSendingQuickReply(trimmedMessage);
+    setSentQuickReply(null);
+
+    try {
+      await Promise.resolve(onSend?.(session.id, trimmedMessage));
+      setSentQuickReply(trimmedMessage);
+      if (quickReplyTimerRef.current) clearTimeout(quickReplyTimerRef.current);
+      quickReplyTimerRef.current = setTimeout(() => setSentQuickReply(null), 2000);
+      return true;
+    } finally {
+      setSendingQuickReply(null);
+    }
   };
 
-  const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleReplyKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleQuickReply(replyText);
-      setReplyText("");
+      const sent = await handleQuickReply(replyText);
+      if (sent) setReplyText("");
     }
   };
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
+      if (quickReplyTimerRef.current) clearTimeout(quickReplyTimerRef.current);
     };
   }, []);
 
   const handleAction = async (action: string, message: string) => {
     setSendingAction(action);
     onSend?.(session.id, message);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setSendingAction(null), 2000);
+    if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
+    actionTimerRef.current = setTimeout(() => setSendingAction(null), 2000);
   };
 
   const rateLimited = pr ? isPRRateLimited(pr) : false;
@@ -606,31 +623,49 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
           <div className="quick-reply__presets">
             <button
               className="quick-reply__preset-btn"
-              onClick={() => handleQuickReply("continue")}
+              onClick={() => void handleQuickReply("continue")}
+              disabled={sendingQuickReply !== null}
             >
-              Continue
+              {sendingQuickReply === "continue"
+                ? "Sending..."
+                : sentQuickReply === "continue"
+                  ? "Sent"
+                  : "Continue"}
             </button>
             <button
               className="quick-reply__preset-btn"
-              onClick={() => handleQuickReply("abort")}
+              onClick={() => void handleQuickReply("abort")}
+              disabled={sendingQuickReply !== null}
             >
-              Abort
+              {sendingQuickReply === "abort"
+                ? "Sending..."
+                : sentQuickReply === "abort"
+                  ? "Sent"
+                  : "Abort"}
             </button>
             <button
               className="quick-reply__preset-btn"
-              onClick={() => handleQuickReply("skip")}
+              onClick={() => void handleQuickReply("skip")}
+              disabled={sendingQuickReply !== null}
             >
-              Skip
+              {sendingQuickReply === "skip"
+                ? "Sending..."
+                : sentQuickReply === "skip"
+                  ? "Sent"
+                  : "Skip"}
             </button>
           </div>
           <textarea
             className="quick-reply__input"
-            placeholder="Type a reply..."
+            placeholder={sendingQuickReply !== null ? "Sending..." : "Type a reply..."}
             aria-label="Type a reply to the agent"
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
-            onKeyDown={handleReplyKeyDown}
+            onKeyDown={(e) => {
+              void handleReplyKeyDown(e);
+            }}
             rows={1}
+            disabled={sendingQuickReply !== null}
           />
         </div>
       )}
