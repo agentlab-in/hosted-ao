@@ -42,7 +42,7 @@ interface ZoneCounts {
 }
 
 interface ProjectSessionsBody {
-  sessions: DashboardSession[];
+  sessions?: DashboardSession[];
   orchestratorId?: string | null;
   orchestrators?: Array<{ id: string; projectId: string; projectName: string }>;
 }
@@ -58,6 +58,9 @@ export default function SessionPage() {
   const [error, setError] = useState<string | null>(null);
   const sessionProjectId = session?.projectId ?? null;
   const sessionIsOrchestrator = session ? isOrchestratorSession(session) : false;
+  const sessionProjectIdRef = useRef<string | null>(null);
+  const sessionIsOrchestratorRef = useRef(false);
+  const hasResolvedProjectSessionsRef = useRef(false);
 
   // Update document title based on session data
   useEffect(() => {
@@ -67,6 +70,18 @@ export default function SessionPage() {
       document.title = `${id} | Session Detail`;
     }
   }, [session, id]);
+
+  useEffect(() => {
+    sessionProjectIdRef.current = sessionProjectId;
+  }, [sessionProjectId]);
+
+  useEffect(() => {
+    sessionIsOrchestratorRef.current = sessionIsOrchestrator;
+  }, [sessionIsOrchestrator]);
+
+  useEffect(() => {
+    hasResolvedProjectSessionsRef.current = false;
+  }, [sessionProjectId, sessionIsOrchestrator]);
 
   // Fetch session data (memoized to avoid recreating on every render)
   const fetchSession = useCallback(async () => {
@@ -90,22 +105,28 @@ export default function SessionPage() {
   }, [id]);
 
   const fetchProjectSessions = useCallback(async () => {
-    if (!sessionProjectId) return;
+    const projectId = sessionProjectIdRef.current;
+    if (!projectId) return;
+    const isOrchestrator = sessionIsOrchestratorRef.current;
+    if (!isOrchestrator && hasResolvedProjectSessionsRef.current) return;
     try {
-      const query = sessionIsOrchestrator
-        ? `/api/sessions?project=${encodeURIComponent(sessionProjectId)}`
-        : `/api/sessions?project=${encodeURIComponent(sessionProjectId)}&orchestratorOnly=true`;
+      const query = isOrchestrator
+        ? `/api/sessions?project=${encodeURIComponent(projectId)}`
+        : `/api/sessions?project=${encodeURIComponent(projectId)}&orchestratorOnly=true`;
       const res = await fetch(query);
       if (!res.ok) return;
       const body = (await res.json()) as ProjectSessionsBody;
       const sessions = body.sessions ?? [];
       const orchestratorId =
         body.orchestratorId ??
-        body.orchestrators?.find((orchestrator) => orchestrator.projectId === sessionProjectId)?.id ??
+        body.orchestrators?.find((orchestrator) => orchestrator.projectId === projectId)?.id ??
         null;
       setProjectOrchestratorId((current) => (current === orchestratorId ? current : orchestratorId));
 
-      if (!sessionIsOrchestrator) return;
+      if (!isOrchestrator) {
+        hasResolvedProjectSessionsRef.current = true;
+        return;
+      }
 
       const counts: ZoneCounts = {
         merge: 0,
@@ -124,7 +145,7 @@ export default function SessionPage() {
     } catch {
       // non-critical - status strip just won't show
     }
-  }, [sessionIsOrchestrator, sessionProjectId]);
+  }, []);
 
   useEffect(() => {
     if (!sessionIsOrchestrator) {
