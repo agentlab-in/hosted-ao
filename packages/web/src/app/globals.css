@@ -2759,7 +2759,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
   .mobile-session-row__side {
     display: grid;
-    grid-template-columns: max-content 28px;
+    grid-template-columns: max-content 44px;
     align-items: start;
     justify-content: end;
     gap: 10px;
