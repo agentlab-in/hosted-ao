@@ -127,11 +127,10 @@ export default function SessionPage() {
   }, [sessionIsOrchestrator, sessionProjectId]);
 
   useEffect(() => {
-    setProjectOrchestratorId(undefined);
     if (!sessionIsOrchestrator) {
       setZoneCounts(null);
     }
-  }, [sessionIsOrchestrator, sessionProjectId]);
+  }, [sessionIsOrchestrator]);
 
   // Initial fetch — session first, zone counts after (avoids blocking on slow /api/sessions)
   useEffect(() => {
