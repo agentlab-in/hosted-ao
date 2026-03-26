@@ -264,15 +264,11 @@ function DashboardInner({
         const text = await res.text();
         console.error(`Failed to send message to ${sessionId}:`, text);
         showToast(`Send failed: ${text}`, "error");
-        throw new Error(text || `Failed to send message to ${sessionId}`);
+        return;
       }
     } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
       console.error(`Network error sending message to ${sessionId}:`, error);
       showToast("Network error while sending message", "error");
-      throw new Error("Network error while sending message");
     }
   }, [showToast]);
 
@@ -651,6 +647,7 @@ function DashboardInner({
                     onToggle={handleAccordionToggle}
                     compactMobile
                     onPreview={handlePreview}
+                    resetKey={mobileFilter}
                   />
                 ))}
               </div>

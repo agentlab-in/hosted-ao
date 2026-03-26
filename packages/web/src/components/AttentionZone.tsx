@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   type DashboardSession,
   type AttentionLevel,
@@ -24,6 +24,8 @@ interface AttentionZoneProps {
   compactMobile?: boolean;
   /** Open the lightweight mobile preview sheet */
   onPreview?: (session: DashboardSession) => void;
+  /** Reset internal "show all" state when this value changes */
+  resetKey?: string | number | null;
 }
 
 const zoneConfig: Record<
@@ -86,6 +88,7 @@ function AttentionZoneView({
   onToggle,
   compactMobile,
   onPreview,
+  resetKey,
 }: AttentionZoneProps) {
   const config = zoneConfig[level];
   const isAccordion = onToggle !== undefined;
@@ -93,6 +96,16 @@ function AttentionZoneView({
   const visibleSessions =
     isAccordion && compactMobile && !showAll ? sessions.slice(0, 5) : sessions;
   const hiddenCount = sessions.length - visibleSessions.length;
+
+  useEffect(() => {
+    if (collapsed) {
+      setShowAll(false);
+    }
+  }, [collapsed]);
+
+  useEffect(() => {
+    setShowAll(false);
+  }, [resetKey]);
 
   if (isAccordion) {
     return (
@@ -200,6 +213,7 @@ function areAttentionZonePropsEqual(prev: AttentionZoneProps, next: AttentionZon
     prev.onRestore === next.onRestore &&
     prev.compactMobile === next.compactMobile &&
     prev.onPreview === next.onPreview &&
+    prev.resetKey === next.resetKey &&
     prev.sessions.length === next.sessions.length &&
     prev.sessions.every((session, index) => session === next.sessions[index])
   );
