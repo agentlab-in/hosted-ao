@@ -1311,10 +1311,75 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   animation: ready-dot-pulse 2.8s ease-in-out infinite;
 }
 
-/* ── Quick-reply section (respond cards, mobile only) ────────────────── */
+/* ── Quick-reply section (respond cards) ─────────────────────────────── */
 
 .quick-reply {
-  display: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border-default);
+}
+
+.quick-reply__summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.quick-reply__presets {
+  display: flex;
+  gap: 6px;
+}
+
+.quick-reply__preset-btn {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.quick-reply__preset-btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-tint-blue);
+}
+
+.quick-reply__input {
+  min-height: 44px;
+  height: 44px;
+  padding: 12px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  resize: none;
+  overflow: hidden;
+  transition: height 0.15s ease, border-color 0.12s ease;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.quick-reply__input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.quick-reply__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  height: 80px;
+  overflow: auto;
 }
 
 /* ── Done cards — compact, de-emphasized ─────────────────────────────── */
@@ -2846,76 +2911,6 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
   .accordion-section--collapsed .accordion-body > * {
     overflow: hidden;
-  }
-
-  /* -- Quick-reply section on respond cards -- */
-  .quick-reply {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 12px;
-    border-top: 1px solid var(--color-border-default);
-  }
-
-  .quick-reply__summary {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--color-text-secondary);
-    margin: 0;
-  }
-
-  .quick-reply__presets {
-    display: flex;
-    gap: 6px;
-  }
-
-  .quick-reply__preset-btn {
-    min-height: 44px;
-    padding: 0 14px;
-    border: 1px solid var(--color-border-default);
-    background: var(--color-bg-subtle);
-    color: var(--color-text-secondary);
-    font-family: var(--font-sans);
-    font-size: 12px;
-    cursor: pointer;
-    transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
-  }
-
-  .quick-reply__preset-btn:hover {
-    border-color: var(--color-accent);
-    color: var(--color-accent);
-    background: var(--color-tint-blue);
-  }
-
-  .quick-reply__input {
-    min-height: 44px;
-    height: 44px;
-    padding: 12px;
-    border: 1px solid var(--color-border-default);
-    background: var(--color-bg-subtle);
-    color: var(--color-text-primary);
-    font-family: var(--font-sans);
-    font-size: 13px;
-    resize: none;
-    overflow: hidden;
-    transition: height 0.15s ease, border-color 0.12s ease;
-    box-sizing: border-box;
-    width: 100%;
-  }
-
-  .quick-reply__input::placeholder {
-    color: var(--color-text-muted);
-  }
-
-  .quick-reply__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    height: 80px;
-    overflow: auto;
   }
 
   .mobile-pr-list {
