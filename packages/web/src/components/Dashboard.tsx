@@ -127,6 +127,7 @@ function DashboardInner({
     if (!sheetSession) return null;
     if (!sheetSessionOverride) return sheetSession;
     return {
+      ...sheetSession,
       ...sheetSessionOverride,
       status: sheetSession.status,
       activity: sheetSession.activity,

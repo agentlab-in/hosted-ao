@@ -60,7 +60,7 @@ export default function SessionPage() {
   const sessionIsOrchestrator = session ? isOrchestratorSession(session) : false;
   const sessionProjectIdRef = useRef<string | null>(null);
   const sessionIsOrchestratorRef = useRef(false);
-  const hasResolvedProjectSessionsRef = useRef(false);
+  const resolvedProjectSessionsKeyRef = useRef<string | null>(null);
 
   // Update document title based on session data
   useEffect(() => {
@@ -78,10 +78,6 @@ export default function SessionPage() {
   useEffect(() => {
     sessionIsOrchestratorRef.current = sessionIsOrchestrator;
   }, [sessionIsOrchestrator]);
-
-  useEffect(() => {
-    hasResolvedProjectSessionsRef.current = false;
-  }, [sessionProjectId, sessionIsOrchestrator]);
 
   // Fetch session data (memoized to avoid recreating on every render)
   const fetchSession = useCallback(async () => {
@@ -108,7 +104,8 @@ export default function SessionPage() {
     const projectId = sessionProjectIdRef.current;
     if (!projectId) return;
     const isOrchestrator = sessionIsOrchestratorRef.current;
-    if (!isOrchestrator && hasResolvedProjectSessionsRef.current) return;
+    const projectSessionsKey = `${projectId}:${isOrchestrator ? "orchestrator" : "worker"}`;
+    if (!isOrchestrator && resolvedProjectSessionsKeyRef.current === projectSessionsKey) return;
     try {
       const query = isOrchestrator
         ? `/api/sessions?project=${encodeURIComponent(projectId)}`
@@ -124,7 +121,7 @@ export default function SessionPage() {
       setProjectOrchestratorId((current) => (current === orchestratorId ? current : orchestratorId));
 
       if (!isOrchestrator) {
-        hasResolvedProjectSessionsRef.current = true;
+        resolvedProjectSessionsKeyRef.current = projectSessionsKey;
         return;
       }
 

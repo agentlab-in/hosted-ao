@@ -51,7 +51,7 @@ describe("SessionPage project polling", () => {
     vi.restoreAllMocks();
   });
 
-  it("continues polling project sessions for non-orchestrator pages to keep orchestrator nav fresh", async () => {
+  it("resolves orchestrator nav once for non-orchestrator pages and skips repeated project polling", async () => {
     const workerSession = makeWorkerSession();
 
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -113,6 +113,6 @@ describe("SessionPage project polling", () => {
       vi.mocked(fetch).mock.calls.filter(
         ([url]) => url === "/api/sessions?project=my-app&orchestratorOnly=true",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 });
