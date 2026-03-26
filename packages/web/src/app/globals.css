@@ -3088,6 +3088,12 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   pointer-events: none;
 }
 
+@media (max-width: 767px) {
+  .toast-container {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
+  }
+}
+
 .toast {
   pointer-events: auto;
   display: flex;
