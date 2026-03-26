@@ -98,14 +98,8 @@ async function postWithRetry(
   retryDelayMs: number,
 ): Promise<void> {
   let lastError: Error | undefined;
-  // When true, the next iteration skips the standard exponential backoff so we
-  // don't double-delay after already waiting for a 429 Retry-After.
-  let skipNextBackoff = false;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const skipBackoff = skipNextBackoff;
-    skipNextBackoff = false;
-
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
     try {
@@ -126,8 +120,7 @@ async function postWithRetry(
         if (retryAfter && attempt < retries) {
           const waitMs = (parseFloat(retryAfter) || 1) * 1000;
           await new Promise((resolve) => setTimeout(resolve, waitMs));
-          skipNextBackoff = true;
-          continue;
+          continue; // already waited Retry-After; skip exponential backoff naturally
         }
       }
 
@@ -144,7 +137,7 @@ async function postWithRetry(
       clearTimeout(timer);
     }
 
-    if (!skipBackoff && attempt < retries) {
+    if (attempt < retries) {
       const delay = retryDelayMs * 2 ** attempt;
       await new Promise((resolve) => setTimeout(resolve, delay));
     }

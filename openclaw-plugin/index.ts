@@ -197,8 +197,9 @@ export function extractConfiguredReposFromYaml(rawYaml: string): string[] {
     if (indent === 0) break;
 
     // Detect the indentation level of project name keys from the first entry.
+    // Strip inline comments before checking — `my-app: # comment` is a valid key.
     if (projectKeyIndent === null) {
-      if (trimmed.endsWith(":")) projectKeyIndent = indent;
+      if (trimmed.replace(/\s*#.*$/, "").endsWith(":")) projectKeyIndent = indent;
       continue;
     }
 
