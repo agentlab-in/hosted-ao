@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { isOrchestratorSession } from "@composio/ao-core/types";
 import { SessionDetail } from "@/components/SessionDetail";
@@ -58,7 +58,6 @@ export default function SessionPage() {
   const [error, setError] = useState<string | null>(null);
   const sessionProjectId = session?.projectId ?? null;
   const sessionIsOrchestrator = session ? isOrchestratorSession(session) : false;
-  const hasResolvedProjectSessionsRef = useRef(false);
 
   // Update document title based on session data
   useEffect(() => {
@@ -92,7 +91,6 @@ export default function SessionPage() {
 
   const fetchProjectSessions = useCallback(async () => {
     if (!sessionProjectId) return;
-    if (!sessionIsOrchestrator && hasResolvedProjectSessionsRef.current) return;
     try {
       const res = await fetch(`/api/sessions?project=${encodeURIComponent(sessionProjectId)}`);
       if (!res.ok) return;
@@ -102,7 +100,6 @@ export default function SessionPage() {
         body.orchestratorId ??
         body.orchestrators?.find((orchestrator) => orchestrator.projectId === sessionProjectId)?.id ??
         null;
-      hasResolvedProjectSessionsRef.current = true;
       setProjectOrchestratorId((current) => (current === orchestratorId ? current : orchestratorId));
 
       if (!sessionIsOrchestrator) return;
@@ -127,7 +124,6 @@ export default function SessionPage() {
   }, [sessionIsOrchestrator, sessionProjectId]);
 
   useEffect(() => {
-    hasResolvedProjectSessionsRef.current = false;
     setProjectOrchestratorId(undefined);
     if (!sessionIsOrchestrator) {
       setZoneCounts(null);

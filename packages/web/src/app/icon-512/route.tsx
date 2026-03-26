@@ -1,10 +1,10 @@
 import { ImageResponse } from "next/og";
 import { getProjectName } from "@/lib/project-name";
-import { renderIconElement } from "@/lib/icon-renderer";
+import { renderIconElement, sanitizeIconName } from "@/lib/icon-renderer";
 
 export async function GET() {
   const rawName = getProjectName();
-  const name = rawName.replace(/[^\w\s-]/g, "").slice(0, 50) || "AO";
+  const name = sanitizeIconName(rawName);
   const response = new ImageResponse(renderIconElement(512, name), {
     width: 512,
     height: 512,

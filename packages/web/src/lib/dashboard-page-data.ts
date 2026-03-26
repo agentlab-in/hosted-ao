@@ -22,7 +22,9 @@ interface DashboardPageData {
   selectedProjectId?: string;
 }
 
-function getSelectedProjectName(projectFilter: string | undefined): string {
+export const getDashboardProjectName = cache(function getDashboardProjectName(
+  projectFilter: string | undefined,
+): string {
   if (projectFilter === "all") return "All Projects";
   const projects = getAllProjects();
   if (projectFilter) {
@@ -30,7 +32,7 @@ function getSelectedProjectName(projectFilter: string | undefined): string {
     if (selectedProject) return selectedProject.name;
   }
   return getProjectName();
-}
+});
 
 export function resolveDashboardProjectFilter(project?: string): string {
   return project ?? getPrimaryProjectId();
@@ -42,7 +44,7 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
     sessions: [],
     globalPause: null,
     orchestrators: [],
-    projectName: getSelectedProjectName(projectFilter),
+    projectName: getDashboardProjectName(projectFilter),
     projects: getAllProjects(),
     selectedProjectId: projectFilter === "all" ? undefined : projectFilter,
   };

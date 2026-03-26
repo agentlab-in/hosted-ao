@@ -136,6 +136,12 @@ function DashboardInner({
     }
   }, [sheetSession, sheetState]);
 
+  useEffect(() => {
+    if (!sheetState || sheetState.mode !== "confirm-kill" || !sheetSession) return;
+    if (getAttentionLevel(sheetSession) !== "done") return;
+    setSheetState(null);
+  }, [sheetSession, sheetState]);
+
   const grouped = useMemo(() => {
     const zones: Record<AttentionLevel, DashboardSession[]> = {
       merge: [],

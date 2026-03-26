@@ -9,6 +9,10 @@ export function stringToHue(s: string): number {
   return ((hash % 360) + 360) % 360;
 }
 
+export function sanitizeIconName(rawName: string): string {
+  return rawName.replace(/[^\w\s-]/g, "").slice(0, 50) || "AO";
+}
+
 /** Render a colored icon element with the first letter of the given name. */
 export function renderIconElement(size: number, name: string): ReactElement {
   const initial = (name.charAt(0) || "A").toUpperCase();
