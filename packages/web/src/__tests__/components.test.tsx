@@ -527,7 +527,7 @@ describe("SessionCard", () => {
     expect(screen.getByRole("textbox", { name: /type a reply to the agent/i })).not.toBeDisabled();
   });
 
-  it("handles rejected alert action sends without leaving the action button stuck", async () => {
+  it("shows a temporary failed state when an alert action send is rejected", async () => {
     const onSend = vi.fn(() => Promise.reject(new Error("network failed")));
     const pr = makePR({
       state: "open",
@@ -554,7 +554,7 @@ describe("SessionCard", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "ask to fix" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "failed" })).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "sent!" })).not.toBeInTheDocument();
   });

@@ -88,6 +88,7 @@ function DashboardInner({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
+  const [hasMounted, setHasMounted] = useState(false);
   const [expandedLevel, setExpandedLevel] = useState<MobileAttentionLevel | null>(null);
   const [mobileFilter, setMobileFilter] = useState<MobileFilterValue>("all");
   const showSidebar = projects.length > 1;
@@ -159,6 +160,10 @@ function DashboardInner({
 
   // Auto-expand the most urgent non-empty section when switching to mobile.
   // Intentionally seeded once per mobile mode change, not on every session update.
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
   useEffect(() => {
     if (!isMobile) {
       hasSeededMobileExpansionRef.current = false;
@@ -246,31 +251,46 @@ function DashboardInner({
 
   const visibleMobileLevels =
     mobileFilter === "all" ? MOBILE_KANBAN_ORDER : MOBILE_KANBAN_ORDER.filter((level) => level === mobileFilter);
+  const showDesktopPrsLink = hasMounted && !isMobile;
 
   const handleSend = useCallback(async (sessionId: string, message: string) => {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`Failed to send message to ${sessionId}:`, text);
-      showToast(`Send failed: ${text}`, "error");
-      throw new Error(text || `Failed to send message to ${sessionId}`);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Failed to send message to ${sessionId}:`, text);
+        showToast(`Send failed: ${text}`, "error");
+        throw new Error(text || `Failed to send message to ${sessionId}`);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      console.error(`Network error sending message to ${sessionId}:`, error);
+      showToast("Network error while sending message", "error");
+      throw new Error("Network error while sending message");
     }
   }, [showToast]);
 
   const killSession = useCallback(async (sessionId: string) => {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
-      method: "POST",
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`Failed to kill ${sessionId}:`, text);
-      showToast(`Terminate failed: ${text}`, "error");
-    } else {
-      showToast("Session terminated", "success");
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Failed to kill ${sessionId}:`, text);
+        showToast(`Terminate failed: ${text}`, "error");
+      } else {
+        showToast("Session terminated", "success");
+      }
+    } catch (error) {
+      console.error(`Network error killing ${sessionId}:`, error);
+      showToast("Network error while terminating session", "error");
     }
   }, [showToast]);
 
@@ -306,26 +326,36 @@ function DashboardInner({
 
   const handleMerge = useCallback(async (prNumber: number) => {
     setSheetState(null);
-    const res = await fetch(`/api/prs/${prNumber}/merge`, { method: "POST" });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`Failed to merge PR #${prNumber}:`, text);
-      showToast(`Merge failed: ${text}`, "error");
-    } else {
-      showToast(`PR #${prNumber} merged`, "success");
+    try {
+      const res = await fetch(`/api/prs/${prNumber}/merge`, { method: "POST" });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Failed to merge PR #${prNumber}:`, text);
+        showToast(`Merge failed: ${text}`, "error");
+      } else {
+        showToast(`PR #${prNumber} merged`, "success");
+      }
+    } catch (error) {
+      console.error(`Network error merging PR #${prNumber}:`, error);
+      showToast("Network error while merging PR", "error");
     }
   }, [showToast]);
 
   const handleRestore = useCallback(async (sessionId: string) => {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {
-      method: "POST",
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`Failed to restore ${sessionId}:`, text);
-      showToast(`Restore failed: ${text}`, "error");
-    } else {
-      showToast("Session restored", "success");
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`Failed to restore ${sessionId}:`, text);
+        showToast(`Restore failed: ${text}`, "error");
+      } else {
+        showToast("Session restored", "success");
+      }
+    } catch (error) {
+      console.error(`Network error restoring ${sessionId}:`, error);
+      showToast("Network error while restoring session", "error");
     }
   }, [showToast]);
 
@@ -455,10 +485,10 @@ function DashboardInner({
 
             <div className="dashboard-hero__meta">
               <div className="flex items-center gap-3">
-                {!isMobile ? (
+                {showDesktopPrsLink ? (
                   <a
                     href={prsHref}
-                    className="orchestrator-btn flex items-center gap-2 px-4 py-2 text-[12px] font-semibold hover:no-underline"
+                    className="dashboard-prs-link orchestrator-btn flex items-center gap-2 px-4 py-2 text-[12px] font-semibold hover:no-underline"
                   >
                     <svg
                       className="h-3.5 w-3.5 opacity-75"

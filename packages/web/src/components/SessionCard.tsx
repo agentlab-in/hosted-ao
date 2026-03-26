@@ -94,6 +94,7 @@ function getDoneStatusInfo(session: DashboardSession): {
 function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: SessionCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [sendingAction, setSendingAction] = useState<string | null>(null);
+  const [failedAction, setFailedAction] = useState<string | null>(null);
   const [sendingQuickReply, setSendingQuickReply] = useState<string | null>(null);
   const [sentQuickReply, setSentQuickReply] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
@@ -141,12 +142,16 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
     if (sendingAction !== null) return;
 
     setSendingAction(action);
+    setFailedAction(null);
     try {
       await Promise.resolve(onSend?.(session.id, message));
       if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
       actionTimerRef.current = setTimeout(() => setSendingAction(null), 2000);
     } catch {
       setSendingAction(null);
+      setFailedAction(action);
+      if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
+      actionTimerRef.current = setTimeout(() => setFailedAction(null), 2000);
     }
   };
 
@@ -542,6 +547,8 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                       disabled={sendingAction === alert.key}
                       className={cn(
                         "border-l px-2 py-0.5 font-[var(--font-mono)] text-[11px] font-medium transition-colors disabled:opacity-50",
+                        failedAction === alert.key &&
+                          "bg-[var(--color-tint-red)] text-[var(--color-status-error)]",
                         alert.actionClassName,
                       )}
                       style={{
@@ -549,7 +556,11 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                           alert.borderColor ?? alert.color ?? "var(--color-border-default)",
                       }}
                     >
-                      {sendingAction === alert.key ? "sent!" : alert.actionLabel}
+                      {sendingAction === alert.key
+                        ? "sent!"
+                        : failedAction === alert.key
+                          ? "failed"
+                          : alert.actionLabel}
                     </button>
                   )}
                 </span>

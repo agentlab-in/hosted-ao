@@ -92,7 +92,10 @@ export default function SessionPage() {
   const fetchProjectSessions = useCallback(async () => {
     if (!sessionProjectId) return;
     try {
-      const res = await fetch(`/api/sessions?project=${encodeURIComponent(sessionProjectId)}`);
+      const query = sessionIsOrchestrator
+        ? `/api/sessions?project=${encodeURIComponent(sessionProjectId)}`
+        : `/api/sessions?project=${encodeURIComponent(sessionProjectId)}&orchestratorOnly=true`;
+      const res = await fetch(query);
       if (!res.ok) return;
       const body = (await res.json()) as ProjectSessionsBody;
       const sessions = body.sessions ?? [];

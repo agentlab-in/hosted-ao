@@ -1382,6 +1382,24 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   overflow: auto;
 }
 
+@media (min-width: 768px) {
+  .quick-reply__preset-btn {
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .quick-reply__input {
+    min-height: 32px;
+    height: 32px;
+    padding: 8px 10px;
+  }
+
+  .quick-reply__input:focus {
+    height: 60px;
+  }
+}
+
 /* ── Done cards — compact, de-emphasized ─────────────────────────────── */
 
 .session-card-done {
@@ -2095,6 +2113,12 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
 
 .mobile-bottom-nav {
   display: none;
+}
+
+@media (max-width: 767px) {
+  .dashboard-prs-link {
+    display: none;
+  }
 }
 
 /* ── Mobile breakpoint — 768px (tablet / landscape phone) ────────────── */

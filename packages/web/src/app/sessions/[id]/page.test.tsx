@@ -64,20 +64,19 @@ describe("SessionPage project polling", () => {
         } as Response;
       }
 
-      if (url === "/api/sessions?project=my-app") {
+      if (url === "/api/sessions?project=my-app&orchestratorOnly=true") {
         return {
           ok: true,
           status: 200,
           json: async () => ({
-            sessions: [
-              workerSession,
+            orchestratorId: "my-app-orchestrator",
+            orchestrators: [
               {
-                ...workerSession,
                 id: "my-app-orchestrator",
-                metadata: { role: "orchestrator" },
+                projectId: "my-app",
+                projectName: "My App",
               },
             ],
-            orchestratorId: "my-app-orchestrator",
           }),
         } as Response;
       }
@@ -97,10 +96,12 @@ describe("SessionPage project polling", () => {
     });
     await flushAsyncWork();
 
-    expect(fetch).toHaveBeenCalledWith("/api/sessions?project=my-app");
+    expect(fetch).toHaveBeenCalledWith("/api/sessions?project=my-app&orchestratorOnly=true");
 
     expect(
-      vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/sessions?project=my-app"),
+      vi.mocked(fetch).mock.calls.filter(
+        ([url]) => url === "/api/sessions?project=my-app&orchestratorOnly=true",
+      ),
     ).toHaveLength(1);
 
     await act(async () => {
@@ -109,7 +110,9 @@ describe("SessionPage project polling", () => {
     await flushAsyncWork();
 
     expect(
-      vi.mocked(fetch).mock.calls.filter(([url]) => url === "/api/sessions?project=my-app"),
+      vi.mocked(fetch).mock.calls.filter(
+        ([url]) => url === "/api/sessions?project=my-app&orchestratorOnly=true",
+      ),
     ).toHaveLength(2);
   });
 });
