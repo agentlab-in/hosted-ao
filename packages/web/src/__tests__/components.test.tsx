@@ -500,6 +500,32 @@ describe("SessionCard", () => {
       expect(screen.getByRole("textbox", { name: /type a reply to the agent/i })).toHaveValue("");
     });
   });
+
+  it("does not show sent state or clear reply text when quick reply send fails", async () => {
+    const onSend = vi.fn(() => Promise.reject(new Error("network failed")));
+    const session = makeSession({
+      id: "respond-3",
+      status: "needs_input",
+      activity: "waiting_input",
+      summary: "Need approval to proceed",
+    });
+
+    render(<SessionCard session={session} onSend={onSend} />);
+
+    const input = screen.getByRole("textbox", { name: /type a reply to the agent/i });
+    fireEvent.change(input, { target: { value: "please continue" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+    });
+
+    expect(screen.queryByRole("button", { name: "Sent" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /type a reply to the agent/i })).toHaveValue(
+      "please continue",
+    );
+    expect(screen.getByRole("textbox", { name: /type a reply to the agent/i })).not.toBeDisabled();
+  });
 });
 
 // ── AttentionZone ────────────────────────────────────────────────────

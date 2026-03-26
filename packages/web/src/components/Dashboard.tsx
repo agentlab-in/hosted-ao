@@ -254,9 +254,12 @@ function DashboardInner({
       body: JSON.stringify({ message }),
     });
     if (!res.ok) {
-      console.error(`Failed to send message to ${sessionId}:`, await res.text());
+      const text = await res.text();
+      console.error(`Failed to send message to ${sessionId}:`, text);
+      showToast(`Send failed: ${text}`, "error");
+      throw new Error(text || `Failed to send message to ${sessionId}`);
     }
-  }, []);
+  }, [showToast]);
 
   const killSession = useCallback(async (sessionId: string) => {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/kill`, {

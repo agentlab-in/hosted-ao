@@ -115,6 +115,8 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
       if (quickReplyTimerRef.current) clearTimeout(quickReplyTimerRef.current);
       quickReplyTimerRef.current = setTimeout(() => setSentQuickReply(null), 2000);
       return true;
+    } catch {
+      return false;
     } finally {
       setSendingQuickReply(null);
     }
