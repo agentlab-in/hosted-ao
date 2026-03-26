@@ -526,6 +526,38 @@ describe("SessionCard", () => {
     );
     expect(screen.getByRole("textbox", { name: /type a reply to the agent/i })).not.toBeDisabled();
   });
+
+  it("handles rejected alert action sends without leaving the action button stuck", async () => {
+    const onSend = vi.fn(() => Promise.reject(new Error("network failed")));
+    const pr = makePR({
+      state: "open",
+      ciStatus: "failing",
+      ciChecks: [{ name: "test", status: "failed" }],
+      reviewDecision: "approved",
+      mergeability: {
+        mergeable: false,
+        ciPassing: false,
+        approved: true,
+        noConflicts: true,
+        blockers: [],
+      },
+    });
+    const session = makeSession({ activity: "idle", pr });
+
+    render(<SessionCard session={session} onSend={onSend} />);
+
+    const actionButton = screen.getByRole("button", { name: "ask to fix" });
+    fireEvent.click(actionButton);
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "ask to fix" })).not.toBeDisabled();
+    });
+    expect(screen.queryByRole("button", { name: "sent!" })).not.toBeInTheDocument();
+  });
 });
 
 // ── AttentionZone ────────────────────────────────────────────────────

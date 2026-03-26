@@ -138,10 +138,16 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
   }, []);
 
   const handleAction = async (action: string, message: string) => {
+    if (sendingAction !== null) return;
+
     setSendingAction(action);
-    onSend?.(session.id, message);
-    if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
-    actionTimerRef.current = setTimeout(() => setSendingAction(null), 2000);
+    try {
+      await Promise.resolve(onSend?.(session.id, message));
+      if (actionTimerRef.current) clearTimeout(actionTimerRef.current);
+      actionTimerRef.current = setTimeout(() => setSendingAction(null), 2000);
+    } catch {
+      setSendingAction(null);
+    }
   };
 
   const rateLimited = pr ? isPRRateLimited(pr) : false;
@@ -531,7 +537,7 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleAction(alert.key, alert.actionMessage ?? "");
+                        void handleAction(alert.key, alert.actionMessage ?? "");
                       }}
                       disabled={sendingAction === alert.key}
                       className={cn(
