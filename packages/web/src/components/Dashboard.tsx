@@ -97,6 +97,7 @@ function DashboardInner({
     sessionId: string;
     mode: "preview" | "confirm-kill";
   } | null>(null);
+  const [sheetSessionOverride, setSheetSessionOverride] = useState<DashboardSession | null>(null);
   const sessionsRef = useRef(sessions);
   const hasSeededMobileExpansionRef = useRef(false);
   sessionsRef.current = sessions;
@@ -122,6 +123,16 @@ function DashboardInner({
     () => (sheetState ? sessions.find((session) => session.id === sheetState.sessionId) ?? null : null),
     [sessions, sheetState],
   );
+  const hydratedSheetSession = useMemo(() => {
+    if (!sheetSession) return null;
+    if (!sheetSessionOverride) return sheetSession;
+    return {
+      ...sheetSessionOverride,
+      status: sheetSession.status,
+      activity: sheetSession.activity,
+      lastActivityAt: sheetSession.lastActivityAt,
+    };
+  }, [sheetSession, sheetSessionOverride]);
 
   useEffect(() => {
     setActiveOrchestrators((current) => mergeOrchestrators(current, orchestratorLinks));
@@ -138,10 +149,38 @@ function DashboardInner({
   }, [sheetSession, sheetState]);
 
   useEffect(() => {
-    if (!sheetState || sheetState.mode !== "confirm-kill" || !sheetSession) return;
-    if (getAttentionLevel(sheetSession) !== "done") return;
+    if (!sheetState || sheetState.mode !== "confirm-kill" || !hydratedSheetSession) return;
+    if (getAttentionLevel(hydratedSheetSession) !== "done") return;
     setSheetState(null);
-  }, [sheetSession, sheetState]);
+  }, [hydratedSheetSession, sheetState]);
+
+  useEffect(() => {
+    if (!sheetState) {
+      setSheetSessionOverride(null);
+      return;
+    }
+
+    let cancelled = false;
+    const sessionId = sheetState.sessionId;
+    const refreshSession = async () => {
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as Partial<DashboardSession> | null;
+        if (!data || data.id !== sessionId) return;
+        if (!cancelled) setSheetSessionOverride(data as DashboardSession);
+      } catch {
+        // Ignore transient failures; SSE still keeps status/activity fresh.
+      }
+    };
+
+    void refreshSession();
+    const interval = setInterval(refreshSession, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sheetState]);
 
   const grouped = useMemo(() => {
     const zones: Record<AttentionLevel, DashboardSession[]> = {
@@ -324,22 +363,23 @@ function DashboardInner({
   }, []);
 
   const handleKillConfirm = useCallback(async () => {
-    const session = sheetSession;
+    const session = hydratedSheetSession;
     setSheetState(null);
     if (!session) return;
     await killSession(session.id);
-  }, [killSession, sheetSession]);
+  }, [hydratedSheetSession, killSession]);
 
   const handleMerge = useCallback(async (prNumber: number) => {
-    setSheetState(null);
     try {
       const res = await fetch(`/api/prs/${prNumber}/merge`, { method: "POST" });
       if (!res.ok) {
         const text = await res.text();
         console.error(`Failed to merge PR #${prNumber}:`, text);
         showToast(`Merge failed: ${text}`, "error");
+        return;
       } else {
         showToast(`PR #${prNumber} merged`, "success");
+        setSheetState(null);
       }
     } catch (error) {
       console.error(`Network error merging PR #${prNumber}:`, error);
@@ -694,17 +734,17 @@ function DashboardInner({
       />
     ) : null}
     {isMobile ? (
-      <BottomSheet
-        session={sheetSession}
-        mode={sheetState?.mode ?? "preview"}
-        onConfirm={handleKillConfirm}
-        onCancel={() => setSheetState(null)}
-        onRequestKill={handleRequestKillFromPreview}
-        onMerge={handleMerge}
-        isMergeReady={
-          sheetSession?.pr ? isPRMergeReady(sheetSession.pr) : false
-        }
-      />
+    <BottomSheet
+      session={hydratedSheetSession}
+      mode={sheetState?.mode ?? "preview"}
+      onConfirm={handleKillConfirm}
+      onCancel={() => setSheetState(null)}
+      onRequestKill={handleRequestKillFromPreview}
+      onMerge={handleMerge}
+      isMergeReady={
+        hydratedSheetSession?.pr ? isPRMergeReady(hydratedSheetSession.pr) : false
+      }
+    />
     ) : null}
     </>
   );
