@@ -252,11 +252,31 @@ function DashboardInner({
     }
   }, []);
 
+  const killSession = useCallback(async (sessionId: string) => {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`Failed to kill ${sessionId}:`, text);
+      showToast(`Terminate failed: ${text}`, "error");
+    } else {
+      showToast("Session terminated", "success");
+    }
+  }, [showToast]);
+
   const handleKill = useCallback((sessionId: string) => {
     const session = sessionsRef.current.find((s) => s.id === sessionId) ?? null;
     if (!session) return;
+    if (!isMobile) {
+      const confirmed = window.confirm("Terminate this session?");
+      if (confirmed) {
+        void killSession(session.id);
+      }
+      return;
+    }
     setSheetState({ sessionId: session.id, mode: "confirm-kill" });
-  }, []);
+  }, [isMobile, killSession]);
 
   const handlePreview = useCallback((session: DashboardSession) => {
     setSheetState({ sessionId: session.id, mode: "preview" });
@@ -272,17 +292,8 @@ function DashboardInner({
     const session = sheetSession;
     setSheetState(null);
     if (!session) return;
-    const res = await fetch(`/api/sessions/${encodeURIComponent(session.id)}/kill`, {
-      method: "POST",
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`Failed to kill ${session.id}:`, text);
-      showToast(`Terminate failed: ${text}`, "error");
-    } else {
-      showToast("Session terminated", "success");
-    }
-  }, [sheetSession, showToast]);
+    await killSession(session.id);
+  }, [killSession, sheetSession]);
 
   const handleMerge = useCallback(async (prNumber: number) => {
     setSheetState(null);
@@ -636,17 +647,19 @@ function DashboardInner({
         orchestratorHref={orchestratorHref}
       />
     ) : null}
-    <BottomSheet
-      session={sheetSession}
-      mode={sheetState?.mode ?? "preview"}
-      onConfirm={handleKillConfirm}
-      onCancel={() => setSheetState(null)}
-      onRequestKill={handleRequestKillFromPreview}
-      onMerge={handleMerge}
-      isMergeReady={
-        sheetSession?.pr ? isPRMergeReady(sheetSession.pr) : false
-      }
-    />
+    {isMobile ? (
+      <BottomSheet
+        session={sheetSession}
+        mode={sheetState?.mode ?? "preview"}
+        onConfirm={handleKillConfirm}
+        onCancel={() => setSheetState(null)}
+        onRequestKill={handleRequestKillFromPreview}
+        onMerge={handleMerge}
+        isMergeReady={
+          sheetSession?.pr ? isPRMergeReady(sheetSession.pr) : false
+        }
+      />
+    ) : null}
     </>
   );
 }

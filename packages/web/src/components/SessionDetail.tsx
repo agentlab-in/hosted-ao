@@ -409,7 +409,7 @@ export function SessionDetail({
 
           {pr ? (
             <section id="session-pr-section" className="mt-6">
-              <PRCard pr={pr} sessionId={session.id} />
+              <SessionDetailPRCard pr={pr} sessionId={session.id} />
             </section>
           ) : null}
         </main>
@@ -428,9 +428,9 @@ export function SessionDetail({
   );
 }
 
-// ── PR Card ───────────────────────────────────────────────────────────
+// ── Session detail PR card ────────────────────────────────────────────
 
-function PRCard({ pr, sessionId }: { pr: DashboardPR; sessionId: string }) {
+function SessionDetailPRCard({ pr, sessionId }: { pr: DashboardPR; sessionId: string }) {
   const [sendingComments, setSendingComments] = useState<Set<string>>(new Set());
   const [sentComments, setSentComments] = useState<Set<string>>(new Set());
   const [errorComments, setErrorComments] = useState<Set<string>>(new Set());
