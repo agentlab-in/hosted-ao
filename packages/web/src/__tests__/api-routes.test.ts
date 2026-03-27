@@ -390,6 +390,37 @@ describe("API Routes", () => {
         sourceSessionId: "docs-orchestrator",
       });
     });
+
+    it("enriches all PRs concurrently, not sequentially", async () => {
+      const sessionsWithPRs = Array.from({ length: 6 }, (_, i) =>
+        makeSession({
+          id: `worker-${i}`,
+          status: "pr_open",
+          activity: "idle",
+          pr: {
+            number: 100 + i,
+            url: `https://github.com/acme/my-app/pull/${100 + i}`,
+            title: `PR ${i}`,
+            owner: "acme",
+            repo: "my-app",
+            branch: `feat/pr-${i}`,
+            baseBranch: "main",
+            isDraft: false,
+          },
+        }),
+      );
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValue(sessionsWithPRs);
+
+      const enrichSpy = vi
+        .spyOn(serialize, "enrichSessionPR")
+        .mockResolvedValue(true);
+
+      const res = await sessionsGET(makeRequest("http://localhost:3000/api/sessions"));
+      expect(res.status).toBe(200);
+      expect(enrichSpy.mock.calls.length).toBe(6);
+
+      enrichSpy.mockRestore();
+    });
   });
 
   // ── POST /api/spawn ────────────────────────────────────────────────
