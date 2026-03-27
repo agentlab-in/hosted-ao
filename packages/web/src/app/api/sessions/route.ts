@@ -69,7 +69,7 @@ export async function GET(request: Request) {
     );
 
     if (metadataSettled) {
-      const prEnrichPromises: Promise<unknown>[] = [];
+      const prEnrichPromises: Promise<boolean>[] = [];
 
       for (let i = 0; i < workerSessions.length; i++) {
         const core = workerSessions[i];
