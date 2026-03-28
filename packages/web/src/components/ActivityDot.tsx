@@ -37,10 +37,7 @@ export function ActivityDot({ activity, dotOnly = false, size = 6 }: ActivityDot
   if (dotOnly) {
     return (
       <div
-        className={cn(
-          "shrink-0 rounded-full",
-          isPulsing && "animate-[activity-pulse_2s_ease-in-out_infinite]",
-        )}
+        className={cn("shrink-0 rounded-full", isPulsing && "dot-pulse")}
         style={{ width: size, height: size, background: c.dot }}
       />
     );
@@ -52,10 +49,7 @@ export function ActivityDot({ activity, dotOnly = false, size = 6 }: ActivityDot
       style={{ background: c.bg }}
     >
       <span
-        className={cn(
-          "h-1.5 w-1.5 shrink-0 rounded-full",
-          isPulsing && "animate-[activity-pulse_2s_ease-in-out_infinite]",
-        )}
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", isPulsing && "dot-pulse")}
         style={{ background: c.dot }}
       />
       <span className="text-[10px] font-medium" style={{ color: c.text }}>
