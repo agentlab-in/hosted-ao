@@ -393,31 +393,91 @@ describe("API Routes", () => {
   });
 
   describe("GET /api/runtime/terminal", () => {
+    function withEnv(overrides: Record<string, string | undefined>, fn: () => Promise<void>) {
+      const saved: Record<string, string | undefined> = {};
+      for (const key of Object.keys(overrides)) {
+        saved[key] = process.env[key];
+        if (overrides[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = overrides[key];
+        }
+      }
+      return fn().finally(() => {
+        for (const key of Object.keys(saved)) {
+          if (saved[key] === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = saved[key];
+          }
+        }
+      });
+    }
+
     it("returns runtime direct terminal port from server env", async () => {
-      const previousDirect = process.env.DIRECT_TERMINAL_PORT;
-      const previousTerminal = process.env.TERMINAL_PORT;
-
-      process.env.DIRECT_TERMINAL_PORT = "14803";
-      process.env.TERMINAL_PORT = "14802";
-
-      try {
+      await withEnv({ DIRECT_TERMINAL_PORT: "14803", TERMINAL_PORT: "14802" }, async () => {
         const res = await runtimeTerminalGET();
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.directTerminalPort).toBe("14803");
         expect(data.terminalPort).toBe("14802");
-      } finally {
-        if (previousDirect === undefined) {
-          delete process.env.DIRECT_TERMINAL_PORT;
-        } else {
-          process.env.DIRECT_TERMINAL_PORT = previousDirect;
-        }
-        if (previousTerminal === undefined) {
-          delete process.env.TERMINAL_PORT;
-        } else {
-          process.env.TERMINAL_PORT = previousTerminal;
-        }
-      }
+      });
+    });
+
+    it("falls back to default ports when env vars are absent", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: undefined, TERMINAL_PORT: undefined }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14801");
+        expect(data.terminalPort).toBe("14800");
+      });
+    });
+
+    it("falls back to default ports for non-numeric env values", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: "abc", TERMINAL_PORT: "not-a-port" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14801");
+        expect(data.terminalPort).toBe("14800");
+      });
+    });
+
+    it("falls back to default ports for out-of-range port values", async () => {
+      await withEnv({ DIRECT_TERMINAL_PORT: "99999", TERMINAL_PORT: "0" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.directTerminalPort).toBe("14801");
+        expect(data.terminalPort).toBe("14800");
+      });
+    });
+
+    it("returns null proxyWsPath when TERMINAL_WS_PATH is absent", async () => {
+      await withEnv(
+        { TERMINAL_WS_PATH: undefined, NEXT_PUBLIC_TERMINAL_WS_PATH: undefined },
+        async () => {
+          const res = await runtimeTerminalGET();
+          expect(res.status).toBe(200);
+          const data = await res.json();
+          expect(data.proxyWsPath).toBeNull();
+        },
+      );
+    });
+
+    it("rejects proxyWsPath that does not start with /", async () => {
+      await withEnv({ TERMINAL_WS_PATH: "no-leading-slash" }, async () => {
+        const res = await runtimeTerminalGET();
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.proxyWsPath).toBeNull();
+      });
+    });
+
+    it("sets Cache-Control: no-store header", async () => {
+      const res = await runtimeTerminalGET();
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
     });
   });
 

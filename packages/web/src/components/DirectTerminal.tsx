@@ -347,6 +347,7 @@ export function DirectTerminal({
         // Runtime WS config cache. We do not rely on build-time NEXT_PUBLIC_* here
         // because `ao start` can choose terminal ports dynamically at runtime.
         const runtimeConnectionConfig: TerminalConnectionConfig = {};
+        let runtimeFetchDone = false;
 
         // ── Preserve selection while terminal receives output ────────
         // xterm.js clears the selection on every terminal.write(). We
@@ -437,16 +438,24 @@ export function DirectTerminal({
             directTerminalPort: normalizePortValue(process.env.NEXT_PUBLIC_DIRECT_TERMINAL_PORT),
           };
 
-          if (!fromBuild.proxyWsPath && !runtimeConnectionConfig.directTerminalPort) {
+          if (!fromBuild.proxyWsPath && !runtimeFetchDone) {
+            runtimeFetchDone = true;
+            const controller = new AbortController();
+            const fetchTimeout = setTimeout(() => controller.abort(), 1500);
             try {
-              const response = await fetch("/api/runtime/terminal", { cache: "no-store" });
+              const response = await fetch("/api/runtime/terminal", {
+                cache: "no-store",
+                signal: controller.signal,
+              });
               if (response.ok) {
                 const runtimeConfig = parseRuntimeTerminalConfig(await response.json());
                 runtimeConnectionConfig.proxyWsPath = runtimeConfig.proxyWsPath;
                 runtimeConnectionConfig.directTerminalPort = runtimeConfig.directTerminalPort;
               }
             } catch {
-              // Runtime config endpoint is optional; fallback to build-time values.
+              // Runtime config endpoint is optional (timeout or network failure); fallback to build-time values.
+            } finally {
+              clearTimeout(fetchTimeout);
             }
           }
 

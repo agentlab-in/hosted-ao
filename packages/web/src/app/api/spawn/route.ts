@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server";
-import { validateIdentifier } from "@/lib/validation";
+import { validateIdentifier, validateConfiguredProject } from "@/lib/validation";
 import { getServices } from "@/lib/services";
 import { sessionToDashboard } from "@/lib/serialize";
 import { getCorrelationId, jsonWithCorrelation, recordApiObservation } from "@/lib/observability";
@@ -28,7 +28,8 @@ export async function POST(request: NextRequest) {
   try {
     const { config, sessionManager } = await getServices();
     const projectId = body.projectId as string;
-    if (!config.projects[projectId]) {
+    const projectErr = validateConfiguredProject(config.projects, projectId);
+    if (projectErr) {
       recordApiObservation({
         config,
         method: "POST",
@@ -38,14 +39,10 @@ export async function POST(request: NextRequest) {
         outcome: "failure",
         statusCode: 404,
         projectId,
-        reason: `Unknown project: ${projectId}`,
+        reason: projectErr,
         data: { issueId: body.issueId },
       });
-      return jsonWithCorrelation(
-        { error: `Unknown project: ${projectId}` },
-        { status: 404 },
-        correlationId,
-      );
+      return jsonWithCorrelation({ error: projectErr }, { status: 404 }, correlationId);
     }
 
     const session = await sessionManager.spawn({

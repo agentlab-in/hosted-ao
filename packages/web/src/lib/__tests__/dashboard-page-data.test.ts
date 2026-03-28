@@ -41,4 +41,8 @@ describe("resolveDashboardProjectFilter", () => {
   it("falls back to primary project for unknown ids", () => {
     expect(resolveDashboardProjectFilter("mono-orchestrator")).toBe("mono");
   });
+
+  it("falls back to primary project when no project is given", () => {
+    expect(resolveDashboardProjectFilter(undefined)).toBe("mono");
+  });
 });

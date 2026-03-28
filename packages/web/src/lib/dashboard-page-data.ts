@@ -40,7 +40,7 @@ export function resolveDashboardProjectFilter(project?: string): string {
   if (project && projects.some((entry) => entry.id === project)) {
     return project;
   }
-  return projects[0]?.id ?? getPrimaryProjectId();
+  return getPrimaryProjectId();
 }
 
 export const getDashboardPageData = cache(async function getDashboardPageData(project?: string): Promise<DashboardPageData> {
