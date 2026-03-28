@@ -15,7 +15,7 @@ import type { FitAddon as FitAddonType } from "@xterm/addon-fit";
 interface DirectTerminalProps {
   sessionId: string;
   startFullscreen?: boolean;
-  /** Visual variant. "orchestrator" uses violet accent; "agent" (default) uses blue. */
+  /** Visual variant. Orchestrator keeps the same design-system blue accent as the rest of the app. */
   variant?: "agent" | "orchestrator";
   /** CSS height for the terminal container in normal (non-fullscreen) mode.
    *  Defaults to "max(440px, calc(100vh - 440px))". */
@@ -46,11 +46,7 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
     selDark: "rgba(91, 126, 248, 0.30)",
     selLight: "rgba(91, 126, 248, 0.25)",
   };
-  const orchAccent = {
-    cursor: "#a371f7",
-    selDark: "rgba(163, 113, 247, 0.25)",
-    selLight: "rgba(130, 80, 223, 0.20)",
-  };
+  const orchAccent = agentAccent;
   const accent = variant === "orchestrator" ? orchAccent : agentAccent;
 
   const dark: ITheme = {
@@ -66,7 +62,7 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
     green: "#22c55e",
     yellow: "#f59e0b",
     blue: "#5b7ef8",
-    magenta: "#a371f7",
+    magenta: "#5b7ef8",
     cyan: "#22d3ee",
     white: "#d4d4d8",
     brightBlack: "#50506a",
@@ -74,7 +70,7 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
     brightGreen: "#4ade80",
     brightYellow: "#fbbf24",
     brightBlue: "#7b9cfb",
-    brightMagenta: "#c084fc",
+    brightMagenta: "#7b9cfb",
     brightCyan: "#67e8f9",
     brightWhite: "#eeeef5",
   };
@@ -92,7 +88,7 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
     green: "#1f7a3d",
     yellow: "#8a5a00",
     blue: "#175cd3",
-    magenta: "#8e24aa",
+    magenta: "#175cd3",
     cyan: "#0b7285",
     white: "#4b5563",
     brightBlack: "#374151",
@@ -100,7 +96,7 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
     brightGreen: "#176639",
     brightYellow: "#6f4a00",
     brightBlue: "#1d4ed8",
-    brightMagenta: "#7b1fa2",
+    brightMagenta: "#1d4ed8",
     brightCyan: "#155e75",
     brightWhite: "#374151",
   };
@@ -609,8 +605,7 @@ export function DirectTerminal({
     };
   }, [fullscreen]);
 
-  const accentColor =
-    variant === "orchestrator" ? "var(--color-accent-violet)" : "var(--color-accent)";
+  const accentColor = "var(--color-accent)";
 
   const statusDotClass =
     status === "connected"

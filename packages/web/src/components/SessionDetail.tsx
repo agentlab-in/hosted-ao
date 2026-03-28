@@ -538,7 +538,10 @@ function SessionDetailPRCard({ pr, sessionId }: { pr: DashboardPR; sessionId: st
               <span className="text-[var(--color-text-tertiary)]">&middot;</span>
               <span
                 className="px-2 py-0.5 text-[10px] font-semibold"
-                style={{ color: "#a371f7", background: "rgba(163,113,247,0.12)" }}
+                style={{
+                  color: "var(--color-text-secondary)",
+                  background: "var(--color-chip-bg)",
+                }}
               >
                 Merged
               </span>
@@ -631,7 +634,7 @@ function SessionDetailPRCard({ pr, sessionId }: { pr: DashboardPR; sessionId: st
                         onClick={() => handleAskAgentToFix(c)}
                         disabled={sendingComments.has(c.url)}
                         className={cn(
-                          "mt-1.5 px-3 py-1 text-[11px] font-semibold transition-all",
+                          "mt-1.5 px-3 py-1 text-[11px] font-semibold transition-colors duration-150",
                           sentComments.has(c.url)
                             ? "bg-[var(--color-status-ready)] text-white"
                             : errorComments.has(c.url)
