@@ -61,7 +61,7 @@
 
   /* Status / semantic colors */
   --color-status-working: #16a34a;
-  --color-status-ready: #5B7EF8;
+  --color-status-ready: #5e6ad2;
   --color-status-respond: #ca8a04;
   --color-status-review: #0891b2;
   --color-status-attention: #9a6700;
@@ -82,7 +82,7 @@
   --color-tint-blue: rgba(91, 126, 248, 0.08);
   --color-tint-green: rgba(22, 163, 74, 0.08);
   --color-tint-yellow: rgba(154, 103, 0, 0.08);
-  --color-tint-red: rgba(207, 34, 46, 0.08);
+  --color-tint-red: rgba(220, 38, 38, 0.08);
   --color-tint-violet: rgba(130, 80, 223, 0.08);
   --color-tint-orange: rgba(188, 76, 0, 0.08);
   --color-tint-neutral: rgba(0, 0, 0, 0.04);
@@ -215,7 +215,7 @@
   --color-tint-blue: rgba(91, 126, 248, 0.12);
   --color-tint-green: rgba(34, 197, 94, 0.12);
   --color-tint-yellow: rgba(241, 190, 100, 0.12);
-  --color-tint-red: rgba(255, 123, 114, 0.12);
+  --color-tint-red: rgba(239, 68, 68, 0.12);
   --color-tint-violet: rgba(181, 156, 255, 0.12);
   --color-tint-orange: rgba(255, 157, 87, 0.12);
   --color-tint-neutral: rgba(255, 255, 255, 0.05);
