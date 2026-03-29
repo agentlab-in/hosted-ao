@@ -75,6 +75,8 @@ export function create(): Runtime {
           const { scriptPath, invocation } = writeLaunchScript(config.launchCommand);
           try {
             await tmux("send-keys", "-t", sessionName, "-l", invocation);
+            await sleep(300);
+            await tmux("send-keys", "-t", sessionName, "Enter");
           } finally {
             try {
               unlinkSync(scriptPath);
@@ -82,8 +84,6 @@ export function create(): Runtime {
               // ignore cleanup errors
             }
           }
-          await sleep(300);
-          await tmux("send-keys", "-t", sessionName, "Enter");
         } else {
           await tmux("send-keys", "-t", sessionName, config.launchCommand, "Enter");
         }
