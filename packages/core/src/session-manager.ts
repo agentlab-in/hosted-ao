@@ -1372,7 +1372,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         AO_CALLER_TYPE: "orchestrator",
         AO_PROJECT_ID: orchestratorConfig.projectId,
         AO_CONFIG_PATH: config.configPath,
-        ...(config.port !== undefined && config.port !== null && { AO_PORT: String(config.port) }),
+        ...(config.port !== undefined && config.port !== null && { AO_PORT: String(config.port) })
       },
     });
 

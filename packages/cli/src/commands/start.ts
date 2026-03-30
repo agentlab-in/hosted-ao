@@ -162,6 +162,33 @@ function canPromptForInstall(): boolean {
   return isHumanCaller() && IS_TTY;
 }
 
+/**
+ * Prompt the user to optionally switch orchestrator/worker agents at startup.
+ * Shows only agents detected on the current system (reuses detectAvailableAgents).
+ * Returns the chosen agents
+ */
+async function promptAgentSelection(): Promise<{
+  orchestratorAgent: string;
+  workerAgent: string
+} | null> {
+  if (canPromptForInstall()) {
+    const available = await detectAvailableAgents();
+    if (available.length === 0) {
+      console.log(chalk.yellow("No agent runtimes detected — using existing config."));
+      return null;
+    }
+
+    const agentOptions = available.map((a) => ({ value: a.name, label: a.displayName }));
+
+    const orchestratorAgent = await promptSelect("Orchestrator agent:", agentOptions);
+    const workerAgent = await promptSelect("Worker agent:", agentOptions);
+
+    return { orchestratorAgent, workerAgent };
+  } else {
+    return null;
+  }
+}
+
 async function askYesNo(
   question: string,
   defaultYes = true,
@@ -989,6 +1016,7 @@ export function registerStart(program: Command): void {
     .option("--no-dashboard", "Skip starting the dashboard server")
     .option("--no-orchestrator", "Skip starting the orchestrator agent")
     .option("--rebuild", "Clean and rebuild dashboard before starting")
+    .option("--interactive", "Prompt to configure config settings")
     .action(
       async (
         projectArg?: string,
@@ -996,6 +1024,7 @@ export function registerStart(program: Command): void {
           dashboard?: boolean;
           orchestrator?: boolean;
           rebuild?: boolean;
+          interactive?: boolean;
         },
       ) => {
         try {
@@ -1151,9 +1180,26 @@ export function registerStart(program: Command): void {
             }
           }
 
+          // ── Agent selection prompt (Step 10)──
+          const agentOverride = opts?.interactive ? await promptAgentSelection() : null;
+          if (agentOverride) {
+            const { orchestratorAgent, workerAgent } = agentOverride;
+
+            const rawYaml = readFileSync(config.configPath, "utf-8");
+            const rawConfig = yamlParse(rawYaml);
+            const proj = rawConfig.projects[projectId];
+            proj.orchestrator = { ...(proj.orchestrator ?? {}), agent: orchestratorAgent };
+            proj.worker = { ...(proj.worker ?? {}), agent: workerAgent };
+            writeFileSync(config.configPath, yamlStringify(rawConfig, { indent: 2 }));
+            console.log(chalk.dim(`  ✓ Saved to ${config.configPath}\n`));
+            
+            config = loadConfig(config.configPath);
+            project = config.projects[projectId];
+          }
+
           const actualPort = await runStartup(config, projectId, project, opts);
 
-          // ── Register in running.json (Step 10) ──
+          // ── Register in running.json (Step 11) ──
           await register({
             pid: process.pid,
             configPath: config.configPath,
