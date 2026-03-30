@@ -390,6 +390,55 @@ describe("API Routes", () => {
         sourceSessionId: "docs-orchestrator",
       });
     });
+
+    it("enriches all PRs concurrently, not sequentially", async () => {
+      vi.useFakeTimers();
+
+      const sessionsWithPRs = Array.from({ length: 6 }, (_, i) =>
+        makeSession({
+          id: `worker-${i}`,
+          status: "pr_open",
+          activity: "idle",
+          pr: {
+            number: 100 + i,
+            url: `https://github.com/acme/my-app/pull/${100 + i}`,
+            title: `PR ${i}`,
+            owner: "acme",
+            repo: "my-app",
+            branch: `feat/pr-${i}`,
+            baseBranch: "main",
+            isDraft: false,
+          },
+        }),
+      );
+      (mockSessionManager.list as ReturnType<typeof vi.fn>).mockResolvedValue(sessionsWithPRs);
+
+      const metadataSpy = vi
+        .spyOn(serialize, "enrichSessionsMetadata")
+        .mockResolvedValue(undefined);
+
+      const enrichSpy = vi
+        .spyOn(serialize, "enrichSessionPR")
+        .mockImplementation(
+          () => new Promise<void>((resolve) => { setTimeout(resolve, 1_000); }),
+        );
+
+      const responsePromise = sessionsGET(makeRequest("http://localhost:3000/api/sessions"));
+
+      // Flush microtasks so the handler reaches the PR enrichment loop
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Sequential would only have 1 call pending; parallel fires all 6 immediately
+      expect(enrichSpy.mock.calls.length).toBe(6);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      const res = await responsePromise;
+      expect(res.status).toBe(200);
+
+      metadataSpy.mockRestore();
+      enrichSpy.mockRestore();
+      vi.useRealTimers();
+    });
   });
 
   describe("GET /api/runtime/terminal", () => {
