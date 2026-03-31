@@ -452,7 +452,7 @@ export function registerSetup(program: Command): void {
     });
 }
 
-async function runSetupAction(opts: SetupOptions): Promise<void> {
+export async function runSetupAction(opts: SetupOptions): Promise<void> {
   const nonInteractive = opts.nonInteractive || !process.stdin.isTTY;
 
   // --- Find existing config ------------------------------------------------

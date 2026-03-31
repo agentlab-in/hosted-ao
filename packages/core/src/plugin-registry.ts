@@ -84,13 +84,13 @@ function extractPluginConfig(
   return undefined;
 }
 
-function isPluginModule(value: unknown): value is PluginModule {
+export function isPluginModule(value: unknown): value is PluginModule {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<PluginModule>;
   return Boolean(candidate.manifest && typeof candidate.create === "function");
 }
 
-function normalizeImportedPluginModule(value: unknown): PluginModule | null {
+export function normalizeImportedPluginModule(value: unknown): PluginModule | null {
   if (isPluginModule(value)) return value;
 
   if (value && typeof value === "object" && "default" in value) {
@@ -107,7 +107,7 @@ function resolveConfigRelativePath(targetPath: string, configPath?: string): str
   return resolve(baseDir, targetPath);
 }
 
-function resolvePackageExportsEntry(exportsField: unknown): string | null {
+export function resolvePackageExportsEntry(exportsField: unknown): string | null {
   if (typeof exportsField === "string") return exportsField;
   if (!exportsField || typeof exportsField !== "object") return null;
 
@@ -131,17 +131,18 @@ function resolvePackageExportsEntry(exportsField: unknown): string | null {
   return null;
 }
 
-function resolveLocalPluginEntrypoint(pluginPath: string): string | null {
+export function resolveLocalPluginEntrypoint(pluginPath: string): string | null {
   if (!existsSync(pluginPath)) return null;
 
-  const stat = statSync(pluginPath);
-  if (stat.isFile()) {
-    return pluginPath;
-  }
-
-  if (!stat.isDirectory()) {
+  let stat;
+  try {
+    stat = statSync(pluginPath);
+  } catch {
     return null;
   }
+
+  if (stat.isFile()) return pluginPath;
+  if (!stat.isDirectory()) return null;
 
   const packageJsonPath = join(pluginPath, "package.json");
   if (existsSync(packageJsonPath)) {
