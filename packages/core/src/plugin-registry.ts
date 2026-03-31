@@ -84,13 +84,13 @@ function extractPluginConfig(
   return undefined;
 }
 
-function isPluginModule(value: unknown): value is PluginModule {
+export function isPluginModule(value: unknown): value is PluginModule {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<PluginModule>;
   return Boolean(candidate.manifest && typeof candidate.create === "function");
 }
 
-function normalizeImportedPluginModule(value: unknown): PluginModule | null {
+export function normalizeImportedPluginModule(value: unknown): PluginModule | null {
   if (isPluginModule(value)) return value;
 
   if (value && typeof value === "object" && "default" in value) {
@@ -107,7 +107,7 @@ function resolveConfigRelativePath(targetPath: string, configPath?: string): str
   return resolve(baseDir, targetPath);
 }
 
-function resolvePackageExportsEntry(exportsField: unknown): string | null {
+export function resolvePackageExportsEntry(exportsField: unknown): string | null {
   if (typeof exportsField === "string") return exportsField;
   if (!exportsField || typeof exportsField !== "object") return null;
 
@@ -131,17 +131,18 @@ function resolvePackageExportsEntry(exportsField: unknown): string | null {
   return null;
 }
 
-function resolveLocalPluginEntrypoint(pluginPath: string): string | null {
+export function resolveLocalPluginEntrypoint(pluginPath: string): string | null {
   if (!existsSync(pluginPath)) return null;
 
-  const stat = statSync(pluginPath);
-  if (stat.isFile()) {
-    return pluginPath;
-  }
-
-  if (!stat.isDirectory()) {
+  let stat;
+  try {
+    stat = statSync(pluginPath);
+  } catch {
     return null;
   }
+
+  if (stat.isFile()) return pluginPath;
+  if (!stat.isDirectory()) return null;
 
   const packageJsonPath = join(pluginPath, "package.json");
   if (existsSync(packageJsonPath)) {
@@ -183,6 +184,7 @@ function resolveLocalPluginEntrypoint(pluginPath: string): string | null {
 
 function inferPackageSpecifier(value: string | undefined): string | null {
   if (!value) return null;
+  if (value.startsWith(".") || value.startsWith("/")) return null;
   return value.startsWith("@") || value.includes("/") ? value : null;
 }
 
@@ -190,13 +192,19 @@ function resolvePluginSpecifier(
   plugin: InstalledPluginConfig,
   config: OrchestratorConfig,
 ): string | null {
-  if (plugin.path) {
-    const absolutePath = resolveConfigRelativePath(plugin.path, config.configPath);
-    const entrypoint = resolveLocalPluginEntrypoint(absolutePath);
-    return entrypoint ? pathToFileURL(entrypoint).href : null;
+  switch (plugin.source) {
+    case "local": {
+      if (!plugin.path) return null;
+      const absolutePath = resolveConfigRelativePath(plugin.path, config.configPath);
+      const entrypoint = resolveLocalPluginEntrypoint(absolutePath);
+      return entrypoint ? pathToFileURL(entrypoint).href : null;
+    }
+    case "registry":
+    case "npm":
+      return plugin.package ?? inferPackageSpecifier(plugin.name);
+    default:
+      return null;
   }
-
-  return plugin.package ?? inferPackageSpecifier(plugin.name);
 }
 
 export function createPluginRegistry(): PluginRegistry {
@@ -258,7 +266,10 @@ export function createPluginRegistry(): PluginRegistry {
         if (plugin.enabled === false) continue;
 
         const specifier = resolvePluginSpecifier(plugin, config);
-        if (!specifier) continue;
+        if (!specifier) {
+          console.warn(`[plugin-registry] Could not resolve specifier for plugin "${plugin.name}" (source: ${plugin.source})`);
+          continue;
+        }
 
         try {
           const mod = normalizeImportedPluginModule(await doImport(specifier));
@@ -266,8 +277,8 @@ export function createPluginRegistry(): PluginRegistry {
 
           const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
           this.register(mod, pluginConfig);
-        } catch {
-          // External plugin unavailable or invalid — continue loading the rest.
+        } catch (error) {
+          console.warn(`[plugin-registry] Failed to load plugin "${specifier}":`, error);
         }
       }
     },
