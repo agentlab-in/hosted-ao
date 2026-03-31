@@ -132,7 +132,8 @@ export function isLocalPluginReference(reference: string): boolean {
     reference.startsWith("./") ||
     reference.startsWith("../") ||
     reference.startsWith("/") ||
-    reference.startsWith("~/")
+    reference.startsWith("~/") ||
+    isAbsolute(reference)
   );
 }
 
