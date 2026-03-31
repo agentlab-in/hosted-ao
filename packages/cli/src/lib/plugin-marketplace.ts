@@ -1,12 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { InstalledPluginConfig, PluginModule, PluginSlot } from "@composio/ao-core";
 
-const require = createRequire(import.meta.url);
-const registryData = require("../assets/plugin-registry.json") as unknown[];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// Resolve registry from package root (works from both src/lib/ and dist/lib/)
+const registryPath = resolve(__dirname, "../../src/assets/plugin-registry.json");
+const registryData = JSON.parse(readFileSync(registryPath, "utf-8")) as unknown[];
 
 export interface MarketplacePluginEntry {
   id: string;
