@@ -53,7 +53,9 @@ class MockFitAddon {
   fit() {}
 }
 
-class MockWebLinksAddon {}
+function MockWebLinksAddon() {
+  return undefined;
+}
 
 class MockWebSocket {
   static OPEN = 1;
