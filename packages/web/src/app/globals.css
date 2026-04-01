@@ -158,9 +158,6 @@
   --color-alert-comment: #bc4c00;
   --color-alert-comment-bg: #c2410c;
 
-  /* Activity pulse glow */
-  --color-activity-pulse: rgba(22, 163, 74, 0.45);
-  --color-activity-pulse-end: rgba(22, 163, 74, 0);
 }
 
 /* ── Dark mode ────────────────────────────────────────────────────── */
@@ -295,9 +292,6 @@
   --color-alert-comment: #c88a2e;
   --color-alert-comment-bg: rgba(200, 138, 46, 0.25);
 
-  /* Activity pulse glow */
-  --color-activity-pulse: rgba(34, 197, 94, 0.45);
-  --color-activity-pulse-end: rgba(34, 197, 94, 0);
 }
 
 @theme {

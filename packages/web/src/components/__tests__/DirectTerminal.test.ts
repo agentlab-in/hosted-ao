@@ -134,6 +134,14 @@ describe("buildTerminalThemes", () => {
     expect(agent.light.selectionBackground).toBe(orch.light.selectionBackground);
   });
 
+  it("keeps ANSI magenta distinct from ANSI blue", () => {
+    const { dark, light } = buildTerminalThemes("agent");
+    expect(dark.magenta).not.toBe(dark.blue);
+    expect(dark.brightMagenta).not.toBe(dark.brightBlue);
+    expect(light.magenta).not.toBe(light.blue);
+    expect(light.brightMagenta).not.toBe(light.brightBlue);
+  });
+
   it("selection colors differ between dark and light themes", () => {
     const { dark, light } = buildTerminalThemes("agent");
     expect(dark.selectionBackground).not.toBe(light.selectionBackground);
