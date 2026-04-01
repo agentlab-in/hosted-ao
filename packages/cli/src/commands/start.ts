@@ -41,6 +41,7 @@ import {
   findWebDir,
   buildDashboardEnv,
   waitForPortAndOpen,
+  openUrl,
   isPortAvailable,
   findFreePort,
   MAX_PORT_SCAN,
@@ -52,11 +53,16 @@ import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
 import { detectAgentRuntime, detectAvailableAgents, type DetectedAgent } from "../lib/detect-agent.js";
 import { detectDefaultBranch } from "../lib/git-utils.js";
+import { promptConfirm, promptSelect } from "../lib/prompts.js";
 import {
   detectProjectType,
   generateRulesFromTemplates,
   formatProjectTypeForDisplay,
 } from "../lib/project-detection.js";
+import { formatCommandError } from "../lib/cli-errors.js";
+import { detectOpenClawInstallation } from "../lib/openclaw-probe.js";
+import { applyOpenClawCredentials } from "../lib/credential-resolver.js";
+import { findProjectForDirectory } from "../lib/project-resolution.js";
 
 const DEFAULT_PORT = 3000;
 const IS_TTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
@@ -101,32 +107,22 @@ async function resolveProject(
   // Multiple projects — try matching cwd to a project path
   // Note: loadConfig() already expands ~ in project paths via expandPaths()
   const currentDir = resolve(cwd());
-  for (const [id, proj] of Object.entries(config.projects)) {
-    if (resolve(proj.path) === currentDir) {
-      return { projectId: id, project: proj };
-    }
+  const matchedProjectId = findProjectForDirectory(config.projects, currentDir);
+  if (matchedProjectId) {
+    return { projectId: matchedProjectId, project: config.projects[matchedProjectId] };
   }
 
   // No match — prompt if interactive, otherwise error
   if (isHumanCaller()) {
-    console.log(chalk.yellow(`\nMultiple projects configured. Which one would you like to ${action}?\n`));
-    projectIds.forEach((id, i) => console.log(`  ${i + 1}. ${config.projects[id].name ?? id} (${id})`));
-
-    const { createInterface } = await import("node:readline/promises");
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const choice = await rl.question(`\n  Choose project [1-${projectIds.length}]: `);
-
-      const idx = Number.parseInt(choice.trim(), 10);
-      if (!Number.isFinite(idx) || idx < 1 || idx > projectIds.length) {
-        throw new Error("Please enter a valid number from the list");
-      }
-
-      const projectId = projectIds[idx - 1];
-      return { projectId, project: config.projects[projectId] };
-    } finally {
-      rl.close();
-    }
+    const projectId = await promptSelect(
+      `Choose project to ${action}:`,
+      projectIds.map((id) => ({
+        value: id,
+        label: config.projects[id].name ?? id,
+        hint: id,
+      })),
+    );
+    return { projectId, project: config.projects[projectId] };
   } else {
     throw new Error(
       `Multiple projects configured. Specify which one to ${action}:\n  ${projectIds.map((id) => `ao ${action} ${id}`).join("\n  ")}`,
@@ -170,24 +166,60 @@ function canPromptForInstall(): boolean {
   return isHumanCaller() && IS_TTY;
 }
 
+function genericInstallHints(command: string): string[] {
+  switch (command) {
+    case "node":
+    case "npm":
+      return ["Install Node.js/npm from https://nodejs.org/"];
+    case "pnpm":
+      return [
+        "corepack enable && corepack prepare pnpm@latest --activate",
+        "npm install -g pnpm",
+      ];
+    case "pipx":
+      return [
+        "python3 -m pip install --user pipx",
+        "python3 -m pipx ensurepath",
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Prompt the user to optionally switch orchestrator/worker agents at startup.
+ * Shows only agents detected on the current system (reuses detectAvailableAgents).
+ * Returns the chosen agents
+ */
+async function promptAgentSelection(): Promise<{
+  orchestratorAgent: string;
+  workerAgent: string
+} | null> {
+  if (canPromptForInstall()) {
+    const available = await detectAvailableAgents();
+    if (available.length === 0) {
+      console.log(chalk.yellow("No agent runtimes detected — using existing config."));
+      return null;
+    }
+
+    const agentOptions = available.map((a) => ({ value: a.name, label: a.displayName }));
+
+    const orchestratorAgent = await promptSelect("Orchestrator agent:", agentOptions);
+    const workerAgent = await promptSelect("Worker agent:", agentOptions);
+
+    return { orchestratorAgent, workerAgent };
+  } else {
+    return null;
+  }
+}
+
 async function askYesNo(
   question: string,
   defaultYes = true,
   nonInteractiveDefault = defaultYes,
 ): Promise<boolean> {
   if (!canPromptForInstall()) return nonInteractiveDefault;
-
-  const { createInterface } = await import("node:readline/promises");
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const suffix = defaultYes ? "[Y/n]" : "[y/N]";
-    const answer = await rl.question(`${question} ${suffix}: `);
-    const normalized = answer.trim().toLowerCase();
-    if (!normalized) return defaultYes;
-    return normalized === "y" || normalized === "yes";
-  } finally {
-    rl.close();
-  }
+  return await promptConfirm(question, defaultYes);
 }
 
 function gitInstallAttempts(): InstallAttempt[] {
@@ -246,7 +278,16 @@ function ghInstallAttempts(): InstallAttempt[] {
 async function runInteractiveCommand(cmd: string, args: string[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: "inherit" });
-    child.once("error", reject);
+    child.once("error", (err) => {
+      reject(
+        formatCommandError(err, {
+          cmd,
+          args,
+          action: "run an interactive installer",
+          installHints: genericInstallHints(cmd),
+        }),
+      );
+    });
     child.once("close", (code) => {
       if (code === 0) {
         resolve();
@@ -338,40 +379,37 @@ async function promptInstallAgentRuntime(available: DetectedAgent[]): Promise<De
 
   console.log(chalk.yellow("⚠ No supported agent runtime detected."));
   console.log(chalk.dim("  You can install one now (recommended) or continue and install later.\n"));
-  const skipOption = AGENT_INSTALL_OPTIONS.length + 1;
-  AGENT_INSTALL_OPTIONS.forEach((option, i) => {
-    const command = [option.cmd, ...option.args].join(" ");
-    console.log(`  ${i + 1}. ${option.label} (${option.id}) — ${command}`);
-  });
-  console.log(`  ${skipOption}. Skip for now\n`);
+  const choice = await promptSelect(
+    "Choose runtime to install:",
+    [
+      ...AGENT_INSTALL_OPTIONS.map((option) => ({
+        value: option.id,
+        label: option.label,
+        hint: [option.cmd, ...option.args].join(" "),
+      })),
+      { value: "skip", label: "Skip for now" },
+    ],
+  );
+  if (choice === "skip") {
+    return available;
+  }
 
-  const { createInterface } = await import("node:readline/promises");
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const selected = AGENT_INSTALL_OPTIONS.find((option) => option.id === choice);
+  if (!selected) {
+    return available;
+  }
+
+  console.log(chalk.dim(`  Installing ${selected.label}...`));
   try {
-    const choice = await rl.question(`  Choose runtime to install [1-${skipOption}]: `);
-    const idx = Number.parseInt(choice.trim(), 10);
-    if (!Number.isFinite(idx) || idx < 1 || idx > skipOption) {
-      return available;
+    await runInteractiveCommand(selected.cmd, selected.args);
+    const refreshed = await detectAvailableAgents();
+    if (refreshed.length > 0) {
+      console.log(chalk.green(`  ✓ ${selected.label} installed successfully`));
     }
-    if (idx === skipOption) {
-      return available;
-    }
-
-    const selected = AGENT_INSTALL_OPTIONS[idx - 1];
-    console.log(chalk.dim(`  Installing ${selected.label}...`));
-    try {
-      await runInteractiveCommand(selected.cmd, selected.args);
-      const refreshed = await detectAvailableAgents();
-      if (refreshed.length > 0) {
-        console.log(chalk.green(`  ✓ ${selected.label} installed successfully`));
-      }
-      return refreshed;
-    } catch {
-      console.log(chalk.yellow(`  ⚠ Could not install ${selected.label} automatically.`));
-      return available;
-    }
-  } finally {
-    rl.close();
+    return refreshed;
+  } catch {
+    console.log(chalk.yellow(`  ⚠ Could not install ${selected.label} automatically.`));
+    return available;
   }
 }
 
@@ -742,7 +780,15 @@ async function startDashboard(
   }
 
   child.on("error", (err) => {
-    console.error(chalk.red("Dashboard failed to start:"), err.message);
+    const cmd = isDevMode ? "pnpm" : "node";
+    const args = isDevMode ? ["run", "dev"] : [resolve(webDir, "dist-server", "start-all.js")];
+    const formatted = formatCommandError(err, {
+      cmd,
+      args,
+      action: "start the AO dashboard",
+      installHints: genericInstallHints(cmd),
+    });
+    console.error(chalk.red("Dashboard failed to start:"), formatted.message);
     // Emit synthetic exit so callers listening on "exit" can clean up
     child.emit("exit", 1, null);
   });
@@ -806,6 +852,43 @@ async function ensureTmux(): Promise<void> {
   process.exit(1);
 }
 
+async function warnAboutOpenClawStatus(config: OrchestratorConfig): Promise<void> {
+  const openclawConfig = config.notifiers?.["openclaw"];
+  const openclawConfigured =
+    openclawConfig !== null && openclawConfig !== undefined &&
+    typeof openclawConfig === "object" &&
+    openclawConfig.plugin === "openclaw";
+  const configuredUrl =
+    openclawConfigured && typeof openclawConfig.url === "string" ? openclawConfig.url : undefined;
+
+  try {
+    const installation = configuredUrl
+      ? await detectOpenClawInstallation(configuredUrl)
+      : await detectOpenClawInstallation();
+
+    if (openclawConfigured) {
+      if (installation.state !== "running") {
+        console.log(
+          chalk.yellow(
+            `⚠ OpenClaw is configured but the gateway is not reachable at ${installation.gatewayUrl}. Notifications may fail until it is running.`,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (installation.state === "running") {
+      console.log(
+        chalk.yellow(
+          `⚠ OpenClaw is running at ${installation.gatewayUrl} but AO is not configured to use it. Run \`ao setup openclaw\` if you want OpenClaw notifications.`,
+        ),
+      );
+    }
+  } catch {
+    // OpenClaw probing is advisory for `ao start`; never block startup on it.
+  }
+}
+
 /**
  * Shared startup logic: launch dashboard + orchestrator session, print summary.
  * Used by both normal and URL-based start flows.
@@ -821,6 +904,21 @@ async function runStartup(
   const runtime = config.defaults?.runtime ?? "tmux";
   if (runtime === "tmux") {
     await ensureTmux();
+  }
+  await warnAboutOpenClawStatus(config);
+
+  // Only inject OpenClaw credentials when the project actually uses OpenClaw.
+  // This avoids exposing API keys to projects/plugins that don't need them.
+  const openclawNotifier = config.notifiers?.["openclaw"];
+  const hasOpenClaw =
+    openclawNotifier !== null && openclawNotifier !== undefined &&
+    typeof openclawNotifier === "object" && openclawNotifier.plugin === "openclaw";
+  if (hasOpenClaw) {
+    const injectedKeys = applyOpenClawCredentials();
+    if (injectedKeys.length > 0) {
+      const names = injectedKeys.map((k) => k.key).join(", ");
+      console.log(chalk.dim(`  Resolved from OpenClaw config: ${names}`));
+    }
   }
 
   const sessionId = `${project.sessionPrefix}-orchestrator`;
@@ -1011,6 +1109,7 @@ export function registerStart(program: Command): void {
     .option("--no-dashboard", "Skip starting the dashboard server")
     .option("--no-orchestrator", "Skip starting the orchestrator agent")
     .option("--rebuild", "Clean and rebuild dashboard before starting")
+    .option("--interactive", "Prompt to configure config settings")
     .action(
       async (
         projectArg?: string,
@@ -1018,6 +1117,7 @@ export function registerStart(program: Command): void {
           dashboard?: boolean;
           orchestrator?: boolean;
           rebuild?: boolean;
+          interactive?: boolean;
         },
       ) => {
         try {
@@ -1101,25 +1201,22 @@ export function registerStart(program: Command): void {
               console.log(`  PID: ${running.pid} | Up since: ${running.startedAt}`);
               console.log(`  Projects: ${running.projects.join(", ")}\n`);
 
-              // Interactive menu
-              const { createInterface } = await import("node:readline/promises");
-              const rl = createInterface({ input: process.stdin, output: process.stdout });
-              console.log("  1. Open dashboard (keep current)");
-              console.log("  2. Start new orchestrator on this project");
-              console.log("  3. Override — restart everything");
-              console.log("  4. Quit\n");
-              const choice = await rl.question("  Choice [1-4]: ");
-              rl.close();
+              const choice = await promptSelect(
+                "AO is already running. What do you want to do?",
+                [
+                  { value: "open", label: "Open dashboard", hint: "Keep the current instance" },
+                  { value: "new", label: "Start new orchestrator", hint: "Add a new session for this project" },
+                  { value: "restart", label: "Restart everything", hint: "Stop the current instance first" },
+                  { value: "quit", label: "Quit" },
+                ],
+                "open",
+              );
 
-              if (choice.trim() === "1") {
+              if (choice === "open") {
                 const url = `http://localhost:${running.port}`;
-                const [cmd, args]: [string, string[]] =
-                  process.platform === "win32"
-                    ? ["cmd.exe", ["/c", "start", "", url]]
-                    : [process.platform === "linux" ? "xdg-open" : "open", [url]];
-                spawn(cmd, args, { stdio: "ignore" });
+                openUrl(url);
                 process.exit(0);
-              } else if (choice.trim() === "2") {
+              } else if (choice === "new") {
                 // Generate unique orchestrator: same project, new session
                 const rawYaml = readFileSync(config.configPath, "utf-8");
                 const rawConfig = yamlParse(rawYaml);
@@ -1149,7 +1246,7 @@ export function registerStart(program: Command): void {
                 projectId = newId;
                 project = config.projects[newId];
                 // Continue to startup below
-              } else if (choice.trim() === "3") {
+              } else if (choice === "restart") {
                 try { process.kill(running.pid, "SIGTERM"); } catch { /* already dead */ }
                 if (!(await waitForExit(running.pid, 5000))) {
                   console.log(chalk.yellow("  Process didn't exit cleanly, sending SIGKILL..."));
@@ -1172,9 +1269,26 @@ export function registerStart(program: Command): void {
             }
           }
 
+          // ── Agent selection prompt (Step 10)──
+          const agentOverride = opts?.interactive ? await promptAgentSelection() : null;
+          if (agentOverride) {
+            const { orchestratorAgent, workerAgent } = agentOverride;
+
+            const rawYaml = readFileSync(config.configPath, "utf-8");
+            const rawConfig = yamlParse(rawYaml);
+            const proj = rawConfig.projects[projectId];
+            proj.orchestrator = { ...(proj.orchestrator ?? {}), agent: orchestratorAgent };
+            proj.worker = { ...(proj.worker ?? {}), agent: workerAgent };
+            writeFileSync(config.configPath, yamlStringify(rawConfig, { indent: 2 }));
+            console.log(chalk.dim(`  ✓ Saved to ${config.configPath}\n`));
+            
+            config = loadConfig(config.configPath);
+            project = config.projects[projectId];
+          }
+
           const actualPort = await runStartup(config, projectId, project, opts);
 
-          // ── Register in running.json (Step 10) ──
+          // ── Register in running.json (Step 11) ──
           await register({
             pid: process.pid,
             configPath: config.configPath,
