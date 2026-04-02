@@ -313,22 +313,26 @@ function expandPaths(config: OrchestratorConfig): OrchestratorConfig {
  * Format: extract the last segment from the package/path, removing common prefixes.
  * e.g., "@acme/ao-plugin-tracker-jira" -> "jira"
  * e.g., "./plugins/my-tracker" -> "my-tracker"
+ * e.g., "my-tracker" (local path without slashes) -> "my-tracker"
  */
 function generateTempPluginName(pkg?: string, path?: string): string {
-  const specifier = pkg ?? path ?? "unknown";
-
-  // For npm packages, extract the last part after the last hyphen or slash
+  // Handle npm packages: extract the last part after the last hyphen
   // @acme/ao-plugin-tracker-jira -> jira
   // @composio/ao-plugin-scm-gitlab -> gitlab
-  if (specifier.startsWith("@") || !specifier.includes("/")) {
-    const parts = specifier.split(/[-/]/);
-    return parts[parts.length - 1] ?? specifier;
+  if (pkg) {
+    const parts = pkg.split(/[-/]/);
+    return parts[parts.length - 1] ?? pkg;
   }
 
-  // For local paths, use the basename
+  // Handle local paths: use the basename
   // ./plugins/my-tracker -> my-tracker
-  const segments = specifier.split("/").filter((s) => s && s !== "." && s !== "..");
-  return segments[segments.length - 1] ?? specifier;
+  // my-tracker -> my-tracker (no slashes is still a valid path)
+  if (path) {
+    const segments = path.split("/").filter((s) => s && s !== "." && s !== "..");
+    return segments[segments.length - 1] ?? path;
+  }
+
+  return "unknown";
 }
 
 /**
