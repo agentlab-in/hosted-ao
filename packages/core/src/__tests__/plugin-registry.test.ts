@@ -262,7 +262,7 @@ describe("loadBuiltins", () => {
     });
   });
 
-  it("strips package and path loading metadata from notifier config", async () => {
+  it("strips package loading metadata from notifier config", async () => {
     const registry = createPluginRegistry();
     const fakeWebhook = makePlugin("notifier", "webhook");
     const cfg = makeOrchestratorConfig({
@@ -270,9 +270,8 @@ describe("loadBuiltins", () => {
       notifiers: {
         mywebhook: {
           plugin: "webhook",
-          // These are loading metadata fields that should be stripped:
+          // package field is allowed for resolution but should be stripped:
           package: "@composio/ao-plugin-notifier-webhook",
-          path: "./plugins/custom-webhook", // Filesystem path that could leak
           // These are plugin-specific fields that should be passed through:
           url: "https://webhook.example.com/notify",
           retries: 3,
@@ -285,13 +284,33 @@ describe("loadBuiltins", () => {
       throw new Error(`Not found: ${pkg}`);
     });
 
-    // Loading metadata (package, path) should be stripped to prevent leakage
+    // Loading metadata (package) should be stripped to prevent leakage
     // Plugin-specific fields (url, retries) should be passed through
     expect(fakeWebhook.create).toHaveBeenCalledWith({
       url: "https://webhook.example.com/notify",
       retries: 3,
       configPath: "/test/config.yaml",
     });
+  });
+
+  it("throws when path is used alongside plugin name in notifier config", async () => {
+    const registry = createPluginRegistry();
+    const fakeWebhook = makePlugin("notifier", "webhook");
+    const cfg = makeOrchestratorConfig({
+      notifiers: {
+        mywebhook: {
+          plugin: "webhook",
+          path: "./some/path", // This triggers the collision check
+        },
+      },
+    });
+
+    await expect(
+      registry.loadBuiltins(cfg, async (pkg: string) => {
+        if (pkg === "@composio/ao-plugin-notifier-webhook") return fakeWebhook;
+        return null;
+      })
+    ).rejects.toThrow(/path" is reserved/);
   });
 
   it("does not match notifier key when explicit plugin points to another notifier", async () => {
