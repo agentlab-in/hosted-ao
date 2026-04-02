@@ -530,7 +530,7 @@ describe("External plugin manifest validation", () => {
     expect(registry.get("tracker", "jira")).not.toBeNull();
   });
 
-  it("warns when manifest.name does not match expectedPluginName", async () => {
+  it("warns when manifest.name does not match expectedPluginName but still registers plugin", async () => {
     const registry = createPluginRegistry();
 
     const mockPlugin = {
@@ -566,12 +566,16 @@ describe("External plugin manifest validation", () => {
       ],
     });
 
-    // Should warn but not throw (error is caught and logged)
+    // Should warn about validation failure but still register the plugin
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await registry.loadFromConfig(config, importFn);
 
+    // Plugin should still be registered under its manifest.name
+    expect(registry.get("tracker", "jira-enterprise")).not.toBeNull();
+
+    // Should have logged a validation warning
     expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to load plugin"),
+      expect.stringContaining("Config validation failed for projects.proj1.tracker"),
     );
     stderrSpy.mockRestore();
   });
@@ -770,5 +774,77 @@ describe("External plugin manifest validation", () => {
     expect(config.projects.proj2.tracker?.plugin).toBe("jira-cloud");
     // Plugin should be registered under manifest.name
     expect(registry.get("tracker", "jira-cloud")).not.toBeNull();
+  });
+
+  it("registers plugin even when one project has misconfigured expectedPluginName", async () => {
+    const registry = createPluginRegistry();
+
+    const mockPlugin = {
+      manifest: { name: "jira-cloud", slot: "tracker" as const, version: "1.0.0", description: "Jira Cloud" },
+      create: vi.fn(() => ({})),
+    };
+
+    const importFn = vi.fn(async () => mockPlugin);
+
+    const config = makeOrchestratorConfig({
+      configPath: "/test/config.yaml",
+      plugins: [
+        { name: "jira", source: "npm", package: "@acme/ao-plugin-tracker-jira", enabled: true },
+      ],
+      projects: {
+        proj1: {
+          path: "/repos/test1",
+          repo: "org/test1",
+          name: "proj1",
+          defaultBranch: "main",
+          sessionPrefix: "test1",
+          tracker: { plugin: "jira", package: "@acme/ao-plugin-tracker-jira" },
+        },
+        proj2: {
+          path: "/repos/test2",
+          repo: "org/test2",
+          name: "proj2",
+          defaultBranch: "main",
+          sessionPrefix: "test2",
+          // Same external plugin but with WRONG explicit plugin name
+          tracker: { plugin: "wrong-name", package: "@acme/ao-plugin-tracker-jira" },
+        },
+      },
+      _externalPluginEntries: [
+        {
+          source: "projects.proj1.tracker",
+          location: { kind: "project", projectId: "proj1", configType: "tracker" },
+          slot: "tracker",
+          package: "@acme/ao-plugin-tracker-jira",
+          // No expectedPluginName - will accept any manifest.name
+        },
+        {
+          source: "projects.proj2.tracker",
+          location: { kind: "project", projectId: "proj2", configType: "tracker" },
+          slot: "tracker",
+          package: "@acme/ao-plugin-tracker-jira",
+          expectedPluginName: "wrong-name", // Mismatches manifest.name "jira-cloud"
+        },
+      ],
+    });
+
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await registry.loadFromConfig(config, importFn);
+
+    // Plugin should STILL be registered despite proj2's misconfiguration
+    expect(registry.get("tracker", "jira-cloud")).not.toBeNull();
+
+    // proj1 should be updated correctly (no expectedPluginName = accepts any)
+    expect(config.projects.proj1.tracker?.plugin).toBe("jira-cloud");
+
+    // proj2's config should NOT be updated (validation failed)
+    expect(config.projects.proj2.tracker?.plugin).toBe("wrong-name");
+
+    // Should have logged a warning about proj2's validation failure
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Config validation failed for projects.proj2.tracker"),
+    );
+
+    stderrSpy.mockRestore();
   });
 });

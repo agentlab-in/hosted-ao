@@ -365,18 +365,29 @@ export function createPluginRegistry(): PluginRegistry {
           const mod = normalizeImportedPluginModule(await doImport(specifier));
           if (!mod) continue;
 
+          // Register the plugin FIRST, before validating individual project configs.
+          // This ensures the plugin is available even if some projects have misconfigurations.
+          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
+          this.register(mod, pluginConfig);
+
           // Check if this plugin was auto-added from inline tracker/scm/notifier config
           // Multiple projects may share the same external plugin, so find ALL matching entries
           const matchingEntries = findAllExternalPluginEntries(plugin, externalEntries);
           for (const externalEntry of matchingEntries) {
-            // Validate manifest.name matches expectedPluginName (if specified)
-            validateManifestName(mod.manifest, externalEntry, specifier);
-            // Update the config with the actual manifest.name
-            updateConfigWithManifestName(mod.manifest, externalEntry, config);
+            try {
+              // Validate manifest.name matches expectedPluginName (if specified)
+              validateManifestName(mod.manifest, externalEntry, specifier);
+              // Update the config with the actual manifest.name
+              updateConfigWithManifestName(mod.manifest, externalEntry, config);
+            } catch (validationError) {
+              // Log validation errors but don't abort - other projects can still use the plugin.
+              // The misconfigured project will fail later when it tries to use the plugin
+              // with the wrong name, giving a clearer error at point of use.
+              process.stderr.write(
+                `[plugin-registry] Config validation failed for ${externalEntry.source}: ${validationError}\n`,
+              );
+            }
           }
-
-          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
-          this.register(mod, pluginConfig);
         } catch (error) {
           process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
         }
