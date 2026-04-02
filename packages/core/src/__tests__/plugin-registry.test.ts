@@ -671,6 +671,66 @@ describe("External plugin manifest validation", () => {
     expect(registry.get("notifier", "ms-teams")).not.toBeNull();
   });
 
+  it("passes notifier config to plugin even when manifest name differs from temp name", async () => {
+    const registry = createPluginRegistry();
+
+    const mockPlugin = {
+      manifest: { name: "ms-teams", slot: "notifier" as const, version: "1.0.0", description: "Teams notifier" },
+      create: vi.fn(() => ({})),
+    };
+
+    const importFn = vi.fn(async () => mockPlugin);
+
+    const config = makeOrchestratorConfig({
+      configPath: "/test/config.yaml",
+      plugins: [
+        // Temp name is "teams" (from package name), but manifest.name is "ms-teams"
+        { name: "teams", source: "npm", package: "@acme/ao-plugin-notifier-teams", enabled: true },
+      ],
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          name: "proj1",
+          defaultBranch: "main",
+          sessionPrefix: "test",
+        },
+      },
+      notifiers: {
+        myteams: {
+          plugin: "teams", // Temp name - will be updated to "ms-teams"
+          package: "@acme/ao-plugin-notifier-teams",
+          webhookUrl: "https://teams.webhook.url/abc123",
+          channel: "#alerts",
+        },
+      },
+      _externalPluginEntries: [
+        {
+          source: "notifiers.myteams",
+          location: { kind: "notifier", notifierId: "myteams" },
+          slot: "notifier",
+          package: "@acme/ao-plugin-notifier-teams",
+          // No expectedPluginName - config.plugin will be updated to manifest.name
+        },
+      ],
+    });
+
+    await registry.loadFromConfig(config, importFn);
+
+    // Config should be updated BEFORE extractPluginConfig is called
+    expect(config.notifiers?.myteams?.plugin).toBe("ms-teams");
+
+    // Plugin should receive its config (webhookUrl, channel) despite name mismatch
+    expect(mockPlugin.create).toHaveBeenCalledWith({
+      webhookUrl: "https://teams.webhook.url/abc123",
+      channel: "#alerts",
+      configPath: "/test/config.yaml",
+    });
+
+    // Plugin should be registered
+    expect(registry.get("notifier", "ms-teams")).not.toBeNull();
+  });
+
   it("warns when plugin slot does not match config slot", async () => {
     const registry = createPluginRegistry();
 
