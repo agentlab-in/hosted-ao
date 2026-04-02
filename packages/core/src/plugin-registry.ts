@@ -91,21 +91,24 @@ function extractPluginConfig(
       const matches = hasExplicitPlugin ? configuredPlugin === name : false;
 
       if (matches) {
+        // Tracker and SCM plugins are typically stateless in their global instance.
+        // To maintain legacy behavior and prevent accidental project-specific leakage
+        // into singleton built-ins, we return undefined for built-in trackers/scms.
+        // Check isBuiltin BEFORE prepareConfig to avoid unnecessary validation errors.
+        const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
+        if (isBuiltin) {
+          return undefined;
+        }
+
+        // External plugins (not in BUILTIN_PLUGINS) receive their cleaned config.
         const sourceId = `projects.${projectId}.${slot}`;
-        const prepared = prepareConfig(
+        return prepareConfig(
           slot,
           name,
           sourceId,
           entry as Record<string, unknown>,
           config.configPath,
         );
-
-        // Tracker and SCM plugins are typically stateless in their global instance.
-        // To maintain legacy behavior and prevent accidental project-specific leakage
-        // into singleton built-ins, we return undefined for built-in trackers/scms.
-        // External plugins (not in BUILTIN_PLUGINS) still receive their cleaned config.
-        const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
-        return isBuiltin ? undefined : prepared;
       }
     }
   }
