@@ -365,13 +365,10 @@ export function createPluginRegistry(): PluginRegistry {
           const mod = normalizeImportedPluginModule(await doImport(specifier));
           if (!mod) continue;
 
-          // Register the plugin FIRST, before validating individual project configs.
-          // This ensures the plugin is available even if some projects have misconfigurations.
-          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
-          this.register(mod, pluginConfig);
-
-          // Check if this plugin was auto-added from inline tracker/scm/notifier config
-          // Multiple projects may share the same external plugin, so find ALL matching entries
+          // Check if this plugin was auto-added from inline tracker/scm/notifier config.
+          // Multiple projects may share the same external plugin, so find ALL matching entries.
+          // We validate and update configs FIRST, before extracting plugin config, because
+          // extractPluginConfig looks up by manifest.name which may differ from the temp name.
           const matchingEntries = findAllExternalPluginEntries(plugin, externalEntries);
           for (const externalEntry of matchingEntries) {
             try {
@@ -388,6 +385,12 @@ export function createPluginRegistry(): PluginRegistry {
               );
             }
           }
+
+          // Extract plugin config AFTER updating configs with manifest.name.
+          // This ensures extractPluginConfig can find the config by manifest.name
+          // (e.g., manifest "ms-teams" after config was updated from temp "teams").
+          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
+          this.register(mod, pluginConfig);
         } catch (error) {
           process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
         }
