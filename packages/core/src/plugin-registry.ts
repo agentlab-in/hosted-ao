@@ -378,10 +378,16 @@ export function createPluginRegistry(): PluginRegistry {
         }
 
         if (mod) {
-          const pluginConfig = orchestratorConfig
-            ? extractPluginConfig(builtin.slot, builtin.name, orchestratorConfig)
-            : undefined;
-          this.register(mod, pluginConfig);
+          try {
+            const pluginConfig = orchestratorConfig
+              ? extractPluginConfig(builtin.slot, builtin.name, orchestratorConfig)
+              : undefined;
+            this.register(mod, pluginConfig);
+          } catch (error) {
+            process.stderr.write(
+              `[plugin-registry] Failed to load built-in plugin "${builtin.name}": ${error}\n`,
+            );
+          }
         }
       }
     },
