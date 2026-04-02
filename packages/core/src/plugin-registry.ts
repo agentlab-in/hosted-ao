@@ -76,16 +76,32 @@ function extractPluginConfig(
       const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
       const matches = hasExplicitPlugin ? configuredPlugin === name : notifierName === name;
       if (matches) {
+        const rawConfig = notifierConfig as Record<string, unknown>;
+
+        // Explicitly check for reserved fields to prevent silent stripping/collision
+        if ("package" in rawConfig && "path" in rawConfig) {
+          throw new Error(
+            `In notifier "${notifierName}": both "package" and "path" are specified. ` +
+              `Use "package" for npm plugins or "path" for local plugins, not both.`
+          );
+        }
+
+        if (hasExplicitPlugin || rawConfig.package) {
+          if ("path" in rawConfig) {
+            throw new Error(
+              `In notifier "${notifierName}": "path" is reserved for plugin loading. ` +
+                `Rename your configuration field to something else (e.g., "apiPath").`
+            );
+          }
+        }
+
         // Strip loading metadata fields (plugin, package, path) from config passed to plugin.
-        // These are used for plugin resolution, not plugin-specific configuration.
-        // The path field is particularly important to strip since plugins may use it
-        // for their own purposes (e.g., API endpoint path).
         const {
           plugin: _plugin,
           package: _package,
           path: _path,
           ...rest
-        } = notifierConfig as Record<string, unknown>;
+        } = rawConfig;
         return config.configPath ? { ...rest, configPath: config.configPath } : rest;
       }
     }
