@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateConfig, collectExternalPluginConfigs } from "../config.js";
+import { validateConfig } from "../config.js";
 
 describe("Config Validation - Project Uniqueness", () => {
   it("rejects duplicate project IDs (same basename)", () => {

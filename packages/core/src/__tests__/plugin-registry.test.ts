@@ -485,6 +485,7 @@ describe("External plugin manifest validation", () => {
       _externalPluginEntries: [
         {
           source: "projects.proj1.tracker",
+          location: { kind: "project", projectId: "proj1", configType: "tracker" },
           slot: "tracker",
           package: "@acme/ao-plugin-tracker-jira",
           expectedPluginName: "jira",
