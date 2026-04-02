@@ -519,6 +519,7 @@ export interface Issue {
   labels: string[];
   assignee?: string;
   priority?: number;
+  branchName?: string;
 }
 
 export interface IssueFilters {
