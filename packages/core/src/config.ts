@@ -310,18 +310,32 @@ function expandPaths(config: OrchestratorConfig): OrchestratorConfig {
 /**
  * Generate a temporary plugin name from a package or path specifier.
  * This name is used until the actual manifest.name is discovered during plugin loading.
- * Format: extract the last segment from the package/path, removing common prefixes.
+ * Format: extract the plugin name from the package/path, removing common prefixes.
  * e.g., "@acme/ao-plugin-tracker-jira" -> "jira"
+ * e.g., "@acme/ao-plugin-tracker-jira-cloud" -> "jira-cloud"
  * e.g., "./plugins/my-tracker" -> "my-tracker"
  * e.g., "my-tracker" (local path without slashes) -> "my-tracker"
  */
 function generateTempPluginName(pkg?: string, path?: string): string {
-  // Handle npm packages: extract the last part after the last hyphen
+  // Handle npm packages: extract the plugin name after the slot prefix
   // @acme/ao-plugin-tracker-jira -> jira
+  // @acme/ao-plugin-tracker-jira-cloud -> jira-cloud (preserves multi-word names)
   // @composio/ao-plugin-scm-gitlab -> gitlab
   if (pkg) {
-    const parts = pkg.split(/[-/]/);
-    return parts[parts.length - 1] ?? pkg;
+    // First get the package name without scope: "@acme/ao-plugin-tracker-jira" -> "ao-plugin-tracker-jira"
+    const slashParts = pkg.split("/");
+    const packageName = slashParts[slashParts.length - 1] ?? pkg;
+
+    // Try to extract name after common prefix pattern: ao-plugin-{slot}-{name}
+    // This preserves multi-word names like "jira-cloud"
+    const prefixMatch = packageName.match(/^ao-plugin-(?:runtime|agent|workspace|tracker|scm|notifier|terminal)-(.+)$/);
+    if (prefixMatch?.[1]) {
+      return prefixMatch[1];
+    }
+
+    // Fallback: split by hyphens and take last segment
+    const parts = packageName.split("-");
+    return parts[parts.length - 1] ?? packageName;
   }
 
   // Handle local paths: use the basename

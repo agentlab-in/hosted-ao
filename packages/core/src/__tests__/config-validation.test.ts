@@ -1050,4 +1050,40 @@ describe("External Plugin Name Generation", () => {
     // Should use the path as-is (not split by hyphens like npm packages)
     expect(config.projects.proj1.tracker?.plugin).toBe("my-tracker");
   });
+
+  it("preserves multi-word plugin names from scoped npm packages", () => {
+    const config = validateConfig({
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+          tracker: {
+            package: "@acme/ao-plugin-tracker-jira-cloud",
+          },
+        },
+      },
+    });
+
+    // Should extract "jira-cloud" not just "cloud"
+    expect(config.projects.proj1.tracker?.plugin).toBe("jira-cloud");
+  });
+
+  it("preserves multi-word plugin names from unscoped npm packages", () => {
+    const config = validateConfig({
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+          scm: {
+            package: "ao-plugin-scm-azure-devops",
+          },
+        },
+      },
+    });
+
+    // Should extract "azure-devops" not just "devops"
+    expect(config.projects.proj1.scm?.plugin).toBe("azure-devops");
+  });
 });
