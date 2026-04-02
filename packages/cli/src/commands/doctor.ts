@@ -345,6 +345,9 @@ async function sendTestNotifications(
   for (const [name, notifierConfig] of configuredNotifiers) {
     if (notifierConfig.plugin) {
       targets.set(notifierConfig.plugin, { label: name, pluginName: notifierConfig.plugin });
+    } else {
+      // External plugin without explicit plugin name - manifest.name not yet resolved
+      warn(`${name}: notifier plugin name not resolved (external plugin may not be loaded yet)`);
     }
   }
 

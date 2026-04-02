@@ -312,7 +312,7 @@ describe("loadBuiltins", () => {
       return null;
     });
 
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('path" is reserved'));
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('"path" field conflicts with reserved'));
     stderrSpy.mockRestore();
 
     // Plugin should not be registered due to config error

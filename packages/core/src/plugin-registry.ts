@@ -92,7 +92,20 @@ function extractPluginConfig(
 
       if (matches) {
         const sourceId = `projects.${projectId}.${slot}`;
-        return prepareConfig(slot, name, sourceId, entry as Record<string, unknown>, config.configPath);
+        const prepared = prepareConfig(
+          slot,
+          name,
+          sourceId,
+          entry as Record<string, unknown>,
+          config.configPath,
+        );
+
+        // Tracker and SCM plugins are typically stateless in their global instance.
+        // To maintain legacy behavior and prevent accidental project-specific leakage
+        // into singleton built-ins, we return undefined for built-in trackers/scms.
+        // External plugins (not in BUILTIN_PLUGINS) still receive their cleaned config.
+        const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
+        return isBuiltin ? undefined : prepared;
       }
     }
   }
@@ -102,6 +115,7 @@ function extractPluginConfig(
 
 /**
  * Internal helper to validate and strip loading metadata from a plugin configuration.
+ * Reserved fields (plugin, package, path) are used for plugin resolution and stripped.
  */
 function prepareConfig(
   slot: string,
@@ -119,20 +133,45 @@ function prepareConfig(
     );
   }
 
-  // If loading via built-in name or npm package, 'path' is a collision.
-  // We detect this by checking if 'package' is present OR if no 'path' was 
-  // intended for local resolution (i.e. name refers to a built-in).
+  // If loading via built-in name or npm package, having a 'path' field is ambiguous:
+  // it could be a local plugin path (for loading) or a plugin config value.
+  // We reject this to avoid silently stripping a config value the user intended to pass.
   const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
   if ((rawConfig.package || isBuiltin) && "path" in rawConfig) {
+    const loadingMethod = rawConfig.package ? `npm package "${rawConfig.package}"` : `built-in plugin "${name}"`;
     throw new Error(
-      `In ${slot} "${sourceId}": "path" is reserved for plugin loading. ` +
-        `Rename your configuration field to something else (e.g., "apiPath").`,
+      `In ${slot} "${sourceId}": "path" field conflicts with reserved plugin loading field. ` +
+        `You're loading via ${loadingMethod}, but also have a "path" field which would be stripped. ` +
+        `Rename your configuration field to something else (e.g., "apiPath", "webhookPath").`,
     );
   }
 
   // Strip loading metadata fields (plugin, package, path) from config passed to plugin.
   const { plugin: _plugin, package: _package, path: _path, ...rest } = rawConfig;
   return configPath ? { ...rest, configPath } : rest;
+}
+
+/**
+ * Build an index of external plugin entries by package/path for O(1) lookups.
+ * Multiple entries can share the same package/path (e.g., multiple projects using same plugin).
+ */
+function buildExternalPluginIndex(
+  externalEntries: ExternalPluginEntryRef[] | undefined,
+): Map<string, ExternalPluginEntryRef[]> {
+  const index = new Map<string, ExternalPluginEntryRef[]>();
+  if (!externalEntries) return index;
+
+  for (const entry of externalEntries) {
+    const key = entry.package ? `package:${entry.package}` : `path:${entry.path}`;
+    const existing = index.get(key);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      index.set(key, [entry]);
+    }
+  }
+
+  return index;
 }
 
 /**
@@ -145,15 +184,15 @@ function prepareConfig(
  */
 function findAllExternalPluginEntries(
   plugin: InstalledPluginConfig,
-  externalEntries: ExternalPluginEntryRef[] | undefined,
+  externalIndex: Map<string, ExternalPluginEntryRef[]>,
 ): ExternalPluginEntryRef[] {
-  if (!externalEntries) return [];
-
-  return externalEntries.filter((entry) => {
-    if (plugin.package && entry.package === plugin.package) return true;
-    if (plugin.path && entry.path === plugin.path) return true;
-    return false;
-  });
+  if (plugin.package) {
+    return externalIndex.get(`package:${plugin.package}`) ?? [];
+  }
+  if (plugin.path) {
+    return externalIndex.get(`path:${plugin.path}`) ?? [];
+  }
+  return [];
 }
 
 /**
@@ -400,7 +439,8 @@ export function createPluginRegistry(): PluginRegistry {
       await this.loadBuiltins(config, importFn);
 
       const doImport = importFn ?? ((pkg: string) => import(pkg));
-      const externalEntries = config._externalPluginEntries;
+      // Build index once for O(1) lookups when matching plugins to external entries
+      const externalIndex = buildExternalPluginIndex(config._externalPluginEntries);
 
       for (const plugin of config.plugins ?? []) {
         if (plugin.enabled === false) continue;
@@ -419,7 +459,7 @@ export function createPluginRegistry(): PluginRegistry {
           // Multiple projects may share the same external plugin, so find ALL matching entries.
           // We validate and update configs FIRST, before extracting plugin config, because
           // extractPluginConfig looks up by manifest.name which may differ from the temp name.
-          const matchingEntries = findAllExternalPluginEntries(plugin, externalEntries);
+          const matchingEntries = findAllExternalPluginEntries(plugin, externalIndex);
           for (const externalEntry of matchingEntries) {
             try {
               // Validate manifest.name matches expectedPluginName (if specified)
