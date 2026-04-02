@@ -1032,4 +1032,22 @@ describe("External Plugin Name Generation", () => {
 
     expect(config.projects.proj1.tracker?.plugin).toBe("my-custom-name");
   });
+
+  it("handles local path without slashes correctly", () => {
+    const config = validateConfig({
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+          tracker: {
+            path: "my-tracker",
+          },
+        },
+      },
+    });
+
+    // Should use the path as-is (not split by hyphens like npm packages)
+    expect(config.projects.proj1.tracker?.plugin).toBe("my-tracker");
+  });
 });

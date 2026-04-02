@@ -86,16 +86,20 @@ function extractPluginConfig(
 }
 
 /**
- * Find the external plugin entry that matches a given plugin config.
+ * Find ALL external plugin entries that match a given plugin config.
  * Used for manifest.name validation when loading inline tracker/scm/notifier plugins.
+ *
+ * Returns all matching entries because multiple projects may share the same
+ * external plugin (same package/path), and all their configs need to be updated
+ * with the actual manifest.name.
  */
-function findExternalPluginEntry(
+function findAllExternalPluginEntries(
   plugin: InstalledPluginConfig,
   externalEntries: ExternalPluginEntryRef[] | undefined,
-): ExternalPluginEntryRef | undefined {
-  if (!externalEntries) return undefined;
+): ExternalPluginEntryRef[] {
+  if (!externalEntries) return [];
 
-  return externalEntries.find((entry) => {
+  return externalEntries.filter((entry) => {
     if (plugin.package && entry.package === plugin.package) return true;
     if (plugin.path && entry.path === plugin.path) return true;
     return false;
@@ -153,9 +157,9 @@ function updateConfigWithManifestName(
 
   // Also validate slot matches
   if (manifest.slot !== slot) {
-    console.warn(
+    process.stderr.write(
       `[plugin-registry] Plugin at ${source} has slot "${manifest.slot}" but was configured as "${slot}". ` +
-        `The plugin will be registered under its declared slot "${manifest.slot}".`,
+        `The plugin will be registered under its declared slot "${manifest.slot}".\n`,
     );
   }
 }
@@ -344,7 +348,7 @@ export function createPluginRegistry(): PluginRegistry {
 
         const specifier = resolvePluginSpecifier(plugin, config);
         if (!specifier) {
-          console.warn(`[plugin-registry] Could not resolve specifier for plugin "${plugin.name}" (source: ${plugin.source})`);
+          process.stderr.write(`[plugin-registry] Could not resolve specifier for plugin "${plugin.name}" (source: ${plugin.source})\n`);
           continue;
         }
 
@@ -353,8 +357,9 @@ export function createPluginRegistry(): PluginRegistry {
           if (!mod) continue;
 
           // Check if this plugin was auto-added from inline tracker/scm/notifier config
-          const externalEntry = findExternalPluginEntry(plugin, externalEntries);
-          if (externalEntry) {
+          // Multiple projects may share the same external plugin, so find ALL matching entries
+          const matchingEntries = findAllExternalPluginEntries(plugin, externalEntries);
+          for (const externalEntry of matchingEntries) {
             // Validate manifest.name matches expectedPluginName (if specified)
             validateManifestName(mod.manifest, externalEntry, specifier);
             // Update the config with the actual manifest.name
@@ -364,7 +369,7 @@ export function createPluginRegistry(): PluginRegistry {
           const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
           this.register(mod, pluginConfig);
         } catch (error) {
-          console.warn(`[plugin-registry] Failed to load plugin "${specifier}":`, error);
+          process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
         }
       }
     },
