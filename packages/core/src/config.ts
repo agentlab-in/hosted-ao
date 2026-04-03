@@ -50,6 +50,32 @@ function inferScmPlugin(project: {
 // ZOD SCHEMAS
 // =============================================================================
 
+/**
+ * Common validation for plugin config fields (tracker, scm, notifier).
+ * Must have either plugin (for built-ins) or package/path (for external plugins).
+ * Cannot have both package and path.
+ */
+function validatePluginConfigFields(
+  value: { plugin?: string; package?: string; path?: string },
+  ctx: z.RefinementCtx,
+  configType: string,
+): void {
+  // Must have either plugin or package/path
+  if (!value.plugin && !value.package && !value.path) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${configType} config requires either 'plugin' (for built-ins) or 'package'/'path' (for external plugins)`,
+    });
+  }
+  // Cannot have both package and path
+  if (value.package && value.path) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${configType} config cannot have both 'package' and 'path' - use one or the other`,
+    });
+  }
+}
+
 const ReactionConfigSchema = z.object({
   auto: z.boolean().default(true),
   action: z.enum(["send-to-agent", "notify", "auto-merge"]).default("notify"),
@@ -68,22 +94,7 @@ const TrackerConfigSchema = z
     path: z.string().optional(),
   })
   .passthrough()
-  .superRefine((value, ctx) => {
-    // Must have either plugin or package/path
-    if (!value.plugin && !value.package && !value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Tracker config requires either 'plugin' (for built-ins) or 'package'/'path' (for external plugins)",
-      });
-    }
-    // Cannot have both package and path
-    if (value.package && value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Tracker config cannot have both 'package' and 'path' - use one or the other",
-      });
-    }
-  });
+  .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "Tracker"));
 
 const SCMConfigSchema = z
   .object({
@@ -103,22 +114,7 @@ const SCMConfigSchema = z
       .optional(),
   })
   .passthrough()
-  .superRefine((value, ctx) => {
-    // Must have either plugin or package/path
-    if (!value.plugin && !value.package && !value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "SCM config requires either 'plugin' (for built-ins) or 'package'/'path' (for external plugins)",
-      });
-    }
-    // Cannot have both package and path
-    if (value.package && value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "SCM config cannot have both 'package' and 'path' - use one or the other",
-      });
-    }
-  });
+  .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "SCM"));
 
 const NotifierConfigSchema = z
   .object({
@@ -127,22 +123,7 @@ const NotifierConfigSchema = z
     path: z.string().optional(),
   })
   .passthrough()
-  .superRefine((value, ctx) => {
-    // Must have either plugin or package/path
-    if (!value.plugin && !value.package && !value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Notifier config requires either 'plugin' (for built-ins) or 'package'/'path' (for external plugins)",
-      });
-    }
-    // Cannot have both package and path
-    if (value.package && value.path) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Notifier config cannot have both 'package' and 'path' - use one or the other",
-      });
-    }
-  });
+  .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "Notifier"));
 
 const AgentPermissionSchema = z
   .enum(["permissionless", "default", "auto-edit", "suggest", "skip"])
@@ -328,10 +309,10 @@ function generateTempPluginName(pkg?: string, path?: string): string {
       return prefixMatch[1];
     }
 
-    // Non-standard package name (doesn't follow ao-plugin convention): use last hyphen-segment
-    // e.g., "custom-tracker-plugin" -> "plugin"
-    const parts = packageName.split("-");
-    return parts[parts.length - 1] ?? packageName;
+    // Non-standard package name (doesn't follow ao-plugin convention): use the full package name
+    // to avoid collisions. "plugin" from "custom-tracker-plugin" would collide with other packages
+    // that also end in "-plugin". The temp name is replaced with manifest.name after loading anyway.
+    return packageName;
   }
 
   // Handle local paths: use the basename
@@ -450,10 +431,21 @@ function mergeExternalPlugins(
     if (plugin.path) seen.add(`path:${plugin.path}`);
   }
 
-  // Add external entries that aren't already present
+  // Add external entries that aren't already present, or enable if disabled
   for (const entry of externalEntries) {
     const key = entry.package ? `package:${entry.package}` : `path:${entry.path}`;
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      // If the existing plugin is disabled but there's an inline reference, enable it
+      const existingPlugin = plugins.find(
+        (p) =>
+          (entry.package && p.package === entry.package) ||
+          (entry.path && p.path === entry.path),
+      );
+      if (existingPlugin && existingPlugin.enabled === false) {
+        existingPlugin.enabled = true;
+      }
+      continue;
+    }
     seen.add(key);
 
     // Generate a temporary name - will be replaced with manifest.name during loading

@@ -1176,6 +1176,11 @@ export interface TrackerConfig {
    * Plugin name (manifest.name). Required when using built-in plugins.
    * Optional when `package` or `path` is specified (will be inferred from manifest).
    * When both plugin and package/path are specified, manifest.name must match plugin.
+   *
+   * POST-VALIDATION INVARIANT: After validateConfig(), this field is ALWAYS populated.
+   * Either from user input, inferred from repo (github/gitlab), or auto-generated from
+   * package/path via generateTempPluginName(). The optional typing exists for raw config
+   * input before validation. Downstream code can safely assume non-null after validation.
    */
   plugin?: string;
   /** npm package name for external plugins (e.g. "@acme/ao-plugin-tracker-jira") */
@@ -1191,6 +1196,11 @@ export interface SCMConfig {
    * Plugin name (manifest.name). Required when using built-in plugins.
    * Optional when `package` or `path` is specified (will be inferred from manifest).
    * When both plugin and package/path are specified, manifest.name must match plugin.
+   *
+   * POST-VALIDATION INVARIANT: After validateConfig(), this field is ALWAYS populated.
+   * Either from user input, inferred from repo (github/gitlab), or auto-generated from
+   * package/path via generateTempPluginName(). The optional typing exists for raw config
+   * input before validation. Downstream code can safely assume non-null after validation.
    */
   plugin?: string;
   /** npm package name for external plugins (e.g. "@acme/ao-plugin-scm-bitbucket") */
@@ -1216,6 +1226,11 @@ export interface NotifierConfig {
    * Plugin name (manifest.name). Required when using built-in plugins.
    * Optional when `package` or `path` is specified (will be inferred from manifest).
    * When both plugin and package/path are specified, manifest.name must match plugin.
+   *
+   * POST-VALIDATION INVARIANT: After validateConfig(), this field is ALWAYS populated.
+   * Either from user input or auto-generated from package/path via generateTempPluginName().
+   * The optional typing exists for raw config input before validation.
+   * Downstream code can safely assume non-null after validation.
    */
   plugin?: string;
   /** npm package name for external plugins (e.g. "@acme/ao-plugin-notifier-teams") */

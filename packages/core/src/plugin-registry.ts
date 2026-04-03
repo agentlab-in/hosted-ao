@@ -81,36 +81,13 @@ function extractPluginConfig(
   }
 
   // 2. Handle Tracker and SCM Slots (Project-level)
+  // Tracker and SCM plugins are typically stateless singletons that receive
+  // project-specific config per-call (via ProjectConfig argument), not at create() time.
+  // This applies to BOTH built-in and external plugins to avoid order-dependent
+  // behavior when multiple projects share the same plugin but have different configs.
+  // Return undefined so plugins are initialized without project-specific config.
   if (slot === "tracker" || slot === "scm") {
-    for (const [projectId, project] of Object.entries(config.projects)) {
-      const entry = slot === "tracker" ? project.tracker : project.scm;
-      if (!entry || typeof entry !== "object") continue;
-
-      const configuredPlugin = (entry as Record<string, unknown>)["plugin"];
-      const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
-      const matches = hasExplicitPlugin ? configuredPlugin === name : false;
-
-      if (matches) {
-        // Tracker and SCM plugins are typically stateless in their global instance.
-        // To maintain legacy behavior and prevent accidental project-specific leakage
-        // into singleton built-ins, we return undefined for built-in trackers/scms.
-        // Check isBuiltin BEFORE prepareConfig to avoid unnecessary validation errors.
-        const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
-        if (isBuiltin) {
-          return undefined;
-        }
-
-        // External plugins (not in BUILTIN_PLUGINS) receive their cleaned config.
-        const sourceId = `projects.${projectId}.${slot}`;
-        return prepareConfig(
-          slot,
-          name,
-          sourceId,
-          entry as Record<string, unknown>,
-          config.configPath,
-        );
-      }
-    }
+    return undefined;
   }
 
   return undefined;
