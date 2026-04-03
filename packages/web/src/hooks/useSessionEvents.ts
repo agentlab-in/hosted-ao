@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useCallback } from "react";
 import type {
   AttentionLevel,
   DashboardSession,
@@ -104,6 +104,7 @@ export function useSessionEvents(
   initialSessions: DashboardSession[],
   initialGlobalPause?: GlobalPauseState | null,
   project?: string,
+  muxSessions?: Array<{ id: string; status: string; activity: string | null; attentionLevel: string; lastActivityAt: string }>,
   initialAttentionLevels?: SSEAttentionMap,
 ): State {
   const [state, dispatch] = useReducer(reducer, {
@@ -120,6 +121,7 @@ export function useSessionEvents(
   const pendingMembershipKeyRef = useRef<string | null>(null);
   const lastRefreshAtRef = useRef(Date.now());
   const disconnectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRefreshControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     sessionsRef.current = state.sessions;
@@ -134,11 +136,92 @@ export function useSessionEvents(
     });
   }, [initialSessions, initialGlobalPause]);
 
+  // Define scheduleRefresh with useCallback so both effects can use it
+  const scheduleRefresh = useCallback(() => {
+    if (refreshingRef.current || refreshTimerRef.current) return;
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshingRef.current = true;
+      const requestedMembershipKey = pendingMembershipKeyRef.current;
+      const refreshController = new AbortController();
+      activeRefreshControllerRef.current = refreshController;
+
+      const sessionsUrl = project
+        ? `/api/sessions?project=${encodeURIComponent(project)}`
+        : "/api/sessions";
+
+      void fetch(sessionsUrl, { signal: refreshController.signal })
+        .then((res) => (res.ok ? res.json() : null))
+        .then(
+          (updated: { sessions?: DashboardSession[]; globalPause?: GlobalPauseState } | null) => {
+            if (refreshController.signal.aborted || !updated?.sessions) return;
+
+            lastRefreshAtRef.current = Date.now();
+            dispatch({
+              type: "reset",
+              sessions: updated.sessions,
+              globalPause: updated.globalPause ?? null,
+            });
+          },
+        )
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          console.warn("[useSessionEvents] refresh failed:", err);
+        })
+        .finally(() => {
+          if (activeRefreshControllerRef.current === refreshController) {
+            activeRefreshControllerRef.current = null;
+          }
+          if (refreshController.signal.aborted) {
+            refreshingRef.current = false;
+            return;
+          }
+
+          refreshingRef.current = false;
+
+          if (
+            pendingMembershipKeyRef.current !== null &&
+            pendingMembershipKeyRef.current !== requestedMembershipKey
+          ) {
+            scheduleRefresh();
+            return;
+          }
+
+          pendingMembershipKeyRef.current = null;
+        });
+    }, MEMBERSHIP_REFRESH_DELAY_MS);
+  }, [project]);
+
+  // Mux-based session updates (replaces SSE when available)
   useEffect(() => {
+    if (!muxSessions || muxSessions.length === 0) return;
+
+    dispatch({ type: "snapshot", patches: muxSessions as SSESnapshotEvent["sessions"] });
+
+    const currentMembershipKey = createMembershipKey(sessionsRef.current);
+    const snapshotMembershipKey = createMembershipKey(muxSessions);
+
+    if (currentMembershipKey !== snapshotMembershipKey) {
+      pendingMembershipKeyRef.current = snapshotMembershipKey;
+      scheduleRefresh();
+      return;
+    }
+
+    if (Date.now() - lastRefreshAtRef.current >= STALE_REFRESH_INTERVAL_MS) {
+      scheduleRefresh();
+    }
+  }, [muxSessions, scheduleRefresh]);
+
+  useEffect(() => {
+    // Skip SSE if mux sessions are available
+    if (muxSessions) {
+      dispatch({ type: "setConnection", status: "connected" });
+      return;
+    }
+
     const url = project ? `/api/events?project=${encodeURIComponent(project)}` : "/api/events";
     const es = new EventSource(url);
     let disposed = false;
-    let activeRefreshController: AbortController | null = null;
 
     const clearRefreshTimer = () => {
       if (refreshTimerRef.current) {
@@ -152,63 +235,6 @@ export function useSessionEvents(
         clearTimeout(disconnectedTimerRef.current);
         disconnectedTimerRef.current = null;
       }
-    };
-
-    const scheduleRefresh = () => {
-      if (disposed) return;
-      if (refreshingRef.current || refreshTimerRef.current) return;
-      refreshTimerRef.current = setTimeout(() => {
-        if (disposed) return;
-        refreshTimerRef.current = null;
-        refreshingRef.current = true;
-        const requestedMembershipKey = pendingMembershipKeyRef.current;
-        const refreshController = new AbortController();
-        activeRefreshController = refreshController;
-
-        const sessionsUrl = project
-          ? `/api/sessions?project=${encodeURIComponent(project)}`
-          : "/api/sessions";
-
-        void fetch(sessionsUrl, { signal: refreshController.signal })
-          .then((res) => (res.ok ? res.json() : null))
-          .then(
-            (updated: { sessions?: DashboardSession[]; globalPause?: GlobalPauseState } | null) => {
-              if (disposed || refreshController.signal.aborted || !updated?.sessions) return;
-
-              lastRefreshAtRef.current = Date.now();
-              dispatch({
-                type: "reset",
-                sessions: updated.sessions,
-                globalPause: updated.globalPause ?? null,
-              });
-            },
-          )
-          .catch((err: unknown) => {
-            if (err instanceof DOMException && err.name === "AbortError") return;
-            console.warn("[useSessionEvents] refresh failed:", err);
-          })
-          .finally(() => {
-            if (activeRefreshController === refreshController) {
-              activeRefreshController = null;
-            }
-            if (disposed || refreshController.signal.aborted) {
-              refreshingRef.current = false;
-              return;
-            }
-
-            refreshingRef.current = false;
-
-            if (
-              pendingMembershipKeyRef.current !== null &&
-              pendingMembershipKeyRef.current !== requestedMembershipKey
-            ) {
-              scheduleRefresh();
-              return;
-            }
-
-            pendingMembershipKeyRef.current = null;
-          });
-      }, MEMBERSHIP_REFRESH_DELAY_MS);
     };
 
     es.onmessage = (event: MessageEvent) => {
@@ -264,15 +290,15 @@ export function useSessionEvents(
 
     return () => {
       disposed = true;
-      activeRefreshController?.abort();
-      activeRefreshController = null;
+      activeRefreshControllerRef.current?.abort();
+      activeRefreshControllerRef.current = null;
       refreshingRef.current = false;
       pendingMembershipKeyRef.current = null;
       clearRefreshTimer();
       clearDisconnectedTimer();
       es.close();
     };
-  }, [project]);
+  }, [project, muxSessions, scheduleRefresh]);
 
   return state;
 }
