@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { generateOrchestratorPrompt, isOrchestratorSession } from "@composio/ao-core";
+import { generateOrchestratorPrompt } from "@composio/ao-core";
 import { getServices } from "@/lib/services";
 import { validateIdentifier, validateConfiguredProject } from "@/lib/validation";
+import { mapSessionsToOrchestrators } from "@/lib/orchestrator-utils";
 
 /**
  * GET /api/orchestrators?project=<projectId>
@@ -29,17 +30,7 @@ export async function GET(request: NextRequest) {
     const sessionPrefix = project.sessionPrefix ?? projectId;
 
     const allSessions = await sessionManager.list(projectId);
-    const orchestrators = allSessions
-      .filter((s) => isOrchestratorSession(s, sessionPrefix))
-      .map((s) => ({
-        id: s.id,
-        projectId: s.projectId,
-        projectName: project.name,
-        status: s.status,
-        activity: s.activity,
-        createdAt: s.createdAt?.toISOString() ?? null,
-        lastActivityAt: s.lastActivityAt?.toISOString() ?? null,
-      }));
+    const orchestrators = mapSessionsToOrchestrators(allSessions, sessionPrefix, project.name);
 
     return NextResponse.json({ orchestrators, projectName: project.name });
   } catch (err) {
