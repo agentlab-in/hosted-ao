@@ -29,7 +29,6 @@ if (changedFiles.length === 0) {
   const comment = `${COMMENT_TAG}\n## Test Coverage Report\n\n_No TypeScript source files changed in this PR._\n`;
   writeFileSync("coverage-comment.md", comment);
   if (ghOutput) appendFileSync(ghOutput, "has_coverage=false\n");
-  console.log(comment);
   process.exit(0);
 }
 
@@ -176,4 +175,3 @@ if (fileReports.length === 0) {
 }
 
 writeFileSync("coverage-comment.md", comment);
-console.log(comment);
