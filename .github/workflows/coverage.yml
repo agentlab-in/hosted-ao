@@ -54,19 +54,19 @@ jobs:
           # Only run coverage for packages that have changed files
           if echo "$CHANGED" | grep -q '^packages/core/'; then
             echo "::group::Core tests"
-            pnpm --filter @composio/ao-core exec vitest run --coverage --coverage.reporter=json || true
+            pnpm --filter @composio/ao-core exec vitest run --coverage.enabled --coverage.reporter=json || true
             echo "::endgroup::"
           fi
 
           if echo "$CHANGED" | grep -q '^packages/cli/'; then
             echo "::group::CLI tests"
-            pnpm --filter @composio/ao-cli exec vitest run --coverage --coverage.reporter=json || true
+            pnpm --filter @composio/ao-cli exec vitest run --coverage.enabled --coverage.reporter=json || true
             echo "::endgroup::"
           fi
 
           if echo "$CHANGED" | grep -q '^packages/web/'; then
             echo "::group::Web tests"
-            pnpm --filter @composio/ao-web exec vitest run --coverage --coverage.reporter=json || true
+            pnpm --filter @composio/ao-web exec vitest run --coverage.enabled --coverage.reporter=json || true
             echo "::endgroup::"
           fi
 
@@ -76,7 +76,7 @@ jobs:
               if [ -f "$plugin_dir/package.json" ]; then
                 pkg_name=$(node -e "console.log(require('./$plugin_dir/package.json').name)")
                 echo "::group::$pkg_name tests"
-                pnpm --filter "$pkg_name" exec vitest run --coverage --coverage.reporter=json || true
+                pnpm --filter "$pkg_name" exec vitest run --coverage.enabled --coverage.reporter=json || true
                 echo "::endgroup::"
               fi
             done
