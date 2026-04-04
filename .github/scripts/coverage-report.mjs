@@ -12,6 +12,7 @@
 /* eslint-disable no-undef -- Node.js CI script; process/console are globals */
 import { readFileSync, writeFileSync, existsSync, appendFileSync, realpathSync, readdirSync } from "node:fs";
 import { resolve, relative } from "node:path";
+import libCoverage from "istanbul-lib-coverage";
 
 const COMMENT_TAG = "<!-- coverage-report -->";
 const cwd = realpathSync(process.cwd());
@@ -32,7 +33,7 @@ if (changedFiles.length === 0) {
   process.exit(0);
 }
 
-// ── 2. Discover coverage-final.json files ──────────────────────────
+// ── 2. Discover and merge coverage-final.json files ────────────────
 function findCoverageFiles(baseDir) {
   const results = [];
   const packagesDir = resolve(baseDir, "packages");
@@ -62,57 +63,47 @@ function findCoverageFiles(baseDir) {
   return results;
 }
 
-const coverageFiles = findCoverageFiles(cwd);
+const coverageMap = libCoverage.createCoverageMap({});
 
-// ── 3. Parse coverage and filter to changed files ──────────────────
+for (const jsonPath of findCoverageFiles(cwd)) {
+  const raw = JSON.parse(readFileSync(jsonPath, "utf-8"));
+  coverageMap.merge(raw);
+}
+
+// ── 3. Filter to changed files and collect metrics ─────────────────
 let totalLines = 0;
 let coveredLines = 0;
 const fileReports = [];
 
-for (const jsonPath of coverageFiles) {
-  const coverage = JSON.parse(readFileSync(jsonPath, "utf-8"));
+for (const absPath of coverageMap.files()) {
+  // Normalize to handle symlinks (e.g. /tmp -> /private/tmp on macOS)
+  const realAbsPath = existsSync(absPath) ? realpathSync(absPath) : absPath;
+  const relPath = relative(cwd, realAbsPath);
 
-  for (const [absPath, data] of Object.entries(coverage)) {
-    // Normalize to handle symlinks (e.g. /tmp -> /private/tmp on macOS)
-    const realAbsPath = existsSync(absPath) ? realpathSync(absPath) : absPath;
-    const relPath = relative(cwd, realAbsPath);
+  if (!changedFiles.includes(relPath)) continue;
 
-    if (!changedFiles.includes(relPath)) continue;
+  const fc = coverageMap.fileCoverageFor(absPath);
+  const summary = fc.toSummary();
+  const lineCoverage = fc.getLineCoverage();
 
-    // Derive per-line hit counts from the statement map.
-    // A line is "covered" if any statement on it was executed.
-    const lineHits = new Map();
+  const fileTotalLines = summary.lines.total;
+  const fileCoveredLines = summary.lines.covered;
+  const uncoveredLineNums = Object.entries(lineCoverage)
+    .filter(([, hits]) => hits === 0)
+    .map(([line]) => Number(line))
+    .sort((a, b) => a - b);
 
-    for (const [id, loc] of Object.entries(data.statementMap)) {
-      const hits = data.s[id] ?? 0;
-      for (let line = loc.start.line; line <= loc.end.line; line++) {
-        const prev = lineHits.get(line);
-        // Keep the highest hit count for each line
-        if (prev === undefined || hits > prev) {
-          lineHits.set(line, hits);
-        }
-      }
-    }
+  totalLines += fileTotalLines;
+  coveredLines += fileCoveredLines;
 
-    const fileTotalLines = lineHits.size;
-    const fileCoveredLines = [...lineHits.values()].filter((h) => h > 0).length;
-    const uncoveredLineNums = [...lineHits.entries()]
-      .filter(([, h]) => h === 0)
-      .map(([l]) => l)
-      .sort((a, b) => a - b);
-
-    totalLines += fileTotalLines;
-    coveredLines += fileCoveredLines;
-
-    if (fileTotalLines > 0) {
-      fileReports.push({
-        path: relPath,
-        total: fileTotalLines,
-        covered: fileCoveredLines,
-        pct: ((fileCoveredLines / fileTotalLines) * 100).toFixed(1),
-        uncoveredLines: uncoveredLineNums,
-      });
-    }
+  if (fileTotalLines > 0) {
+    fileReports.push({
+      path: relPath,
+      total: fileTotalLines,
+      covered: fileCoveredLines,
+      pct: summary.lines.pct.toFixed(1),
+      uncoveredLines: uncoveredLineNums,
+    });
   }
 }
 
