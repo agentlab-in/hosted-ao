@@ -136,6 +136,9 @@ export function useSessionEvents(
   }, [initialSessions, initialGlobalPause]);
 
   useEffect(() => {
+    // Reset so the new project gets an immediate first refresh on its first SSE snapshot
+    lastRefreshAtRef.current = 0;
+
     const url = project ? `/api/events?project=${encodeURIComponent(project)}` : "/api/events";
     const es = new EventSource(url);
     let disposed = false;
