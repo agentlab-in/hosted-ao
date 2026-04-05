@@ -157,6 +157,7 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
   };
 
   const rateLimited = pr ? isPRRateLimited(pr) : false;
+  const prUnenriched = pr ? isPRUnenriched(pr) : false;
   const alerts = getAlerts(session);
   const isReadyToMerge = !rateLimited && pr?.mergeability.mergeable && pr.state === "open";
   const isTerminal =
@@ -266,7 +267,7 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
               #{pr.number}
             </a>
           )}
-          {pr && !rateLimited && (isPRUnenriched(pr) ? (
+          {pr && !rateLimited && (prUnenriched ? (
             <span className="inline-block h-[14px] w-16 animate-pulse rounded-full bg-[var(--color-bg-subtle)]" />
           ) : (
             <span className="done-meta-chip font-[var(--font-mono)]">
@@ -348,21 +349,33 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
                   >
                     {pr.title}
                   </a>
-                  <br />
-                  <span className="mt-1 inline-flex items-center gap-2">
-                    <span className="done-meta-chip font-[var(--font-mono)]">
-                      <span className="text-[var(--color-status-ready)]">+{pr.additions}</span>{" "}
-                      <span className="text-[var(--color-status-error)]">-{pr.deletions}</span>
-                    </span>
-                    <span className="text-[var(--color-text-muted)]">·</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)]">
-                      mergeable: {pr.mergeability.mergeable ? "yes" : "no"}
-                    </span>
-                    <span className="text-[var(--color-text-muted)]">·</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)]">
-                      review: {pr.reviewDecision}
-                    </span>
-                  </span>
+                  {prUnenriched ? (
+                    <>
+                      <br />
+                      <span className="mt-1 inline-flex items-center gap-2 text-[10px] text-[var(--color-text-muted)]">
+                        <span className="inline-block h-3 w-12 animate-pulse rounded bg-[var(--color-bg-subtle)]" />
+                        <span>PR details loading...</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <br />
+                      <span className="mt-1 inline-flex items-center gap-2">
+                        <span className="done-meta-chip font-[var(--font-mono)]">
+                          <span className="text-[var(--color-status-ready)]">+{pr.additions}</span>{" "}
+                          <span className="text-[var(--color-status-error)]">-{pr.deletions}</span>
+                        </span>
+                        <span className="text-[var(--color-text-muted)]">·</span>
+                        <span className="text-[10px] text-[var(--color-text-muted)]">
+                          mergeable: {pr.mergeability.mergeable ? "yes" : "no"}
+                        </span>
+                        <span className="text-[var(--color-text-muted)]">·</span>
+                        <span className="text-[10px] text-[var(--color-text-muted)]">
+                          review: {pr.reviewDecision}
+                        </span>
+                      </span>
+                    </>
+                  )}
                 </p>
               </div>
             )}
@@ -477,7 +490,7 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
               #{pr.number}
             </a>
           )}
-          {pr && !rateLimited && (isPRUnenriched(pr) ? (
+          {pr && !rateLimited && (prUnenriched ? (
             <span className="inline-block h-[14px] w-16 animate-pulse rounded-full bg-[var(--color-bg-subtle)]" />
           ) : (
             <span className="inline-flex items-center rounded-full bg-[var(--color-chip-bg)] px-2 py-0.5 font-[var(--font-mono)] text-[10px] font-semibold text-[var(--color-text-muted)]">
