@@ -75,8 +75,9 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
       if (!core.pr) continue;
       const projectConfig = resolveProject(core, config.projects);
       const scm = getSCM(registry, projectConfig);
-      if (!scm) continue;
-      await enrichSessionPR(pageData.sessions[i], scm, core.pr, { cacheOnly: true });
+      if (scm) {
+        await enrichSessionPR(pageData.sessions[i], scm, core.pr, { cacheOnly: true });
+      }
 
       // For terminal sessions with cache-miss PRs, infer state from session status
       // to avoid showing merged/closed PRs as "open" until client refresh
