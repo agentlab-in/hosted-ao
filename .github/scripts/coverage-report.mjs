@@ -6,17 +6,15 @@
  *   - changed-files.txt in cwd (one relative path per line)
  *   - coverage-final.json in each package's coverage/ directory
  *
- * Sets GITHUB_OUTPUT: has_coverage=true|false
  */
 
 /* eslint-disable no-undef -- Node.js CI script; process/console are globals */
-import { readFileSync, writeFileSync, existsSync, appendFileSync, realpathSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync, readdirSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import libCoverage from "istanbul-lib-coverage";
 
 const COMMENT_TAG = "<!-- coverage-report -->";
 const cwd = realpathSync(process.cwd());
-const ghOutput = process.env.GITHUB_OUTPUT;
 
 // ── 1. Read changed files ──────────────────────────────────────────
 const changedFiles = readFileSync("changed-files.txt", "utf-8")
@@ -28,7 +26,6 @@ const changedFiles = readFileSync("changed-files.txt", "utf-8")
 if (changedFiles.length === 0) {
   const comment = `${COMMENT_TAG}\n## Test Coverage Report\n\n_No TypeScript source files changed in this PR._\n`;
   writeFileSync("coverage-comment.md", comment);
-  if (ghOutput) appendFileSync(ghOutput, "has_coverage=false\n");
   process.exit(0);
 }
 
@@ -133,7 +130,6 @@ let comment = `${COMMENT_TAG}\n## Test Coverage Report\n\n`;
 if (fileReports.length === 0) {
   comment +=
     "_Changed files have no coverage data (not instrumented or no tests ran)._\n";
-  if (ghOutput) appendFileSync(ghOutput, "has_coverage=false\n");
 } else {
   const pct =
     totalLines > 0 ? ((coveredLines / totalLines) * 100).toFixed(1) : "0.0";
@@ -171,7 +167,6 @@ if (fileReports.length === 0) {
     comment += "\n";
   }
 
-  if (ghOutput) appendFileSync(ghOutput, "has_coverage=true\n");
 }
 
 writeFileSync("coverage-comment.md", comment);

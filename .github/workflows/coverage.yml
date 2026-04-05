@@ -85,7 +85,6 @@ jobs:
           fi
 
       - name: Generate coverage report
-        id: report
         run: node .github/scripts/coverage-report.mjs
 
       - name: Post or update PR comment
