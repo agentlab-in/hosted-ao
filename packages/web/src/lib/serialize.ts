@@ -73,8 +73,17 @@ export function listDashboardOrchestrators(
   sessions: Session[],
   projects: Record<string, ProjectConfig>,
 ): DashboardOrchestratorLink[] {
+  const allSessionPrefixes = Object.entries(projects).map(
+    ([projectId, p]) => p.sessionPrefix ?? projectId,
+  );
   return sessions
-    .filter((session) => isOrchestratorSession(session))
+    .filter((session) =>
+      isOrchestratorSession(
+        session,
+        projects[session.projectId]?.sessionPrefix ?? session.projectId,
+        allSessionPrefixes,
+      ),
+    )
     .map((session) => ({
       id: session.id,
       projectId: session.projectId,
@@ -367,7 +376,7 @@ export async function enrichSessionsMetadataFast(
 
   // Issue labels (synchronous string parsing, no API calls)
   projects.forEach((project, i) => {
-    if (!dashboardSessions[i].issueUrl || !project?.tracker) return;
+    if (!dashboardSessions[i].issueUrl || !project?.tracker?.plugin) return;
     const tracker = registry.get<Tracker>("tracker", project.tracker.plugin);
     if (!tracker) return;
     enrichSessionIssue(dashboardSessions[i], tracker, project);
@@ -405,7 +414,7 @@ export async function enrichSessionsMetadata(
     if (!dashboardSessions[i].issueUrl || !dashboardSessions[i].issueLabel) {
       return Promise.resolve();
     }
-    if (!project?.tracker) return Promise.resolve();
+    if (!project?.tracker?.plugin) return Promise.resolve();
     const tracker = registry.get<Tracker>("tracker", project.tracker.plugin);
     if (!tracker) return Promise.resolve();
     return enrichSessionIssueTitle(dashboardSessions[i], tracker, project);
