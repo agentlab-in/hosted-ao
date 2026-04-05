@@ -12,6 +12,8 @@ import { getPrimaryProjectId, getProjectName, getAllProjects, type ProjectInfo }
 import { filterProjectSessions, filterWorkerSessions } from "@/lib/project-utils";
 import { resolveGlobalPause, type GlobalPauseState } from "@/lib/global-pause";
 
+const FAST_METADATA_ENRICH_TIMEOUT_MS = 3_000;
+
 interface DashboardPageData {
   sessions: DashboardSession[];
   globalPause: GlobalPauseState | null;
@@ -19,6 +21,21 @@ interface DashboardPageData {
   projectName: string;
   projects: ProjectInfo[];
   selectedProjectId?: string;
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<boolean>((resolve) => {
+    timeoutId = setTimeout(() => resolve(false), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise.then(() => true).catch(() => true), timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 export const getDashboardProjectName = cache(function getDashboardProjectName(
@@ -65,8 +82,12 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
     const coreSessions = filterWorkerSessions(allSessions, projectFilter, config.projects);
     pageData.sessions = coreSessions.map(sessionToDashboard);
 
-    // Fast enrichment: issue labels (sync) + agent summaries (local disk I/O)
-    await enrichSessionsMetadataFast(coreSessions, pageData.sessions, config, registry);
+    // Fast enrichment: issue labels (sync) + agent summaries (local disk I/O).
+    // Keep a hard cap here so a slow local agent plugin can't stall SSR indefinitely.
+    await settlesWithin(
+      enrichSessionsMetadataFast(coreSessions, pageData.sessions, config, registry),
+      FAST_METADATA_ENRICH_TIMEOUT_MS,
+    );
 
     // PR cache hits only (in-memory lookup, no SCM API calls)
     const terminalStatuses = new Set(["merged", "killed", "cleanup", "done", "terminated"]);
