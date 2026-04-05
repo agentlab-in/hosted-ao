@@ -664,6 +664,7 @@ describe("useSessionEvents", () => {
     });
   });
 
+<<<<<<< HEAD
   describe("sseAttentionLevels", () => {
     it("starts with empty attention levels when no initial levels provided", () => {
       const sessions = makeSessions(2);
@@ -920,6 +921,91 @@ describe("useSessionEvents", () => {
       unmount();
       act(() => vi.advanceTimersByTime(500));
       vi.useRealTimers();
+    });
+  });
+
+  describe("immediate first refresh", () => {
+    it("triggers /api/sessions fetch on first SSE snapshot even when membership matches", async () => {
+      const sessions = makeSessions(2);
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ sessions, globalPause: null }),
+      } as unknown as Response);
+
+      renderHook(() => useSessionEvents(sessions));
+
+      // Send snapshot with SAME membership — should still refresh because lastRefreshAtRef starts at 0
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: sessions.map((s) => ({
+              id: s.id,
+              status: s.status,
+              activity: s.activity,
+              lastActivityAt: s.lastActivityAt,
+            })),
+          }),
+        } as MessageEvent);
+      });
+
+      await waitFor(() => {
+        expect(fetch).toHaveBeenCalledWith("/api/sessions", {
+          signal: expect.any(AbortSignal),
+        });
+      });
+    });
+
+    it("updates lastRefreshAtRef on fetch failure to prevent retry loops", async () => {
+      const sessions = makeSessions(1);
+      const fetchError = new Error("Network error");
+      vi.mocked(fetch)
+        .mockRejectedValueOnce(fetchError)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ sessions, globalPause: null }),
+        } as unknown as Response);
+
+      renderHook(() => useSessionEvents(sessions));
+
+      // First snapshot triggers refresh (lastRefreshAtRef = 0)
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: sessions.map((s) => ({
+              id: s.id,
+              status: s.status,
+              activity: s.activity,
+              lastActivityAt: s.lastActivityAt,
+            })),
+          }),
+        } as MessageEvent);
+      });
+
+      // Wait for fetch to be called and fail
+      await waitFor(() => {
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+
+      // Second snapshot should NOT trigger another immediate refresh
+      // because lastRefreshAtRef was updated on failure
+      await act(async () => {
+        eventSourceMock!.onmessage!.call(eventSourceMock, {
+          data: JSON.stringify({
+            type: "snapshot",
+            sessions: sessions.map((s) => ({
+              id: s.id,
+              status: s.status,
+              activity: s.activity,
+              lastActivityAt: s.lastActivityAt,
+            })),
+          }),
+        } as MessageEvent);
+      });
+
+      // fetch should still only have been called once (the failed one)
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 });
