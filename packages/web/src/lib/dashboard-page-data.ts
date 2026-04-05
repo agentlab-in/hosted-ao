@@ -5,10 +5,9 @@ import {
   sessionToDashboard,
   resolveProject,
   enrichSessionPR,
-  enrichSessionsMetadata,
+  enrichSessionsMetadataFast,
   listDashboardOrchestrators,
 } from "@/lib/serialize";
-import { prCache, prCacheKey } from "@/lib/cache";
 import { getPrimaryProjectId, getProjectName, getAllProjects, type ProjectInfo } from "@/lib/project-name";
 import { filterProjectSessions, filterWorkerSessions } from "@/lib/project-utils";
 import { resolveGlobalPause, type GlobalPauseState } from "@/lib/global-pause";
@@ -66,62 +65,28 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
     const coreSessions = filterWorkerSessions(allSessions, projectFilter, config.projects);
     pageData.sessions = coreSessions.map(sessionToDashboard);
 
-    const metaTimeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
-    await Promise.race([
-      enrichSessionsMetadata(coreSessions, pageData.sessions, config, registry),
-      metaTimeout,
-    ]);
+    // Fast enrichment: issue labels (sync) + agent summaries (local disk I/O)
+    await enrichSessionsMetadataFast(coreSessions, pageData.sessions, config, registry);
 
+    // PR cache hits only (in-memory lookup, no SCM API calls)
     const terminalStatuses = new Set(["merged", "killed", "cleanup", "done", "terminated"]);
-    const enrichPromises = coreSessions.map((core, index) => {
-      if (!core.pr) return Promise.resolve();
-
-      const cacheKey = prCacheKey(core.pr.owner, core.pr.repo, core.pr.number);
-      const cached = prCache.get(cacheKey);
-
-      if (cached) {
-        const sessionPR = pageData.sessions[index]?.pr;
-        if (sessionPR) {
-          sessionPR.state = cached.state;
-          sessionPR.title = cached.title;
-          sessionPR.additions = cached.additions;
-          sessionPR.deletions = cached.deletions;
-          sessionPR.ciStatus = cached.ciStatus as
-            | "none"
-            | "pending"
-            | "passing"
-            | "failing";
-          sessionPR.reviewDecision = cached.reviewDecision as
-            | "none"
-            | "pending"
-            | "approved"
-            | "changes_requested";
-          sessionPR.ciChecks = cached.ciChecks.map((check) => ({
-            name: check.name,
-            status: check.status as "pending" | "running" | "passed" | "failed" | "skipped",
-            url: check.url,
-          }));
-          sessionPR.mergeability = cached.mergeability;
-          sessionPR.unresolvedThreads = cached.unresolvedThreads;
-          sessionPR.unresolvedComments = cached.unresolvedComments;
-        }
-
-        if (
-          terminalStatuses.has(core.status) ||
-          cached.state === "merged" ||
-          cached.state === "closed"
-        ) {
-          return Promise.resolve();
-        }
-      }
-
+    for (let i = 0; i < coreSessions.length; i++) {
+      const core = coreSessions[i];
+      if (!core.pr) continue;
       const projectConfig = resolveProject(core, config.projects);
       const scm = getSCM(registry, projectConfig);
-      if (!scm) return Promise.resolve();
-      return enrichSessionPR(pageData.sessions[index], scm, core.pr);
-    });
-    const enrichTimeout = new Promise<void>((resolve) => setTimeout(resolve, 4_000));
-    await Promise.race([Promise.allSettled(enrichPromises), enrichTimeout]);
+      if (!scm) continue;
+      await enrichSessionPR(pageData.sessions[i], scm, core.pr, { cacheOnly: true });
+
+      // For terminal sessions with cache-miss PRs, infer state from session status
+      // to avoid showing merged/closed PRs as "open" until client refresh
+      const sessionPR = pageData.sessions[i].pr;
+      if (sessionPR && !sessionPR.enriched && terminalStatuses.has(core.status)) {
+        if (core.status === "merged") {
+          sessionPR.state = "merged";
+        }
+      }
+    }
   } catch {
     pageData.sessions = [];
     pageData.globalPause = null;

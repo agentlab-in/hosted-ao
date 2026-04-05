@@ -5,6 +5,7 @@ import {
   type DashboardSession,
   getAttentionLevel,
   isPRRateLimited,
+  isPRUnenriched,
   TERMINAL_STATUSES,
   TERMINAL_ACTIVITIES,
   CI_STATUS,
@@ -265,13 +266,15 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
               #{pr.number}
             </a>
           )}
-          {pr && !rateLimited && (
+          {pr && !rateLimited && (isPRUnenriched(pr) ? (
+            <span className="inline-block h-[14px] w-16 animate-pulse rounded-full bg-[var(--color-bg-subtle)]" />
+          ) : (
             <span className="done-meta-chip font-[var(--font-mono)]">
               <span className="text-[var(--color-status-ready)]">+{pr.additions}</span>{" "}
               <span className="text-[var(--color-status-error)]">-{pr.deletions}</span>{" "}
               {getSizeLabel(pr.additions, pr.deletions)}
             </span>
-          )}
+          ))}
         </div>
 
         {/* Expandable detail panel */}
@@ -474,11 +477,13 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
               #{pr.number}
             </a>
           )}
-          {pr && !rateLimited && (
+          {pr && !rateLimited && (isPRUnenriched(pr) ? (
+            <span className="inline-block h-[14px] w-16 animate-pulse rounded-full bg-[var(--color-bg-subtle)]" />
+          ) : (
             <span className="inline-flex items-center rounded-full bg-[var(--color-chip-bg)] px-2 py-0.5 font-[var(--font-mono)] text-[10px] font-semibold text-[var(--color-text-muted)]">
               +{pr.additions} -{pr.deletions} {getSizeLabel(pr.additions, pr.deletions)}
             </span>
-          )}
+          ))}
         </div>
 
         {secondaryText && (
@@ -721,6 +726,7 @@ function getAlerts(session: DashboardSession): Alert[] {
   const pr = session.pr;
   if (!pr || pr.state !== "open") return [];
   if (isPRRateLimited(pr)) return [];
+  if (isPRUnenriched(pr)) return [];
 
   const alerts: Alert[] = [];
 

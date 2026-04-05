@@ -78,7 +78,7 @@ export function useSessionEvents(
   const refreshingRef = useRef(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingMembershipKeyRef = useRef<string | null>(null);
-  const lastRefreshAtRef = useRef(Date.now());
+  const lastRefreshAtRef = useRef(0);
   const disconnectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -141,6 +141,8 @@ export function useSessionEvents(
           .catch((err: unknown) => {
             if (err instanceof DOMException && err.name === "AbortError") return;
             console.warn("[useSessionEvents] refresh failed:", err);
+            // Update timestamp on failure to prevent retry loops on every SSE snapshot
+            lastRefreshAtRef.current = Date.now();
           })
           .finally(() => {
             if (activeRefreshController === refreshController) {
