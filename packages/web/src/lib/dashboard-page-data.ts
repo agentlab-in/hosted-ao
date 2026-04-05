@@ -1,5 +1,5 @@
 import { cache } from "react";
-import type { DashboardSession, DashboardOrchestratorLink } from "@/lib/types";
+import { TERMINAL_STATUSES, type DashboardSession, type DashboardOrchestratorLink } from "@/lib/types";
 import { getServices, getSCM } from "@/lib/services";
 import {
   sessionToDashboard,
@@ -76,7 +76,7 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
     );
 
     // PR cache hits only (in-memory lookup, no SCM API calls)
-    const terminalStatuses = new Set(["merged", "killed", "cleanup", "done", "terminated"]);
+    // TERMINAL_STATUSES includes merged, killed, cleanup, done, terminated, errored
     for (let i = 0; i < coreSessions.length; i++) {
       const core = coreSessions[i];
       if (!core.pr) continue;
@@ -86,12 +86,14 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
         await enrichSessionPR(pageData.sessions[i], scm, core.pr, { cacheOnly: true });
       }
 
-      // For terminal sessions with cache-miss PRs, infer state from session status
-      // to avoid showing merged/closed PRs as "open" until client refresh
+      // For cache-miss PRs, infer terminal PR state from lifecycle status
+      // to avoid showing merged/closed PRs as "open" until client refresh.
       const sessionPR = pageData.sessions[i].pr;
-      if (sessionPR && !sessionPR.enriched && terminalStatuses.has(core.status)) {
+      if (sessionPR && !sessionPR.enriched && TERMINAL_STATUSES.has(core.status)) {
         if (core.status === "merged") {
           sessionPR.state = "merged";
+        } else if (core.status === "killed") {
+          sessionPR.state = "closed";
         }
       }
     }
