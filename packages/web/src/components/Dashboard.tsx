@@ -36,9 +36,9 @@ interface DashboardProps {
   orchestrators?: DashboardOrchestratorLink[];
 }
 
-const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge", "done"] as const;
+const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as const;
 /** Urgency-first order for the mobile accordion (reversed from desktop) */
-const MOBILE_KANBAN_ORDER = ["respond", "merge", "review", "pending", "working", "done"] as const;
+const MOBILE_KANBAN_ORDER = ["respond", "merge", "review", "pending", "working"] as const;
 const MOBILE_FILTERS = [
   { value: "all", label: "All" },
   { value: "respond", label: "Respond" },
@@ -46,7 +46,6 @@ const MOBILE_FILTERS = [
   { value: "review", label: "Review" },
   { value: "pending", label: "Pending" },
   { value: "working", label: "Working" },
-  { value: "done", label: "Done" },
 ] as const;
 type MobileAttentionLevel = (typeof MOBILE_KANBAN_ORDER)[number];
 type MobileFilterValue = (typeof MOBILE_FILTERS)[number]["value"];
@@ -293,10 +292,12 @@ function DashboardInner({
   }, [activeOrchestrators, allProjectsView, projects, sessionsByProject]);
 
   const handleAccordionToggle = useCallback((level: AttentionLevel) => {
+    if (level === "done") return;
     setExpandedLevel((current) => (current === level ? null : level));
   }, []);
 
   const handlePillTap = useCallback((level: AttentionLevel) => {
+    if (level === "done") return;
     setMobileFilter(level);
     setExpandedLevel(level);
     const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
