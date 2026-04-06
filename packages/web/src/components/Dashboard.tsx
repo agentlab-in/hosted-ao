@@ -14,6 +14,7 @@ import {
   isPRMergeReady,
 } from "@/lib/types";
 import { AttentionZone } from "./AttentionZone";
+import { SessionCard } from "./SessionCard";
 import { DynamicFavicon, countNeedingAttention } from "./DynamicFavicon";
 import { useSessionEvents } from "@/hooks/useSessionEvents";
 import { ProjectSidebar } from "./ProjectSidebar";
@@ -106,6 +107,7 @@ function DashboardInner({
     mode: "preview" | "confirm-kill";
   } | null>(null);
   const [sheetSessionOverride, setSheetSessionOverride] = useState<DashboardSession | null>(null);
+  const [doneExpanded, setDoneExpanded] = useState(false);
   const sessionsRef = useRef(sessions);
   const hasSeededMobileExpansionRef = useRef(false);
   sessionsRef.current = sessions;
@@ -735,7 +737,46 @@ function DashboardInner({
           </div>
         )}
 
-        {!allProjectsView && !hasAnySessions && <EmptyState />}
+        {!allProjectsView && grouped.done.length > 0 && (
+          <div className="done-bar mt-6">
+            <button
+              type="button"
+              className="done-bar__toggle"
+              onClick={() => setDoneExpanded((v) => !v)}
+              aria-expanded={doneExpanded}
+            >
+              <svg
+                className={`done-bar__chevron${doneExpanded ? " done-bar__chevron--open" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path d="m9 18 6-6-6-6" />
+              </svg>
+              <span>Done / Terminated</span>
+              <span className="done-bar__count">{grouped.done.length}</span>
+              <span className="done-bar__rule" aria-hidden="true" />
+            </button>
+            {doneExpanded && (
+              <div className="done-bar__cards">
+                {grouped.done.map((session) => (
+                  <SessionCard
+                    key={session.id}
+                    session={session}
+                    onSend={handleSend}
+                    onKill={handleKill}
+                    onMerge={handleMerge}
+                    onRestore={handleRestore}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!allProjectsView && !hasAnySessions && grouped.done.length === 0 && <EmptyState />}
 
       </div>
     </div>
@@ -1072,3 +1113,4 @@ function BoardLegendItem({ label, tone }: { label: string; tone: string }) {
     </span>
   );
 }
+
