@@ -47,7 +47,6 @@ export function PullRequestsPage({
   }, [initialSessions]);
   const { sessions, sseAttentionLevels } = useSessionEvents(
     initialSessions,
-    null,
     projectId,
     mux?.status === "connected" ? mux.sessions : undefined,
     initialAttentionLevels,
