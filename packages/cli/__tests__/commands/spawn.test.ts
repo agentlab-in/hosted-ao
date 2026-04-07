@@ -114,10 +114,10 @@ beforeEach(() => {
     throw new Error(`process.exit(${code})`);
   });
 
-  mockSpinner.start.mockReturnThis();
-  mockSpinner.stop.mockReturnThis();
-  mockSpinner.succeed.mockReturnThis();
-  mockSpinner.fail.mockReturnThis();
+  mockSpinner.start.mockClear().mockReturnThis();
+  mockSpinner.stop.mockClear().mockReturnThis();
+  mockSpinner.succeed.mockClear().mockReturnThis();
+  mockSpinner.fail.mockClear().mockReturnThis();
   mockSessionManager.spawn.mockReset();
   mockSessionManager.claimPR.mockReset();
   mockExec.mockReset();
