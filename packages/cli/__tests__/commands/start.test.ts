@@ -911,9 +911,10 @@ describe("start command — orchestrator session strategy display", () => {
   it("navigates directly to session page when one existing orchestrator found with dashboard enabled", async () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
 
-    // Mock findWebDir
-    const { findWebDir } = await import("../../src/lib/web-dir.js");
-    vi.mocked(findWebDir).mockReturnValue(tmpDir);
+    // Mock findWebDir and port availability for dashboard-enabled test
+    const webDir = await import("../../src/lib/web-dir.js");
+    vi.mocked(webDir.findWebDir).mockReturnValue(tmpDir);
+    vi.mocked(webDir.isPortAvailable).mockResolvedValue(true);
     writeFileSync(join(tmpDir, "package.json"), "{}");
 
     const fakeDashboard = {
@@ -937,8 +938,9 @@ describe("start command — orchestrator session strategy display", () => {
     await program.parseAsync(["node", "test", "start"]);
 
     const output = getLoggedOutput();
-    // With one orchestrator, goes directly to the session page — shows tmux attach, no selection message
-    expect(output).toContain("tmux attach -t tmux-session-existing");
+    // With one orchestrator and dashboard enabled, shows the session URL instead of tmux attach
+    expect(output).toContain("http://localhost:3000/sessions/app-orchestrator");
+    expect(output).not.toContain("tmux attach");
     expect(output).not.toContain("multiple sessions found");
     expect(output).not.toContain("select one in the dashboard");
 
