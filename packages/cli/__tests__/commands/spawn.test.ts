@@ -281,7 +281,7 @@ describe("spawn command", () => {
     });
   });
 
-  it("shows tmux attach command using runtimeHandle.id (hash-based name)", async () => {
+  it("shows ao session attach command instead of raw tmux attach", async () => {
     const fakeSession: Session = {
       id: "app-7",
       projectId: "my-app",
@@ -303,7 +303,9 @@ describe("spawn command", () => {
     await program.parseAsync(["node", "test", "spawn"]);
 
     const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(output).toContain("8474d6f29887-app-7");
+    expect(output).toContain("ao session attach app-7");
+    expect(output).not.toContain("tmux attach");
+    expect(output).not.toContain("8474d6f29887-app-7");
   });
 
   it("passes --agent flag to sessionManager.spawn()", async () => {
@@ -432,7 +434,7 @@ describe("spawn command", () => {
 
     const output = consoleSpy.mock.calls.map((c) => String(c[0])).join("\n");
     expect(output).toContain("https://github.com/org/repo/pull/123");
-    expect(output).toContain("feat/claimed-pr");
+    expect(output).toContain("ao session attach app-1");
   });
 
   it("passes GitHub assignment flag through to claimPR", async () => {
