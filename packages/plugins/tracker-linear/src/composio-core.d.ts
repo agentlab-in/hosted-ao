@@ -1,8 +1,8 @@
 /**
- * Minimal type declarations for @aoagents/core (optional peer dependency).
+ * Minimal type declarations for @composio/core (optional peer dependency).
  * Only the subset used by the Composio transport is declared here.
  */
-declare module "@aoagents/core" {
+declare module "@composio/core" {
   interface ComposioExecuteResult {
     data?: Record<string, unknown>;
     error?: string;

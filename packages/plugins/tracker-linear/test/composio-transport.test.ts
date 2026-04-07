@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Mock @aoagents/core
+// Mock @composio/core
 // ---------------------------------------------------------------------------
 
 const { mockExecute, MockComposio } = vi.hoisted(() => {
@@ -12,7 +12,7 @@ const { mockExecute, MockComposio } = vi.hoisted(() => {
   return { mockExecute, MockComposio };
 });
 
-vi.mock("@aoagents/core", () => ({
+vi.mock("@composio/core", () => ({
   Composio: MockComposio,
 }));
 
