@@ -5,7 +5,7 @@
 Agent Orchestrator (AO) is a platform for spawning and managing parallel AI coding agents across distributed systems. It runs multiple agents (Claude Code, Codex, Aider, OpenCode) simultaneously — each in an isolated git worktree with its own PR — and provides a single dashboard to supervise them all. Agents autonomously fix CI failures, address review comments, and manage PRs.
 
 **Org:** ComposioHQ
-**Repo:** `github.com/aoagents/ao`
+**Repo:** `github.com/ComposioHQ/agent-orchestrator`
 **License:** MIT
 
 ## Monorepo Structure

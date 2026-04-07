@@ -17,12 +17,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/aoagents/ao.git",
+    "url": "https://github.com/ComposioHQ/agent-orchestrator.git",
     "directory": "packages/plugins/notifier-openclaw"
   },
-  "homepage": "https://github.com/aoagents/ao",
+  "homepage": "https://github.com/ComposioHQ/agent-orchestrator",
   "bugs": {
-    "url": "https://github.com/aoagents/ao/issues"
+    "url": "https://github.com/ComposioHQ/agent-orchestrator/issues"
   },
   "engines": {
     "node": ">=20.0.0"

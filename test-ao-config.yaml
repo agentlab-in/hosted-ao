@@ -9,7 +9,7 @@ defaults:
     - desktop
 projects:
   ao-35:
-    repo: aoagents/ao
+    repo: ComposioHQ/agent-orchestrator
     path: /Users/equinox/.worktrees/ao/ao/ao-35
     defaultBranch: feat/seamless-onboarding
     agentRules: >-

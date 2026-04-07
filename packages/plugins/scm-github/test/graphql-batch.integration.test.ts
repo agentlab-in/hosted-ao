@@ -15,10 +15,10 @@ const SKIP_INTEGRATION_TESTS = !GITHUB_TOKEN;
 describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", () => {
   const testPRs = [
     {
-      owner: "aoagents",
-      repo: "ao",
+      owner: "ComposioHQ",
+      repo: "agent-orchestrator",
       number: 1,
-      url: "https://github.com/aoagents/ao/pull/1",
+      url: "https://github.com/ComposioHQ/agent-orchestrator/pull/1",
       title: "Test PR",
       branch: "test-branch",
       baseBranch: "main",
@@ -31,7 +31,7 @@ describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", 
 
     expect(result.size).toBeGreaterThan(0);
 
-    const enrichment = result.get("aoagents/ao#1");
+    const enrichment = result.get("ComposioHQ/agent-orchestrator#1");
     expect(enrichment).toBeDefined();
     expect(enrichment?.state).toMatch(/^(open|merged|closed)$/);
     expect(enrichment?.ciStatus).toMatch(/^(passing|failing|pending|none)$/);
@@ -42,10 +42,10 @@ describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", 
   it("should handle non-existent PR gracefully", async () => {
     const nonExistentPRs = [
       {
-        owner: "aoagents",
-        repo: "ao",
+        owner: "ComposioHQ",
+        repo: "agent-orchestrator",
         number: 99999999,
-        url: "https://github.com/aoagents/ao/pull/99999999",
+        url: "https://github.com/ComposioHQ/agent-orchestrator/pull/99999999",
         title: "Non-existent",
         branch: "non-existent",
         baseBranch: "main",
@@ -57,7 +57,7 @@ describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", 
 
     // Should return enrichment data even for non-existent PRs
     expect(result.size).toBe(1);
-    const enrichment = result.get("aoagents/ao#99999999");
+    const enrichment = result.get("ComposioHQ/agent-orchestrator#99999999");
     expect(enrichment).toBeDefined();
     // Non-existent PRs should be marked as not mergeable
     expect(enrichment?.mergeable).toBe(false);
@@ -67,20 +67,20 @@ describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", 
     // Test with multiple PRs from the same repo
     const multiPRs = [
       {
-        owner: "aoagents",
-        repo: "ao",
+        owner: "ComposioHQ",
+        repo: "agent-orchestrator",
         number: 1,
-        url: "https://github.com/aoagents/ao/pull/1",
+        url: "https://github.com/ComposioHQ/agent-orchestrator/pull/1",
         title: "PR 1",
         branch: "branch1",
         baseBranch: "main",
         isDraft: false,
       },
       {
-        owner: "aoagents",
-        repo: "ao",
+        owner: "ComposioHQ",
+        repo: "agent-orchestrator",
         number: 2,
-        url: "https://github.com/aoagents/ao/pull/2",
+        url: "https://github.com/ComposioHQ/agent-orchestrator/pull/2",
         title: "PR 2",
         branch: "branch2",
         baseBranch: "main",
@@ -92,8 +92,8 @@ describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", 
 
     expect(result.size).toBe(2);
 
-    const pr1 = result.get("aoagents/ao#1");
-    const pr2 = result.get("aoagents/ao#2");
+    const pr1 = result.get("ComposioHQ/agent-orchestrator#1");
+    const pr2 = result.get("ComposioHQ/agent-orchestrator#2");
 
     expect(pr1).toBeDefined();
     expect(pr2).toBeDefined();
@@ -111,10 +111,10 @@ describe.skipIf(SKIP_INTEGRATION_TESTS)("GraphQL Batch Enrichment Integration", 
   it("should handle PRs from different repositories", async () => {
     const multiRepoPRs = [
       {
-        owner: "aoagents",
-        repo: "ao",
+        owner: "ComposioHQ",
+        repo: "agent-orchestrator",
         number: 1,
-        url: "https://github.com/aoagents/ao/pull/1",
+        url: "https://github.com/ComposioHQ/agent-orchestrator/pull/1",
         title: "PR in repo 1",
         branch: "branch1",
         baseBranch: "main",

@@ -91,7 +91,7 @@ If you want to develop or contribute to Agent Orchestrator:
 
 ```bash
 # Clone the repository
-git clone https://github.com/aoagents/ao
+git clone https://github.com/ComposioHQ/agent-orchestrator
 cd agent-orchestrator
 
 # Run the setup script (installs deps, builds, links CLI)
@@ -839,4 +839,4 @@ Useful for:
 
 ---
 
-**Need help?** Open an issue at: https://github.com/aoagents/ao/issues
+**Need help?** Open an issue at: https://github.com/ComposioHQ/agent-orchestrator/issues
