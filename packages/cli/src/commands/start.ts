@@ -1009,7 +1009,6 @@ async function runStartup(
   }
 
   // Create orchestrator session (unless --no-orchestrator or existing orchestrators found)
-  let tmuxTarget = sessionId;
   let hasExistingOrchestrators = false;
   let selectedOrchestratorId: string | null = null;
 
@@ -1050,8 +1049,6 @@ async function runStartup(
       );
       const selected = sortedOrchestrators[0];
       selectedOrchestratorId = selected.id;
-      // Use runtimeHandle.id if available, otherwise fall back to the session ID
-      tmuxTarget = selected.runtimeHandle?.id ?? selected.id;
       if (opts?.dashboard !== false && existingOrchestrators.length > 1) {
         hasExistingOrchestrators = true;
       }
@@ -1067,9 +1064,6 @@ async function runStartup(
         const systemPrompt = generateOrchestratorPrompt({ config, projectId, project });
         const session = await sm.spawnOrchestrator({ projectId, systemPrompt });
         selectedOrchestratorId = session.id;
-        if (session.runtimeHandle?.id) {
-          tmuxTarget = session.runtimeHandle.id;
-        }
         reused =
           orchestratorSessionStrategy === "reuse" &&
           session.metadata?.["orchestratorSessionReused"] === "true";
@@ -1115,7 +1109,10 @@ async function runStartup(
         `http://localhost:${port}/sessions/${orchSessionId}`,
       );
     } else {
-      console.log(chalk.cyan("Orchestrator:"), `tmux attach -t ${tmuxTarget}`);
+      console.log(
+        chalk.cyan("Orchestrator:"),
+        `http://localhost:${port}/sessions/${orchSessionId}`,
+      );
     }
   } else if (reused) {
     console.log(chalk.cyan("Orchestrator:"), `reused existing session (${sessionId})`);
