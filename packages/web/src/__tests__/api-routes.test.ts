@@ -983,7 +983,6 @@ describe("API Routes", () => {
       expect(data.error).toMatch(/Invalid JSON body/);
     });
   });
-
   // ── GET /api/sessions/patches ──────────────────────────────────────────
 
   describe("GET /api/sessions/patches", () => {
