@@ -26,7 +26,7 @@ describe("direct-terminal-ws.ts", () => {
   });
 
   it("does not import loadConfig from @aoagents/ao-core", () => {
-    expect(source).not.toMatch(/import\s.*loadConfig.*from\s+["']@composio\/ao-core["']/);
+    expect(source).not.toMatch(/import\s.*loadConfig.*from\s+["']@aoagents\/ao-core["']/);
   });
 
   it("does not reference config.dataDir", () => {
@@ -48,6 +48,7 @@ describe("direct-terminal-ws.ts", () => {
     expect(source).toMatch(/totalErrors/);
   });
 });
+
 
 describe("OrchestratorConfig compatibility", () => {
   it("OrchestratorConfig does not have dataDir property", () => {
