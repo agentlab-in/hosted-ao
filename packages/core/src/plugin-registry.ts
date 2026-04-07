@@ -65,6 +65,7 @@ function extractPluginConfig(
   slot: PluginSlot,
   name: string,
   config: OrchestratorConfig,
+  isExternalLoad = false,
 ): Record<string, unknown> | undefined {
   // 1. Handle Notifier Slot
   if (slot === "notifier") {
@@ -75,7 +76,7 @@ function extractPluginConfig(
       const matches = hasExplicitPlugin ? configuredPlugin === name : notifierId === name;
 
       if (matches) {
-        return prepareConfig(slot, name, notifierId, notifierConfig, config.configPath);
+        return prepareConfig(slot, name, notifierId, notifierConfig, config.configPath, isExternalLoad);
       }
     }
   }
@@ -103,6 +104,7 @@ function prepareConfig(
   sourceId: string,
   rawConfig: Record<string, unknown>,
   configPath?: string,
+  isExternalLoad = false,
 ): Record<string, unknown> {
   // Explicitly check for reserved fields to prevent silent stripping/collision.
   // 'path' is reserved for local resolution; 'package' is reserved for npm resolution.
@@ -116,7 +118,10 @@ function prepareConfig(
   // If loading via built-in name or npm package, having a 'path' field is ambiguous:
   // it could be a local plugin path (for loading) or a plugin config value.
   // We reject this to avoid silently stripping a config value the user intended to pass.
-  const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
+  // Skip the built-in guard for external loads: when loading via `path`, the manifest.name
+  // may legitimately collide with a built-in (e.g. a forked "slack"), and the path field
+  // here IS the loading path, not a stray user config value.
+  const isBuiltin = !isExternalLoad && BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
   if ((rawConfig.package || isBuiltin) && "path" in rawConfig) {
     const loadingMethod = rawConfig.package ? `npm package "${rawConfig.package}"` : `built-in plugin "${name}"`;
     throw new Error(
@@ -459,7 +464,7 @@ export function createPluginRegistry(): PluginRegistry {
           // Extract plugin config AFTER updating configs with manifest.name.
           // This ensures extractPluginConfig can find the config by manifest.name
           // (e.g., manifest "ms-teams" after config was updated from temp "teams").
-          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
+          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config, true);
           this.register(mod, pluginConfig);
         } catch (error) {
           process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
