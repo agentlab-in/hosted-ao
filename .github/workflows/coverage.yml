@@ -38,7 +38,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm -r --filter '!@composio/ao-web' build
+        run: pnpm -r --filter '!@aoagents/ao-web' build
 
       - name: Get changed files
         env:
@@ -56,19 +56,19 @@ jobs:
           # Only run coverage for packages that have changed files
           if echo "$CHANGED" | grep -q '^packages/core/'; then
             echo "::group::Core tests"
-            pnpm --filter @composio/ao-core exec vitest run --coverage.enabled --coverage.reporter=json || true
+            pnpm --filter @aoagents/ao-core exec vitest run --coverage.enabled --coverage.reporter=json || true
             echo "::endgroup::"
           fi
 
           if echo "$CHANGED" | grep -q '^packages/cli/'; then
             echo "::group::CLI tests"
-            pnpm --filter @composio/ao-cli exec vitest run --coverage.enabled --coverage.reporter=json || true
+            pnpm --filter @aoagents/ao-cli exec vitest run --coverage.enabled --coverage.reporter=json || true
             echo "::endgroup::"
           fi
 
           if echo "$CHANGED" | grep -q '^packages/web/'; then
             echo "::group::Web tests"
-            pnpm --filter @composio/ao-web exec vitest run --coverage.enabled --coverage.reporter=json || true
+            pnpm --filter @aoagents/ao-web exec vitest run --coverage.enabled --coverage.reporter=json || true
             echo "::endgroup::"
           fi
 

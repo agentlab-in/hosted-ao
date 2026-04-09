@@ -38,78 +38,78 @@ importers:
 
   packages/ao:
     dependencies:
-      '@composio/ao-cli':
+      '@aoagents/ao-cli':
         specifier: workspace:*
         version: link:../cli
 
   packages/cli:
     dependencies:
+      '@aoagents/ao-core':
+        specifier: workspace:*
+        version: link:../core
+      '@aoagents/ao-plugin-agent-aider':
+        specifier: workspace:*
+        version: link:../plugins/agent-aider
+      '@aoagents/ao-plugin-agent-claude-code':
+        specifier: workspace:*
+        version: link:../plugins/agent-claude-code
+      '@aoagents/ao-plugin-agent-codex':
+        specifier: workspace:*
+        version: link:../plugins/agent-codex
+      '@aoagents/ao-plugin-agent-opencode':
+        specifier: workspace:*
+        version: link:../plugins/agent-opencode
+      '@aoagents/ao-plugin-notifier-composio':
+        specifier: workspace:*
+        version: link:../plugins/notifier-composio
+      '@aoagents/ao-plugin-notifier-desktop':
+        specifier: workspace:*
+        version: link:../plugins/notifier-desktop
+      '@aoagents/ao-plugin-notifier-discord':
+        specifier: workspace:*
+        version: link:../plugins/notifier-discord
+      '@aoagents/ao-plugin-notifier-openclaw':
+        specifier: workspace:*
+        version: link:../plugins/notifier-openclaw
+      '@aoagents/ao-plugin-notifier-slack':
+        specifier: workspace:*
+        version: link:../plugins/notifier-slack
+      '@aoagents/ao-plugin-notifier-webhook':
+        specifier: workspace:*
+        version: link:../plugins/notifier-webhook
+      '@aoagents/ao-plugin-runtime-process':
+        specifier: workspace:*
+        version: link:../plugins/runtime-process
+      '@aoagents/ao-plugin-runtime-tmux':
+        specifier: workspace:*
+        version: link:../plugins/runtime-tmux
+      '@aoagents/ao-plugin-scm-github':
+        specifier: workspace:*
+        version: link:../plugins/scm-github
+      '@aoagents/ao-plugin-terminal-iterm2':
+        specifier: workspace:*
+        version: link:../plugins/terminal-iterm2
+      '@aoagents/ao-plugin-terminal-web':
+        specifier: workspace:*
+        version: link:../plugins/terminal-web
+      '@aoagents/ao-plugin-tracker-github':
+        specifier: workspace:*
+        version: link:../plugins/tracker-github
+      '@aoagents/ao-plugin-tracker-linear':
+        specifier: workspace:*
+        version: link:../plugins/tracker-linear
+      '@aoagents/ao-plugin-workspace-clone':
+        specifier: workspace:*
+        version: link:../plugins/workspace-clone
+      '@aoagents/ao-plugin-workspace-worktree':
+        specifier: workspace:*
+        version: link:../plugins/workspace-worktree
+      '@aoagents/ao-web':
+        specifier: workspace:*
+        version: link:../web
       '@clack/prompts':
         specifier: ^0.9.1
         version: 0.9.1
-      '@composio/ao-core':
-        specifier: workspace:*
-        version: link:../core
-      '@composio/ao-plugin-agent-aider':
-        specifier: workspace:*
-        version: link:../plugins/agent-aider
-      '@composio/ao-plugin-agent-claude-code':
-        specifier: workspace:*
-        version: link:../plugins/agent-claude-code
-      '@composio/ao-plugin-agent-codex':
-        specifier: workspace:*
-        version: link:../plugins/agent-codex
-      '@composio/ao-plugin-agent-opencode':
-        specifier: workspace:*
-        version: link:../plugins/agent-opencode
-      '@composio/ao-plugin-notifier-composio':
-        specifier: workspace:*
-        version: link:../plugins/notifier-composio
-      '@composio/ao-plugin-notifier-desktop':
-        specifier: workspace:*
-        version: link:../plugins/notifier-desktop
-      '@composio/ao-plugin-notifier-discord':
-        specifier: workspace:*
-        version: link:../plugins/notifier-discord
-      '@composio/ao-plugin-notifier-openclaw':
-        specifier: workspace:*
-        version: link:../plugins/notifier-openclaw
-      '@composio/ao-plugin-notifier-slack':
-        specifier: workspace:*
-        version: link:../plugins/notifier-slack
-      '@composio/ao-plugin-notifier-webhook':
-        specifier: workspace:*
-        version: link:../plugins/notifier-webhook
-      '@composio/ao-plugin-runtime-process':
-        specifier: workspace:*
-        version: link:../plugins/runtime-process
-      '@composio/ao-plugin-runtime-tmux':
-        specifier: workspace:*
-        version: link:../plugins/runtime-tmux
-      '@composio/ao-plugin-scm-github':
-        specifier: workspace:*
-        version: link:../plugins/scm-github
-      '@composio/ao-plugin-terminal-iterm2':
-        specifier: workspace:*
-        version: link:../plugins/terminal-iterm2
-      '@composio/ao-plugin-terminal-web':
-        specifier: workspace:*
-        version: link:../plugins/terminal-web
-      '@composio/ao-plugin-tracker-github':
-        specifier: workspace:*
-        version: link:../plugins/tracker-github
-      '@composio/ao-plugin-tracker-linear':
-        specifier: workspace:*
-        version: link:../plugins/tracker-linear
-      '@composio/ao-plugin-workspace-clone':
-        specifier: workspace:*
-        version: link:../plugins/workspace-clone
-      '@composio/ao-plugin-workspace-worktree':
-        specifier: workspace:*
-        version: link:../plugins/workspace-worktree
-      '@composio/ao-web':
-        specifier: workspace:*
-        version: link:../web
       chalk:
         specifier: ^5.4.0
         version: 5.6.2
@@ -166,56 +166,56 @@ importers:
 
   packages/integration-tests:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../core
-      '@composio/ao-plugin-agent-aider':
+      '@aoagents/ao-plugin-agent-aider':
         specifier: workspace:*
         version: link:../plugins/agent-aider
-      '@composio/ao-plugin-agent-claude-code':
+      '@aoagents/ao-plugin-agent-claude-code':
         specifier: workspace:*
         version: link:../plugins/agent-claude-code
-      '@composio/ao-plugin-agent-codex':
+      '@aoagents/ao-plugin-agent-codex':
         specifier: workspace:*
         version: link:../plugins/agent-codex
-      '@composio/ao-plugin-agent-opencode':
+      '@aoagents/ao-plugin-agent-opencode':
         specifier: workspace:*
         version: link:../plugins/agent-opencode
-      '@composio/ao-plugin-runtime-process':
+      '@aoagents/ao-plugin-runtime-process':
         specifier: workspace:*
         version: link:../plugins/runtime-process
-      '@composio/ao-plugin-runtime-tmux':
+      '@aoagents/ao-plugin-runtime-tmux':
         specifier: workspace:*
         version: link:../plugins/runtime-tmux
-      '@composio/ao-plugin-tracker-linear':
+      '@aoagents/ao-plugin-tracker-linear':
         specifier: workspace:*
         version: link:../plugins/tracker-linear
-      '@composio/ao-plugin-workspace-clone':
+      '@aoagents/ao-plugin-workspace-clone':
         specifier: workspace:*
         version: link:../plugins/workspace-clone
-      '@composio/ao-plugin-workspace-worktree':
+      '@aoagents/ao-plugin-workspace-worktree':
         specifier: workspace:*
         version: link:../plugins/workspace-worktree
     devDependencies:
-      '@composio/ao-plugin-notifier-composio':
+      '@aoagents/ao-plugin-notifier-composio':
         specifier: workspace:*
         version: link:../plugins/notifier-composio
-      '@composio/ao-plugin-notifier-desktop':
+      '@aoagents/ao-plugin-notifier-desktop':
         specifier: workspace:*
         version: link:../plugins/notifier-desktop
-      '@composio/ao-plugin-notifier-openclaw':
+      '@aoagents/ao-plugin-notifier-openclaw':
         specifier: workspace:*
         version: link:../plugins/notifier-openclaw
-      '@composio/ao-plugin-notifier-slack':
+      '@aoagents/ao-plugin-notifier-slack':
         specifier: workspace:*
         version: link:../plugins/notifier-slack
-      '@composio/ao-plugin-notifier-webhook':
+      '@aoagents/ao-plugin-notifier-webhook':
         specifier: workspace:*
         version: link:../plugins/notifier-webhook
-      '@composio/ao-plugin-terminal-iterm2':
+      '@aoagents/ao-plugin-terminal-iterm2':
         specifier: workspace:*
         version: link:../plugins/terminal-iterm2
-      '@composio/ao-plugin-terminal-web':
+      '@aoagents/ao-plugin-terminal-web':
         specifier: workspace:*
         version: link:../plugins/terminal-web
       '@types/node':
@@ -233,7 +233,7 @@ importers:
 
   packages/plugins/agent-aider:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -249,7 +249,7 @@ importers:
 
   packages/plugins/agent-claude-code:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -265,7 +265,7 @@ importers:
 
   packages/plugins/agent-codex:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -281,7 +281,7 @@ importers:
 
   packages/plugins/agent-opencode:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -297,7 +297,7 @@ importers:
 
   packages/plugins/notifier-composio:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
       composio-core:
@@ -316,7 +316,7 @@ importers:
 
   packages/plugins/notifier-desktop:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -332,7 +332,7 @@ importers:
 
   packages/plugins/notifier-discord:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -351,7 +351,7 @@ importers:
 
   packages/plugins/notifier-openclaw:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -367,7 +367,7 @@ importers:
 
   packages/plugins/notifier-slack:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -383,7 +383,7 @@ importers:
 
   packages/plugins/notifier-webhook:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -399,7 +399,7 @@ importers:
 
   packages/plugins/runtime-process:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -415,7 +415,7 @@ importers:
 
   packages/plugins/runtime-tmux:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -431,7 +431,7 @@ importers:
 
   packages/plugins/scm-github:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -447,7 +447,7 @@ importers:
 
   packages/plugins/scm-gitlab:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -463,7 +463,7 @@ importers:
 
   packages/plugins/terminal-iterm2:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -479,7 +479,7 @@ importers:
 
   packages/plugins/terminal-web:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -495,7 +495,7 @@ importers:
 
   packages/plugins/tracker-github:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -511,10 +511,10 @@ importers:
 
   packages/plugins/tracker-gitlab:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
-      '@composio/ao-plugin-scm-gitlab':
+      '@aoagents/ao-plugin-scm-gitlab':
         specifier: workspace:*
         version: link:../scm-gitlab
     devDependencies:
@@ -530,7 +530,7 @@ importers:
 
   packages/plugins/tracker-linear:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -546,7 +546,7 @@ importers:
 
   packages/plugins/workspace-clone:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -562,7 +562,7 @@ importers:
 
   packages/plugins/workspace-worktree:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
@@ -578,28 +578,28 @@ importers:
 
   packages/web:
     dependencies:
-      '@composio/ao-core':
+      '@aoagents/ao-core':
         specifier: workspace:*
         version: link:../core
-      '@composio/ao-plugin-agent-claude-code':
+      '@aoagents/ao-plugin-agent-claude-code':
         specifier: workspace:*
         version: link:../plugins/agent-claude-code
-      '@composio/ao-plugin-agent-opencode':
+      '@aoagents/ao-plugin-agent-opencode':
         specifier: workspace:*
         version: link:../plugins/agent-opencode
-      '@composio/ao-plugin-runtime-tmux':
+      '@aoagents/ao-plugin-runtime-tmux':
         specifier: workspace:*
         version: link:../plugins/runtime-tmux
-      '@composio/ao-plugin-scm-github':
+      '@aoagents/ao-plugin-scm-github':
         specifier: workspace:*
         version: link:../plugins/scm-github
-      '@composio/ao-plugin-tracker-github':
+      '@aoagents/ao-plugin-tracker-github':
         specifier: workspace:*
         version: link:../plugins/tracker-github
-      '@composio/ao-plugin-tracker-linear':
+      '@aoagents/ao-plugin-tracker-linear':
         specifier: workspace:*
         version: link:../plugins/tracker-linear
-      '@composio/ao-plugin-workspace-worktree':
+      '@aoagents/ao-plugin-workspace-worktree':
         specifier: workspace:*
         version: link:../plugins/workspace-worktree
       '@xterm/addon-fit':
