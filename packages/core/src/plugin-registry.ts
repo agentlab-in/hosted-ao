@@ -66,76 +66,51 @@ const BUILTIN_PLUGINS: Array<{ slot: PluginSlot; name: string; pkg: string }> = 
   { slot: "terminal", name: "web", pkg: "@composio/ao-plugin-terminal-web" },
 ];
 
-function extractPluginConfig(
-  slot: PluginSlot,
-  name: string,
-  config: OrchestratorConfig,
-): Record<string, unknown> | undefined {
-  // 1. Handle Notifier Slot
-  if (slot === "notifier") {
-    for (const [notifierId, notifierConfig] of Object.entries(config.notifiers ?? {})) {
-      if (!notifierConfig || typeof notifierConfig !== "object") continue;
-      const configuredPlugin = (notifierConfig as Record<string, unknown>)["plugin"];
-      const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
-      const matches = hasExplicitPlugin ? configuredPlugin === name : notifierId === name;
-
-      if (matches) {
-        return prepareConfig(slot, name, notifierId, notifierConfig, config.configPath);
-      }
-    }
-  }
-
-  // 2. Handle Tracker and SCM Slots (Project-level)
-  // Tracker and SCM plugins are typically stateless singletons that receive
-  // project-specific config per-call (via ProjectConfig argument), not at create() time.
-  // This applies to BOTH built-in and external plugins to avoid order-dependent
-  // behavior when multiple projects share the same plugin but have different configs.
-  // Return undefined so plugins are initialized without project-specific config.
-  if (slot === "tracker" || slot === "scm") {
-    return undefined;
-  }
-
-  return undefined;
+function matchesNotifierPlugin(
+  pluginName: string,
+  notifierId: string,
+  notifierConfig: Record<string, unknown>,
+): boolean {
+  const configuredPlugin = notifierConfig["plugin"];
+  const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
+  return hasExplicitPlugin ? configuredPlugin === pluginName : notifierId === pluginName;
 }
 
 function collectNotifierRegistrations(
   pluginName: string,
   config: OrchestratorConfig,
+  isExternalLoad = false,
 ): NotifierRegistration[] {
-  const registrations: NotifierRegistration[] = [];
-  const seen = new Set<string>();
+  const orderedMatches = new Map<string, Record<string, unknown>>();
   const notifierEntries = Object.entries(config.notifiers ?? {});
 
-  const addRegistration = (registrationName: string, rawConfig: Record<string, unknown>): void => {
-    if (seen.has(registrationName)) return;
-    seen.add(registrationName);
-    registrations.push({
-      registrationName,
-      config: prepareConfig("notifier", pluginName, registrationName, rawConfig, config.configPath),
-    });
-  };
-
   const exactMatch = config.notifiers?.[pluginName];
-  if (exactMatch && typeof exactMatch === "object") {
-    const configuredPlugin = exactMatch["plugin"];
-    const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
-    if (!hasExplicitPlugin || configuredPlugin === pluginName) {
-      addRegistration(pluginName, exactMatch);
-    }
+  if (
+    exactMatch &&
+    typeof exactMatch === "object" &&
+    matchesNotifierPlugin(pluginName, pluginName, exactMatch)
+  ) {
+    orderedMatches.set(pluginName, exactMatch);
   }
 
   for (const [notifierId, notifierConfig] of notifierEntries) {
     if (!notifierConfig || typeof notifierConfig !== "object") continue;
-    const configuredPlugin = (notifierConfig as Record<string, unknown>)["plugin"];
-    const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
-    const matches = hasExplicitPlugin ? configuredPlugin === pluginName : notifierId === pluginName;
-
-    if (matches) {
-      addRegistration(notifierId, notifierConfig);
+    if (matchesNotifierPlugin(pluginName, notifierId, notifierConfig)) {
+      orderedMatches.set(notifierId, notifierConfig);
     }
   }
 
-  return registrations;
+  return [...orderedMatches.entries()].map(([registrationName, rawConfig]) => ({
+    registrationName,
+    config: prepareConfig(
+      "notifier",
+      pluginName,
+      registrationName,
+      rawConfig,
+      config.configPath,
+      isExternalLoad,
+    ),
+  }));
 }
 
 /**
@@ -148,6 +123,7 @@ function prepareConfig(
   sourceId: string,
   rawConfig: Record<string, unknown>,
   configPath?: string,
+  isExternalLoad = false,
 ): Record<string, unknown> {
   // Explicitly check for reserved fields to prevent silent stripping/collision.
   // 'path' is reserved for local resolution; 'package' is reserved for npm resolution.
@@ -161,7 +137,10 @@ function prepareConfig(
   // If loading via built-in name or npm package, having a 'path' field is ambiguous:
   // it could be a local plugin path (for loading) or a plugin config value.
   // We reject this to avoid silently stripping a config value the user intended to pass.
-  const isBuiltin = BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
+  // Skip the built-in guard for external loads: when loading via `path`, the manifest.name
+  // may legitimately collide with a built-in (e.g. a forked "slack"), and the path field
+  // here IS the loading path, not a stray user config value.
+  const isBuiltin = !isExternalLoad && BUILTIN_PLUGINS.some((b) => b.slot === slot && b.name === name);
   if ((rawConfig.package || isBuiltin) && "path" in rawConfig) {
     const loadingMethod = rawConfig.package ? `npm package "${rawConfig.package}"` : `built-in plugin "${name}"`;
     throw new Error(
@@ -413,9 +392,13 @@ export function createPluginRegistry(): PluginRegistry {
     plugins.set(makeKey(slot, name), { manifest, instance });
   }
 
-  function registerNotifier(plugin: PluginModule, config: OrchestratorConfig): void {
+  function registerNotifier(
+    plugin: PluginModule,
+    config: OrchestratorConfig,
+    isExternalLoad = false,
+  ): void {
     const { manifest } = plugin;
-    const registrations = collectNotifierRegistrations(manifest.name, config);
+    const registrations = collectNotifierRegistrations(manifest.name, config, isExternalLoad);
 
     if (registrations.length === 0) {
       registerInstance(manifest.slot, manifest.name, manifest, plugin.create(undefined));
@@ -473,10 +456,7 @@ export function createPluginRegistry(): PluginRegistry {
             if (orchestratorConfig && mod.manifest.slot === "notifier") {
               registerNotifier(mod, orchestratorConfig);
             } else {
-              const pluginConfig = orchestratorConfig
-                ? extractPluginConfig(builtin.slot, builtin.name, orchestratorConfig)
-                : undefined;
-              this.register(mod, pluginConfig);
+              this.register(mod);
             }
           } catch (error) {
             process.stderr.write(
@@ -513,8 +493,8 @@ export function createPluginRegistry(): PluginRegistry {
 
           // Check if this plugin was auto-added from inline tracker/scm/notifier config.
           // Multiple projects may share the same external plugin, so find ALL matching entries.
-          // We validate and update configs FIRST, before extracting plugin config, because
-          // extractPluginConfig looks up by manifest.name which may differ from the temp name.
+          // We validate and update configs FIRST so notifier alias registration uses
+          // the final manifest.name instead of any temporary inferred plugin name.
           const matchingEntries = findAllExternalPluginEntries(plugin, externalIndex);
           for (const externalEntry of matchingEntries) {
             try {
@@ -532,14 +512,10 @@ export function createPluginRegistry(): PluginRegistry {
             }
           }
 
-          // Extract plugin config AFTER updating configs with manifest.name.
-          // This ensures extractPluginConfig can find the config by manifest.name
-          // (e.g., manifest "ms-teams" after config was updated from temp "teams").
           if (mod.manifest.slot === "notifier") {
-            registerNotifier(mod, config);
+            registerNotifier(mod, config, true);
           } else {
-            const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config);
-            this.register(mod, pluginConfig);
+            this.register(mod);
           }
         } catch (error) {
           process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
