@@ -23,6 +23,11 @@ import type {
 /** Map from "slot:name" → plugin instance */
 type PluginMap = Map<string, { manifest: PluginManifest; instance: unknown }>;
 
+interface NotifierRegistration {
+  registrationName: string;
+  config?: Record<string, unknown>;
+}
+
 const LOCAL_PLUGIN_ENTRY_CANDIDATES = ["dist/index.js", "index.js"] as const;
 
 function makeKey(slot: PluginSlot, name: string): string {
@@ -61,37 +66,51 @@ const BUILTIN_PLUGINS: Array<{ slot: PluginSlot; name: string; pkg: string }> = 
   { slot: "terminal", name: "web", pkg: "@aoagents/ao-plugin-terminal-web" },
 ];
 
-function extractPluginConfig(
-  slot: PluginSlot,
-  name: string,
+function matchesNotifierPlugin(
+  pluginName: string,
+  notifierId: string,
+  notifierConfig: Record<string, unknown>,
+): boolean {
+  const configuredPlugin = notifierConfig["plugin"];
+  const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
+  return hasExplicitPlugin ? configuredPlugin === pluginName : notifierId === pluginName;
+}
+
+function collectNotifierRegistrations(
+  pluginName: string,
   config: OrchestratorConfig,
   isExternalLoad = false,
-): Record<string, unknown> | undefined {
-  // 1. Handle Notifier Slot
-  if (slot === "notifier") {
-    for (const [notifierId, notifierConfig] of Object.entries(config.notifiers ?? {})) {
-      if (!notifierConfig || typeof notifierConfig !== "object") continue;
-      const configuredPlugin = (notifierConfig as Record<string, unknown>)["plugin"];
-      const hasExplicitPlugin = typeof configuredPlugin === "string" && configuredPlugin.length > 0;
-      const matches = hasExplicitPlugin ? configuredPlugin === name : notifierId === name;
+): NotifierRegistration[] {
+  const orderedMatches = new Map<string, Record<string, unknown>>();
+  const notifierEntries = Object.entries(config.notifiers ?? {});
 
-      if (matches) {
-        return prepareConfig(slot, name, notifierId, notifierConfig, config.configPath, isExternalLoad);
-      }
+  const exactMatch = config.notifiers?.[pluginName];
+  if (
+    exactMatch &&
+    typeof exactMatch === "object" &&
+    matchesNotifierPlugin(pluginName, pluginName, exactMatch)
+  ) {
+    orderedMatches.set(pluginName, exactMatch);
+  }
+
+  for (const [notifierId, notifierConfig] of notifierEntries) {
+    if (!notifierConfig || typeof notifierConfig !== "object") continue;
+    if (matchesNotifierPlugin(pluginName, notifierId, notifierConfig)) {
+      orderedMatches.set(notifierId, notifierConfig);
     }
   }
 
-  // 2. Handle Tracker and SCM Slots (Project-level)
-  // Tracker and SCM plugins are typically stateless singletons that receive
-  // project-specific config per-call (via ProjectConfig argument), not at create() time.
-  // This applies to BOTH built-in and external plugins to avoid order-dependent
-  // behavior when multiple projects share the same plugin but have different configs.
-  // Return undefined so plugins are initialized without project-specific config.
-  if (slot === "tracker" || slot === "scm") {
-    return undefined;
-  }
-
-  return undefined;
+  return [...orderedMatches.entries()].map(([registrationName, rawConfig]) => ({
+    registrationName,
+    config: prepareConfig(
+      "notifier",
+      pluginName,
+      registrationName,
+      rawConfig,
+      config.configPath,
+      isExternalLoad,
+    ),
+  }));
 }
 
 /**
@@ -364,12 +383,43 @@ function resolvePluginSpecifier(
 export function createPluginRegistry(): PluginRegistry {
   const plugins: PluginMap = new Map();
 
+  function registerInstance(
+    slot: PluginSlot,
+    name: string,
+    manifest: PluginManifest,
+    instance: unknown,
+  ): void {
+    plugins.set(makeKey(slot, name), { manifest, instance });
+  }
+
+  function registerNotifier(
+    plugin: PluginModule,
+    config: OrchestratorConfig,
+    isExternalLoad = false,
+  ): void {
+    const { manifest } = plugin;
+    const registrations = collectNotifierRegistrations(manifest.name, config, isExternalLoad);
+
+    if (registrations.length === 0) {
+      registerInstance(manifest.slot, manifest.name, manifest, plugin.create(undefined));
+      return;
+    }
+
+    for (const [index, registration] of registrations.entries()) {
+      const instance = plugin.create(registration.config);
+      registerInstance(manifest.slot, registration.registrationName, manifest, instance);
+
+      if (index === 0 && registration.registrationName !== manifest.name) {
+        registerInstance(manifest.slot, manifest.name, manifest, instance);
+      }
+    }
+  }
+
   return {
     register(plugin: PluginModule, config?: Record<string, unknown>): void {
       const { manifest } = plugin;
-      const key = makeKey(manifest.slot, manifest.name);
       const instance = plugin.create(config);
-      plugins.set(key, { manifest, instance });
+      registerInstance(manifest.slot, manifest.name, manifest, instance);
     },
 
     get<T>(slot: PluginSlot, name: string): T | null {
@@ -378,13 +428,13 @@ export function createPluginRegistry(): PluginRegistry {
     },
 
     list(slot: PluginSlot): PluginManifest[] {
-      const result: PluginManifest[] = [];
+      const result = new Map<string, PluginManifest>();
       for (const [key, entry] of plugins) {
-        if (key.startsWith(`${slot}:`)) {
-          result.push(entry.manifest);
+        if (key.startsWith(`${slot}:`) && !result.has(entry.manifest.name)) {
+          result.set(entry.manifest.name, entry.manifest);
         }
       }
-      return result;
+      return [...result.values()];
     },
 
     async loadBuiltins(
@@ -403,10 +453,11 @@ export function createPluginRegistry(): PluginRegistry {
 
         if (mod) {
           try {
-            const pluginConfig = orchestratorConfig
-              ? extractPluginConfig(builtin.slot, builtin.name, orchestratorConfig)
-              : undefined;
-            this.register(mod, pluginConfig);
+            if (orchestratorConfig && mod.manifest.slot === "notifier") {
+              registerNotifier(mod, orchestratorConfig);
+            } else {
+              this.register(mod);
+            }
           } catch (error) {
             process.stderr.write(
               `[plugin-registry] Failed to load built-in plugin "${builtin.name}": ${error}\n`,
@@ -442,8 +493,8 @@ export function createPluginRegistry(): PluginRegistry {
 
           // Check if this plugin was auto-added from inline tracker/scm/notifier config.
           // Multiple projects may share the same external plugin, so find ALL matching entries.
-          // We validate and update configs FIRST, before extracting plugin config, because
-          // extractPluginConfig looks up by manifest.name which may differ from the temp name.
+          // We validate and update configs FIRST so notifier alias registration uses
+          // the final manifest.name instead of any temporary inferred plugin name.
           const matchingEntries = findAllExternalPluginEntries(plugin, externalIndex);
           for (const externalEntry of matchingEntries) {
             try {
@@ -461,11 +512,11 @@ export function createPluginRegistry(): PluginRegistry {
             }
           }
 
-          // Extract plugin config AFTER updating configs with manifest.name.
-          // This ensures extractPluginConfig can find the config by manifest.name
-          // (e.g., manifest "ms-teams" after config was updated from temp "teams").
-          const pluginConfig = extractPluginConfig(mod.manifest.slot, mod.manifest.name, config, true);
-          this.register(mod, pluginConfig);
+          if (mod.manifest.slot === "notifier") {
+            registerNotifier(mod, config, true);
+          } else {
+            this.register(mod);
+          }
         } catch (error) {
           process.stderr.write(`[plugin-registry] Failed to load plugin "${specifier}": ${error}\n`);
         }
