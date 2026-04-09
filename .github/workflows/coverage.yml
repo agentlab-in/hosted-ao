@@ -76,7 +76,7 @@ jobs:
             # Run coverage for each changed plugin
             for plugin_dir in $(echo "$CHANGED" | grep '^packages/plugins/' | cut -d/ -f1-3 | sort -u); do
               if [ -f "$plugin_dir/package.json" ]; then
-                pkg_name=$(node -e "console.log(require('./$plugin_dir/package.json').name)")
+                pkg_name=$(jq -r .name "$plugin_dir/package.json")
                 echo "::group::$pkg_name tests"
                 pnpm --filter "$pkg_name" exec vitest run --coverage.enabled --coverage.reporter=json || true
                 echo "::endgroup::"
