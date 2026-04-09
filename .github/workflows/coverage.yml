@@ -101,10 +101,16 @@ jobs:
             | tail -1)
 
           if [ -n "$COMMENT_ID" ]; then
-            gh api "repos/$REPO/issues/comments/$COMMENT_ID" \
+            # Update may fail on fork PRs (403) — fall back to creating a new comment
+            if gh api "repos/$REPO/issues/comments/$COMMENT_ID" \
               -X PATCH \
-              -F body=@coverage-comment.md
-            echo "Updated existing comment $COMMENT_ID"
+              -F body=@coverage-comment.md 2>/dev/null; then
+              echo "Updated existing comment $COMMENT_ID"
+            else
+              echo "Could not update comment $COMMENT_ID, creating new one"
+              gh pr comment "$PR_NUMBER" --body-file coverage-comment.md
+              echo "Created new comment"
+            fi
           else
             gh pr comment "$PR_NUMBER" --body-file coverage-comment.md
             echo "Created new comment"
