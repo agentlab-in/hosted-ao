@@ -355,7 +355,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     if (!project) return session.status;
 
     const agentName = resolveAgentSelection({
-      role: resolveSessionRole(session.id, session.metadata, project.sessionPrefix),
+      role: resolveSessionRole(
+        session.id,
+        session.metadata,
+        project.sessionPrefix,
+        Object.values(config.projects).map((p) => p.sessionPrefix),
+      ),
       project,
       defaults: config.defaults,
       persistedAgent: session.metadata["agent"],
@@ -1266,6 +1271,22 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     } else {
       // No transition but track current state
       states.set(session.id, newStatus);
+    }
+
+    // Pin first quality summary for title stability
+    if (
+      session.agentInfo?.summary &&
+      !session.agentInfo.summaryIsFallback &&
+      !session.metadata["pinnedSummary"]
+    ) {
+      const trimmed = session.agentInfo.summary.replace(/[\n\r]/g, " ").trim();
+      if (trimmed.length >= 5) {
+        try {
+          updateSessionMetadata(session, { pinnedSummary: trimmed });
+        } catch {
+          // Non-critical: title just won't be pinned this cycle
+        }
+      }
     }
 
     await Promise.allSettled([

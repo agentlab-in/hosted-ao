@@ -762,7 +762,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     metadata: Record<string, string>,
   ) {
     return resolveAgentSelection({
-      role: resolveSessionRole(sessionId, metadata, project.sessionPrefix),
+      role: resolveSessionRole(
+        sessionId,
+        metadata,
+        project.sessionPrefix,
+        Object.values(config.projects).map((p) => p.sessionPrefix),
+      ),
       project,
       defaults: config.defaults,
       persistedAgent: metadata["agent"],
@@ -2333,6 +2338,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         createdAt: raw["createdAt"],
         runtimeHandle: raw["runtimeHandle"],
         opencodeSessionId: raw["opencodeSessionId"],
+        pinnedSummary: raw["pinnedSummary"],
       });
     }
 
