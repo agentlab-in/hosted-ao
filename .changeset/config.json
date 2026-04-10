@@ -13,7 +13,6 @@
       "@aoagents/ao-plugin-agent-claude-code",
       "@aoagents/ao-plugin-agent-codex",
       "@aoagents/ao-plugin-agent-aider",
-      "@aoagents/ao-plugin-agent-cursor",
       "@aoagents/ao-plugin-agent-opencode",
       "@aoagents/ao-plugin-workspace-worktree",
       "@aoagents/ao-plugin-workspace-clone",
