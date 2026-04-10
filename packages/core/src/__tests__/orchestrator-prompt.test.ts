@@ -5,6 +5,7 @@ import type { OrchestratorConfig } from "../types.js";
 const config: OrchestratorConfig = {
   configPath: "/tmp/agent-orchestrator.yaml",
   port: 3000,
+  power: { preventIdleSleep: false },
   defaults: {
     runtime: "tmux",
     agent: "claude-code",

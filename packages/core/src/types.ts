@@ -1003,6 +1003,19 @@ export interface ReactionResult {
 // CONFIGURATION
 // =============================================================================
 
+/**
+ * Power management configuration.
+ * Controls system sleep behavior while AO is running.
+ */
+export interface PowerConfig {
+  /**
+   * Prevent macOS idle sleep while AO is running.
+   * Uses `caffeinate -i -w <pid>` to hold an assertion.
+   * Defaults to true on macOS, no-op on other platforms.
+   */
+  preventIdleSleep: boolean;
+}
+
 /** Top-level orchestrator configuration (from agent-orchestrator.yaml) */
 export interface OrchestratorConfig {
   /**
@@ -1023,6 +1036,9 @@ export interface OrchestratorConfig {
 
   /** Milliseconds before a "ready" session becomes "idle" (default: 300000 = 5 min) */
   readyThresholdMs: number;
+
+  /** Power management settings (idle sleep prevention, etc.) */
+  power: PowerConfig;
 
   /** Default plugin selections */
   defaults: DefaultPlugins;

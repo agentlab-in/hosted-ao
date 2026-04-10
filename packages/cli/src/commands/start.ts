@@ -51,6 +51,7 @@ import {
 import { rebuildDashboardProductionArtifacts } from "../lib/dashboard-rebuild.js";
 import { preflight } from "../lib/preflight.js";
 import { register, unregister, isAlreadyRunning, getRunning, waitForExit } from "../lib/running-state.js";
+import { preventIdleSleep } from "../lib/prevent-sleep.js";
 import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
 import { detectAgentRuntime, detectAvailableAgents, type DetectedAgent } from "../lib/detect-agent.js";
@@ -921,6 +922,16 @@ async function runStartup(
     await ensureTmux();
   }
   await warnAboutOpenClawStatus(config);
+
+  // Prevent macOS idle sleep while AO is running (if enabled in config)
+  // Uses caffeinate -i -w <pid> to hold an assertion tied to this process lifetime.
+  // No-op on non-macOS platforms.
+  if (config.power?.preventIdleSleep !== false) {
+    const sleepHandle = preventIdleSleep();
+    if (sleepHandle) {
+      console.log(chalk.dim("  Preventing macOS idle sleep while AO is running"));
+    }
+  }
 
   // Only inject OpenClaw credentials when the project actually uses OpenClaw.
   // This avoids exposing API keys to projects/plugins that don't need them.

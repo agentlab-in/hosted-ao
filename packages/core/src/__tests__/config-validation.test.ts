@@ -1087,3 +1087,72 @@ describe("External Plugin Name Generation", () => {
     expect(config.projects.proj1.scm?.plugin).toBe("azure-devops");
   });
 });
+
+describe("Config Validation - Power Config", () => {
+  it("applies default power config with preventIdleSleep based on platform", () => {
+    const config = validateConfig({
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    // Default is true on darwin, false elsewhere
+    expect(config.power).toBeDefined();
+    expect(config.power.preventIdleSleep).toBe(process.platform === "darwin");
+  });
+
+  it("accepts explicit power.preventIdleSleep: true", () => {
+    const config = validateConfig({
+      power: {
+        preventIdleSleep: true,
+      },
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    expect(config.power.preventIdleSleep).toBe(true);
+  });
+
+  it("accepts explicit power.preventIdleSleep: false", () => {
+    const config = validateConfig({
+      power: {
+        preventIdleSleep: false,
+      },
+      projects: {
+        proj1: {
+          path: "/repos/test",
+          repo: "org/test",
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    expect(config.power.preventIdleSleep).toBe(false);
+  });
+
+  it("rejects invalid power.preventIdleSleep type", () => {
+    expect(() =>
+      validateConfig({
+        power: {
+          preventIdleSleep: "yes", // Invalid: should be boolean
+        },
+        projects: {
+          proj1: {
+            path: "/repos/test",
+            repo: "org/test",
+            defaultBranch: "main",
+          },
+        },
+      }),
+    ).toThrow();
+  });
+});
