@@ -3519,10 +3519,6 @@ packages:
     resolution: {integrity: sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==}
     engines: {node: '>=10'}
 
-  proxy-from-env@2.1.0:
-    resolution: {integrity: sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==}
-    engines: {node: '>=10'}
-
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
@@ -5893,9 +5889,9 @@ snapshots:
       '@cloudflare/workers-types': 4.20260410.1
       '@composio/mcp': 1.0.3-0
       '@hey-api/client-axios': 0.2.12(axios@1.15.0)
-      '@langchain/core': 1.1.24(@opentelemetry/api@1.9.0)(openai@6.22.0(ws@8.19.0)(zod@3.25.76))
-      '@langchain/openai': 1.2.7(@langchain/core@1.1.24(@opentelemetry/api@1.9.0)(openai@6.22.0(ws@8.19.0)(zod@3.25.76)))(ws@8.19.0)
-      ai: 6.0.86(zod@3.25.76)
+      '@langchain/core': 1.1.39(@opentelemetry/api@1.9.0)(openai@6.34.0(ws@8.20.0)(zod@3.25.76))(ws@8.20.0)
+      '@langchain/openai': 1.4.3(@langchain/core@1.1.39(@opentelemetry/api@1.9.0)(openai@6.34.0(ws@8.20.0)(zod@3.25.76))(ws@8.20.0))(ws@8.20.0)
+      ai: 6.0.156(zod@3.25.76)
       axios: 1.15.0
       chalk: 4.1.2
       cli-progress: 3.12.0
@@ -6993,11 +6989,6 @@ snapshots:
       react-is: 17.0.2
 
   proc-log@6.1.0: {}
-
-  promise-retry@2.0.1:
-    dependencies:
-      err-code: 2.0.3
-      retry: 0.12.0
 
   proxy-from-env@2.1.0: {}
 
