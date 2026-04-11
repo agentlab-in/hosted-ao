@@ -1710,7 +1710,7 @@ describe("spawn", () => {
       expect(readFileSync(promptFile, "utf-8")).toBe("You are the orchestrator.");
     });
 
-    it("writes orchestrator-only AGENTS.md for OpenCode orchestrators", async () => {
+    it("writes the orchestrator AGENTS.md block for OpenCode orchestrators", async () => {
       const opencodeAgent: Agent = {
         ...mockAgent,
         name: "opencode",
