@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Prompt validated here; sanitized (newline stripping) below after project validation
   if (body.prompt !== undefined && body.prompt !== null) {
     const promptErr = validateString(body.prompt, "prompt", 4096);
     if (promptErr) {
