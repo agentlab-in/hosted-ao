@@ -63,9 +63,8 @@ import {
 } from "./paths.js";
 import { asValidOpenCodeSessionId } from "./opencode-session-id.js";
 import {
-  getWorkspaceOpenCodeConfigPath,
-  writeWorkspaceOpenCodeConfig,
-} from "./opencode-config.js";
+  writeWorkspaceOpenCodeAgentsMd,
+} from "./opencode-agents-md.js";
 import { normalizeOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse } from "./utils/validation.js";
@@ -74,12 +73,6 @@ import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js"
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = 10_000;
 const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = 10_000;
-
-function getExistingWorkspaceOpenCodeConfigPath(workspacePath: string | null | undefined): string | undefined {
-  if (!workspacePath) return undefined;
-  const configPath = getWorkspaceOpenCodeConfigPath(workspacePath);
-  return existsSync(configPath) ? configPath : undefined;
-}
 
 function errorIncludesSessionNotFound(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -1386,10 +1379,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     }
 
-    let openCodeConfigPath: string | undefined;
     if (plugins.agent.name === "opencode" && systemPromptFile) {
       try {
-        openCodeConfigPath = writeWorkspaceOpenCodeConfig(workspacePath, systemPromptFile);
+        writeWorkspaceOpenCodeAgentsMd(workspacePath, systemPromptFile);
       } catch (err) {
         await cleanupWorktreeAndMetadata(systemPromptFile);
         throw err;
@@ -1439,9 +1431,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     const launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
-    if (openCodeConfigPath) {
-      environment["OPENCODE_CONFIG"] = openCodeConfigPath;
-    }
 
     // Create runtime — clean up worktree and metadata on failure
     let handle: RuntimeHandle;
@@ -2421,10 +2410,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     // 7. Get launch command — try restore command first, fall back to fresh launch
     let launchCommand: string;
-    const openCodeConfigPath =
-      selectedAgent === "opencode"
-        ? getExistingWorkspaceOpenCodeConfigPath(workspacePath)
-        : undefined;
     const projectConfigForLaunch: ProjectConfig = {
       ...project,
       agentConfig: {
@@ -2452,9 +2437,6 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
-    if (openCodeConfigPath) {
-      environment["OPENCODE_CONFIG"] = openCodeConfigPath;
-    }
 
     // 8. Create runtime (reuse tmuxName from metadata)
     const tmuxName = raw["tmuxName"];

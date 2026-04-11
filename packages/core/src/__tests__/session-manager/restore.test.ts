@@ -5,7 +5,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
-import { getWorkspaceOpenCodeConfigPath } from "../../opencode-config.js";
+import { getWorkspaceAgentsMdPath } from "../../opencode-agents-md.js";
 import {
   writeMetadata,
   readMetadataRaw,
@@ -475,10 +475,10 @@ describe("restore", () => {
     expect(createCall.launchCommand).toBe("claude --resume abc123");
   });
 
-  it("passes OPENCODE_CONFIG when restoring OpenCode orchestrators", async () => {
+  it("does not need extra OpenCode config when restoring OpenCode orchestrators", async () => {
     const wsPath = join(tmpDir, "ws-app-orchestrator-opencode-restore");
-    mkdirSync(join(wsPath, ".ao"), { recursive: true });
-    writeFileSync(getWorkspaceOpenCodeConfigPath(wsPath), "{}\n", "utf-8");
+    mkdirSync(wsPath, { recursive: true });
+    writeFileSync(getWorkspaceAgentsMdPath(wsPath), "## Agent Orchestrator\n", "utf-8");
 
     const mockOpenCodeAgentWithRestore: Agent = {
       ...mockAgent,
@@ -537,8 +537,8 @@ describe("restore", () => {
 
     expect(mockRuntime.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        environment: expect.objectContaining({
-          OPENCODE_CONFIG: getWorkspaceOpenCodeConfigPath(wsPath),
+        environment: expect.not.objectContaining({
+          OPENCODE_CONFIG: expect.any(String),
         }),
       }),
     );

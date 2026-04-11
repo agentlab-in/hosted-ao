@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
 import { type Session, type RuntimeHandle, type AgentLaunchConfig } from "@aoagents/ao-core";
 
 const { mockAppendActivityEntry, mockReadLastActivityEntry, mockRecordTerminalActivity } =
@@ -756,14 +755,9 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("--model 'claude-sonnet-4-5-20250929'");
   });
 
-  it("does not inject an internal agent when workspace opencode.json exists", async () => {
-    const workspacePath = "/tmp/test-restore-opencode-config";
-    mkdirSync(`${workspacePath}/.ao`, { recursive: true });
-    writeFileSync(`${workspacePath}/.ao/opencode.json`, "{}\n", "utf-8");
-
+  it("does not inject an internal agent during restore", async () => {
     const cmd = await agent.getRestoreCommand!(
       makeSession({
-        workspacePath,
         metadata: { opencodeSessionId: "ses_abc123" },
       }),
       { name: "proj", repo: "o/r", path: "/p", defaultBranch: "main", sessionPrefix: "p" },

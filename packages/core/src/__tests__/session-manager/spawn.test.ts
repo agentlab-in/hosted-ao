@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { validateConfig } from "../../config.js";
-import { OPENCODE_INTERNAL_ORCHESTRATOR_AGENT_NAME, getWorkspaceOpenCodeConfigPath } from "../../opencode-config.js";
+import { getWorkspaceAgentsMdPath } from "../../opencode-agents-md.js";
 import {
   writeMetadata,
   readMetadata,
@@ -1710,7 +1710,7 @@ describe("spawn", () => {
       expect(readFileSync(promptFile, "utf-8")).toBe("You are the orchestrator.");
     });
 
-    it("generates .ao/opencode.json and passes OPENCODE_CONFIG for OpenCode orchestrators", async () => {
+    it("writes workspace AGENTS.md for OpenCode orchestrators", async () => {
       const opencodeAgent: Agent = {
         ...mockAgent,
         name: "opencode",
@@ -1746,31 +1746,13 @@ describe("spawn", () => {
         systemPrompt: "You are the orchestrator.",
       });
 
-      const opencodeConfigPath = getWorkspaceOpenCodeConfigPath("/tmp/ws");
-      expect(existsSync(opencodeConfigPath)).toBe(true);
-      expect(JSON.parse(readFileSync(opencodeConfigPath, "utf-8"))).toEqual({
-        $schema: "https://opencode.ai/config.json",
-        default_agent: OPENCODE_INTERNAL_ORCHESTRATOR_AGENT_NAME,
-        agent: {
-          [OPENCODE_INTERNAL_ORCHESTRATOR_AGENT_NAME]: {
-            description: "Agent Orchestrator internal orchestrator agent",
-            mode: "primary",
-            prompt: expect.stringContaining("orchestrator-prompt-app-orchestrator-1.md"),
-          },
-        },
-      });
+      const agentsMdPath = getWorkspaceAgentsMdPath("/tmp/ws");
+      expect(existsSync(agentsMdPath)).toBe(true);
+      expect(readFileSync(agentsMdPath, "utf-8")).toContain("You are the orchestrator.");
 
       expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
           systemPromptFile: expect.stringContaining("orchestrator-prompt-app-orchestrator-1.md"),
-        }),
-      );
-
-      expect(mockRuntime.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          environment: expect.objectContaining({
-            OPENCODE_CONFIG: opencodeConfigPath,
-          }),
         }),
       );
     });
