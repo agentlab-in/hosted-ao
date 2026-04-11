@@ -701,8 +701,12 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
         )}
 
         <div className="session-card__footer">
-          <span className="card__status min-w-0 truncate">
-            {footerStatus}
+          <span className="card__status min-w-0 truncate" title={session.userPrompt ?? undefined}>
+            {!session.issueUrl && session.userPrompt
+              ? session.userPrompt.length > 60
+                ? session.userPrompt.slice(0, 60) + "…"
+                : session.userPrompt
+              : footerStatus}
           </span>
 
           {isReadyToMerge && pr ? (
