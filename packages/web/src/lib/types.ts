@@ -90,6 +90,7 @@ export interface DashboardPR {
   state: "open" | "merged" | "closed";
   additions: number;
   deletions: number;
+  changedFiles?: number;
   ciStatus: CIStatus;
   ciChecks: DashboardCICheck[];
   reviewDecision: ReviewDecision;
