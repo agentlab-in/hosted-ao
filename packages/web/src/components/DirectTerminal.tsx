@@ -72,579 +72,326 @@ export function buildTerminalThemes(variant: TerminalVariant): { dark: ITheme; l
     cursorAccent: "#fafafa",
     selectionBackground: accent.selLight,
     selectionInactiveBackground: "rgba(128, 128, 128, 0.15)",
-    // ANSI colors — darkened for legibility on #fafafa terminal background
-    black: "#24292f",
-    red: "#b42318",
-    green: "#1f7a3d",
-    yellow: "#8a5a00",
-    blue: "#175cd3",
-    magenta: "#8e24aa",
-    cyan: "#0b7285",
-    white: "#4b5563",
-    brightBlack: "#374151",
-    brightRed: "#912018",
-    brightGreen: "#176639",
-    brightYellow: "#6f4a00",
-    brightBlue: "#1d4ed8",
-    brightMagenta: "#7b1fa2",
-    brightCyan: "#155e75",
-    brightWhite: "#374151",
+    // ANSI colors — darkened for legibility on white
+    black: "#1f2937",
+    red: "#dc2626",
+    green: "#16a34a",
+    yellow: "#ca8a04",
+    blue: "#2563eb",
+    magenta: "#9333ea",
+    cyan: "#0891b2",
+    white: "#6b7280",
+    brightBlack: "#4b5563",
+    brightRed: "#ef4444",
+    brightGreen: "#22c55e",
+    brightYellow: "#eab308",
+    brightBlue: "#3b82f6",
+    brightMagenta: "#a855f7",
+    brightCyan: "#06b6d4",
+    brightWhite: "#9ca3af",
   };
 
   return { dark, light };
 }
 
-/**
- * Direct xterm.js terminal with native WebSocket connection.
- * Implements Extended Device Attributes (XDA) handler to enable
- * tmux clipboard support (OSC 52) without requiring iTerm2 attachment.
- *
- * Based on DeepWiki analysis:
- * - tmux queries for XDA (CSI > q / XTVERSION) to detect terminal type
- * - When tmux sees "XTerm(" in response, it enables TTYC_MS (clipboard)
- * - xterm.js doesn't implement XDA by default, so we register custom handler
- */
 export function DirectTerminal({
   sessionId,
   startFullscreen = false,
   variant = "agent",
   appearance = "theme",
-  height = "max(440px, calc(100dvh - 440px))",
+  height = "max(440px, calc(100vh - 440px))",
   isOpenCodeSession = false,
-  reloadCommand,
+  reloadCommand = "/exit",
   chromeless = false,
 }: DirectTerminalProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { resolvedTheme } = useTheme();
-  const terminalThemes = useMemo(() => buildTerminalThemes(variant), [variant]);
-  const { subscribeTerminal, writeTerminal, resizeTerminal: resizeTerminalMux, openTerminal, closeTerminal, status: muxStatus } = useMux();
+  const { subscribeTerminal, writeTerminal, openTerminal, closeTerminal, resizeTerminal, status: muxStatus } = useMux();
 
   const terminalRef = useRef<HTMLDivElement>(null);
-  const terminalInstance = useRef<TerminalType | null>(null);
-  const fitAddon = useRef<FitAddonType | null>(null);
-  const muxStatusRef = useRef(muxStatus);
-  muxStatusRef.current = muxStatus;
+  const termRef = useRef<TerminalType | null>(null);
+  const fitAddonRef = useRef<FitAddonType | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const [connected, setConnected] = useState(false);
   const [fullscreen, setFullscreen] = useState(startFullscreen);
-  const [error, setError] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [reloadError, setReloadError] = useState<string | null>(null);
 
-  // Update URL when fullscreen changes
-  useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
+  const terminalThemes = useMemo(() => buildTerminalThemes(variant), [variant]);
+  const isDark = appearance === "dark" || (appearance === "theme" && resolvedTheme !== "light");
+  const theme = isDark ? terminalThemes.dark : terminalThemes.light;
 
-    if (fullscreen) {
-      params.set("fullscreen", "true");
-    } else {
+  const updateFullscreenQuery = (next: boolean) => {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    if (next) {
+      params.set("fullscreen", sessionId);
+    } else if (params.get("fullscreen") === sessionId) {
       params.delete("fullscreen");
     }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
 
-    const newUrl = params.toString() ? `${pathname}?${params.toString()}` : pathname;
-    router.replace(newUrl, { scroll: false });
-  }, [fullscreen, pathname, router, searchParams]);
+  useEffect(() => {
+    const requestedSession = searchParams?.get("fullscreen");
+    if (requestedSession === sessionId && !fullscreen) {
+      setFullscreen(true);
+    } else if (requestedSession !== sessionId && fullscreen && startFullscreen === false) {
+      setFullscreen(false);
+    }
+  }, [fullscreen, searchParams, sessionId, startFullscreen]);
 
-  async function handleReload(): Promise<void> {
-    if (!isOpenCodeSession || reloading) return;
-    setReloadError(null);
-    setReloading(true);
-    try {
-      let commandToSend = reloadCommand;
+  useEffect(() => {
+    let cancelled = false;
 
-      if (!commandToSend) {
-        const remapRes = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/remap`, {
-          method: "POST",
-        });
-        if (!remapRes.ok) {
-          throw new Error(`Failed to remap OpenCode session: ${remapRes.status}`);
-        }
-        const remapData = (await remapRes.json()) as { opencodeSessionId?: unknown };
-        if (
-          typeof remapData.opencodeSessionId !== "string" ||
-          remapData.opencodeSessionId.length === 0
-        ) {
-          throw new Error("Missing OpenCode session id after remap");
-        }
-        commandToSend = `/exit\nopencode --session ${remapData.opencodeSessionId}\n`;
-      }
+    async function init() {
+      if (!terminalRef.current || termRef.current) return;
 
-      const sendRes = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: commandToSend }),
+      const [{ Terminal }, { FitAddon }, { WebLinksAddon }] = await Promise.all([
+        import("xterm"),
+        import("@xterm/addon-fit"),
+        import("@xterm/addon-web-links"),
+      ]);
+
+      if (cancelled || !terminalRef.current) return;
+
+      const term = new Terminal({
+        theme,
+        convertEol: true,
+        cursorBlink: true,
+        allowTransparency: true,
+        fontFamily:
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+        fontSize: 13,
+        lineHeight: 1.25,
+        scrollback: 5000,
       });
-      if (!sendRes.ok) {
-        throw new Error(`Failed to send reload command: ${sendRes.status}`);
+      const fitAddon = new FitAddon();
+      const webLinksAddon = new WebLinksAddon();
+
+      termRef.current = term;
+      fitAddonRef.current = fitAddon;
+      term.loadAddon(fitAddon);
+      term.loadAddon(webLinksAddon);
+      term.open(terminalRef.current);
+      fitAddon.fit();
+
+      // Keep xterm selection styling in sync on theme changes
+      term.options.theme = theme;
+
+      // Allow copy from selected text with Cmd/Ctrl+C without sending interrupt
+      term.attachCustomKeyEventHandler((e) => {
+        const isCopy = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c";
+        if (isCopy && term.hasSelection()) {
+          navigator.clipboard?.writeText(term.getSelection());
+          return false;
+        }
+        return true;
+      });
+
+      const onDataDispose = term.onData((data) => {
+        writeTerminal(sessionId, data);
+      });
+
+      cleanupRef.current = subscribeTerminal(sessionId, (event) => {
+        if (event.type === "data") {
+          term.write(event.data);
+          setConnected(true);
+        } else if (event.type === "open") {
+          setConnected(true);
+        } else if (event.type === "error") {
+          setReloadError(event.message);
+        }
+      });
+
+      openTerminal(sessionId);
+
+      resizeObserverRef.current = new ResizeObserver(() => {
+        fitAddon.fit();
+        if (term.cols && term.rows) {
+          resizeTerminal(sessionId, term.cols, term.rows);
+        }
+      });
+      resizeObserverRef.current.observe(terminalRef.current);
+
+      const fontsReady = (document as Document & { fonts?: FontFaceSet }).fonts?.ready;
+      fontsReady?.then(() => {
+        fitAddon.fit();
+        if (term.cols && term.rows) {
+          resizeTerminal(sessionId, term.cols, term.rows);
+        }
+      });
+
+      return () => {
+        onDataDispose.dispose();
+      };
+    }
+
+    const disposePromise = init();
+    return () => {
+      cancelled = true;
+      disposePromise?.then((dispose) => dispose?.());
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+      closeTerminal(sessionId);
+      termRef.current?.dispose();
+      termRef.current = null;
+      fitAddonRef.current = null;
+      setConnected(false);
+    };
+  }, [closeTerminal, openTerminal, resizeTerminal, sessionId, subscribeTerminal, theme, writeTerminal]);
+
+  useEffect(() => {
+    if (!termRef.current || !fitAddonRef.current) return;
+    termRef.current.options.theme = theme;
+    fitAddonRef.current.fit();
+    if (termRef.current.cols && termRef.current.rows) {
+      resizeTerminal(sessionId, termRef.current.cols, termRef.current.rows);
+    }
+  }, [resizeTerminal, sessionId, theme]);
+
+  useEffect(() => {
+    if (!fitAddonRef.current || !termRef.current) return;
+    const id = window.setTimeout(() => {
+      fitAddonRef.current?.fit();
+      if (termRef.current?.cols && termRef.current?.rows) {
+        resizeTerminal(sessionId, termRef.current.cols, termRef.current.rows);
       }
-    } catch (err) {
-      setReloadError(err instanceof Error ? err.message : "Failed to reload OpenCode session");
+    }, 16);
+    return () => window.clearTimeout(id);
+  }, [fullscreen, resizeTerminal, sessionId]);
+
+  const handleToggleFullscreen = () => {
+    const next = !fullscreen;
+    setFullscreen(next);
+    updateFullscreenQuery(next);
+  };
+
+  const handleReload = async () => {
+    if (reloading || muxStatus !== "connected") return;
+    setReloading(true);
+    setReloadError(null);
+    try {
+      writeTerminal(sessionId, `${reloadCommand}`);
+    } catch (error) {
+      setReloadError(error instanceof Error ? error.message : "Failed to restart session");
     } finally {
       setReloading(false);
     }
-  }
+  };
 
-  useEffect(() => {
-    if (!terminalRef.current) return;
-
-    // Dynamically import xterm.js to avoid SSR issues
-    let mounted = true;
-    let cleanup: (() => void) | null = null;
-    let inputDisposable: { dispose(): void } | null = null;
-    let unsubscribe: (() => void) | null = null;
-
-    Promise.all([
-      import("xterm").then((mod) => mod.Terminal),
-      import("@xterm/addon-fit").then((mod) => mod.FitAddon),
-      import("@xterm/addon-web-links").then((mod) => mod.WebLinksAddon),
-      document.fonts.ready,
-    ])
-      .then(([Terminal, FitAddon, WebLinksAddon]) => {
-        if (!mounted || !terminalRef.current) return;
-
-        const isDark = appearance === "dark" || resolvedTheme !== "light";
-        const activeTheme = isDark ? terminalThemes.dark : terminalThemes.light;
-
-        // Initialize xterm.js Terminal
-        const terminal = new Terminal({
-          cursorBlink: true,
-          fontSize: 13,
-          fontFamily:
-            'var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
-          theme: activeTheme,
-          // Light mode needs an explicit contrast floor because agent UIs often emit
-          // dim/faint ANSI sequences that become unreadable on a near-white background.
-          minimumContrastRatio: isDark ? 1 : 7,
-          scrollback: 10000,
-          allowProposedApi: true,
-          fastScrollModifier: "alt",
-          fastScrollSensitivity: 3,
-          scrollSensitivity: 1,
-        });
-
-        // Add FitAddon for responsive sizing
-        const fit = new FitAddon();
-        terminal.loadAddon(fit);
-        fitAddon.current = fit;
-
-        // Add WebLinksAddon for clickable links
-        const webLinks = new WebLinksAddon();
-        terminal.loadAddon(webLinks);
-
-        // **CRITICAL FIX**: Register XDA (Extended Device Attributes) handler
-        // This makes tmux recognize our terminal and enable clipboard support
-        terminal.parser.registerCsiHandler(
-          { prefix: ">", final: "q" }, // CSI > q is XTVERSION / XDA
-          () => {
-            // Respond with XTerm identification that tmux recognizes
-            // tmux looks for "XTerm(" in the response (see tmux tty-keys.c)
-            // Format: DCS > | XTerm(version) ST
-            // DCS = \x1bP, ST = \x1b\\
-            terminal.write("\x1bP>|XTerm(370)\x1b\\");
-            console.log("[DirectTerminal] Sent XDA response for clipboard support");
-            return true; // Handled
-          },
-        );
-
-        // Register OSC 52 handler for clipboard support
-        // tmux sends OSC 52 with base64-encoded text when copying
-        terminal.parser.registerOscHandler(52, (data) => {
-          const parts = data.split(";");
-          if (parts.length < 2) return false;
-          const b64 = parts[parts.length - 1];
-          try {
-            // Decode base64 → binary string → Uint8Array → UTF-8 text
-            // atob() alone only handles Latin-1; TextDecoder is needed for UTF-8
-            const binary = atob(b64);
-            const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
-            const text = new TextDecoder().decode(bytes);
-            navigator.clipboard?.writeText(text).catch(() => {});
-          } catch {
-            // Ignore decode errors
-          }
-          return true;
-        });
-
-        // Open terminal in DOM
-        terminal.open(terminalRef.current);
-        terminalInstance.current = terminal;
-
-        // Fit terminal to container
-        fit.fit();
-
-        // ── Preserve selection while terminal receives output ────────
-        // xterm.js clears the selection on every terminal.write(). We
-        // buffer incoming data while a selection is active so the
-        // highlight stays visible for Cmd+C. The buffer is flushed
-        // when the selection is cleared (click, keypress, etc.).
-        const writeBuffer: string[] = [];
-        let selectionActive = false;
-        let safetyTimer: ReturnType<typeof setTimeout> | null = null;
-        let bufferBytes = 0;
-        const MAX_BUFFER_BYTES = 1_048_576; // 1 MB
-
-        const flushWriteBuffer = () => {
-          if (safetyTimer) {
-            clearTimeout(safetyTimer);
-            safetyTimer = null;
-          }
-          if (writeBuffer.length > 0) {
-            terminal.write(writeBuffer.join(""));
-            writeBuffer.length = 0;
-            bufferBytes = 0;
-          }
-        };
-
-        const selectionDisposable = terminal.onSelectionChange(() => {
-          if (terminal.hasSelection()) {
-            selectionActive = true;
-            // Safety: flush after 5s to prevent unbounded buffering
-            if (!safetyTimer) {
-              safetyTimer = setTimeout(() => {
-                selectionActive = false;
-                flushWriteBuffer();
-              }, 5_000);
-            }
-          } else {
-            selectionActive = false;
-            flushWriteBuffer();
-          }
-        });
-
-        // Intercept Cmd+C (Mac) and Ctrl+Shift+C (Linux/Win) for copy.
-        // Paste (Cmd+V / Ctrl+Shift+V) is handled natively by xterm.js
-        // via its internal textarea — no custom handler needed.
-        terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-          if (e.type !== "keydown") return true;
-
-          // Cmd+C / Ctrl+Shift+C — copy selection
-          const isCopy =
-            (e.metaKey && !e.ctrlKey && !e.altKey && e.code === "KeyC") ||
-            (e.ctrlKey && e.shiftKey && e.code === "KeyC");
-          if (isCopy && terminal.hasSelection()) {
-            navigator.clipboard?.writeText(terminal.getSelection()).catch(() => {});
-            // Clear selection so the terminal resumes receiving output
-            terminal.clearSelection();
-            return false;
-          }
-
-          return true;
-        });
-
-        // Open terminal via mux
-        openTerminal(sessionId);
-
-        // Subscribe to terminal data via mux
-        unsubscribe = subscribeTerminal(sessionId, (data) => {
-          if (selectionActive) {
-            writeBuffer.push(data);
-            bufferBytes += data.length;
-            // Flush if buffer exceeds 1 MB to prevent OOM
-            if (bufferBytes > MAX_BUFFER_BYTES) {
-              selectionActive = false;
-              flushWriteBuffer();
-            }
-          } else {
-            terminal.write(data);
-          }
-        });
-
-        // Handle window resize
-        const handleResize = () => {
-          if (fit) {
-            fit.fit();
-            resizeTerminalMux(sessionId, terminal.cols, terminal.rows);
-          }
-        };
-
-        window.addEventListener("resize", handleResize);
-
-        // Terminal input → mux
-        inputDisposable = terminal.onData((data) => {
-          writeTerminal(sessionId, data);
-        });
-
-        // Send initial size
-        resizeTerminalMux(sessionId, terminal.cols, terminal.rows);
-
-        // Store cleanup function to be called from useEffect cleanup
-        cleanup = () => {
-          selectionDisposable.dispose();
-          if (safetyTimer) clearTimeout(safetyTimer);
-          window.removeEventListener("resize", handleResize);
-          inputDisposable?.dispose();
-          inputDisposable = null;
-          unsubscribe?.();
-          closeTerminal(sessionId);
-          terminal.dispose();
-        };
-      })
-      .catch((err) => {
-        console.error("[DirectTerminal] Failed to load xterm.js:", err);
-        setError("Failed to load terminal");
-      });
-
-    return () => {
-      mounted = false;
-      cleanup?.();
-    };
-  }, [
-    appearance,
-    sessionId,
-    variant,
-    resolvedTheme,
-    terminalThemes,
-    subscribeTerminal,
-    writeTerminal,
-    resizeTerminalMux,
-    openTerminal,
-    closeTerminal,
-  ]);
-
-  // Re-send terminal dimensions on every reconnect so the server-side PTY
-  // matches the client's xterm.js size (new PTYs spawn at 80×24 default).
-  useEffect(() => {
-    if (muxStatus !== "connected") return;
-    const fit = fitAddon.current;
-    const terminal = terminalInstance.current;
-    if (!fit || !terminal) return;
-    fit.fit();
-    resizeTerminalMux(sessionId, terminal.cols, terminal.rows);
-  }, [muxStatus, sessionId, resizeTerminalMux]);
-
-  // Live theme switching without terminal recreation
-  useEffect(() => {
-    const terminal = terminalInstance.current;
-    if (!terminal) return;
-    const isDark = appearance === "dark" || resolvedTheme !== "light";
-    terminal.options.theme = isDark ? terminalThemes.dark : terminalThemes.light;
-    terminal.options.minimumContrastRatio = isDark ? 1 : 7;
-  }, [appearance, resolvedTheme, terminalThemes]);
-
-  // Re-fit terminal when fullscreen changes
-  useEffect(() => {
-    const fit = fitAddon.current;
-    const terminal = terminalInstance.current;
-    const container = terminalRef.current;
-
-    if (!fit || !terminal || muxStatusRef.current !== "connected" || !container) {
-      return;
-    }
-
-    let resizeAttempts = 0;
-    const maxAttempts = 60;
-    let cancelled = false;
-    let rafId = 0;
-    let lastHeight = -1;
-
-    const resizeTerminal = () => {
-      if (cancelled) return;
-      resizeAttempts++;
-
-      // Wait for the container height to stabilise (CSS transition finished)
-      const currentHeight = container.getBoundingClientRect().height;
-      const settled = lastHeight >= 0 && Math.abs(currentHeight - lastHeight) < 1;
-      lastHeight = currentHeight;
-
-      if (!settled && resizeAttempts < maxAttempts) {
-        // Container is still transitioning, try again next frame
-        rafId = requestAnimationFrame(resizeTerminal);
-        return;
-      }
-
-      // Container is at target size, now resize terminal
-      terminal.refresh(0, terminal.rows - 1);
-      fit.fit();
-      terminal.refresh(0, terminal.rows - 1);
-
-      // Send new size to server via mux
-      resizeTerminalMux(sessionId, terminal.cols, terminal.rows);
-    };
-
-    // Start resize polling
-    rafId = requestAnimationFrame(resizeTerminal);
-
-    // Also try on transitionend
-    const handleTransitionEnd = (e: TransitionEvent) => {
-      if (cancelled) return;
-      if (e.target === container.parentElement) {
-        resizeAttempts = 0;
-        lastHeight = -1;
-        setTimeout(() => {
-          if (!cancelled) rafId = requestAnimationFrame(resizeTerminal);
-        }, 50);
-      }
-    };
-
-    const parent = container.parentElement;
-    parent?.addEventListener("transitionend", handleTransitionEnd);
-
-    // Backup timers in case RAF polling doesn't work
-    const timer1 = setTimeout(() => {
-      if (cancelled) return;
-      resizeAttempts = 0;
-      lastHeight = -1;
-      resizeTerminal();
-    }, 300);
-    const timer2 = setTimeout(() => {
-      if (cancelled) return;
-      resizeAttempts = 0;
-      lastHeight = -1;
-      resizeTerminal();
-    }, 600);
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafId);
-      parent?.removeEventListener("transitionend", handleTransitionEnd);
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-    };
-  }, [fullscreen, sessionId, resizeTerminalMux]);
-
-  const accentColor = "var(--color-accent)";
-
-  // Local errors (e.g. xterm.js load failure) take priority over mux connection state
-  const displayStatus = error ? "error" : muxStatus;
-
-  const statusDotClass =
-    displayStatus === "connected"
-      ? "bg-[var(--color-status-ready)]"
-      : displayStatus === "error" || displayStatus === "disconnected"
-        ? "bg-[var(--color-status-error)]"
-        : "bg-[var(--color-status-attention)] animate-[pulse_1.5s_ease-in-out_infinite]";
-
-  const statusText =
-    displayStatus === "connected"
-      ? "Connected"
-      : displayStatus === "error"
-        ? (error ?? "Error")
-        : displayStatus === "disconnected"
-          ? "Disconnected"
-          : "Connecting…";
-
-  const statusTextColor =
-    displayStatus === "connected"
-      ? "text-[var(--color-status-ready)]"
-      : displayStatus === "error" || displayStatus === "disconnected"
-        ? "text-[var(--color-status-error)]"
-        : "text-[var(--color-text-tertiary)]";
-  const isDarkChrome = appearance === "dark" || resolvedTheme !== "light";
   const fullscreenButton = (
     <button
-      onClick={() => setFullscreen(!fullscreen)}
-      className={cn(
-        "flex items-center gap-1 px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)]",
-        !isOpenCodeSession && !chromeless && "ml-auto",
-      )}
+      onClick={handleToggleFullscreen}
+      className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)]"
       aria-label={fullscreen ? "exit fullscreen" : "fullscreen"}
+      title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
     >
       {fullscreen ? (
-        <>
-          <svg
-            className="h-3 w-3"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            viewBox="0 0 24 24"
-          >
-            <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
-          </svg>
-          exit fullscreen
-        </>
+        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M8 3H3v5" />
+          <path d="M16 3h5v5" />
+          <path d="M8 21H3v-5" />
+          <path d="M16 21h5v-5" />
+        </svg>
       ) : (
-        <>
-          <svg
-            className="h-3 w-3"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            viewBox="0 0 24 24"
-          >
-            <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-          </svg>
-          fullscreen
-        </>
+        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M8 3H3v5" />
+          <path d="M16 3h5v5" />
+          <path d="M8 21H3v-5" />
+          <path d="M16 21h5v-5" />
+        </svg>
       )}
+      {fullscreen ? "Exit" : "Fullscreen"}
     </button>
   );
 
   return (
     <div
       className={cn(
-        "relative overflow-hidden border border-[var(--color-border-default)]",
-        isDarkChrome ? "bg-[#0a0a0f]" : "bg-[#fafafa]",
-        fullscreen && "fixed inset-0 z-50 rounded-none border-0",
-        chromeless && "border-0",
+        "overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg-panel)] shadow-[var(--shadow-sm)]",
+        fullscreen
+          ? "fixed inset-0 z-50 rounded-none border-0"
+          : "relative rounded-[12px]",
       )}
+      style={{
+        ...(fullscreen ? { width: "100vw", height: "100dvh" } : {}),
+      }}
     >
       {!chromeless ? (
-        <div className="flex items-center gap-2 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-3 py-2">
-          <div className={cn("h-2 w-2 shrink-0 rounded-full", statusDotClass)} />
-          <span className="font-[var(--font-mono)] text-[11px]" style={{ color: accentColor }}>
-            {sessionId}
-          </span>
-          <span
-            className={cn("text-[10px] font-medium uppercase tracking-[0.06em]", statusTextColor)}
-          >
-            {statusText}
-          </span>
-          <span
-            className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
-            style={{
-              color: accentColor,
-              background: `color-mix(in srgb, ${accentColor} 12%, transparent)`,
-            }}
-          >
-            XDA
-          </span>
-          {isOpenCodeSession ? (
-            <button
-              onClick={handleReload}
-              disabled={reloading || muxStatus !== "connected"}
-              title="Restart OpenCode session (/exit then resume mapped session)"
-              aria-label="Restart OpenCode session"
-              className="ml-auto flex items-center gap-1 px-2 py-0.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {reloading ? (
-                <>
-                  <svg
-                    className="h-3 w-3 animate-spin"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    viewBox="0 0 24 24"
-                  >
-                    <path d="M12 3a9 9 0 109 9" />
-                  </svg>
-                  restarting
-                </>
-              ) : (
-                <>
-                  <svg
-                    className="h-3 w-3"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    viewBox="0 0 24 24"
-                  >
-                    <path d="M21 12a9 9 0 11-2.64-6.36" />
-                    <path d="M21 3v6h-6" />
-                  </svg>
-                  restart
-                </>
-              )}
-            </button>
-          ) : null}
-          {reloadError ? (
-            <span
-              className="max-w-[40ch] truncate text-[10px] font-medium text-[var(--color-status-error)]"
-              title={reloadError}
-            >
-              {reloadError}
+        <div className="flex h-[37px] items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--color-accent)]">
+              XDA
             </span>
-          ) : null}
-          {fullscreenButton}
+            <span className="truncate text-[12px] text-[var(--color-text-secondary)]">
+              {sessionId}
+            </span>
+            <span
+              className={cn(
+                "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
+                connected
+                  ? "bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] text-[var(--color-accent)]"
+                  : "bg-[var(--color-bg-subtle)] text-[var(--color-text-tertiary)]",
+              )}
+            >
+              {connected ? "Connected" : "Connecting"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {isOpenCodeSession ? (
+              <button
+                onClick={handleReload}
+                disabled={reloading || muxStatus !== "connected"}
+                title="Restart OpenCode session (/exit then resume mapped session)"
+                aria-label="Restart OpenCode session"
+                className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {reloading ? (
+                  <>
+                    <svg
+                      className="h-3 w-3 animate-spin"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M12 3a9 9 0 109 9" />
+                    </svg>
+                    restarting
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="h-3 w-3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M21 12a9 9 0 11-2.64-6.36" />
+                      <path d="M21 3v6h-6" />
+                    </svg>
+                    restart
+                  </>
+                )}
+              </button>
+            ) : null}
+            {reloadError ? (
+              <span
+                className="max-w-[220px] truncate text-[10px] font-medium text-[var(--color-status-error)]"
+                title={reloadError}
+              >
+                {reloadError}
+              </span>
+            ) : null}
+            {fullscreenButton}
+          </div>
         </div>
       ) : null}
       {chromeless ? (
