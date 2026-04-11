@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { validateConfig } from "../../config.js";
+import { OPENCODE_INTERNAL_ORCHESTRATOR_AGENT_NAME, getWorkspaceOpenCodeConfigPath } from "../../opencode-config.js";
 import {
   writeMetadata,
   readMetadata,
@@ -1707,6 +1708,71 @@ describe("spawn", () => {
       expect(existsSync(promptFile)).toBe(true);
       const { readFileSync } = await import("node:fs");
       expect(readFileSync(promptFile, "utf-8")).toBe("You are the orchestrator.");
+    });
+
+    it("generates .ao/opencode.json and passes OPENCODE_CONFIG for OpenCode orchestrators", async () => {
+      const opencodeAgent: Agent = {
+        ...mockAgent,
+        name: "opencode",
+      };
+      const registryWithOpenCode: PluginRegistry = {
+        ...mockRegistry,
+        get: vi.fn().mockImplementation((slot: string) => {
+          if (slot === "runtime") return mockRuntime;
+          if (slot === "agent") return opencodeAgent;
+          if (slot === "workspace") return mockWorkspace;
+          return null;
+        }),
+      };
+      const configWithOpenCode: OrchestratorConfig = {
+        ...config,
+        defaults: { ...config.defaults, agent: "opencode" },
+        projects: {
+          ...config.projects,
+          "my-app": {
+            ...config.projects["my-app"],
+            agent: "opencode",
+          },
+        },
+      };
+
+      const sm = createSessionManager({
+        config: configWithOpenCode,
+        registry: registryWithOpenCode,
+      });
+
+      await sm.spawnOrchestrator({
+        projectId: "my-app",
+        systemPrompt: "You are the orchestrator.",
+      });
+
+      const opencodeConfigPath = getWorkspaceOpenCodeConfigPath("/tmp/ws");
+      expect(existsSync(opencodeConfigPath)).toBe(true);
+      expect(JSON.parse(readFileSync(opencodeConfigPath, "utf-8"))).toEqual({
+        $schema: "https://opencode.ai/config.json",
+        default_agent: OPENCODE_INTERNAL_ORCHESTRATOR_AGENT_NAME,
+        agent: {
+          [OPENCODE_INTERNAL_ORCHESTRATOR_AGENT_NAME]: {
+            description: "Agent Orchestrator internal orchestrator agent",
+            mode: "primary",
+            prompt: expect.stringContaining("orchestrator-prompt-app-orchestrator-1.md"),
+          },
+        },
+      });
+
+      expect(opencodeAgent.getLaunchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          systemPromptFile: expect.stringContaining("orchestrator-prompt-app-orchestrator-1.md"),
+        }),
+      );
+
+      expect(mockRuntime.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: expect.objectContaining({
+            OPENCODE_CONFIG: opencodeConfigPath,
+          }),
+        }),
+      );
     });
 
     it("throws for unknown project", async () => {

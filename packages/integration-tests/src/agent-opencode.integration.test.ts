@@ -16,7 +16,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { ActivityDetection, AgentSessionInfo } from "@aoagents/ao-core";
+import { type ActivityDetection, type AgentSessionInfo } from "@aoagents/ao-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import opencodePlugin from "@aoagents/ao-plugin-agent-opencode";
 import {
@@ -216,11 +216,11 @@ describe("getLaunchCommand (integration)", () => {
       systemPrompt: "You are an orchestrator",
       prompt: "do the task",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
     expect(cmd).toContain(
-      `exec opencode --session "$SES_ID" --prompt 'You are an orchestrator
-
-do the task'`,
+      "opencode run --format json --title 'AO:test-1' --command true",
+    );
+    expect(cmd).toContain(
+      `exec opencode --session "$SES_ID" --prompt 'do the task'`,
     );
   });
 
@@ -230,9 +230,11 @@ do the task'`,
       systemPromptFile: "/tmp/orchestrator-prompt.md",
       prompt: "do the task",
     });
-    expect(cmd).toContain("opencode run --format json --title 'AO:test-1' --command true");
     expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt \"$(cat '/tmp/orchestrator-prompt.md'; printf '\\n\\n'; printf %s 'do the task')\"",
+      "opencode run --format json --title 'AO:test-1' --command true",
+    );
+    expect(cmd).toContain(
+      `exec opencode --session "$SES_ID" --prompt 'do the task'`,
     );
   });
 
@@ -253,12 +255,11 @@ do the task'`,
       model: "gpt-5.2",
       prompt: "review this code",
     });
-    expect(cmd).toContain("--agent 'oracle'");
     expect(cmd).toContain(
       "opencode run --format json --title 'AO:test-1' --agent 'oracle' --model 'gpt-5.2' --command true",
     );
     expect(cmd).toContain(
-      "exec opencode --session \"$SES_ID\" --prompt 'You are an expert\n\nreview this code' --agent 'oracle' --model 'gpt-5.2'",
+      `exec opencode --session "$SES_ID" --prompt 'review this code' --agent 'oracle' --model 'gpt-5.2'`,
     );
     expect(cmd).toContain("--model 'gpt-5.2'");
   });
@@ -269,7 +270,6 @@ do the task'`,
       systemPrompt: "direct prompt",
       systemPromptFile: "/tmp/file-prompt.md",
     });
-    expect(cmd).toContain("\"$(cat '/tmp/file-prompt.md')\"");
     expect(cmd).not.toContain("direct prompt");
   });
 
@@ -284,7 +284,7 @@ do the task'`,
       "opencode run --format json --title 'AO:test-orchestrator' --command true",
     );
     expect(cmd).toContain(
-      'exec opencode --session "$SES_ID" --prompt "$(cat \'/tmp/orchestrator-prompt.md\')"',
+      `exec opencode --session "$SES_ID"`,
     );
   });
 
@@ -293,7 +293,7 @@ do the task'`,
       ...baseConfig,
       systemPrompt: "it's important",
     });
-    expect(cmd).toContain("'it'\\''s important'");
+    expect(cmd).not.toContain("'it'\\''s important'");
   });
 
   it("escapes path with single quotes in systemPromptFile", () => {
@@ -301,7 +301,7 @@ do the task'`,
       ...baseConfig,
       systemPromptFile: "/tmp/it's-prompt.md",
     });
-    expect(cmd).toContain("\"$(cat '/tmp/it'\\''s-prompt.md')\"");
+    expect(cmd).not.toContain("/tmp/it'\\''s-prompt.md");
   });
 
   it("handles prompt with special shell characters", () => {

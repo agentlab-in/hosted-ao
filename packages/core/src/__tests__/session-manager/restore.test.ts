@@ -5,6 +5,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
+import { getWorkspaceOpenCodeConfigPath } from "../../opencode-config.js";
 import {
   writeMetadata,
   readMetadataRaw,
@@ -472,6 +473,75 @@ describe("restore", () => {
     // Verify runtime.create was called with the restore command
     const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(createCall.launchCommand).toBe("claude --resume abc123");
+  });
+
+  it("passes OPENCODE_CONFIG when restoring OpenCode orchestrators", async () => {
+    const wsPath = join(tmpDir, "ws-app-orchestrator-opencode-restore");
+    mkdirSync(join(wsPath, ".ao"), { recursive: true });
+    writeFileSync(getWorkspaceOpenCodeConfigPath(wsPath), "{}\n", "utf-8");
+
+    const mockOpenCodeAgentWithRestore: Agent = {
+      ...mockAgent,
+      name: "opencode",
+      getRestoreCommand: vi.fn().mockResolvedValue("opencode --session 'ses_restore'"),
+    };
+
+    const registryWithOpenCodeRestore: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockOpenCodeAgentWithRestore;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-orchestrator", {
+      worktree: wsPath,
+      branch: "main",
+      status: "killed",
+      project: "my-app",
+      role: "orchestrator",
+      agent: "opencode",
+      opencodeSessionId: "ses_restore",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+
+    const configWithOpenCode: OrchestratorConfig = {
+      ...config,
+      defaults: { ...config.defaults, agent: "opencode" },
+      projects: {
+        ...config.projects,
+        "my-app": {
+          ...config.projects["my-app"],
+          agent: "opencode",
+        },
+      },
+    };
+
+    const sm = createSessionManager({
+      config: configWithOpenCode,
+      registry: registryWithOpenCodeRestore,
+    });
+    await sm.restore("app-orchestrator");
+
+    expect(mockOpenCodeAgentWithRestore.getRestoreCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePath: wsPath }),
+      expect.objectContaining({
+        agentConfig: expect.objectContaining({
+          opencodeSessionId: "ses_restore",
+          permissions: "permissionless",
+        }),
+      }),
+    );
+
+    expect(mockRuntime.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: expect.objectContaining({
+          OPENCODE_CONFIG: getWorkspaceOpenCodeConfigPath(wsPath),
+        }),
+      }),
+    );
   });
 
   it("falls back to getLaunchCommand when getRestoreCommand returns null", async () => {
