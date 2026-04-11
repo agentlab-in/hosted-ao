@@ -9,15 +9,23 @@ vi.mock("node:child_process", () => ({
 
 import { preventIdleSleep } from "../../src/lib/prevent-sleep.js";
 
-// Store original platform
-const originalPlatform = process.platform;
+// Store original platform descriptor for safe restoration
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+);
 
 function setPlatform(platform: string): void {
-  Object.defineProperty(process, "platform", { value: platform });
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
 }
 
 function restorePlatform(): void {
-  Object.defineProperty(process, "platform", { value: originalPlatform });
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
 }
 
 beforeEach(() => {
@@ -36,6 +44,7 @@ describe("preventIdleSleep", () => {
 
     it("spawns caffeinate with correct arguments", () => {
       const mockChild = {
+        pid: 9999,
         unref: vi.fn(),
         on: vi.fn(),
         kill: vi.fn(),
@@ -55,6 +64,7 @@ describe("preventIdleSleep", () => {
 
     it("spawns caffeinate with custom pid", () => {
       const mockChild = {
+        pid: 9999,
         unref: vi.fn(),
         on: vi.fn(),
         kill: vi.fn(),
@@ -73,6 +83,7 @@ describe("preventIdleSleep", () => {
 
     it("returns handle with release function", () => {
       const mockChild = {
+        pid: 9999,
         unref: vi.fn(),
         on: vi.fn(),
         kill: vi.fn(),
@@ -87,6 +98,7 @@ describe("preventIdleSleep", () => {
 
     it("release function kills the caffeinate process", () => {
       const mockChild = {
+        pid: 9999,
         unref: vi.fn(),
         on: vi.fn(),
         kill: vi.fn(),
@@ -101,6 +113,7 @@ describe("preventIdleSleep", () => {
 
     it("release function handles errors silently", () => {
       const mockChild = {
+        pid: 9999,
         unref: vi.fn(),
         on: vi.fn(),
         kill: vi.fn().mockImplementation(() => {
@@ -118,6 +131,7 @@ describe("preventIdleSleep", () => {
     it("registers error handler for spawn failures", () => {
       const onMock = vi.fn();
       const mockChild = {
+        pid: 9999,
         unref: vi.fn(),
         on: onMock,
         kill: vi.fn(),
@@ -127,6 +141,21 @@ describe("preventIdleSleep", () => {
       preventIdleSleep();
 
       expect(onMock).toHaveBeenCalledWith("error", expect.any(Function));
+    });
+
+    it("returns null when spawn fails synchronously (no pid)", () => {
+      const mockChild = {
+        pid: undefined,
+        unref: vi.fn(),
+        on: vi.fn(),
+        kill: vi.fn(),
+      } as unknown as ChildProcess;
+      mockSpawn.mockReturnValue(mockChild);
+
+      const handle = preventIdleSleep();
+
+      expect(handle).toBeNull();
+      expect(mockChild.unref).not.toHaveBeenCalled();
     });
   });
 

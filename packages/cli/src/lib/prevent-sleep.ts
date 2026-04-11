@@ -50,6 +50,12 @@ export function preventIdleSleep(pid?: number): SleepPreventionHandle | null {
     detached: true,
   });
 
+  // Check if spawn succeeded — child.pid is undefined if spawn failed synchronously
+  // (e.g., ENOENT when caffeinate doesn't exist)
+  if (child.pid === undefined) {
+    return null;
+  }
+
   // Don't keep the Node event loop alive for this child
   child.unref();
 

@@ -1037,8 +1037,8 @@ export interface OrchestratorConfig {
   /** Milliseconds before a "ready" session becomes "idle" (default: 300000 = 5 min) */
   readyThresholdMs: number;
 
-  /** Power management settings (idle sleep prevention, etc.) */
-  power: PowerConfig;
+  /** Power management settings (idle sleep prevention, etc.). Populated with defaults post-validation. */
+  power?: PowerConfig;
 
   /** Default plugin selections */
   defaults: DefaultPlugins;

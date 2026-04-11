@@ -1102,7 +1102,7 @@ describe("Config Validation - Power Config", () => {
 
     // Default is true on darwin, false elsewhere
     expect(config.power).toBeDefined();
-    expect(config.power.preventIdleSleep).toBe(process.platform === "darwin");
+    expect(config.power!.preventIdleSleep).toBe(process.platform === "darwin");
   });
 
   it("accepts explicit power.preventIdleSleep: true", () => {
@@ -1119,7 +1119,7 @@ describe("Config Validation - Power Config", () => {
       },
     });
 
-    expect(config.power.preventIdleSleep).toBe(true);
+    expect(config.power!.preventIdleSleep).toBe(true);
   });
 
   it("accepts explicit power.preventIdleSleep: false", () => {
@@ -1136,7 +1136,7 @@ describe("Config Validation - Power Config", () => {
       },
     });
 
-    expect(config.power.preventIdleSleep).toBe(false);
+    expect(config.power!.preventIdleSleep).toBe(false);
   });
 
   it("rejects invalid power.preventIdleSleep type", () => {
