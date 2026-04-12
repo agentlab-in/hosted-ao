@@ -1075,6 +1075,7 @@ describe("stop command", () => {
     // Port 3000 has nothing, but port 3001 has the orphaned dashboard
     mockExec.mockImplementation(async (cmd: string, args: string[] = []) => {
       if (cmd === "kill") return { stdout: "", stderr: "" };
+      if (cmd === "ps") return { stdout: "node /fake/web/dist-server/start-all.js", stderr: "" };
       const portArg = args.find((a) => a.startsWith(":"));
       if (portArg === ":3001") return { stdout: "99999", stderr: "" };
       throw new Error("no process");
@@ -1087,6 +1088,36 @@ describe("stop command", () => {
       .mock.calls.map((c) => c.join(" "))
       .join("\n");
     expect(output).toContain("was on port 3001");
+  });
+
+  it("skips non-dashboard processes during port scan", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
+    mockSessionManager.kill.mockResolvedValue(undefined);
+    // Port 3000 has nothing, port 3001 has an unrelated process,
+    // port 3002 has the actual dashboard
+    mockExec.mockImplementation(async (cmd: string, args: string[] = []) => {
+      if (cmd === "kill") return { stdout: "", stderr: "" };
+      if (cmd === "ps") {
+        const pid = args[1];
+        if (pid === "11111") return { stdout: "python -m http.server 3001", stderr: "" };
+        if (pid === "22222") return { stdout: "node /fake/web/dist-server/start-all.js", stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+      const portArg = args.find((a) => a.startsWith(":"));
+      if (portArg === ":3001") return { stdout: "11111", stderr: "" };
+      if (portArg === ":3002") return { stdout: "22222", stderr: "" };
+      throw new Error("no process");
+    });
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    // Should skip port 3001 (python) and find the dashboard on 3002
+    expect(output).toContain("was on port 3002");
   });
 });
 

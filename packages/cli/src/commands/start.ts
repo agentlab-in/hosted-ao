@@ -1155,6 +1155,8 @@ async function runStartup(
 
     // Ensure the dashboard child is killed when the parent exits (e.g. Ctrl+C).
     // Node.js does not guarantee signal propagation to child processes.
+    // Registering a SIGINT handler suppresses Node's default exit, so we
+    // must call process.exit() ourselves after cleaning up the child.
     /* c8 ignore start -- signal handlers only fire on process termination */
     const killDashboard = (): void => {
       try {
@@ -1163,9 +1165,13 @@ async function runStartup(
         // already dead
       }
     };
+    const killAndExit = (): void => {
+      killDashboard();
+      process.exit();
+    };
     /* c8 ignore stop */
-    process.on("SIGINT", killDashboard);
-    process.on("SIGTERM", killDashboard);
+    process.on("SIGINT", killAndExit);
+    process.on("SIGTERM", killAndExit);
     process.on("exit", killDashboard);
   }
 
@@ -1192,17 +1198,54 @@ async function killOnPort(port: number): Promise<boolean> {
   }
 }
 
+/**
+ * Check whether a process listening on the given port is an AO dashboard
+ * (next-server / node running start-all.js).  Only kill if it matches,
+ * to avoid terminating unrelated services during the port-range scan.
+ */
+async function killDashboardOnPort(port: number): Promise<boolean> {
+  try {
+    const { stdout } = await exec("lsof", ["-ti", `:${port}`]);
+    const pids = stdout
+      .trim()
+      .split("\n")
+      .filter((p) => p.length > 0);
+    if (pids.length === 0) return false;
+
+    // Verify at least one PID is an AO dashboard process
+    const isDashboard = await Promise.all(
+      pids.map(async (pid) => {
+        try {
+          const { stdout: cmdline } = await exec("ps", ["-p", pid, "-o", "args="]);
+          return /next-server|start-all\.js/.test(cmdline);
+        } catch {
+          return false;
+        }
+      }),
+    );
+    if (!isDashboard.some(Boolean)) return false;
+
+    await exec("kill", pids);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function stopDashboard(port: number): Promise<void> {
-  // 1. Try the expected port first
+  // 1. Try the expected port — no process-name check needed because
+  //    the caller already knows a dashboard was started on this port
   if (await killOnPort(port)) {
     console.log(chalk.green("Dashboard stopped"));
     return;
   }
 
   // 2. Fallback: scan nearby ports to find an orphaned dashboard
-  //    that was auto-reassigned when the original port was busy
+  //    that was auto-reassigned when the original port was busy.
+  //    Uses killDashboardOnPort to verify the process is actually an
+  //    AO dashboard before killing, avoiding collateral damage.
   for (let p = port + 1; p <= port + MAX_PORT_SCAN; p++) {
-    if (await killOnPort(p)) {
+    if (await killDashboardOnPort(p)) {
       console.log(chalk.green(`Dashboard stopped (was on port ${p})`));
       return;
     }
