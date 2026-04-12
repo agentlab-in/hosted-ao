@@ -562,7 +562,7 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
 
   // Build config with smart defaults
   const projectId = env.isGitRepo ? basename(workingDir) : "my-project";
-  const repo = env.ownerRepo || undefined;
+  const repo = env.ownerRepo ?? undefined;
   const path = workingDir;
   const defaultBranch = env.defaultBranch || "main";
 
