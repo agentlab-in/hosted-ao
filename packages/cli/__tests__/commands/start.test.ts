@@ -395,6 +395,9 @@ describe("start command — project resolution", () => {
   });
 
   it("errors when multiple projects and no arg", async () => {
+    // Non-interactive callers get an error instead of a prompt
+    mockIsHumanCaller.mockReturnValue(false);
+
     mockConfigRef.current = makeConfig({
       frontend: makeProject({ name: "Frontend" }),
       backend: makeProject({ name: "Backend" }),
