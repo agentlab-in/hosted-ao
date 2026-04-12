@@ -108,6 +108,7 @@ vi.mock("../../src/lib/web-dir.js", () => ({
   waitForPortAndOpen: (...args: unknown[]) => mockWaitForPortAndOpen(...args),
   isPortAvailable: vi.fn().mockResolvedValue(true),
   findFreePort: vi.fn().mockResolvedValue(3000),
+  MAX_PORT_SCAN: 100,
 }));
 
 vi.mock("../../src/lib/dashboard-rebuild.js", () => ({

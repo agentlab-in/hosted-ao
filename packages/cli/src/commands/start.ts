@@ -1152,6 +1152,19 @@ async function runStartup(
       }
       process.exit(code ?? 0);
     });
+
+    // Ensure the dashboard child is killed when the parent exits (e.g. Ctrl+C).
+    // Node.js does not guarantee signal propagation to child processes.
+    const killDashboard = (): void => {
+      try {
+        dashboardProcess?.kill("SIGTERM");
+      } catch {
+        // already dead
+      }
+    };
+    process.on("SIGINT", killDashboard);
+    process.on("SIGTERM", killDashboard);
+    process.on("exit", killDashboard);
   }
 
   return port;
@@ -1162,25 +1175,38 @@ async function runStartup(
  * Uses lsof to find the process listening on the port, then kills it.
  * Best effort — if it fails, just warn the user.
  */
-async function stopDashboard(port: number): Promise<void> {
+async function killOnPort(port: number): Promise<boolean> {
   try {
-    // Find PIDs listening on the port (can be multiple: parent + children)
     const { stdout } = await exec("lsof", ["-ti", `:${port}`]);
     const pids = stdout
       .trim()
       .split("\n")
       .filter((p) => p.length > 0);
-
-    if (pids.length > 0) {
-      // Kill all processes (pass PIDs as separate arguments)
-      await exec("kill", pids);
-      console.log(chalk.green("Dashboard stopped"));
-    } else {
-      console.log(chalk.yellow(`Dashboard not running on port ${port}`));
-    }
+    if (pids.length === 0) return false;
+    await exec("kill", pids);
+    return true;
   } catch {
-    console.log(chalk.yellow("Could not stop dashboard (may not be running)"));
+    return false;
   }
+}
+
+async function stopDashboard(port: number): Promise<void> {
+  // 1. Try the expected port first
+  if (await killOnPort(port)) {
+    console.log(chalk.green("Dashboard stopped"));
+    return;
+  }
+
+  // 2. Fallback: scan nearby ports to find an orphaned dashboard
+  //    that was auto-reassigned when the original port was busy
+  for (let p = port + 1; p <= port + MAX_PORT_SCAN; p++) {
+    if (await killOnPort(p)) {
+      console.log(chalk.green(`Dashboard stopped (was on port ${p})`));
+      return;
+    }
+  }
+
+  console.log(chalk.yellow("Could not stop dashboard (may not be running)"));
 }
 
 // =============================================================================
