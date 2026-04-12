@@ -1059,12 +1059,34 @@ describe("stop command", () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
     mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
     mockSessionManager.kill.mockResolvedValue(undefined);
+    mockExec.mockResolvedValue({ stdout: "12345", stderr: "" });
 
     await program.parseAsync(["node", "test", "stop", "--purge-session"]);
 
     expect(mockSessionManager.kill).toHaveBeenCalledWith("app-orchestrator", {
       purgeOpenCode: true,
     });
+  });
+
+  it("finds orphaned dashboard on a reassigned port via port scan", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
+    mockSessionManager.kill.mockResolvedValue(undefined);
+    // Port 3000 has nothing, but port 3001 has the orphaned dashboard
+    mockExec.mockImplementation(async (cmd: string, args: string[] = []) => {
+      if (cmd === "kill") return { stdout: "", stderr: "" };
+      const portArg = args.find((a) => a.startsWith(":"));
+      if (portArg === ":3001") return { stdout: "99999", stderr: "" };
+      throw new Error("no process");
+    });
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    expect(output).toContain("was on port 3001");
   });
 });
 

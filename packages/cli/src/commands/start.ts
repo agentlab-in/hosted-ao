@@ -1155,6 +1155,7 @@ async function runStartup(
 
     // Ensure the dashboard child is killed when the parent exits (e.g. Ctrl+C).
     // Node.js does not guarantee signal propagation to child processes.
+    /* c8 ignore start -- signal handlers only fire on process termination */
     const killDashboard = (): void => {
       try {
         dashboardProcess?.kill("SIGTERM");
@@ -1162,6 +1163,7 @@ async function runStartup(
         // already dead
       }
     };
+    /* c8 ignore stop */
     process.on("SIGINT", killDashboard);
     process.on("SIGTERM", killDashboard);
     process.on("exit", killDashboard);
