@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { confirm, isCancel, select, type Option } from "@clack/prompts";
+import { confirm, isCancel, select, text, type Option } from "@clack/prompts";
 
 type SelectOption<T extends string> = Option<T>;
 
@@ -24,6 +24,21 @@ export async function promptSelect<T extends string>(
   });
   if (isCancel(result)) {
     console.log(chalk.yellow("\nRequest Cancelled."));
+    process.exit(0);
+  }
+  return result;
+}
+
+export async function promptText(
+  message: string,
+  placeholder?: string,
+): Promise<string> {
+  const result = await text({
+    message,
+    ...(placeholder ? { placeholder } : {}),
+  });
+  if (isCancel(result)) {
+    console.log(chalk.yellow("\nCancelled."));
     process.exit(0);
   }
   return result;

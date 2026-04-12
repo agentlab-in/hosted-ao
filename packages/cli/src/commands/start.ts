@@ -56,7 +56,7 @@ import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
 import { detectAgentRuntime, detectAvailableAgents, type DetectedAgent } from "../lib/detect-agent.js";
 import { detectDefaultBranch } from "../lib/git-utils.js";
-import { promptConfirm, promptSelect } from "../lib/prompts.js";
+import { promptConfirm, promptSelect, promptText } from "../lib/prompts.js";
 import {
   detectProjectType,
   generateRulesFromTemplates,
@@ -562,9 +562,25 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
 
   // Build config with smart defaults
   const projectId = env.isGitRepo ? basename(workingDir) : "my-project";
-  const repo = env.ownerRepo ?? undefined;
+  let repo: string | undefined = env.ownerRepo ?? undefined;
   const path = workingDir;
   const defaultBranch = env.defaultBranch || "main";
+
+  // If no repo detected, inform the user and ask
+  if (!repo && isHumanCaller()) {
+    console.log(chalk.yellow("  ⚠ Could not auto-detect a GitHub/GitLab remote."));
+    const entered = await promptText(
+      "  Enter repo (owner/repo) or leave empty to skip:",
+      "owner/repo",
+    );
+    const trimmed = entered.trim();
+    if (trimmed && trimmed.includes("/")) {
+      repo = trimmed;
+      console.log(chalk.green(`  ✓ Repo: ${repo}`));
+    } else if (trimmed) {
+      console.log(chalk.yellow(`  ⚠ "${trimmed}" doesn't look like owner/repo — skipping.`));
+    }
+  }
 
   // Detect available agent runtimes via plugin registry
   let detectedAgents = await detectAvailableAgents();
@@ -609,8 +625,8 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
   console.log(chalk.green(`✓ Config created: ${outputPath}\n`));
 
   if (!repo) {
-    console.log(chalk.yellow("⚠ Could not detect GitHub remote."));
-    console.log(chalk.dim("  Add a 'repo' field (owner/repo) to the config before spawning agents.\n"));
+    console.log(chalk.yellow("⚠ No repo configured — issue tracking and PR features will be unavailable."));
+    console.log(chalk.dim("  Add a 'repo' field (owner/repo) to the config to enable them.\n"));
   }
 
   if (!env.hasTmux) {
