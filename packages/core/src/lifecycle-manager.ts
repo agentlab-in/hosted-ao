@@ -244,6 +244,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     for (const pr of uniquePRs) {
       // Find the project for this PR
       const project = Object.values(config.projects).find((p) => {
+        if (!p.repo) return false;
         const [owner, repo] = p.repo.split("/");
         return owner === pr.owner && repo === pr.repo;
       });
