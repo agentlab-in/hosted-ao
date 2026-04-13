@@ -66,7 +66,7 @@ const config: RollupOptions = {
         declarationMap: true,
         module: "Node16",
       },
-      tsconfig: "./tsconfig.json",
+      tsconfig: "./tsconfig.build.json",
     }),
   ],
 };
