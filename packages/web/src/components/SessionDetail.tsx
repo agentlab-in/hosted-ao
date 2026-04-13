@@ -864,21 +864,36 @@ function SessionDetailPRCard({ pr, sessionId, metadata }: { pr: DashboardPR; ses
         {pr.ciChecks.length > 0 && (
           <>
             <div className="session-detail-pr-sep" />
-            {pr.ciChecks.map((check) => (
-              <span
-                key={check.name}
-                className={cn(
-                  "session-detail-ci-chip",
-                  check.status === "passed" && "session-detail-ci-chip--pass",
-                  check.status === "failed" && "session-detail-ci-chip--fail",
-                  check.status === "pending" && "session-detail-ci-chip--pending",
-                  check.status !== "passed" && check.status !== "failed" && check.status !== "pending" && "session-detail-ci-chip--queued",
-                )}
-              >
-                {check.status === "passed" ? "\u2713" : check.status === "failed" ? "\u2717" : check.status === "pending" ? "\u25CF" : "\u25CB"}{" "}
-                {check.name}
-              </span>
-            ))}
+            {pr.ciChecks.map((check) => {
+              const chip = (
+                <span
+                  className={cn(
+                    "session-detail-ci-chip",
+                    check.status === "passed" && "session-detail-ci-chip--pass",
+                    check.status === "failed" && "session-detail-ci-chip--fail",
+                    check.status === "pending" && "session-detail-ci-chip--pending",
+                    check.status !== "passed" && check.status !== "failed" && check.status !== "pending" && "session-detail-ci-chip--queued",
+                  )}
+                >
+                  {check.status === "passed" ? "\u2713" : check.status === "failed" ? "\u2717" : check.status === "pending" ? "\u25CF" : "\u25CB"}{" "}
+                  {check.name}
+                </span>
+              );
+              return check.url ? (
+                <a
+                  key={check.name}
+                  href={check.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:no-underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {chip}
+                </a>
+              ) : (
+                <span key={check.name}>{chip}</span>
+              );
+            })}
           </>
         )}
       </div>
