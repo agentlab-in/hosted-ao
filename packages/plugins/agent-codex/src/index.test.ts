@@ -739,6 +739,94 @@ describe("getActivityState", () => {
     expect(result?.state).toBe("ready");
   });
 
+  it("returns waiting_input when payload.type is approval_request on event_msg", async () => {
+    // Real Codex writes {"type":"event_msg","payload":{"type":"approval_request",...}}
+    // Without payloadType handling, this decays to ready/idle via the event_msg case.
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "event_msg",
+      payloadType: "approval_request",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("waiting_input");
+  });
+
+  it("returns waiting_input for exec_approval_request payload type", async () => {
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "event_msg",
+      payloadType: "exec_approval_request",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("waiting_input");
+  });
+
+  it("returns blocked when payload.type is error on event_msg", async () => {
+    // Real Codex writes {"type":"event_msg","payload":{"type":"error",...}}
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "event_msg",
+      payloadType: "error",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("blocked");
+  });
+
+  it("returns active when payload.type is task_started on a recent event_msg", async () => {
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "event_msg",
+      payloadType: "task_started",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("active");
+  });
+
+  it("returns ready when payload.type is task_complete on a recent event_msg", async () => {
+    mockTmuxWithProcess("codex");
+    const content = '{"type":"session_meta","cwd":"/workspace/test"}\n';
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    mockStat.mockResolvedValue({ mtimeMs: Date.now(), mtime: new Date() });
+    mockReadLastJsonlEntry.mockResolvedValue({
+      lastType: "event_msg",
+      payloadType: "task_complete",
+      modifiedAt: new Date(),
+    });
+
+    const session = makeSession({ runtimeHandle: makeTmuxHandle(), workspacePath: "/workspace/test" });
+    const result = await agent.getActivityState(session);
+    expect(result?.state).toBe("ready");
+  });
+
   it("detects activity from payload-wrapped Codex session_meta files", async () => {
     mockTmuxWithProcess("codex");
     const content =
