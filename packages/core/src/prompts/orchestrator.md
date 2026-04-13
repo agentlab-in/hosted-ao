@@ -148,7 +148,13 @@ Features:
 - One-click actions (send message, kill, merge PR)
 - Real-time updates via Server-Sent Events
 
+{{AUTOMATED_REACTIONS_SECTION_START}}
+## Automated Reactions
+
+The system automatically handles these events:
+
 {{automatedReactionsSection}}
+{{AUTOMATED_REACTIONS_SECTION_END}}
 
 ## Common Workflows
 
@@ -203,4 +209,8 @@ When an agent needs human judgment:
 
 8. **Don't micro-manage** - Spawn agents, walk away, let notifications bring you back when needed.
 
+{{PROJECT_SPECIFIC_RULES_SECTION_START}}
+## Project-Specific Rules
+
 {{projectSpecificRulesSection}}
+{{PROJECT_SPECIFIC_RULES_SECTION_END}}

@@ -29,9 +29,11 @@ interface OrchestratorPromptRenderData {
 }
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
+const ORCHESTRATOR_PROMPT_DIR = "prompts";
+const ORCHESTRATOR_PROMPT_TEMPLATE = "orchestrator.md";
 const ORCHESTRATOR_TEMPLATE_PATHS = [
-  join(moduleDir, "prompts", "orchestrator.md"),
-  join(moduleDir, "..", "src", "prompts", "orchestrator.md"),
+  join(moduleDir, ORCHESTRATOR_PROMPT_DIR, ORCHESTRATOR_PROMPT_TEMPLATE),
+  join(moduleDir, "..", "src", ORCHESTRATOR_PROMPT_DIR, ORCHESTRATOR_PROMPT_TEMPLATE),
 ];
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
@@ -56,19 +58,22 @@ function loadOrchestratorTemplate(): string {
 }
 
 function buildAutomatedReactionsSection(project: ProjectConfig): string {
+  const markdownBold = String.fromCharCode(42).repeat(2);
+  const bold = (text: string): string => `${markdownBold}${text}${markdownBold}`;
+
   const reactionLines: string[] = [];
 
   for (const [event, reaction] of Object.entries(project.reactions ?? {})) {
     if (reaction.auto && reaction.action === "send-to-agent") {
       reactionLines.push(
-        `- **${event}**: Auto-sends instruction to agent (retries: ${reaction.retries ?? "none"}, escalates after: ${reaction.escalateAfter ?? "never"})`,
+        `- ${bold(event)}: Auto-sends instruction to agent (retries: ${reaction.retries ?? "none"}, escalates after: ${reaction.escalateAfter ?? "never"})`,
       );
       continue;
     }
 
     if (reaction.auto && reaction.action === "notify") {
       reactionLines.push(
-        `- **${event}**: Notifies human (priority: ${reaction.priority ?? "info"})`,
+        `- ${bold(event)}: Notifies human (priority: ${reaction.priority ?? "info"})`,
       );
     }
   }
@@ -77,11 +82,7 @@ function buildAutomatedReactionsSection(project: ProjectConfig): string {
     return "";
   }
 
-  return `## Automated Reactions
-
-The system automatically handles these events:
-
-${reactionLines.join("\n")}`;
+  return reactionLines.join("\n");
 }
 
 function buildProjectSpecificRulesSection(project: ProjectConfig): string {
@@ -90,9 +91,43 @@ function buildProjectSpecificRulesSection(project: ProjectConfig): string {
     return "";
   }
 
-  return `## Project-Specific Rules
+  return rules;
+}
 
-${rules}`;
+function removeOptionalSectionBlocks(
+  template: string,
+  data: OrchestratorPromptRenderData,
+): string {
+  const templates = [
+    ["AUTOMATED_REACTIONS_SECTION_START", "AUTOMATED_REACTIONS_SECTION_END", data.automatedReactionsSection],
+    ["PROJECT_SPECIFIC_RULES_SECTION_START", "PROJECT_SPECIFIC_RULES_SECTION_END", data.projectSpecificRulesSection],
+  ] as const;
+
+  let interpolated = template;
+  for (const [startKey, endKey, section] of templates) {
+    const startMarker = `{{${startKey}}}`;
+    const endMarker = `{{${endKey}}}`;
+    const start = interpolated.indexOf(startMarker);
+    if (start === -1) {
+      continue;
+    }
+    const end = interpolated.indexOf(endMarker, start);
+    if (end === -1) {
+      continue;
+    }
+
+    const fullStart = start;
+    const fullEnd = end + endMarker.length;
+    const blockContent = interpolated.slice(start + startMarker.length, end);
+    const replacement = section ? blockContent : "";
+
+    interpolated =
+      interpolated.slice(0, fullStart) +
+      replacement +
+      interpolated.slice(fullEnd);
+  }
+
+  return interpolated;
 }
 
 function createRenderData(opts: OrchestratorPromptConfig): OrchestratorPromptRenderData {
@@ -131,7 +166,11 @@ function normalizeRenderedPrompt(prompt: string): string {
  * session management workflows, and project configuration.
  */
 export function generateOrchestratorPrompt(opts: OrchestratorPromptConfig): string {
+  const data = createRenderData(opts);
+  const template = loadOrchestratorTemplate();
+  const templateWithOptionalSections = removeOptionalSectionBlocks(template, data);
+
   return normalizeRenderedPrompt(
-    renderTemplate(loadOrchestratorTemplate(), createRenderData(opts)),
+    renderTemplate(templateWithOptionalSections, data),
   );
 }

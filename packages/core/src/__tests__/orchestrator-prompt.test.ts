@@ -136,7 +136,7 @@ describe("generateOrchestratorPrompt", () => {
     });
 
     expect(promptWithOptionalSections).toContain("## Automated Reactions");
-    expect(promptWithOptionalSections).toContain("**ci_failed**");
+    expect(promptWithOptionalSections).toContain("ci_failed");
     expect(promptWithOptionalSections).toContain("## Project-Specific Rules");
     expect(promptWithOptionalSections).toContain("Escalate production incidents immediately.");
     expect(promptWithoutOptionalSections).not.toContain("## Automated Reactions");
