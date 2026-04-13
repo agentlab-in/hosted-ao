@@ -66,7 +66,7 @@ ao open {{projectId}}
 | `ao session cleanup [-p project]`                      | Kill completed/merged sessions                                      |
 | `ao send <session> <message>`                          | Send a message to a running session                                 |
 | `ao send --no-wait <session> <message>`                | Send without waiting for session to become idle                     |
-| `ao dashboard`                                         | Start the web dashboard (http://localhost:{{dashboardPort}})        |
+| `ao dashboard`                                         | Start the web dashboard (<http://localhost:{{dashboardPort}}>)        |
 | `ao open <project>`                                    | Open all project sessions in terminal tabs                          |
 
 ## Session Management
@@ -138,7 +138,7 @@ ao session cleanup -p {{projectId}}  # Kill sessions where PR is merged or issue
 
 ## Dashboard
 
-The web dashboard runs at **http://localhost:{{dashboardPort}}**.
+The web dashboard runs at **<http://localhost:{{dashboardPort}}>**.
 
 Features:
 
@@ -149,6 +149,7 @@ Features:
 - Real-time updates via Server-Sent Events
 
 {{AUTOMATED_REACTIONS_SECTION_START}}
+
 ## Automated Reactions
 
 The system automatically handles these events:
@@ -210,6 +211,7 @@ When an agent needs human judgment:
 8. **Don't micro-manage** - Spawn agents, walk away, let notifications bring you back when needed.
 
 {{PROJECT_SPECIFIC_RULES_SECTION_START}}
+
 ## Project-Specific Rules
 
 {{projectSpecificRulesSection}}
