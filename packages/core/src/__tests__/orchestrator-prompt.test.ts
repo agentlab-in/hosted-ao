@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generateOrchestratorPrompt } from "../orchestrator-prompt.js";
-import type * as NodeFsModule from "node:fs";
 import type { OrchestratorConfig, ProjectConfig } from "../types.js";
 
 const config: OrchestratorConfig = {
@@ -32,6 +30,25 @@ const config: OrchestratorConfig = {
   readyThresholdMs: 300_000,
 };
 
+async function loadGenerateOrchestratorPrompt() {
+  vi.resetModules();
+  return (await import("../orchestrator-prompt.js")).generateOrchestratorPrompt;
+}
+
+async function loadGenerateOrchestratorPromptWithTemplate(template: string) {
+  vi.resetModules();
+  vi.doMock("node:fs", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+
+    return {
+      ...actual,
+      readFileSync: vi.fn(() => template),
+    };
+  });
+
+  return (await import("../orchestrator-prompt.js")).generateOrchestratorPrompt;
+}
+
 describe("generateOrchestratorPrompt", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -39,7 +56,8 @@ describe("generateOrchestratorPrompt", () => {
     vi.resetModules();
   });
 
-  it("requires read-only investigation from the orchestrator session", () => {
+  it("requires read-only investigation from the orchestrator session", async () => {
+    const generateOrchestratorPrompt = await loadGenerateOrchestratorPrompt();
     const prompt = generateOrchestratorPrompt({
       config,
       projectId: "my-app",
@@ -50,7 +68,8 @@ describe("generateOrchestratorPrompt", () => {
     expect(prompt).toContain("do not edit repository files or implement fixes");
   });
 
-  it("mandates ao send and bans raw tmux access", () => {
+  it("mandates ao send and bans raw tmux access", async () => {
+    const generateOrchestratorPrompt = await loadGenerateOrchestratorPrompt();
     const prompt = generateOrchestratorPrompt({
       config,
       projectId: "my-app",
@@ -62,7 +81,8 @@ describe("generateOrchestratorPrompt", () => {
     expect(prompt).toContain("ao send --no-wait");
   });
 
-  it("pushes implementation and PR claiming into worker sessions", () => {
+  it("pushes implementation and PR claiming into worker sessions", async () => {
+    const generateOrchestratorPrompt = await loadGenerateOrchestratorPrompt();
     const prompt = generateOrchestratorPrompt({
       config,
       projectId: "my-app",
@@ -74,7 +94,8 @@ describe("generateOrchestratorPrompt", () => {
     expect(prompt).toContain("Delegate implementation, test execution, or PR claiming");
   });
 
-  it("expands markdown template placeholders with typed render data", () => {
+  it("expands markdown template placeholders with typed render data", async () => {
+    const generateOrchestratorPrompt = await loadGenerateOrchestratorPrompt();
     const prompt = generateOrchestratorPrompt({
       config,
       projectId: "my-app",
@@ -87,29 +108,51 @@ describe("generateOrchestratorPrompt", () => {
     expect(prompt).toContain("http://localhost:3000");
   });
 
-  it("throws when the markdown template contains an unresolved placeholder", async () => {
-    vi.doMock("node:fs", async () => {
-      const actual = await vi.importActual<typeof NodeFsModule>("node:fs");
-
-      return {
-        ...actual,
-        readFileSync: vi.fn(() => "Hello {{missingPlaceholder}}"),
-      };
-    });
-
-    const { generateOrchestratorPrompt: generateWithMockedTemplate } =
-      await import("../orchestrator-prompt.js");
+  it("throws when the markdown template contains an unresolved snake_case placeholder", async () => {
+    const generateOrchestratorPrompt =
+      await loadGenerateOrchestratorPromptWithTemplate("Hello {{missing_placeholder}}");
 
     expect(() =>
-      generateWithMockedTemplate({
+      generateOrchestratorPrompt({
         config,
         projectId: "my-app",
         project: config.projects["my-app"]!,
       }),
-    ).toThrow("Unresolved template placeholder: missingPlaceholder");
+    ).toThrow("Unresolved template placeholder: missing_placeholder");
   });
 
-  it("renders optional sections only when project data is present", () => {
+  it("throws when the markdown template placeholder matches a prototype property", async () => {
+    const generateOrchestratorPrompt =
+      await loadGenerateOrchestratorPromptWithTemplate("Hello {{toString}}");
+
+    expect(() =>
+      generateOrchestratorPrompt({
+        config,
+        projectId: "my-app",
+        project: config.projects["my-app"]!,
+      }),
+    ).toThrow("Unresolved template placeholder: toString");
+  });
+
+  it("throws when the markdown template contains an unmatched optional-section marker", async () => {
+    const generateOrchestratorPrompt =
+      await loadGenerateOrchestratorPromptWithTemplate(
+        "{{AUTOMATED_REACTIONS_SECTION_START}}\n{{automatedReactionsSection}}",
+      );
+
+    expect(() =>
+      generateOrchestratorPrompt({
+        config,
+        projectId: "my-app",
+        project: config.projects["my-app"]!,
+      }),
+    ).toThrow(
+      "Malformed optional section block: expected {{AUTOMATED_REACTIONS_SECTION_START}} before {{AUTOMATED_REACTIONS_SECTION_END}}",
+    );
+  });
+
+  it("renders optional sections only when project data is present", async () => {
+    const generateOrchestratorPrompt = await loadGenerateOrchestratorPrompt();
     const projectWithOptionalSections: ProjectConfig = {
       ...config.projects["my-app"]!,
       reactions: {

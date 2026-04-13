@@ -28,6 +28,8 @@ interface OrchestratorPromptRenderData {
   projectSpecificRulesSection: string;
 }
 
+type OrchestratorPromptRenderKey = keyof OrchestratorPromptRenderData;
+
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const ORCHESTRATOR_PROMPT_DIR = "prompts";
 const ORCHESTRATOR_PROMPT_TEMPLATE = "orchestrator.md";
@@ -108,12 +110,16 @@ function removeOptionalSectionBlocks(
     const startMarker = `{{${startKey}}}`;
     const endMarker = `{{${endKey}}}`;
     const start = interpolated.indexOf(startMarker);
-    if (start === -1) {
+    const end = interpolated.indexOf(endMarker);
+
+    if (start === -1 && end === -1) {
       continue;
     }
-    const end = interpolated.indexOf(endMarker, start);
-    if (end === -1) {
-      continue;
+
+    if (start === -1 || end === -1 || end < start) {
+      throw new Error(
+        `Malformed optional section block: expected ${startMarker} before ${endMarker}`,
+      );
     }
 
     const fullStart = start;
@@ -128,6 +134,13 @@ function removeOptionalSectionBlocks(
   }
 
   return interpolated;
+}
+
+function hasRenderDataKey(
+  data: OrchestratorPromptRenderData,
+  key: string,
+): key is OrchestratorPromptRenderKey {
+  return Object.prototype.hasOwnProperty.call(data, key);
 }
 
 function createRenderData(opts: OrchestratorPromptConfig): OrchestratorPromptRenderData {
@@ -147,12 +160,12 @@ function createRenderData(opts: OrchestratorPromptConfig): OrchestratorPromptRen
 }
 
 function renderTemplate(template: string, data: OrchestratorPromptRenderData): string {
-  return template.replace(/\{\{([a-zA-Z0-9]+)\}\}/g, (_match, rawKey: string) => {
-    if (!(rawKey in data)) {
+  return template.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, rawKey: string) => {
+    if (!hasRenderDataKey(data, rawKey)) {
       throw new Error(`Unresolved template placeholder: ${rawKey}`);
     }
 
-    return data[rawKey as keyof OrchestratorPromptRenderData];
+    return data[rawKey];
   });
 }
 
