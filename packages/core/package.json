@@ -80,7 +80,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "build": "rm -rf dist && rollup -c rollup.config.mjs && tsc -p tsconfig.build.json --emitDeclarationOnly",
+    "build": "rollup -c rollup.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

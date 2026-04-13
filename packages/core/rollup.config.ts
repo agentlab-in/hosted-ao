@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { builtinModules } from "node:module";
+import type { Plugin, RollupOptions } from "rollup";
 import typescript from "@rollup/plugin-typescript";
 
 const externalPackages = new Set(["yaml", "zod"]);
@@ -8,7 +9,7 @@ const nodeBuiltins = new Set([
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
 ]);
 
-function getPackageName(importId) {
+function getPackageName(importId: string): string | null {
   if (importId.startsWith(".") || importId.startsWith("/")) {
     return null;
   }
@@ -17,10 +18,10 @@ function getPackageName(importId) {
   return importId.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
 }
 
-function rawMarkdown() {
+function rawMarkdown(): Plugin {
   return {
     name: "raw-markdown",
-    async load(id) {
+    async load(id: string) {
       if (!id.endsWith(".md")) {
         return null;
       }
@@ -30,7 +31,16 @@ function rawMarkdown() {
   };
 }
 
-export default {
+function cleanDist(): Plugin {
+  return {
+    name: "clean-dist",
+    async buildStart() {
+      await rm("dist", { force: true, recursive: true });
+    },
+  };
+}
+
+const config: RollupOptions = {
   input: "src/index.ts",
   output: {
     dir: "dist",
@@ -39,7 +49,7 @@ export default {
     preserveModulesRoot: "src",
     sourcemap: true,
   },
-  external(id) {
+  external(id: string) {
     if (nodeBuiltins.has(id) || id.startsWith("node:")) {
       return true;
     }
@@ -48,14 +58,17 @@ export default {
     return packageName ? externalPackages.has(packageName) : false;
   },
   plugins: [
+    cleanDist(),
     rawMarkdown(),
     typescript({
       compilerOptions: {
-        declaration: false,
-        declarationMap: false,
+        declaration: true,
+        declarationMap: true,
         module: "Node16",
       },
       tsconfig: "./tsconfig.json",
     }),
   ],
 };
+
+export default config;
