@@ -80,7 +80,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && mkdir -p dist/prompts && cp src/prompts/orchestrator.md dist/prompts/orchestrator.md",
+    "build": "rm -rf dist && rollup -c rollup.config.mjs && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -91,8 +91,11 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.0.18",
+    "@rollup/plugin-typescript": "^12.3.0",
     "@types/node": "^25.2.3",
+    "@vitest/coverage-v8": "^4.0.18",
+    "rollup": "^4.60.1",
+    "tslib": "^2.8.1",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   }

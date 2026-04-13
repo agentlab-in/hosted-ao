@@ -37,14 +37,9 @@ async function loadGenerateOrchestratorPrompt() {
 
 async function loadGenerateOrchestratorPromptWithTemplate(template: string) {
   vi.resetModules();
-  vi.doMock("node:fs", async () => {
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-
-    return {
-      ...actual,
-      readFileSync: vi.fn(() => template),
-    };
-  });
+  vi.doMock("../prompts/orchestrator.md", () => ({
+    default: template,
+  }));
 
   return (await import("../orchestrator-prompt.js")).generateOrchestratorPrompt;
 }
@@ -52,7 +47,7 @@ async function loadGenerateOrchestratorPromptWithTemplate(template: string) {
 describe("generateOrchestratorPrompt", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.doUnmock("node:fs");
+    vi.doUnmock("../prompts/orchestrator.md");
     vi.resetModules();
   });
 

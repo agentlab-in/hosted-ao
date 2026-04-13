@@ -5,9 +5,7 @@
  * when the orchestrator agent runs.
  */
 
-import * as fs from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import orchestratorTemplate from "./prompts/orchestrator.md";
 import type { OrchestratorConfig, ProjectConfig } from "./types.js";
 
 export interface OrchestratorPromptConfig {
@@ -29,35 +27,6 @@ interface OrchestratorPromptRenderData {
 }
 
 type OrchestratorPromptRenderKey = keyof OrchestratorPromptRenderData;
-
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-const ORCHESTRATOR_PROMPT_DIR = "prompts";
-const ORCHESTRATOR_PROMPT_TEMPLATE = "orchestrator.md";
-const ORCHESTRATOR_TEMPLATE_PATHS = [
-  join(moduleDir, ORCHESTRATOR_PROMPT_DIR, ORCHESTRATOR_PROMPT_TEMPLATE),
-  join(moduleDir, "..", "src", ORCHESTRATOR_PROMPT_DIR, ORCHESTRATOR_PROMPT_TEMPLATE),
-];
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
-}
-
-function loadOrchestratorTemplate(): string {
-  for (const templatePath of ORCHESTRATOR_TEMPLATE_PATHS) {
-    try {
-      return fs.readFileSync(templatePath, "utf-8").trim();
-    } catch (error) {
-      if (isErrnoException(error) && error.code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw new Error(
-    `Unable to find orchestrator prompt template. Checked: ${ORCHESTRATOR_TEMPLATE_PATHS.join(", ")}`,
-  );
-}
 
 function buildAutomatedReactionsSection(project: ProjectConfig): string {
   const markdownBold = String.fromCharCode(42).repeat(2);
@@ -180,8 +149,7 @@ function normalizeRenderedPrompt(prompt: string): string {
  */
 export function generateOrchestratorPrompt(opts: OrchestratorPromptConfig): string {
   const data = createRenderData(opts);
-  const template = loadOrchestratorTemplate();
-  const templateWithOptionalSections = removeOptionalSectionBlocks(template, data);
+  const templateWithOptionalSections = removeOptionalSectionBlocks(orchestratorTemplate.trim(), data);
 
   return normalizeRenderedPrompt(
     renderTemplate(templateWithOptionalSections, data),
