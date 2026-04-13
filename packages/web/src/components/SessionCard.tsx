@@ -469,7 +469,7 @@ function SessionCardView({ session, onSend, onKill, onMerge, onRestore }: Sessio
         )}
         {!isTerminal && (
           <a
-            href={`/sessions/${encodeURIComponent(session.id)}`}
+            href={`/sessions/${encodeURIComponent(session.id)}#session-terminal-section`}
             onClick={(e) => e.stopPropagation()}
             className="session-card__control session-card__terminal-link"
           >
