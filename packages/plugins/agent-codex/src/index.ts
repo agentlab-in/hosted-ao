@@ -28,6 +28,7 @@ import { createReadStream } from "node:fs";
 import { readdir, stat, lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
@@ -145,6 +146,10 @@ async function readJsonlPrefixLines(filePath: string, maxLines: number): Promise
   const handle = await open(filePath, "r");
   const lines: string[] = [];
   let partialLine = "";
+  // Reuse a single decoder across reads so multi-byte UTF-8 sequences that
+  // straddle a chunk boundary (e.g. CJK characters in base_instructions) get
+  // buffered correctly instead of producing U+FFFD replacement characters.
+  const decoder = new StringDecoder("utf8");
 
   try {
     while (lines.length < maxLines) {
@@ -152,12 +157,13 @@ async function readJsonlPrefixLines(filePath: string, maxLines: number): Promise
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
 
       if (bytesRead === 0) {
+        partialLine += decoder.end();
         const finalLine = partialLine.trim();
         if (finalLine) lines.push(finalLine);
         break;
       }
 
-      partialLine += buffer.subarray(0, bytesRead).toString("utf-8");
+      partialLine += decoder.write(buffer.subarray(0, bytesRead));
 
       let newlineIndex = partialLine.indexOf("\n");
       while (newlineIndex !== -1 && lines.length < maxLines) {
