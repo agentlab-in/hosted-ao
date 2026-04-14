@@ -1075,11 +1075,11 @@ describe("start command — autoCreateConfig", () => {
   it("generates config with empty notifiers array (no desktop notifier added by default)", async () => {
     const { detectEnvironment } = await import("../../src/lib/detect-env.js");
     vi.mocked(detectEnvironment).mockResolvedValue({
-      isGitRepo: false,
+      isGitRepo: true,
       gitRemote: null,
       ownerRepo: null,
-      currentBranch: null,
-      defaultBranch: null,
+      currentBranch: "main",
+      defaultBranch: "main",
       hasTmux: true,
       hasGh: false,
       ghAuthed: false,
