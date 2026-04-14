@@ -1022,11 +1022,24 @@ describe("start command — orchestrator session strategy display", () => {
 // ---------------------------------------------------------------------------
 
 describe("stop command", () => {
+  /** Helper: mock exec to simulate a dashboard process on a given port. */
+  function mockDashboardOnPort(dashboardPort: number, pid = "12345"): void {
+    mockExec.mockImplementation(async (cmd: string, args: string[] = []) => {
+      if (cmd === "kill") return { stdout: "", stderr: "" };
+      if (cmd === "ps") return { stdout: "node /fake/web/dist-server/start-all.js", stderr: "" };
+      if (cmd === "lsof") {
+        const portArg = args.find((a) => a.startsWith(":"));
+        if (portArg === `:${dashboardPort}`) return { stdout: pid, stderr: "" };
+      }
+      throw new Error("no process");
+    });
+  }
+
   it("stops orchestrator session and dashboard", async () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
     mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
     mockSessionManager.kill.mockResolvedValue(undefined);
-    mockExec.mockResolvedValue({ stdout: "12345", stderr: "" });
+    mockDashboardOnPort(3000);
 
     await program.parseAsync(["node", "test", "stop"]);
 
@@ -1059,7 +1072,7 @@ describe("stop command", () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
     mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
     mockSessionManager.kill.mockResolvedValue(undefined);
-    mockExec.mockResolvedValue({ stdout: "12345", stderr: "" });
+    mockDashboardOnPort(3000);
 
     await program.parseAsync(["node", "test", "stop", "--purge-session"]);
 
@@ -1073,13 +1086,7 @@ describe("stop command", () => {
     mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
     mockSessionManager.kill.mockResolvedValue(undefined);
     // Port 3000 has nothing, but port 3001 has the orphaned dashboard
-    mockExec.mockImplementation(async (cmd: string, args: string[] = []) => {
-      if (cmd === "kill") return { stdout: "", stderr: "" };
-      if (cmd === "ps") return { stdout: "node /fake/web/dist-server/start-all.js", stderr: "" };
-      const portArg = args.find((a) => a.startsWith(":"));
-      if (portArg === ":3001") return { stdout: "99999", stderr: "" };
-      throw new Error("no process");
-    });
+    mockDashboardOnPort(3001, "99999");
 
     await program.parseAsync(["node", "test", "stop"]);
 
@@ -1104,9 +1111,11 @@ describe("stop command", () => {
         if (pid === "22222") return { stdout: "node /fake/web/dist-server/start-all.js", stderr: "" };
         return { stdout: "", stderr: "" };
       }
-      const portArg = args.find((a) => a.startsWith(":"));
-      if (portArg === ":3001") return { stdout: "11111", stderr: "" };
-      if (portArg === ":3002") return { stdout: "22222", stderr: "" };
+      if (cmd === "lsof") {
+        const portArg = args.find((a) => a.startsWith(":"));
+        if (portArg === ":3001") return { stdout: "11111", stderr: "" };
+        if (portArg === ":3002") return { stdout: "22222", stderr: "" };
+      }
       throw new Error("no process");
     });
 
@@ -1118,6 +1127,39 @@ describe("stop command", () => {
       .join("\n");
     // Should skip port 3001 (python) and find the dashboard on 3002
     expect(output).toContain("was on port 3002");
+  });
+
+  it("only kills dashboard PIDs when port has mixed processes", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockSessionManager.get.mockResolvedValue({ id: "app-orchestrator", status: "running" });
+    mockSessionManager.kill.mockResolvedValue(undefined);
+    // Port 3000 has two processes: a dashboard and an unrelated sidecar
+    mockExec.mockImplementation(async (cmd: string, args: string[] = []) => {
+      if (cmd === "kill") {
+        // Only the dashboard PID should be killed, not the sidecar
+        expect(args).toEqual(["11111"]);
+        return { stdout: "", stderr: "" };
+      }
+      if (cmd === "ps") {
+        const pid = args[1];
+        if (pid === "11111") return { stdout: "node /fake/web/dist-server/start-all.js", stderr: "" };
+        if (pid === "22222") return { stdout: "nginx: worker process", stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+      if (cmd === "lsof") {
+        const portArg = args.find((a) => a.startsWith(":"));
+        if (portArg === ":3000") return { stdout: "11111\n22222", stderr: "" };
+      }
+      throw new Error("no process");
+    });
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    expect(output).toContain("Dashboard stopped");
   });
 });
 
