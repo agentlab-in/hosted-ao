@@ -1145,7 +1145,25 @@ async function runStartup(
 
   // Keep dashboard process alive if it was started
   if (dashboardProcess) {
+    // Kill the dashboard child when the parent exits for any reason
+    // (Ctrl+C, SIGTERM from `ao stop`, normal exit, etc.).
+    // We use the `exit` event instead of SIGINT/SIGTERM to avoid
+    // conflicting with the shutdown handler in registerStart that
+    // flushes lifecycle state and calls process.exit() with the
+    // correct exit code (130 for SIGINT, 0 for SIGTERM).
+    /* c8 ignore start -- exit handler only fires on process termination */
+    const killDashboardChild = (): void => {
+      try {
+        dashboardProcess?.kill("SIGTERM");
+      } catch {
+        // already dead
+      }
+    };
+    /* c8 ignore stop */
+    process.on("exit", killDashboardChild);
+
     dashboardProcess.on("exit", (code) => {
+      process.removeListener("exit", killDashboardChild);
       if (openAbort) openAbort.abort();
       if (code !== 0 && code !== null) {
         console.error(chalk.red(`Dashboard exited with code ${code}`));
@@ -1162,25 +1180,63 @@ async function runStartup(
  * Uses lsof to find the process listening on the port, then kills it.
  * Best effort — if it fails, just warn the user.
  */
-async function stopDashboard(port: number): Promise<void> {
+/** Pattern matching AO dashboard processes (production and dev mode). */
+const DASHBOARD_CMD_PATTERN = /next-server|start-all\.js|next dev|ao-web/;
+
+/**
+ * Check whether a process listening on the given port is an AO dashboard
+ * (next-server, start-all.js, or next dev).  Only kills matching PIDs,
+ * leaving unrelated co-listeners (sidecars, SO_REUSEPORT) untouched.
+ */
+async function killDashboardOnPort(port: number): Promise<boolean> {
   try {
-    // Find PIDs listening on the port (can be multiple: parent + children)
     const { stdout } = await exec("lsof", ["-ti", `:${port}`]);
     const pids = stdout
       .trim()
       .split("\n")
       .filter((p) => p.length > 0);
+    if (pids.length === 0) return false;
 
-    if (pids.length > 0) {
-      // Kill all processes (pass PIDs as separate arguments)
-      await exec("kill", pids);
-      console.log(chalk.green("Dashboard stopped"));
-    } else {
-      console.log(chalk.yellow(`Dashboard not running on port ${port}`));
+    // Filter to only dashboard PIDs
+    const dashboardPids: string[] = [];
+    for (const pid of pids) {
+      try {
+        const { stdout: cmdline } = await exec("ps", ["-p", pid, "-o", "args="]);
+        if (DASHBOARD_CMD_PATTERN.test(cmdline)) {
+          dashboardPids.push(pid);
+        }
+      } catch {
+        // process vanished — skip
+      }
     }
+    if (dashboardPids.length === 0) return false;
+
+    await exec("kill", dashboardPids);
+    return true;
   } catch {
-    console.log(chalk.yellow("Could not stop dashboard (may not be running)"));
+    return false;
   }
+}
+
+async function stopDashboard(port: number): Promise<void> {
+  // 1. Try the expected port — verify it's a dashboard before killing
+  if (await killDashboardOnPort(port)) {
+    console.log(chalk.green("Dashboard stopped"));
+    return;
+  }
+
+  // 2. Fallback: scan nearby ports to find an orphaned dashboard
+  //    that was auto-reassigned when the original port was busy.
+  //    Uses killDashboardOnPort to verify the process is actually an
+  //    AO dashboard before killing, avoiding collateral damage.
+  for (let p = port + 1; p <= port + MAX_PORT_SCAN; p++) {
+    if (await killDashboardOnPort(p)) {
+      console.log(chalk.green(`Dashboard stopped (was on port ${p})`));
+      return;
+    }
+  }
+
+  console.log(chalk.yellow("Could not stop dashboard (may not be running)"));
 }
 
 // =============================================================================
