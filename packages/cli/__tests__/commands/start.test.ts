@@ -1102,8 +1102,8 @@ describe("start command — autoCreateConfig", () => {
     mockProcessCwd.mockReturnValue(tmpDir);
 
     // Non-interactive — skip the repo prompt (no ownerRepo detected)
-    const { isHumanCaller } = await import("../../src/lib/caller-context.js");
-    vi.mocked(isHumanCaller).mockReturnValue(false);
+    const callerContext = await import("../../src/lib/caller-context.js");
+    vi.spyOn(callerContext, "isHumanCaller").mockReturnValue(false);
 
     await createConfigOnly();
 
