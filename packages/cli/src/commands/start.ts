@@ -1278,17 +1278,14 @@ export function registerStart(program: Command): void {
             }
 
             if (!configPath) {
-              // No config anywhere — auto-create in cwd, then add the path as project
-              config = await autoCreateConfig(cwd());
-              // If the path is different from cwd, add it as a second project
               if (resolve(cwd()) !== resolvedPath) {
-                const addedId = await addProjectToConfig(config, resolvedPath);
-                config = loadConfig(config.configPath);
-                projectId = addedId;
-                project = config.projects[projectId];
+                // Target path differs from cwd — create config at the target repo
+                config = await autoCreateConfig(resolvedPath);
               } else {
-                ({ projectId, project } = await resolveProject(config));
+                // cwd is the target — auto-create config here
+                config = await autoCreateConfig(cwd());
               }
+              ({ projectId, project } = await resolveProject(config));
             } else {
               config = loadConfig(configPath);
 
