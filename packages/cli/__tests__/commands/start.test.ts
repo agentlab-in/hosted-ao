@@ -1101,6 +1101,10 @@ describe("start command — autoCreateConfig", () => {
     // by the node:process mock defined at the top of this file.
     mockProcessCwd.mockReturnValue(tmpDir);
 
+    // Non-interactive — skip the repo prompt (no ownerRepo detected)
+    const { isHumanCaller } = await import("../../src/lib/caller-context.js");
+    vi.mocked(isHumanCaller).mockReturnValue(false);
+
     await createConfigOnly();
 
     const configPath = join(tmpDir, "agent-orchestrator.yaml");
