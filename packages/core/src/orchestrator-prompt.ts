@@ -48,8 +48,9 @@ Your role is to coordinate and manage worker agent sessions. You do NOT write co
 - **Local Path**: ${project.path}
 - **Dashboard Port**: ${config.port ?? 3000}`);
 
-  // Quick Start
-  sections.push(`## Quick Start
+  // Quick Start — include issue/PR commands only when repo is configured
+  if (project.repo) {
+    sections.push(`## Quick Start
 
 \`\`\`bash
 # See all sessions at a glance
@@ -78,24 +79,51 @@ ao session kill ${project.sessionPrefix}-1
 # Open all sessions in terminal tabs
 ao open ${projectId}
 \`\`\``);
+  } else {
+    sections.push(`## Quick Start
 
-  // Available Commands
+\`\`\`bash
+# See all sessions at a glance
+ao status
+
+# Spawn a session (prompt-driven, no issue tracker configured)
+ao spawn --prompt "Refactor the auth module to use JWT"
+
+# List sessions
+ao session ls -p ${projectId}
+
+# Send message to a session
+ao send ${project.sessionPrefix}-1 "Your message here"
+
+# Kill a session
+ao session kill ${project.sessionPrefix}-1
+\`\`\`
+
+> **Note:** No repository remote is configured. Issue tracking, PR, and CI features are unavailable.
+> Add a \`repo\` field (owner/repo) to \`agent-orchestrator.yaml\` to enable them.`);
+  }
+
+  // Available Commands — omit PR/issue commands when no repo configured
+  const cmdRows = [
+    `| \`ao status\` | Show all sessions${project.repo ? " with PR/CI/review status" : ""} |`,
+    `| \`ao spawn [issue] [--prompt <text>]${project.repo ? " [--claim-pr <pr>]" : ""}\` | Spawn a worker session${project.repo ? "; use issue ID or --prompt for freeform tasks" : " with --prompt for freeform tasks"} |`,
+    ...(project.repo ? [`| \`ao batch-spawn <issues...>\` | Spawn multiple sessions in parallel (project auto-detected) |`] : []),
+    `| \`ao session ls [-p project]\` | List all sessions (optionally filter by project) |`,
+    ...(project.repo ? [`| \`ao session claim-pr <pr> [session]\` | Attach an existing PR to a worker session |`] : []),
+    `| \`ao session attach <session>\` | Attach to a session's tmux window |`,
+    `| \`ao session kill <session>\` | Kill a specific session |`,
+    `| \`ao session cleanup [-p project]\` | Kill completed/merged sessions |`,
+    `| \`ao send <session> <message>\` | Send a message to a running session |`,
+    `| \`ao send --no-wait <session> <message>\` | Send without waiting for session to become idle |`,
+    `| \`ao dashboard\` | Start the web dashboard (http://localhost:${config.port ?? 3000}) |`,
+    `| \`ao open <project>\` | Open all project sessions in terminal tabs |`,
+  ];
+
   sections.push(`## Available Commands
 
 | Command | Description |
 |---------|-------------|
-| \`ao status\` | Show all sessions with PR/CI/review status |
-| \`ao spawn [issue] [--prompt <text>] [--claim-pr <pr>]\` | Spawn a worker session; use issue ID or --prompt for freeform tasks |
-| \`ao batch-spawn <issues...>\` | Spawn multiple sessions in parallel (project auto-detected) |
-| \`ao session ls [-p project]\` | List all sessions (optionally filter by project) |
-| \`ao session claim-pr <pr> [session]\` | Attach an existing PR to a worker session |
-| \`ao session attach <session>\` | Attach to a session's tmux window |
-| \`ao session kill <session>\` | Kill a specific session |
-| \`ao session cleanup [-p project]\` | Kill completed/merged sessions |
-| \`ao send <session> <message>\` | Send a message to a running session |
-| \`ao send --no-wait <session> <message>\` | Send without waiting for session to become idle |
-| \`ao dashboard\` | Start the web dashboard (http://localhost:${config.port ?? 3000}) |
-| \`ao open <project>\` | Open all project sessions in terminal tabs |`);
+${cmdRows.join("\n")}`);
 
   // Session Management
   sections.push(`## Session Management

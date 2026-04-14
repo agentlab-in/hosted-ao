@@ -535,6 +535,15 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
   console.log(chalk.dim("  Detecting project and generating config...\n"));
 
   const env = await detectEnvironment(workingDir);
+
+  if (!env.isGitRepo) {
+    throw new Error(
+      `"${workingDir}" is not a git repository.\n` +
+        `  ao requires a git repo to manage worktrees and branches.\n` +
+        `  Run \`git init\` first, then try again.`,
+    );
+  }
+
   const projectType = detectProjectType(workingDir);
 
   // Show detection results
@@ -561,7 +570,7 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
   const agentRules = generateRulesFromTemplates(projectType);
 
   // Build config with smart defaults
-  const projectId = env.isGitRepo ? basename(workingDir) : "my-project";
+  const projectId = basename(workingDir);
   let repo: string | undefined = env.ownerRepo ?? undefined;
   const path = workingDir;
   const defaultBranch = env.defaultBranch || "main";
@@ -575,7 +584,7 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
       "owner/repo",
     );
     const trimmed = entered.trim();
-    if (trimmed && trimmed.includes("/")) {
+    if (trimmed && /^[^\s/]+\/[^\s/]+/.test(trimmed)) {
       repo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${repo}`));
     } else if (trimmed) {
@@ -696,6 +705,24 @@ async function addProjectToConfig(
     if (match) ownerRepo = match[1];
   }
 
+  // If no repo detected, prompt the user (same as autoCreateConfig)
+  /* c8 ignore start -- interactive prompt */
+  if (!ownerRepo && isHumanCaller()) {
+    console.log(chalk.yellow("  ⚠ Could not auto-detect a GitHub/GitLab remote."));
+    const entered = await promptText(
+      "  Enter repo (owner/repo) or leave empty to skip:",
+      "owner/repo",
+    );
+    const trimmed = entered.trim();
+    if (trimmed && /^[^\s/]+\/[^\s/]+/.test(trimmed)) {
+      ownerRepo = trimmed;
+      console.log(chalk.green(`  ✓ Repo: ${ownerRepo}`));
+    } else if (trimmed) {
+      console.log(chalk.yellow(`  ⚠ "${trimmed}" doesn't look like owner/repo — skipping.`));
+    }
+  }
+  /* c8 ignore stop */
+
   const defaultBranch = await detectDefaultBranch(resolvedPath, ownerRepo);
 
   // Generate unique session prefix
@@ -749,8 +776,8 @@ async function addProjectToConfig(
   console.log(chalk.green(`\n✓ Added "${projectId}" to ${config.configPath}\n`));
 
   if (!ownerRepo) {
-    console.log(chalk.yellow("⚠ Could not detect GitHub remote."));
-    console.log(chalk.dim("  Update the 'repo' field in the config before spawning agents.\n"));
+    console.log(chalk.yellow("⚠ No repo configured — issue tracking and PR features will be unavailable."));
+    console.log(chalk.dim("  Add a 'repo' field (owner/repo) to the config to enable them.\n"));
   }
 
   return projectId;

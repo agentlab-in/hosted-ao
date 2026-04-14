@@ -245,7 +245,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       // Find the project for this PR
       const project = Object.values(config.projects).find((p) => {
         if (!p.repo) return false;
-        const [owner, repo] = p.repo.split("/");
+        // Use lastIndexOf to correctly handle GitLab subgroup paths (group/subgroup/repo)
+        const slashIdx = p.repo.lastIndexOf("/");
+        if (slashIdx < 0) return false;
+        const owner = p.repo.slice(0, slashIdx);
+        const repo = p.repo.slice(slashIdx + 1);
         return owner === pr.owner && repo === pr.repo;
       });
       if (!project?.scm?.plugin) continue;
