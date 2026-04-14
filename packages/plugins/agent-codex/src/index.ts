@@ -292,6 +292,10 @@ async function streamCodexSessionData(filePath: string): Promise<CodexSessionDat
           data.model = payload.model;
         }
 
+        // Token sources are precedence-ordered: total → last → flat → legacy.
+        // `continue` ensures only one source is counted per entry.
+        // `total_token_usage` is a cumulative snapshot (last-write-wins, so `=`);
+        // the rest are per-turn deltas (accumulate with `+=`). Do not "fix" this.
         const totalUsage = payload.info?.total_token_usage;
         if (typeof totalUsage?.input_tokens === "number") {
           data.inputTokens = totalUsage.input_tokens;
