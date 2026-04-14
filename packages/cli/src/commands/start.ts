@@ -1145,34 +1145,41 @@ async function runStartup(
 
   // Keep dashboard process alive if it was started
   if (dashboardProcess) {
-    dashboardProcess.on("exit", (code) => {
-      if (openAbort) openAbort.abort();
-      if (code !== 0 && code !== null) {
-        console.error(chalk.red(`Dashboard exited with code ${code}`));
-      }
-      process.exit(code ?? 0);
-    });
-
     // Ensure the dashboard child is killed when the parent exits (e.g. Ctrl+C).
     // Node.js does not guarantee signal propagation to child processes.
     // Registering a SIGINT handler suppresses Node's default exit, so we
     // must call process.exit() ourselves after cleaning up the child.
     /* c8 ignore start -- signal handlers only fire on process termination */
-    const killDashboard = (): void => {
+    const killAndExit = (): void => {
+      try {
+        dashboardProcess?.kill("SIGTERM");
+      } catch {
+        // already dead
+      }
+      process.exit();
+    };
+    const killDashboardOnly = (): void => {
       try {
         dashboardProcess?.kill("SIGTERM");
       } catch {
         // already dead
       }
     };
-    const killAndExit = (): void => {
-      killDashboard();
-      process.exit();
-    };
     /* c8 ignore stop */
     process.on("SIGINT", killAndExit);
     process.on("SIGTERM", killAndExit);
-    process.on("exit", killDashboard);
+    process.on("exit", killDashboardOnly);
+
+    dashboardProcess.on("exit", (code) => {
+      process.removeListener("SIGINT", killAndExit);
+      process.removeListener("SIGTERM", killAndExit);
+      process.removeListener("exit", killDashboardOnly);
+      if (openAbort) openAbort.abort();
+      if (code !== 0 && code !== null) {
+        console.error(chalk.red(`Dashboard exited with code ${code}`));
+      }
+      process.exit(code ?? 0);
+    });
   }
 
   return port;
