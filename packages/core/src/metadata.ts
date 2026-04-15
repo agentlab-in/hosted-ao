@@ -40,6 +40,7 @@ import {
   cloneLifecycle,
   parseCanonicalLifecycle,
 } from "./lifecycle-state.js";
+import { validateStatus } from "./utils/validation.js";
 
 /** Serialize a record back to key=value format. Newlines in values are replaced to prevent injection. */
 function serializeMetadata(data: Record<string, string>): string {
@@ -196,7 +197,7 @@ export function readCanonicalLifecycle(
 ): CanonicalSessionLifecycle | null {
   const raw = readMetadataRaw(dataDir, sessionId);
   if (!raw) return null;
-  return parseCanonicalLifecycle(raw, { sessionId });
+  return parseCanonicalLifecycle(raw, { sessionId, status: validateStatus(raw["status"]) });
 }
 
 export function writeCanonicalLifecycle(
@@ -220,7 +221,10 @@ export function updateCanonicalLifecycle(
 ): CanonicalSessionLifecycle | null {
   const raw = readMetadataRaw(dataDir, sessionId);
   if (!raw) return null;
-  const current = parseCanonicalLifecycle(raw, { sessionId });
+  const current = parseCanonicalLifecycle(raw, {
+    sessionId,
+    status: validateStatus(raw["status"]),
+  });
   const next = updater(cloneLifecycle(current));
   writeCanonicalLifecycle(dataDir, sessionId, next, previousStatus);
   return next;

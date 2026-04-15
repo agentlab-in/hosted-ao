@@ -1,12 +1,12 @@
-import type {
-  OrchestratorEvent,
-  Session,
-  EventPriority,
-  EventType,
-  SessionStatus,
-  ActivityState,
+import {
+  createInitialCanonicalLifecycle,
+  type OrchestratorEvent,
+  type Session,
+  type EventPriority,
+  type EventType,
+  type SessionStatus,
+  type ActivityState,
 } from "@aoagents/ao-core";
-import { createInitialCanonicalLifecycle } from "@aoagents/ao-core";
 
 /**
  * Create a test OrchestratorEvent with sensible defaults.

@@ -231,6 +231,19 @@ describe("readCanonicalLifecycle", () => {
     expect(lifecycle!.pr.state).toBe("open");
     expect(lifecycle!.runtime.state).toBe("alive");
   });
+
+  it("validates legacy status before synthesizing canonical lifecycle", () => {
+    writeMetadata(dataDir, "lifecycle-legacy-invalid", {
+      worktree: "/tmp/w",
+      branch: "main",
+      status: "unknown",
+    });
+
+    const lifecycle = readCanonicalLifecycle(dataDir, "lifecycle-legacy-invalid");
+    expect(lifecycle).not.toBeNull();
+    expect(lifecycle!.session.state).toBe("not_started");
+    expect(lifecycle!.session.reason).toBe("spawn_requested");
+  });
 });
 
 describe("deleteMetadata", () => {

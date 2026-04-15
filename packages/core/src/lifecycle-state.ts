@@ -11,7 +11,7 @@ import type {
   SessionStatus,
 } from "./types.js";
 import { parsePrFromUrl } from "./utils/pr.js";
-import { safeJsonParse } from "./utils/validation.js";
+import { safeJsonParse, validateStatus } from "./utils/validation.js";
 
 interface ParseCanonicalLifecycleOptions {
   sessionId?: string;
@@ -144,7 +144,7 @@ function synthesizeCanonicalLifecycle(
   meta: Record<string, string>,
   options: ParseCanonicalLifecycleOptions = {},
 ): CanonicalSessionLifecycle {
-  const status = options.status ?? ((meta["status"] as SessionStatus | undefined) ?? "spawning");
+  const status = options.status ?? validateStatus(meta["status"]);
   const sessionKind: SessionKind =
     meta["role"] === "orchestrator" || options.sessionId?.endsWith("-orchestrator")
       ? "orchestrator"

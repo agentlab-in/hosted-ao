@@ -891,15 +891,16 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       cloneLifecycle(session.lifecycle),
       session.status,
     );
-    updateMetadata(sessionsDir, session.id, { ...updates, ...lifecycleUpdates });
+    const mergedUpdates = { ...updates, ...lifecycleUpdates };
+    updateMetadata(sessionsDir, session.id, mergedUpdates);
 
     const cleaned = Object.fromEntries(
       Object.entries(session.metadata).filter(([key]) => {
-        const update = updates[key];
+        const update = mergedUpdates[key];
         return update === undefined || update !== "";
       }),
     );
-    for (const [key, value] of Object.entries({ ...updates, ...lifecycleUpdates })) {
+    for (const [key, value] of Object.entries(mergedUpdates)) {
       if (value === undefined || value === "") continue;
       cleaned[key] = value;
     }

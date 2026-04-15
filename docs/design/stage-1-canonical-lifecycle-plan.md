@@ -4,7 +4,7 @@
 
 Stage 1 is a planning and foundation stage. It does not redesign the dashboard, change reaction behavior, or implement auto-recovery. Its job is to replace the current overloaded lifecycle model with a canonical persisted model that can safely support later stages.
 
-This plan is derived from the redesign brief in `/Users/harshitsinghbhandari/.ao/ao-ahead/human-work/redesign.md` and from the current implementation in:
+This plan is derived from the redesign brief for this project and from the current implementation in:
 
 - `packages/core/src/types.ts`
 - `packages/core/src/session-manager.ts`
