@@ -584,7 +584,7 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
       "owner/repo",
     );
     const trimmed = entered.trim();
-    if (trimmed && /^[^\s/]+\/[^\s/]+/.test(trimmed)) {
+    if (trimmed && /^[^\s/]+\/[^\s/]+$/.test(trimmed)) {
       repo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${repo}`));
     } else if (trimmed) {
@@ -701,7 +701,7 @@ async function addProjectToConfig(
   let ownerRepo: string | null = null;
   const gitRemote = await git(["remote", "get-url", "origin"], resolvedPath);
   if (gitRemote) {
-    const match = gitRemote.match(/github\.com[:/]([^/]+\/[^/]+?)(\.git)?$/);
+    const match = gitRemote.match(/(?:github|gitlab)\.com[:/]([^/]+\/[^/]+?)(\.git)?$/);
     if (match) ownerRepo = match[1];
   }
 
@@ -714,7 +714,7 @@ async function addProjectToConfig(
       "owner/repo",
     );
     const trimmed = entered.trim();
-    if (trimmed && /^[^\s/]+\/[^\s/]+/.test(trimmed)) {
+    if (trimmed && /^[^\s/]+\/[^\s/]+$/.test(trimmed)) {
       ownerRepo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${ownerRepo}`));
     } else if (trimmed) {

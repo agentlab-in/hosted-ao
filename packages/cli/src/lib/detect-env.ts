@@ -24,7 +24,7 @@ export async function detectEnvironment(workingDir: string): Promise<Environment
   if (isGitRepo) {
     gitRemote = await git(["remote", "get-url", "origin"], workingDir);
     if (gitRemote) {
-      const match = gitRemote.match(/github\.com[:/]([^/]+\/[^/]+?)(\.git)?$/);
+      const match = gitRemote.match(/(?:github|gitlab)\.com[:/]([^/]+\/[^/]+?)(\.git)?$/);
       if (match) {
         ownerRepo = match[1];
       }
