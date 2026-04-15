@@ -583,7 +583,7 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
       "  Enter repo (owner/repo) or leave empty to skip:",
       "owner/repo",
     );
-    const trimmed = entered.trim();
+    const trimmed = (entered || "").trim();
     if (trimmed && /^[^\s/]+\/[^\s/]+$/.test(trimmed)) {
       repo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${repo}`));
@@ -713,7 +713,7 @@ async function addProjectToConfig(
       "  Enter repo (owner/repo) or leave empty to skip:",
       "owner/repo",
     );
-    const trimmed = entered.trim();
+    const trimmed = (entered || "").trim();
     if (trimmed && /^[^\s/]+\/[^\s/]+$/.test(trimmed)) {
       ownerRepo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${ownerRepo}`));

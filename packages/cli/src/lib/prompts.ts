@@ -42,6 +42,6 @@ export async function promptText(
     console.log(chalk.yellow("\nCancelled."));
     process.exit(0);
   }
-  return result;
+  return typeof result === "string" ? result : "";
 }
 /* c8 ignore stop */
