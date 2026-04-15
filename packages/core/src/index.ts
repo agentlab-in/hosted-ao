@@ -33,9 +33,13 @@ export {
   readMetadataRaw,
   writeMetadata,
   updateMetadata,
+  readCanonicalLifecycle,
+  writeCanonicalLifecycle,
+  updateCanonicalLifecycle,
   deleteMetadata,
   listMetadata,
 } from "./metadata.js";
+export { createInitialCanonicalLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 
 // tmux — command wrappers
 export {

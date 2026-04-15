@@ -1,4 +1,5 @@
 import type { RuntimeHandle, Session, SessionId, SessionStatus } from "../types.js";
+import { deriveLegacyStatus, parseCanonicalLifecycle } from "../lifecycle-state.js";
 import { parsePrFromUrl } from "./pr.js";
 import { safeJsonParse, validateStatus } from "./validation.js";
 
@@ -17,19 +18,35 @@ export function sessionFromMetadata(
   meta: Record<string, string>,
   options: SessionFromMetadataOptions = {},
 ): Session {
+  const runtimeHandle =
+    options.runtimeHandle !== undefined
+      ? options.runtimeHandle
+      : meta["runtimeHandle"]
+        ? safeJsonParse<RuntimeHandle>(meta["runtimeHandle"])
+        : null;
+  const lifecycle = parseCanonicalLifecycle(meta, {
+    sessionId,
+    status: options.status ?? validateStatus(meta["status"]),
+    runtimeHandle,
+    createdAt: options.createdAt,
+  });
+  const status = options.status ?? deriveLegacyStatus(lifecycle, validateStatus(meta["status"]));
+  const prUrl = lifecycle.pr.url ?? meta["pr"];
+
   return {
     id: sessionId,
     projectId: meta["project"] ?? options.projectId ?? "",
-    status: options.status ?? validateStatus(meta["status"]),
+    status,
     activity: options.activity ?? null,
+    lifecycle,
     branch: meta["branch"] || null,
     issueId: meta["issue"] || null,
-    pr: meta["pr"]
+    pr: prUrl
       ? (() => {
-          const parsed = parsePrFromUrl(meta["pr"]);
+          const parsed = parsePrFromUrl(prUrl);
           return {
-            number: parsed?.number ?? 0,
-            url: meta["pr"],
+            number: lifecycle.pr.number ?? parsed?.number ?? 0,
+            url: prUrl,
             title: "",
             owner: parsed?.owner ?? "",
             repo: parsed?.repo ?? "",
@@ -40,12 +57,7 @@ export function sessionFromMetadata(
         })()
       : null,
     workspacePath: meta["worktree"] || null,
-    runtimeHandle:
-      options.runtimeHandle !== undefined
-        ? options.runtimeHandle
-        : meta["runtimeHandle"]
-          ? safeJsonParse<RuntimeHandle>(meta["runtimeHandle"])
-          : null,
+    runtimeHandle: lifecycle.runtime.handle ?? runtimeHandle,
     agentInfo: meta["summary"] ? { summary: meta["summary"], agentSessionId: null } : null,
     createdAt: meta["createdAt"] ? new Date(meta["createdAt"]) : (options.createdAt ?? new Date()),
     lastActivityAt: options.lastActivityAt ?? new Date(),
