@@ -57,6 +57,7 @@ import { detectEnvironment } from "../lib/detect-env.js";
 import { detectAgentRuntime, detectAvailableAgents, type DetectedAgent } from "../lib/detect-agent.js";
 import { detectDefaultBranch } from "../lib/git-utils.js";
 import { promptConfirm, promptSelect, promptText } from "../lib/prompts.js";
+import { extractOwnerRepo, isValidRepoString } from "../lib/repo-utils.js";
 import {
   detectProjectType,
   generateRulesFromTemplates,
@@ -580,15 +581,15 @@ async function autoCreateConfig(workingDir: string): Promise<OrchestratorConfig>
   if (!repo && isHumanCaller()) {
     console.log(chalk.yellow("  ⚠ Could not auto-detect a GitHub/GitLab remote."));
     const entered = await promptText(
-      "  Enter repo (owner/repo) or leave empty to skip:",
+      "  Enter repo (owner/repo or group/subgroup/repo) or leave empty to skip:",
       "owner/repo",
     );
     const trimmed = (entered || "").trim();
-    if (trimmed && /^[^\s/]+\/[^\s/]+$/.test(trimmed)) {
+    if (trimmed && isValidRepoString(trimmed)) {
       repo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${repo}`));
     } else if (trimmed) {
-      console.log(chalk.yellow(`  ⚠ "${trimmed}" doesn't look like owner/repo — skipping.`));
+      console.log(chalk.yellow(`  ⚠ "${trimmed}" doesn't look like a valid repo path — skipping.`));
     }
   }
   /* c8 ignore stop */
@@ -701,8 +702,7 @@ async function addProjectToConfig(
   let ownerRepo: string | null = null;
   const gitRemote = await git(["remote", "get-url", "origin"], resolvedPath);
   if (gitRemote) {
-    const match = gitRemote.match(/(?:github|gitlab)\.com[:/]([^/]+\/[^/]+?)(\.git)?$/);
-    if (match) ownerRepo = match[1];
+    ownerRepo = extractOwnerRepo(gitRemote);
   }
 
   // If no repo detected, prompt the user (same as autoCreateConfig)
@@ -710,15 +710,15 @@ async function addProjectToConfig(
   if (!ownerRepo && isHumanCaller()) {
     console.log(chalk.yellow("  ⚠ Could not auto-detect a GitHub/GitLab remote."));
     const entered = await promptText(
-      "  Enter repo (owner/repo) or leave empty to skip:",
+      "  Enter repo (owner/repo or group/subgroup/repo) or leave empty to skip:",
       "owner/repo",
     );
     const trimmed = (entered || "").trim();
-    if (trimmed && /^[^\s/]+\/[^\s/]+$/.test(trimmed)) {
+    if (trimmed && isValidRepoString(trimmed)) {
       ownerRepo = trimmed;
       console.log(chalk.green(`  ✓ Repo: ${ownerRepo}`));
     } else if (trimmed) {
-      console.log(chalk.yellow(`  ⚠ "${trimmed}" doesn't look like owner/repo — skipping.`));
+      console.log(chalk.yellow(`  ⚠ "${trimmed}" doesn't look like a valid repo path — skipping.`));
     }
   }
   /* c8 ignore stop */

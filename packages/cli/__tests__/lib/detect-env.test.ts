@@ -60,6 +60,16 @@ describe("detectEnvironment", () => {
       expect(env.ownerRepo).toBe("org/repo");
     });
 
+    it("extracts GitLab subgroup paths", async () => {
+      vi.mocked(git)
+        .mockResolvedValueOnce(".git")
+        .mockResolvedValueOnce("git@gitlab.com:group/subgroup/repo.git")
+        .mockResolvedValueOnce("main");
+
+      const env = await detectEnvironment("/tmp/test");
+      expect(env.ownerRepo).toBe("group/subgroup/repo");
+    });
+
     it("returns null for self-hosted / unknown git hosts", async () => {
       vi.mocked(git)
         .mockResolvedValueOnce(".git")

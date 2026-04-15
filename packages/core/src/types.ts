@@ -1137,7 +1137,7 @@ export interface ProjectConfig {
   /** Display name */
   name: string;
 
-  /** GitHub repo in "owner/repo" format (optional — omitted when no remote detected) */
+  /** Repository path for the configured SCM provider, e.g. "owner/repo" or "group/subgroup/repo" (optional — omitted when no remote detected) */
   repo?: string;
 
   /** Local path to the repo */
