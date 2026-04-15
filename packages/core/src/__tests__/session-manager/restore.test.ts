@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdirSync,
+  readFileSync,
   writeFileSync,
+  existsSync,
 } from "node:fs";
 import { join } from "node:path";
 import { createSessionManager } from "../../session-manager.js";
 import { getWorkspaceAgentsMdPath } from "../../opencode-agents-md.js";
+import { getProjectBaseDir } from "../../paths.js";
 import {
   writeMetadata,
   readMetadataRaw,
@@ -568,6 +571,71 @@ describe("restore", () => {
         }),
       }),
     );
+  });
+
+  it("re-materializes AGENTS.md for restored OpenCode orchestrators", async () => {
+    const wsPath = join(tmpDir, "ws-app-orchestrator-opencode-agentsmd");
+    mkdirSync(wsPath, { recursive: true });
+
+    const projectPath = join(tmpDir, "my-app");
+    const baseDir = getProjectBaseDir(ctx.configPath, projectPath);
+    mkdirSync(baseDir, { recursive: true });
+    const promptFile = join(baseDir, "orchestrator-prompt-app-orchestrator.md");
+    const promptContent = "You are the AO orchestrator. Delegate tasks.";
+    writeFileSync(promptFile, promptContent, "utf-8");
+
+    const agentsMdPath = getWorkspaceAgentsMdPath(wsPath);
+    expect(existsSync(agentsMdPath)).toBe(false);
+
+    const mockOpenCodeAgent: Agent = {
+      ...mockAgent,
+      name: "opencode",
+      getRestoreCommand: vi.fn().mockResolvedValue("opencode --session 'ses_restore'"),
+    };
+
+    const registryWithOpenCode: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockOpenCodeAgent;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-orchestrator", {
+      worktree: wsPath,
+      branch: "main",
+      status: "killed",
+      project: "my-app",
+      role: "orchestrator",
+      agent: "opencode",
+      opencodeSessionId: "ses_restore",
+      runtimeHandle: JSON.stringify(makeHandle("rt-old")),
+    });
+
+    const configWithOpenCode: OrchestratorConfig = {
+      ...config,
+      defaults: { ...config.defaults, agent: "opencode" },
+      projects: {
+        ...config.projects,
+        "my-app": {
+          ...config.projects["my-app"],
+          agent: "opencode",
+        },
+      },
+    };
+
+    const sm = createSessionManager({
+      config: configWithOpenCode,
+      registry: registryWithOpenCode,
+    });
+    await sm.restore("app-orchestrator");
+
+    expect(existsSync(agentsMdPath)).toBe(true);
+    const written = readFileSync(agentsMdPath, "utf-8");
+    expect(written).toContain(promptContent);
+    expect(written).toContain("<!-- AO_ORCHESTRATOR_PROMPT_START -->");
   });
 
   it("preserves original createdAt/issue/PR metadata", async () => {
