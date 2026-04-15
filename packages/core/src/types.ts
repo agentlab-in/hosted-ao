@@ -210,6 +210,17 @@ export const TERMINAL_ACTIVITIES: ReadonlySet<ActivityState> = new Set(["exited"
 /** Statuses that must never be restored (e.g. already merged). */
 export const NON_RESTORABLE_STATUSES: ReadonlySet<SessionStatus> = new Set(["merged"]);
 
+/** Check whether lifecycle metadata indicates the session's PR is already merged. */
+function hasMergedLifecyclePR(lifecycle: CanonicalSessionLifecycle): boolean {
+  return (
+    (
+      lifecycle as CanonicalSessionLifecycle & {
+        pr?: { state?: string | null } | null;
+      }
+    ).pr?.state === "merged"
+  );
+}
+
 /** Check if a session is in a terminal (dead) state. */
 export function isTerminalSession(session: {
   status: SessionStatus;
@@ -239,10 +250,9 @@ export function isRestorable(session: {
 }): boolean {
   if (session.lifecycle) {
     return (
-      session.lifecycle.session.state !== "done" &&
-      (session.lifecycle.session.state === "terminated" ||
-        session.lifecycle.runtime.state === "missing" ||
-        session.lifecycle.runtime.state === "exited")
+      isTerminalSession(session) &&
+      !NON_RESTORABLE_STATUSES.has(session.status) &&
+      !hasMergedLifecyclePR(session.lifecycle)
     );
   }
   return isTerminalSession(session) && !NON_RESTORABLE_STATUSES.has(session.status);
