@@ -702,6 +702,25 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("merged");
   });
 
+  it("treats closed PRs as done when the canonical lifecycle marks them complete", async () => {
+    const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("closed") });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "pr_open", pr: makePR() }),
+      registry,
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("done");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["status"]).toBe("done");
+  });
+
   it("detects mergeable when approved + CI green", async () => {
     const mockSCM = createMockSCM({
       getReviewDecision: vi.fn().mockResolvedValue("approved"),

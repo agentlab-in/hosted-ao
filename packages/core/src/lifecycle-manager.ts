@@ -387,26 +387,6 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return "stale";
   }
 
-  function buildDetectingResult(
-    session: Session,
-    evidence: string,
-    fallbackStatus: SessionStatus = SESSION_STATUS.STUCK,
-  ): DeterminedStatus {
-    const attempts = parseAttemptCount(session.metadata["detectingAttempts"]) + 1;
-    if (attempts > DETECTING_MAX_ATTEMPTS) {
-      return {
-        status: fallbackStatus,
-        evidence,
-        detectingAttempts: attempts,
-      };
-    }
-    return {
-      status: SESSION_STATUS.DETECTING,
-      evidence,
-      detectingAttempts: attempts,
-    };
-  }
-
   /** Determine current status for a session by polling plugins. */
   async function determineStatus(session: Session): Promise<DeterminedStatus> {
     const project = config.projects[session.projectId];
@@ -444,7 +424,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       detectingAttempts = parseAttemptCount(session.metadata["detectingAttempts"]),
     ): DeterminedStatus => {
       session.lifecycle = lifecycle;
-      session.status = deriveLegacyStatus(lifecycle, session.status);
+      session.status = status;
       return {
         status,
         evidence,
@@ -699,7 +679,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             lifecycle.pr.state = "closed";
             lifecycle.pr.reason = "closed_unmerged";
             setSessionState("done", "research_complete");
-            return commit(SESSION_STATUS.KILLED, "pr_closed", 0);
+            return commit(SESSION_STATUS.DONE, "pr_closed", 0);
           }
 
           lifecycle.pr.state = "open";
@@ -753,7 +733,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           lifecycle.pr.state = "closed";
           lifecycle.pr.reason = "closed_unmerged";
           setSessionState("done", "research_complete");
-          return commit(SESSION_STATUS.KILLED, "pr_closed", 0);
+          return commit(SESSION_STATUS.DONE, "pr_closed", 0);
         }
 
         lifecycle.pr.state = "open";

@@ -110,7 +110,12 @@ export async function validateSession(
     runtimeProbeSucceeded &&
     processProbeSucceeded &&
     ((runtimeAlive && !agentProcessRunning) || (!runtimeAlive && agentProcessRunning));
-  const recoveryRule = determineRecoveryRule(classification, signalDisagreement, metadataStatus);
+  const recoveryRule = determineRecoveryRule(
+    classification,
+    signalDisagreement,
+    metadataStatus,
+    recoveryConfig,
+  );
   const action = determineAction(classification, metadataStatus, recoveryConfig, recoveryRule);
 
   return {
@@ -186,10 +191,14 @@ function determineRecoveryRule(
   classification: RecoveryClassification,
   signalDisagreement: boolean,
   metadataStatus: SessionStatus,
+  recoveryConfig: RecoveryConfig = DEFAULT_RECOVERY_CONFIG,
 ): "auto" | "human" | "skip" {
   if (classification === "unrecoverable") return "skip";
-  if (metadataStatus === "detecting" || signalDisagreement || classification === "partial") {
+  if (metadataStatus === "detecting" || signalDisagreement) {
     return "human";
+  }
+  if (classification === "partial") {
+    return recoveryConfig.escalatePartial ? "human" : "auto";
   }
   if (classification === "live" || classification === "dead") {
     return "auto";
