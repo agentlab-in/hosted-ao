@@ -60,6 +60,14 @@ export interface DashboardSession {
   projectId: string;
   status: SessionStatus;
   activity: ActivityState | null;
+  lifecycle?: {
+    sessionState: string;
+    sessionReason: string;
+    prState: string;
+    prReason: string;
+    runtimeState: string;
+    runtimeReason: string;
+  };
   branch: string | null;
   issueId: string | null; // Deprecated: use issueUrl instead
   issueUrl: string | null; // Full issue URL

@@ -32,9 +32,15 @@ import {
   constants,
 } from "node:fs";
 import { join, dirname } from "node:path";
-import type { SessionId, SessionMetadata } from "./types.js";
+import type { CanonicalSessionLifecycle, SessionId, SessionMetadata, SessionStatus } from "./types.js";
 import { atomicWriteFileSync } from "./atomic-write.js";
 import { parseKeyValueContent } from "./key-value.js";
+import {
+  buildLifecycleMetadataPatch,
+  cloneLifecycle,
+  parseCanonicalLifecycle,
+} from "./lifecycle-state.js";
+import { validateStatus } from "./utils/validation.js";
 
 /** Serialize a record back to key=value format. Newlines in values are replaced to prevent injection. */
 function serializeMetadata(data: Record<string, string>): string {
@@ -85,6 +91,8 @@ export function readMetadata(dataDir: string, sessionId: SessionId): SessionMeta
     agent: raw["agent"],
     createdAt: raw["createdAt"],
     runtimeHandle: raw["runtimeHandle"],
+    stateVersion: raw["stateVersion"],
+    statePayload: raw["statePayload"],
     restoredAt: raw["restoredAt"],
     role: raw["role"],
     dashboardPort: raw["dashboardPort"] ? Number(raw["dashboardPort"]) : undefined,
@@ -136,6 +144,8 @@ export function writeMetadata(
   if (metadata.agent) data["agent"] = metadata.agent;
   if (metadata.createdAt) data["createdAt"] = metadata.createdAt;
   if (metadata.runtimeHandle) data["runtimeHandle"] = metadata.runtimeHandle;
+  if (metadata.stateVersion) data["stateVersion"] = metadata.stateVersion;
+  if (metadata.statePayload) data["statePayload"] = metadata.statePayload;
   if (metadata.restoredAt) data["restoredAt"] = metadata.restoredAt;
   if (metadata.role) data["role"] = metadata.role;
   if (metadata.dashboardPort !== undefined) data["dashboardPort"] = String(metadata.dashboardPort);
@@ -179,6 +189,45 @@ export function updateMetadata(
 
   mkdirSync(dirname(path), { recursive: true });
   atomicWriteFileSync(path, serializeMetadata(existing));
+}
+
+export function readCanonicalLifecycle(
+  dataDir: string,
+  sessionId: SessionId,
+): CanonicalSessionLifecycle | null {
+  const raw = readMetadataRaw(dataDir, sessionId);
+  if (!raw) return null;
+  return parseCanonicalLifecycle(raw, { sessionId, status: validateStatus(raw["status"]) });
+}
+
+export function writeCanonicalLifecycle(
+  dataDir: string,
+  sessionId: SessionId,
+  lifecycle: CanonicalSessionLifecycle,
+  previousStatus?: SessionStatus,
+): void {
+  updateMetadata(
+    dataDir,
+    sessionId,
+    buildLifecycleMetadataPatch(cloneLifecycle(lifecycle), previousStatus),
+  );
+}
+
+export function updateCanonicalLifecycle(
+  dataDir: string,
+  sessionId: SessionId,
+  updater: (current: CanonicalSessionLifecycle) => CanonicalSessionLifecycle,
+  previousStatus?: SessionStatus,
+): CanonicalSessionLifecycle | null {
+  const raw = readMetadataRaw(dataDir, sessionId);
+  if (!raw) return null;
+  const current = parseCanonicalLifecycle(raw, {
+    sessionId,
+    status: validateStatus(raw["status"]),
+  });
+  const next = updater(cloneLifecycle(current));
+  writeCanonicalLifecycle(dataDir, sessionId, next, previousStatus);
+  return next;
 }
 
 /**

@@ -42,14 +42,15 @@ Your role is to coordinate and manage worker agent sessions. You do NOT write co
   sections.push(`## Project Info
 
 - **Name**: ${project.name}
-- **Repository**: ${project.repo}
+- **Repository**: ${project.repo ?? "not configured"}
 - **Default Branch**: ${project.defaultBranch}
 - **Session Prefix**: ${project.sessionPrefix}
 - **Local Path**: ${project.path}
 - **Dashboard Port**: ${config.port ?? 3000}`);
 
-  // Quick Start
-  sections.push(`## Quick Start
+  // Quick Start — include issue/PR commands only when repo is configured
+  if (project.repo) {
+    sections.push(`## Quick Start
 
 \`\`\`bash
 # See all sessions at a glance
@@ -78,27 +79,54 @@ ao session kill ${project.sessionPrefix}-1
 # Open all sessions in terminal tabs
 ao open ${projectId}
 \`\`\``);
+  } else {
+    sections.push(`## Quick Start
 
-  // Available Commands
+\`\`\`bash
+# See all sessions at a glance
+ao status
+
+# Spawn a session (prompt-driven, no issue tracker configured)
+ao spawn --prompt "Refactor the auth module to use JWT"
+
+# List sessions
+ao session ls -p ${projectId}
+
+# Send message to a session
+ao send ${project.sessionPrefix}-1 "Your message here"
+
+# Kill a session
+ao session kill ${project.sessionPrefix}-1
+\`\`\`
+
+> **Note:** No repository remote is configured. Issue tracking, PR, and CI features are unavailable.
+> Add a \`repo\` field (owner/repo) to \`agent-orchestrator.yaml\` to enable them.`);
+  }
+
+  // Available Commands — omit PR/issue commands when no repo configured
+  const cmdRows = [
+    `| \`ao status\` | Show all sessions${project.repo ? " with PR/CI/review status" : ""} |`,
+    `| \`ao spawn [issue] [--prompt <text>]${project.repo ? " [--claim-pr <pr>]" : ""}\` | Spawn a worker session${project.repo ? "; use issue ID or --prompt for freeform tasks" : " with --prompt for freeform tasks"} |`,
+    ...(project.repo ? [`| \`ao batch-spawn <issues...>\` | Spawn multiple sessions in parallel (project auto-detected) |`] : []),
+    `| \`ao session ls [-p project]\` | List all sessions (optionally filter by project) |`,
+    ...(project.repo ? [`| \`ao session claim-pr <pr> [session]\` | Attach an existing PR to a worker session |`] : []),
+    `| \`ao session attach <session>\` | Attach to a session's tmux window |`,
+    `| \`ao session kill <session>\` | Kill a specific session |`,
+    `| \`ao session cleanup [-p project]\` | Kill completed/merged sessions |`,
+    `| \`ao send <session> <message>\` | Send a message to a running session |`,
+    `| \`ao send --no-wait <session> <message>\` | Send without waiting for session to become idle |`,
+    `| \`ao dashboard\` | Start the web dashboard (http://localhost:${config.port ?? 3000}) |`,
+    `| \`ao open <project>\` | Open all project sessions in terminal tabs |`,
+  ];
+
   sections.push(`## Available Commands
 
 | Command | Description |
 |---------|-------------|
-| \`ao status\` | Show all sessions with PR/CI/review status |
-| \`ao spawn [issue] [--prompt <text>] [--claim-pr <pr>]\` | Spawn a worker session; use issue ID or --prompt for freeform tasks |
-| \`ao batch-spawn <issues...>\` | Spawn multiple sessions in parallel (project auto-detected) |
-| \`ao session ls [-p project]\` | List all sessions (optionally filter by project) |
-| \`ao session claim-pr <pr> [session]\` | Attach an existing PR to a worker session |
-| \`ao session attach <session>\` | Attach to a session's tmux window |
-| \`ao session kill <session>\` | Kill a specific session |
-| \`ao session cleanup [-p project]\` | Kill completed/merged sessions |
-| \`ao send <session> <message>\` | Send a message to a running session |
-| \`ao send --no-wait <session> <message>\` | Send without waiting for session to become idle |
-| \`ao dashboard\` | Start the web dashboard (http://localhost:${config.port ?? 3000}) |
-| \`ao open <project>\` | Open all project sessions in terminal tabs |`);
+${cmdRows.join("\n")}`);
 
   // Session Management
-  sections.push(`## Session Management
+  const sessionMgmt = [`## Session Management
 
 ### Spawning Sessions
 
@@ -117,19 +145,21 @@ ao spawn --prompt "Add rate limiting to the /api/upload endpoint"
 ### Monitoring Progress
 
 Use \`ao status\` to see:
-- Current session status (working, pr_open, review_pending, etc.)
+- Current session status (working, pr_open, review_pending, etc.)${project.repo ? `
 - PR state (open/merged/closed)
 - CI status (passing/failing/pending)
 - Review decision (approved/changes_requested/pending)
-- Unresolved comments count
+- Unresolved comments count` : ""}
 
 ### Sending Messages
 
 Send instructions to a running agent:
 \`\`\`bash
 ao send ${project.sessionPrefix}-1 "Please address the review comments on your PR"
-\`\`\`
+\`\`\``];
 
+  if (project.repo) {
+    sessionMgmt.push(`
 ### PR Takeover
 
 If a worker session needs to continue work on an existing PR:
@@ -141,8 +171,10 @@ ao spawn --claim-pr 123
 
 This updates AO metadata, switches the worker worktree onto the PR branch, and lets lifecycle reactions keep routing CI and review feedback to that worker session.
 
-Never claim a PR into \`${project.sessionPrefix}-orchestrator\`. If a PR needs implementation or takeover, delegate it to a worker session instead.
+Never claim a PR into \`${project.sessionPrefix}-orchestrator\`. If a PR needs implementation or takeover, delegate it to a worker session instead.`);
+  }
 
+  sessionMgmt.push(`
 ### Investigation Workflow
 
 When debugging or triaging from the orchestrator session:
@@ -157,6 +189,8 @@ Remove completed sessions:
 \`\`\`bash
 ao session cleanup -p ${projectId}  # Kill sessions where PR is merged or issue is closed
 \`\`\``);
+
+  sections.push(sessionMgmt.join("\n"));
 
   // Dashboard
   sections.push(`## Dashboard
@@ -195,35 +229,45 @@ ${reactionLines.join("\n")}`);
   }
 
   // Workflows
-  sections.push(`## Common Workflows
+  const workflows = [`## Common Workflows`];
 
+  if (project.repo) {
+    workflows.push(`
 ### Bulk Issue Processing
 1. Get list of issues from tracker (GitHub/Linear/etc.)
 2. Use \`ao batch-spawn\` to spawn sessions for each issue
 3. Monitor with \`ao status\` or the dashboard
 4. Agents will fetch, implement, test, PR, and respond to reviews
-5. Use \`ao session cleanup\` when PRs are merged
+5. Use \`ao session cleanup\` when PRs are merged`);
+  }
 
+  workflows.push(`
 ### Handling Stuck Agents
 1. Check \`ao status\` for sessions in "stuck" or "needs_input" state
 2. Attach with \`ao session attach <session>\` to see what they're doing
 3. Send clarification or instructions with \`ao send <session> '...'\`
-4. Or kill and respawn with fresh context if needed
+4. Or kill and respawn with fresh context if needed`);
 
+  if (project.repo) {
+    workflows.push(`
 ### PR Review Flow
 1. Agent creates PR and pushes
 2. CI runs automatically
 3. If CI fails: reaction auto-sends fix instructions to agent
 4. If reviewers request changes: reaction auto-sends comments to agent
-5. When approved + green: notify human to merge (unless auto-merge enabled)
+5. When approved + green: notify human to merge (unless auto-merge enabled)`);
+  }
 
+  workflows.push(`
 ### Manual Intervention
 When an agent needs human judgment:
 1. You'll get a notification (desktop/slack/webhook)
 2. Check the dashboard or \`ao status\` for details
 3. Attach to the session if needed: \`ao session attach <session>\`
 4. Send instructions: \`ao send <session> '...'\`
-5. Or handle the human-only action yourself (merge PR, close issue, etc.) while keeping implementation in worker sessions.`);
+5. Or handle the human-only action yourself${project.repo ? " (merge PR, close issue, etc.)" : ""} while keeping implementation in worker sessions.`);
+
+  sections.push(workflows.join("\n"));
 
   // Tips
   sections.push(`## Tips
