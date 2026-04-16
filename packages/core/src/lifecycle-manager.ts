@@ -350,10 +350,67 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return idleMs > stuckThresholdMs;
   }
 
+  const ACTIVITY_STRONG_WINDOW_MS = 60_000;
+  const ACTIVITY_WEAK_WINDOW_MS = 5 * 60_000;
+  const DETECTING_MAX_ATTEMPTS = 3;
+
+  type ProbeState = "alive" | "dead" | "unknown";
+
+  interface ProbeResult {
+    state: ProbeState;
+    failed: boolean;
+  }
+
+  interface DeterminedStatus {
+    status: SessionStatus;
+    evidence: string;
+    detectingAttempts: number;
+  }
+
+  function parseAttemptCount(raw: string | undefined): number {
+    if (!raw) return 0;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function summarizeActivityFreshness(timestamp: Date | undefined): "strong" | "weak" | "stale" | "none" {
+    if (!timestamp) return "none";
+    const ageMs = Date.now() - timestamp.getTime();
+    if (ageMs <= ACTIVITY_STRONG_WINDOW_MS) return "strong";
+    if (ageMs <= ACTIVITY_WEAK_WINDOW_MS) return "weak";
+    return "stale";
+  }
+
+  function buildDetectingResult(
+    session: Session,
+    evidence: string,
+    fallbackStatus: SessionStatus = SESSION_STATUS.STUCK,
+  ): DeterminedStatus {
+    const attempts = parseAttemptCount(session.metadata["detectingAttempts"]) + 1;
+    if (attempts > DETECTING_MAX_ATTEMPTS) {
+      return {
+        status: fallbackStatus,
+        evidence,
+        detectingAttempts: attempts,
+      };
+    }
+    return {
+      status: SESSION_STATUS.DETECTING,
+      evidence,
+      detectingAttempts: attempts,
+    };
+  }
+
   /** Determine current status for a session by polling plugins. */
-  async function determineStatus(session: Session): Promise<SessionStatus> {
+  async function determineStatus(session: Session): Promise<DeterminedStatus> {
     const project = config.projects[session.projectId];
-    if (!project) return session.status;
+    if (!project) {
+      return {
+        status: session.status,
+        evidence: "project_missing",
+        detectingAttempts: parseAttemptCount(session.metadata["detectingAttempts"]),
+      };
+    }
 
     const agentName = resolveAgentSelection({
       role: resolveSessionRole(
@@ -378,13 +435,22 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       hasPersistedRuntimeIdentity || session.status !== SESSION_STATUS.SPAWNING;
 
     // 1. Check if runtime is alive
+    let runtimeProbe: ProbeResult = { state: "unknown", failed: false };
     if (session.runtimeHandle && canProbeRuntimeIdentity) {
       const runtime = registry.get<Runtime>("runtime", project.runtime ?? config.defaults.runtime);
       if (runtime) {
-        const alive = await runtime.isAlive(session.runtimeHandle).catch(() => true);
-        if (!alive) return "killed";
+        try {
+          const alive = await runtime.isAlive(session.runtimeHandle);
+          runtimeProbe = { state: alive ? "alive" : "dead", failed: false };
+        } catch {
+          runtimeProbe = { state: "unknown", failed: true };
+        }
       }
     }
+
+    let activityState: Awaited<ReturnType<Agent["getActivityState"]>> | null = null;
+    let processProbe: ProbeResult = { state: "unknown", failed: false };
+    let activityEvidence = "activity_unavailable";
 
     // 2. Check agent activity.
     // JSONL-based activity detection is runtime-agnostic, but terminal probing
@@ -414,10 +480,19 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         }
 
         // Try JSONL-based activity detection first (reads agent's session files directly)
-        const activityState = await agent.getActivityState(session, config.readyThresholdMs);
+        activityState = await agent.getActivityState(session, config.readyThresholdMs);
         if (activityState) {
-          if (activityState.state === "waiting_input") return "needs_input";
-          if (activityState.state === "exited") return "killed";
+          activityEvidence = `activity:${activityState.state}`;
+          if (activityState.state === "waiting_input") {
+            return {
+              status: SESSION_STATUS.NEEDS_INPUT,
+              evidence: activityEvidence,
+              detectingAttempts: 0,
+            };
+          }
+          if (activityState.state === "exited") {
+            processProbe = { state: "dead", failed: false };
+          }
 
           if (
             (activityState.state === "idle" || activityState.state === "blocked") &&
@@ -438,10 +513,21 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             const terminalOutput = runtime ? await runtime.getOutput(session.runtimeHandle, 10) : "";
             if (terminalOutput) {
               const activity = agent.detectActivity(terminalOutput);
-              if (activity === "waiting_input") return "needs_input";
+              activityEvidence = `terminal:${activity}`;
+              if (activity === "waiting_input") {
+                return {
+                  status: SESSION_STATUS.NEEDS_INPUT,
+                  evidence: activityEvidence,
+                  detectingAttempts: 0,
+                };
+              }
 
-              const processAlive = await agent.isProcessRunning(session.runtimeHandle);
-              if (!processAlive) return "killed";
+              try {
+                const processAlive = await agent.isProcessRunning(session.runtimeHandle);
+                processProbe = { state: processAlive ? "alive" : "dead", failed: false };
+              } catch {
+                processProbe = { state: "unknown", failed: true };
+              }
             }
           }
         }
@@ -450,11 +536,61 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // than letting the fallback at the bottom coerce them to "working"
         if (
           session.status === SESSION_STATUS.STUCK ||
-          session.status === SESSION_STATUS.NEEDS_INPUT
+          session.status === SESSION_STATUS.NEEDS_INPUT ||
+          session.status === SESSION_STATUS.DETECTING
         ) {
-          return session.status;
+          return {
+            status: session.status,
+            evidence: "activity_probe_failed_preserved",
+            detectingAttempts: parseAttemptCount(session.metadata["detectingAttempts"]),
+          };
         }
+        return buildDetectingResult(session, "activity_probe_failed");
       }
+    }
+
+    if (
+      processProbe.state === "unknown" &&
+      session.runtimeHandle &&
+      canProbeRuntimeIdentity &&
+      agent
+    ) {
+      try {
+        const processAlive = await agent.isProcessRunning(session.runtimeHandle);
+        processProbe = { state: processAlive ? "alive" : "dead", failed: false };
+      } catch {
+        processProbe = { state: "unknown", failed: true };
+      }
+    }
+
+    const activityFreshness = summarizeActivityFreshness(activityState?.timestamp);
+    const recentActivitySupportsLiveness =
+      activityFreshness === "strong" || activityFreshness === "weak";
+
+    if (runtimeProbe.failed || processProbe.failed) {
+      return buildDetectingResult(
+        session,
+        `probe_failed runtime=${runtimeProbe.state} process=${processProbe.state} ${activityEvidence}`,
+      );
+    }
+
+    if (runtimeProbe.state === "dead" && processProbe.state === "dead" && !recentActivitySupportsLiveness) {
+      return {
+        status: SESSION_STATUS.KILLED,
+        evidence: `runtime_dead process_dead activity=${activityFreshness}`,
+        detectingAttempts: 0,
+      };
+    }
+
+    if (
+      (runtimeProbe.state === "dead" && processProbe.state === "alive") ||
+      (runtimeProbe.state === "alive" && processProbe.state === "dead") ||
+      (runtimeProbe.state === "dead" && recentActivitySupportsLiveness)
+    ) {
+      return buildDetectingResult(
+        session,
+        `signal_disagreement runtime=${runtimeProbe.state} process=${processProbe.state} activity=${activityFreshness}`,
+      );
     }
 
     // 3. Auto-detect PR by branch if metadata.pr is missing.
@@ -494,23 +630,44 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
         if (cachedData) {
           // Use cached enrichment data - avoids individual API calls
-          if (cachedData.state === PR_STATE.MERGED) return "merged";
-          if (cachedData.state === PR_STATE.CLOSED) return "killed";
+        if (cachedData.state === PR_STATE.MERGED) {
+          return { status: SESSION_STATUS.MERGED, evidence: "pr_merged", detectingAttempts: 0 };
+        }
+        if (cachedData.state === PR_STATE.CLOSED) {
+          return { status: SESSION_STATUS.KILLED, evidence: "pr_closed", detectingAttempts: 0 };
+        }
 
-          // Check CI
-          if (cachedData.ciStatus === CI_STATUS.FAILING) return "ci_failed";
+        // Check CI
+        if (cachedData.ciStatus === CI_STATUS.FAILING) {
+          return { status: SESSION_STATUS.CI_FAILED, evidence: "ci_failing", detectingAttempts: 0 };
+        }
 
-          // Check reviews
-          if (cachedData.reviewDecision === "changes_requested")
-            return "changes_requested";
-          if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
+        // Check reviews
+        if (cachedData.reviewDecision === "changes_requested") {
+          return {
+            status: SESSION_STATUS.CHANGES_REQUESTED,
+            evidence: "review_changes_requested",
+            detectingAttempts: 0,
+          };
+        }
+        if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
             // Check merge readiness — treat "none" (no reviewers required)
             // as "approved" so CI-green PRs reach "mergeable" status
             // and fire the merge.ready event / approved-and-green reaction.
-            if (cachedData.mergeable) return "mergeable";
-            if (cachedData.reviewDecision === "approved") return "approved";
+            if (cachedData.mergeable) {
+              return { status: SESSION_STATUS.MERGEABLE, evidence: "merge_ready", detectingAttempts: 0 };
+            }
+            if (cachedData.reviewDecision === "approved") {
+              return { status: SESSION_STATUS.APPROVED, evidence: "review_approved", detectingAttempts: 0 };
+            }
           }
-          if (cachedData.reviewDecision === "pending") return "review_pending";
+          if (cachedData.reviewDecision === "pending") {
+            return {
+              status: SESSION_STATUS.REVIEW_PENDING,
+              evidence: "review_pending",
+              detectingAttempts: 0,
+            };
+          }
 
           // 4b. Post-PR stuck detection: agent has a PR open but is idle beyond
           // threshold. This catches the case where step 2's stuck check was
@@ -518,33 +675,55 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // wasn't available during step 2 but the session has been at pr_open
           // for a long time. Without this, sessions get stuck at "pr_open" forever.
           if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
-            return "stuck";
+            return { status: SESSION_STATUS.STUCK, evidence: "idle_beyond_threshold", detectingAttempts: 0 };
           }
 
-          return "pr_open";
+          return { status: SESSION_STATUS.PR_OPEN, evidence: "pr_open", detectingAttempts: 0 };
         }
 
         // Fall back to individual API calls if no cached data
         const prState = await scm.getPRState(session.pr);
-        if (prState === PR_STATE.MERGED) return "merged";
-        if (prState === PR_STATE.CLOSED) return "killed";
+        if (prState === PR_STATE.MERGED) {
+          return { status: SESSION_STATUS.MERGED, evidence: "pr_merged", detectingAttempts: 0 };
+        }
+        if (prState === PR_STATE.CLOSED) {
+          return { status: SESSION_STATUS.KILLED, evidence: "pr_closed", detectingAttempts: 0 };
+        }
 
         // Check CI
         const ciStatus = await scm.getCISummary(session.pr);
-        if (ciStatus === CI_STATUS.FAILING) return "ci_failed";
+        if (ciStatus === CI_STATUS.FAILING) {
+          return { status: SESSION_STATUS.CI_FAILED, evidence: "ci_failing", detectingAttempts: 0 };
+        }
 
         // Check reviews
         const reviewDecision = await scm.getReviewDecision(session.pr);
-        if (reviewDecision === "changes_requested") return "changes_requested";
+        if (reviewDecision === "changes_requested") {
+          return {
+            status: SESSION_STATUS.CHANGES_REQUESTED,
+            evidence: "review_changes_requested",
+            detectingAttempts: 0,
+          };
+        }
         if (reviewDecision === "approved" || reviewDecision === "none") {
           // Check merge readiness — treat "none" (no reviewers required)
           // as "approved" so CI-green PRs reach "mergeable" status
           // and fire the merge.ready event / approved-and-green reaction.
           const mergeReady = await scm.getMergeability(session.pr);
-          if (mergeReady.mergeable) return "mergeable";
-          if (reviewDecision === "approved") return "approved";
+          if (mergeReady.mergeable) {
+            return { status: SESSION_STATUS.MERGEABLE, evidence: "merge_ready", detectingAttempts: 0 };
+          }
+          if (reviewDecision === "approved") {
+            return { status: SESSION_STATUS.APPROVED, evidence: "review_approved", detectingAttempts: 0 };
+          }
         }
-        if (reviewDecision === "pending") return "review_pending";
+        if (reviewDecision === "pending") {
+          return {
+            status: SESSION_STATUS.REVIEW_PENDING,
+            evidence: "review_pending",
+            detectingAttempts: 0,
+          };
+        }
 
         // 4b. Post-PR stuck detection: agent has a PR open but is idle beyond
         // threshold. This catches the case where step 2's stuck check was
@@ -552,10 +731,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // wasn't available during step 2 but the session has been at pr_open
         // for a long time. Without this, sessions get stuck at "pr_open" forever.
         if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
-          return "stuck";
+          return { status: SESSION_STATUS.STUCK, evidence: "idle_beyond_threshold", detectingAttempts: 0 };
         }
 
-        return "pr_open";
+        return { status: SESSION_STATUS.PR_OPEN, evidence: "pr_open", detectingAttempts: 0 };
       } catch {
         // SCM check failed — keep current status
       }
@@ -564,18 +743,23 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // 5. Post-all stuck detection: if we detected idle in step 2 but had no PR,
     // still check stuck threshold. This handles agents that finish without creating a PR.
     if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
-      return "stuck";
+      return { status: SESSION_STATUS.STUCK, evidence: "idle_beyond_threshold", detectingAttempts: 0 };
     }
 
     // 6. Default: if agent is active, it's working
     if (
-      session.status === "spawning" ||
+      session.status === SESSION_STATUS.SPAWNING ||
+      session.status === SESSION_STATUS.DETECTING ||
       session.status === SESSION_STATUS.STUCK ||
       session.status === SESSION_STATUS.NEEDS_INPUT
     ) {
-      return "working";
+      return { status: SESSION_STATUS.WORKING, evidence: activityEvidence, detectingAttempts: 0 };
     }
-    return session.status;
+    return {
+      status: session.status,
+      evidence: activityEvidence,
+      detectingAttempts: parseAttemptCount(session.metadata["detectingAttempts"]),
+    };
   }
 
   /** Execute a reaction for a session. */
@@ -1209,8 +1393,20 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const tracked = states.get(session.id);
     const oldStatus =
       tracked ?? ((session.metadata?.["status"] as SessionStatus | undefined) || session.status);
-    const newStatus = await determineStatus(session);
+    const assessment = await determineStatus(session);
+    const newStatus = assessment.status;
     let transitionReaction: { key: string; result: ReactionResult | null } | undefined;
+
+    updateSessionMetadata(session, {
+      lifecycleEvidence: assessment.evidence,
+      detectingAttempts:
+        assessment.detectingAttempts > 0 ? String(assessment.detectingAttempts) : "",
+      detectingEscalatedAt:
+        newStatus === SESSION_STATUS.STUCK &&
+        assessment.detectingAttempts > DETECTING_MAX_ATTEMPTS
+          ? new Date().toISOString()
+          : "",
+    });
 
     if (newStatus !== oldStatus) {
       const correlationId = createCorrelationId("lifecycle-transition");
