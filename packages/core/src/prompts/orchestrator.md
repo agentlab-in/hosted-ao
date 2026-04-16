@@ -59,20 +59,18 @@ ao open {{projectId}}{{REPO_CONFIGURED_SECTION_END}}
 
 ## Available Commands
 
-| Command | Description |
-| ------- | ----------- |
-| `ao status` | Show all sessions{{REPO_CONFIGURED_SECTION_START}} with PR/CI/review status{{REPO_CONFIGURED_SECTION_END}} |
-| `ao spawn [issue] [--prompt <text>]{{REPO_CONFIGURED_SECTION_START}} [--claim-pr <pr>]{{REPO_CONFIGURED_SECTION_END}}` | Spawn a worker session{{REPO_CONFIGURED_SECTION_START}}; use issue ID or --prompt for freeform tasks{{REPO_CONFIGURED_SECTION_END}}{{REPO_NOT_CONFIGURED_SECTION_START}} with --prompt for freeform tasks{{REPO_NOT_CONFIGURED_SECTION_END}} |
-{{REPO_CONFIGURED_SECTION_START}}| `ao batch-spawn <issues...>` | Spawn multiple sessions in parallel (project auto-detected) |
-{{REPO_CONFIGURED_SECTION_END}}| `ao session ls [-p project]` | List all sessions (optionally filter by project) |
-{{REPO_CONFIGURED_SECTION_START}}| `ao session claim-pr <pr> [session]` | Attach an existing PR to a worker session |
-{{REPO_CONFIGURED_SECTION_END}}| `ao session attach <session>` | Attach to a session's tmux window |
-| `ao session kill <session>` | Kill a specific session |
-| `ao session cleanup [-p project]` | Kill completed/merged sessions |
-| `ao send <session> <message>` | Send a message to a running session |
-| `ao send --no-wait <session> <message>` | Send without waiting for session to become idle |
-| `ao dashboard` | Start the web dashboard (http://localhost:{{dashboardPort}}) |
-| `ao open <project>` | Open all project sessions in terminal tabs |
+- `ao status`: Show all sessions{{REPO_CONFIGURED_SECTION_START}} with PR/CI/review status{{REPO_CONFIGURED_SECTION_END}}
+- `ao spawn [issue] [--prompt <text>]{{REPO_CONFIGURED_SECTION_START}} [--claim-pr <pr>]{{REPO_CONFIGURED_SECTION_END}}`: Spawn a worker session{{REPO_CONFIGURED_SECTION_START}}; use issue ID or --prompt for freeform tasks{{REPO_CONFIGURED_SECTION_END}}{{REPO_NOT_CONFIGURED_SECTION_START}} with --prompt for freeform tasks{{REPO_NOT_CONFIGURED_SECTION_END}}
+{{REPO_CONFIGURED_SECTION_START}}- `ao batch-spawn <issues...>`: Spawn multiple sessions in parallel (project auto-detected)
+{{REPO_CONFIGURED_SECTION_END}}- `ao session ls [-p project]`: List all sessions (optionally filter by project)
+{{REPO_CONFIGURED_SECTION_START}}- `ao session claim-pr <pr> [session]`: Attach an existing PR to a worker session
+{{REPO_CONFIGURED_SECTION_END}}- `ao session attach <session>`: Attach to a session's tmux window
+- `ao session kill <session>`: Kill a specific session
+- `ao session cleanup [-p project]`: Kill completed/merged sessions
+- `ao send <session> <message>`: Send a message to a running session
+- `ao send --no-wait <session> <message>`: Send without waiting for session to become idle
+- `ao dashboard`: Start the web dashboard (http://localhost:{{dashboardPort}})
+- `ao open <project>`: Open all project sessions in terminal tabs
 
 ## Session Management
 
