@@ -105,6 +105,7 @@ export async function validateSession(
     metadataStatus,
     runtimeProbeSucceeded,
     processProbeSucceeded,
+    runtimeHandle !== null,
   );
   const signalDisagreement =
     runtimeProbeSucceeded &&
@@ -155,21 +156,22 @@ function classifySession(
   metadataStatus: SessionStatus,
   runtimeProbeSucceeded: boolean,
   processProbeSucceeded: boolean,
+  hasRuntimeHandle: boolean,
 ): RecoveryClassification {
   if (TERMINAL_STATUSES_SET.has(metadataStatus)) {
     return "unrecoverable";
-  }
-
-  if (metadataStatus === "detecting" || !runtimeProbeSucceeded || !processProbeSucceeded) {
-    return "partial";
   }
 
   if (runtimeAlive && workspaceExists && agentProcessRunning) {
     return "live";
   }
 
-  if (!runtimeAlive && !workspaceExists) {
+  if (!workspaceExists && (!hasRuntimeHandle || (runtimeProbeSucceeded && !runtimeAlive))) {
     return "dead";
+  }
+
+  if (metadataStatus === "detecting" || !runtimeProbeSucceeded || !processProbeSucceeded) {
+    return "partial";
   }
 
   if (runtimeAlive && !workspaceExists) {
@@ -194,14 +196,17 @@ function determineRecoveryRule(
   recoveryConfig: RecoveryConfig = DEFAULT_RECOVERY_CONFIG,
 ): "auto" | "human" | "skip" {
   if (classification === "unrecoverable") return "skip";
-  if (metadataStatus === "detecting" || signalDisagreement) {
+  if (signalDisagreement) {
+    return "human";
+  }
+  if (classification === "live" || classification === "dead") {
+    return "auto";
+  }
+  if (metadataStatus === "detecting") {
     return "human";
   }
   if (classification === "partial") {
     return recoveryConfig.escalatePartial ? "human" : "auto";
-  }
-  if (classification === "live" || classification === "dead") {
-    return "auto";
   }
   return "human";
 }
