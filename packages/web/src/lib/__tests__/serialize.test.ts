@@ -3,15 +3,16 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type {
-  Session,
-  PRInfo,
-  SCM,
-  Agent,
-  Tracker,
-  ProjectConfig,
-  OrchestratorConfig,
-  PluginRegistry,
+import {
+  createInitialCanonicalLifecycle,
+  type Session,
+  type PRInfo,
+  type SCM,
+  type Agent,
+  type Tracker,
+  type ProjectConfig,
+  type OrchestratorConfig,
+  type PluginRegistry,
 } from "@aoagents/ao-core";
 import {
   sessionToDashboard,
@@ -28,11 +29,18 @@ import type { DashboardSession } from "../types";
 
 // Helper to create a minimal Session for testing
 function createCoreSession(overrides?: Partial<Session>): Session {
+  const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
+  lifecycle.session.state = "working";
+  lifecycle.session.reason = "task_in_progress";
+  lifecycle.session.startedAt = lifecycle.session.lastTransitionAt;
+  lifecycle.runtime.state = "alive";
+  lifecycle.runtime.reason = "process_running";
   return {
     id: "test-1",
     projectId: "test",
     status: "working",
     activity: "active",
+    lifecycle,
     branch: "feat/test",
     issueId: null,
     pr: null,
@@ -125,6 +133,20 @@ describe("sessionToDashboard", () => {
     expect(dashboard.branch).toBe("feat/test");
     expect(dashboard.createdAt).toBe("2025-01-01T00:00:00.000Z");
     expect(dashboard.lastActivityAt).toBe("2025-01-01T01:00:00.000Z");
+  });
+
+  it("should expose canonical lifecycle fields", () => {
+    const coreSession = createCoreSession();
+    const dashboard = sessionToDashboard(coreSession);
+
+    expect(dashboard.lifecycle).toEqual({
+      sessionState: "working",
+      sessionReason: "task_in_progress",
+      prState: "none",
+      prReason: "not_created",
+      runtimeState: "alive",
+      runtimeReason: "process_running",
+    });
   });
 
   it("should use agentInfo summary with summaryIsFallback false", () => {

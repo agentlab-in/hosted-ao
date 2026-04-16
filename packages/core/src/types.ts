@@ -24,6 +24,91 @@ import type { ObservabilityLevel } from "./observability.js";
 /** Unique session identifier, e.g. "my-app-1", "backend-12" */
 export type SessionId = string;
 
+export type SessionKind = "worker" | "orchestrator";
+
+export type CanonicalSessionState =
+  | "not_started"
+  | "working"
+  | "idle"
+  | "needs_input"
+  | "stuck"
+  | "detecting"
+  | "done"
+  | "terminated";
+
+export type CanonicalSessionReason =
+  | "spawn_requested"
+  | "agent_acknowledged"
+  | "task_in_progress"
+  | "pr_created"
+  | "fixing_ci"
+  | "resolving_review_comments"
+  | "awaiting_user_input"
+  | "awaiting_external_review"
+  | "research_complete"
+  | "merged_waiting_decision"
+  | "manually_killed"
+  | "runtime_lost"
+  | "agent_process_exited"
+  | "probe_failure"
+  | "error_in_process";
+
+export type CanonicalPRState = "none" | "open" | "merged" | "closed";
+
+export type CanonicalPRReason =
+  | "not_created"
+  | "in_progress"
+  | "ci_failing"
+  | "review_pending"
+  | "changes_requested"
+  | "approved"
+  | "merge_ready"
+  | "merged"
+  | "closed_unmerged";
+
+export type CanonicalRuntimeState = "unknown" | "alive" | "exited" | "missing" | "probe_failed";
+
+export type CanonicalRuntimeReason =
+  | "spawn_incomplete"
+  | "process_running"
+  | "process_missing"
+  | "tmux_missing"
+  | "manual_kill_requested"
+  | "probe_error";
+
+export interface SessionStateRecord {
+  kind: SessionKind;
+  state: CanonicalSessionState;
+  reason: CanonicalSessionReason;
+  startedAt: string | null;
+  completedAt: string | null;
+  terminatedAt: string | null;
+  lastTransitionAt: string;
+}
+
+export interface PRStateRecord {
+  state: CanonicalPRState;
+  reason: CanonicalPRReason;
+  number: number | null;
+  url: string | null;
+  lastObservedAt: string | null;
+}
+
+export interface RuntimeStateRecord {
+  state: CanonicalRuntimeState;
+  reason: CanonicalRuntimeReason;
+  lastObservedAt: string | null;
+  handle: RuntimeHandle | null;
+  tmuxName: string | null;
+}
+
+export interface CanonicalSessionLifecycle {
+  version: 2;
+  session: SessionStateRecord;
+  pr: PRStateRecord;
+  runtime: RuntimeStateRecord;
+}
+
 /** Session lifecycle states */
 export type SessionStatus =
   | "spawning"
@@ -125,11 +210,32 @@ export const TERMINAL_ACTIVITIES: ReadonlySet<ActivityState> = new Set(["exited"
 /** Statuses that must never be restored (e.g. already merged). */
 export const NON_RESTORABLE_STATUSES: ReadonlySet<SessionStatus> = new Set(["merged"]);
 
+/** Check whether lifecycle metadata indicates the session's PR is already merged. */
+function hasMergedLifecyclePR(lifecycle: CanonicalSessionLifecycle): boolean {
+  return (
+    (
+      lifecycle as CanonicalSessionLifecycle & {
+        pr?: { state?: string | null } | null;
+      }
+    ).pr?.state === "merged"
+  );
+}
+
 /** Check if a session is in a terminal (dead) state. */
 export function isTerminalSession(session: {
   status: SessionStatus;
   activity: ActivityState | null;
+  lifecycle?: CanonicalSessionLifecycle;
 }): boolean {
+  if (session.lifecycle) {
+    return (
+      session.lifecycle.session.state === "done" ||
+      session.lifecycle.session.state === "terminated" ||
+      session.lifecycle.pr.state === "merged" ||
+      session.lifecycle.runtime.state === "missing" ||
+      session.lifecycle.runtime.state === "exited"
+    );
+  }
   return (
     TERMINAL_STATUSES.has(session.status) ||
     (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))
@@ -140,7 +246,15 @@ export function isTerminalSession(session: {
 export function isRestorable(session: {
   status: SessionStatus;
   activity: ActivityState | null;
+  lifecycle?: CanonicalSessionLifecycle;
 }): boolean {
+  if (session.lifecycle) {
+    return (
+      isTerminalSession(session) &&
+      !NON_RESTORABLE_STATUSES.has(session.status) &&
+      !hasMergedLifecyclePR(session.lifecycle)
+    );
+  }
   return isTerminalSession(session) && !NON_RESTORABLE_STATUSES.has(session.status);
 }
 
@@ -157,6 +271,9 @@ export interface Session {
 
   /** Activity state from agent plugin (null = not yet determined) */
   activity: ActivityState | null;
+
+  /** Canonical lifecycle truth persisted in metadata. */
+  lifecycle: CanonicalSessionLifecycle;
 
   /** Git branch name */
   branch: string | null;
@@ -1374,6 +1491,8 @@ export interface SessionMetadata {
   worktree: string;
   branch: string;
   status: string;
+  stateVersion?: string;
+  statePayload?: string;
   tmuxName?: string; // Globally unique tmux session name (includes hash)
   issue?: string;
   pr?: string;

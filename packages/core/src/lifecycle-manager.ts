@@ -36,6 +36,7 @@ import {
   type PREnrichmentData,
   type CICheck,
 } from "./types.js";
+import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 import { updateMetadata } from "./metadata.js";
 import { getSessionsDir } from "./paths.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
@@ -360,6 +361,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const project = config.projects[session.projectId];
     if (!project) return session.status;
 
+    const lifecycle = cloneLifecycle(session.lifecycle);
+    const nowIso = new Date().toISOString();
     const agentName = resolveAgentSelection({
       role: resolveSessionRole(
         session.id,
@@ -376,6 +379,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     // Track activity state across steps so stuck detection can run after PR checks
     let detectedIdleTimestamp: Date | null = null;
+    let idleWasBlocked = false;
     // Never probe runtime/agent liveness while a session is still spawning —
     // tmux may not be initialized and the agent process hasn't started yet.
     // A persisted runtimeHandle alone is insufficient to gate on because spawn
@@ -383,12 +387,64 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const canProbeRuntimeIdentity =
       session.status !== SESSION_STATUS.SPAWNING;
 
+    const commit = (): SessionStatus => {
+      session.lifecycle = lifecycle;
+      session.status = deriveLegacyStatus(lifecycle, session.status);
+      return session.status;
+    };
+
+    const setSessionState = (
+      state: typeof lifecycle.session.state,
+      reason: typeof lifecycle.session.reason,
+    ): void => {
+      lifecycle.session.state = state;
+      lifecycle.session.reason = reason;
+      lifecycle.session.lastTransitionAt = nowIso;
+      if (state === "working" && lifecycle.session.startedAt === null) {
+        lifecycle.session.startedAt = nowIso;
+      }
+      if (state === "done") {
+        lifecycle.session.completedAt = nowIso;
+      }
+      if (state === "terminated") {
+        lifecycle.session.terminatedAt = nowIso;
+      }
+    };
+
     // 1. Check if runtime is alive
     if (session.runtimeHandle && canProbeRuntimeIdentity) {
       const runtime = registry.get<Runtime>("runtime", project.runtime ?? config.defaults.runtime);
       if (runtime) {
-        const alive = await runtime.isAlive(session.runtimeHandle).catch(() => true);
-        if (!alive) return "killed";
+        try {
+          const alive = await runtime.isAlive(session.runtimeHandle);
+          lifecycle.runtime.lastObservedAt = nowIso;
+          if (alive) {
+            lifecycle.runtime.state = "alive";
+            lifecycle.runtime.reason = "process_running";
+          } else {
+            lifecycle.runtime.state = "missing";
+            lifecycle.runtime.reason =
+              session.runtimeHandle.runtimeName === "tmux" ? "tmux_missing" : "process_missing";
+            if (
+              lifecycle.session.state !== "done" &&
+              lifecycle.session.state !== "terminated"
+            ) {
+              setSessionState("detecting", "runtime_lost");
+            }
+            return commit();
+          }
+        } catch {
+          lifecycle.runtime.state = "probe_failed";
+          lifecycle.runtime.reason = "probe_error";
+          lifecycle.runtime.lastObservedAt = nowIso;
+          if (
+            lifecycle.session.state !== "done" &&
+            lifecycle.session.state !== "terminated"
+          ) {
+            setSessionState("detecting", "probe_failure");
+          }
+          return commit();
+        }
       }
     }
 
@@ -422,14 +478,26 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // Try JSONL-based activity detection first (reads agent's session files directly)
         const activityState = await agent.getActivityState(session, config.readyThresholdMs);
         if (activityState) {
-          if (activityState.state === "waiting_input") return "needs_input";
-          if (activityState.state === "exited" && canProbeRuntimeIdentity) return "killed";
+          lifecycle.runtime.state = "alive";
+          lifecycle.runtime.reason = "process_running";
+          lifecycle.runtime.lastObservedAt = nowIso;
+          if (activityState.state === "waiting_input") {
+            setSessionState("needs_input", "awaiting_user_input");
+            return commit();
+          }
+          if (activityState.state === "exited" && canProbeRuntimeIdentity) {
+            lifecycle.runtime.state = "exited";
+            lifecycle.runtime.reason = "process_missing";
+            setSessionState("detecting", "agent_process_exited");
+            return commit();
+          }
 
           if (
             (activityState.state === "idle" || activityState.state === "blocked") &&
             activityState.timestamp
           ) {
             detectedIdleTimestamp = activityState.timestamp;
+            idleWasBlocked = activityState.state === "blocked";
           }
 
           // active/ready/idle (below threshold)/blocked (below threshold) —
@@ -444,21 +512,27 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             const terminalOutput = runtime ? await runtime.getOutput(session.runtimeHandle, 10) : "";
             if (terminalOutput) {
               const activity = agent.detectActivity(terminalOutput);
-              if (activity === "waiting_input") return "needs_input";
+              if (activity === "waiting_input") {
+                setSessionState("needs_input", "awaiting_user_input");
+                return commit();
+              }
 
               const processAlive = await agent.isProcessRunning(session.runtimeHandle);
-              if (!processAlive) return "killed";
+              if (!processAlive) {
+                lifecycle.runtime.state = "exited";
+                lifecycle.runtime.reason = "process_missing";
+                lifecycle.runtime.lastObservedAt = nowIso;
+                setSessionState("detecting", "agent_process_exited");
+                return commit();
+              }
             }
           }
         }
       } catch {
         // On probe failure, preserve current stuck/needs_input state rather
         // than letting the fallback at the bottom coerce them to "working"
-        if (
-          session.status === SESSION_STATUS.STUCK ||
-          session.status === SESSION_STATUS.NEEDS_INPUT
-        ) {
-          return session.status;
+        if (lifecycle.session.state === "stuck" || lifecycle.session.state === "needs_input") {
+          return commit();
         }
       }
     }
@@ -480,6 +554,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         const detectedPR = await scm.detectPR(session, project);
         if (detectedPR) {
           session.pr = detectedPR;
+          lifecycle.pr.state = "open";
+          lifecycle.pr.reason = "in_progress";
+          lifecycle.pr.number = detectedPR.number;
+          lifecycle.pr.url = detectedPR.url;
+          lifecycle.pr.lastObservedAt = nowIso;
           // Persist PR URL so subsequent polls don't need to re-query.
           // Don't write status here — step 4 below will determine the
           // correct status (merged, ci_failed, etc.) on this same cycle.
@@ -500,23 +579,56 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
         if (cachedData) {
           // Use cached enrichment data - avoids individual API calls
-          if (cachedData.state === PR_STATE.MERGED) return "merged";
-          if (cachedData.state === PR_STATE.CLOSED) return "killed";
+          lifecycle.pr.number = session.pr.number;
+          lifecycle.pr.url = session.pr.url;
+          lifecycle.pr.lastObservedAt = nowIso;
+          if (cachedData.state === PR_STATE.MERGED) {
+            lifecycle.pr.state = "merged";
+            lifecycle.pr.reason = "merged";
+            setSessionState("idle", "merged_waiting_decision");
+            return commit();
+          }
+          if (cachedData.state === PR_STATE.CLOSED) {
+            lifecycle.pr.state = "closed";
+            lifecycle.pr.reason = "closed_unmerged";
+            setSessionState("done", "research_complete");
+            return commit();
+          }
+          lifecycle.pr.state = "open";
 
           // Check CI
-          if (cachedData.ciStatus === CI_STATUS.FAILING) return "ci_failed";
+          if (cachedData.ciStatus === CI_STATUS.FAILING) {
+            lifecycle.pr.reason = "ci_failing";
+            setSessionState("working", "fixing_ci");
+            return commit();
+          }
 
           // Check reviews
-          if (cachedData.reviewDecision === "changes_requested")
-            return "changes_requested";
+          if (cachedData.reviewDecision === "changes_requested") {
+            lifecycle.pr.reason = "changes_requested";
+            setSessionState("working", "resolving_review_comments");
+            return commit();
+          }
           if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
             // Check merge readiness — treat "none" (no reviewers required)
             // as "approved" so CI-green PRs reach "mergeable" status
             // and fire the merge.ready event / approved-and-green reaction.
-            if (cachedData.mergeable) return "mergeable";
-            if (cachedData.reviewDecision === "approved") return "approved";
+            if (cachedData.mergeable) {
+              lifecycle.pr.reason = "merge_ready";
+              setSessionState("working", "awaiting_external_review");
+              return commit();
+            }
+            if (cachedData.reviewDecision === "approved") {
+              lifecycle.pr.reason = "approved";
+              setSessionState("working", "awaiting_external_review");
+              return commit();
+            }
           }
-          if (cachedData.reviewDecision === "pending") return "review_pending";
+          if (cachedData.reviewDecision === "pending") {
+            lifecycle.pr.reason = "review_pending";
+            setSessionState("working", "awaiting_external_review");
+            return commit();
+          }
 
           // 4b. Post-PR stuck detection: agent has a PR open but is idle beyond
           // threshold. This catches the case where step 2's stuck check was
@@ -524,33 +636,71 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // wasn't available during step 2 but the session has been at pr_open
           // for a long time. Without this, sessions get stuck at "pr_open" forever.
           if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
-            return "stuck";
+            lifecycle.pr.reason = "in_progress";
+            setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
+            return commit();
           }
 
-          return "pr_open";
+          lifecycle.pr.reason = "in_progress";
+          setSessionState("working", "pr_created");
+          return commit();
         }
 
         // Fall back to individual API calls if no cached data
         const prState = await scm.getPRState(session.pr);
-        if (prState === PR_STATE.MERGED) return "merged";
-        if (prState === PR_STATE.CLOSED) return "killed";
+        lifecycle.pr.number = session.pr.number;
+        lifecycle.pr.url = session.pr.url;
+        lifecycle.pr.lastObservedAt = nowIso;
+        if (prState === PR_STATE.MERGED) {
+          lifecycle.pr.state = "merged";
+          lifecycle.pr.reason = "merged";
+          setSessionState("idle", "merged_waiting_decision");
+          return commit();
+        }
+        if (prState === PR_STATE.CLOSED) {
+          lifecycle.pr.state = "closed";
+          lifecycle.pr.reason = "closed_unmerged";
+          setSessionState("done", "research_complete");
+          return commit();
+        }
+        lifecycle.pr.state = "open";
 
         // Check CI
         const ciStatus = await scm.getCISummary(session.pr);
-        if (ciStatus === CI_STATUS.FAILING) return "ci_failed";
+        if (ciStatus === CI_STATUS.FAILING) {
+          lifecycle.pr.reason = "ci_failing";
+          setSessionState("working", "fixing_ci");
+          return commit();
+        }
 
         // Check reviews
         const reviewDecision = await scm.getReviewDecision(session.pr);
-        if (reviewDecision === "changes_requested") return "changes_requested";
+        if (reviewDecision === "changes_requested") {
+          lifecycle.pr.reason = "changes_requested";
+          setSessionState("working", "resolving_review_comments");
+          return commit();
+        }
         if (reviewDecision === "approved" || reviewDecision === "none") {
           // Check merge readiness — treat "none" (no reviewers required)
           // as "approved" so CI-green PRs reach "mergeable" status
           // and fire the merge.ready event / approved-and-green reaction.
           const mergeReady = await scm.getMergeability(session.pr);
-          if (mergeReady.mergeable) return "mergeable";
-          if (reviewDecision === "approved") return "approved";
+          if (mergeReady.mergeable) {
+            lifecycle.pr.reason = "merge_ready";
+            setSessionState("working", "awaiting_external_review");
+            return commit();
+          }
+          if (reviewDecision === "approved") {
+            lifecycle.pr.reason = "approved";
+            setSessionState("working", "awaiting_external_review");
+            return commit();
+          }
         }
-        if (reviewDecision === "pending") return "review_pending";
+        if (reviewDecision === "pending") {
+          lifecycle.pr.reason = "review_pending";
+          setSessionState("working", "awaiting_external_review");
+          return commit();
+        }
 
         // 4b. Post-PR stuck detection: agent has a PR open but is idle beyond
         // threshold. This catches the case where step 2's stuck check was
@@ -558,10 +708,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         // wasn't available during step 2 but the session has been at pr_open
         // for a long time. Without this, sessions get stuck at "pr_open" forever.
         if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
-          return "stuck";
+          lifecycle.pr.reason = "in_progress";
+          setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
+          return commit();
         }
 
-        return "pr_open";
+        lifecycle.pr.reason = "in_progress";
+        setSessionState("working", "pr_created");
+        return commit();
       } catch {
         // SCM check failed — keep current status
       }
@@ -570,7 +724,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // 5. Post-all stuck detection: if we detected idle in step 2 but had no PR,
     // still check stuck threshold. This handles agents that finish without creating a PR.
     if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
-      return "stuck";
+      setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
+      return commit();
     }
 
     // 6. Default: if agent is active, it's working
@@ -579,9 +734,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       session.status === SESSION_STATUS.STUCK ||
       session.status === SESSION_STATUS.NEEDS_INPUT
     ) {
-      return "working";
+      setSessionState("working", "task_in_progress");
+      return commit();
     }
-    return session.status;
+    return commit();
   }
 
   /** Execute a reaction for a session. */
@@ -736,19 +892,25 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     if (!project) return;
 
     const sessionsDir = getSessionsDir(config.configPath, project.path);
-    updateMetadata(sessionsDir, session.id, updates);
+    const lifecycleUpdates = buildLifecycleMetadataPatch(
+      cloneLifecycle(session.lifecycle),
+      session.status,
+    );
+    const mergedUpdates = { ...updates, ...lifecycleUpdates };
+    updateMetadata(sessionsDir, session.id, mergedUpdates);
 
     const cleaned = Object.fromEntries(
       Object.entries(session.metadata).filter(([key]) => {
-        const update = updates[key];
+        const update = mergedUpdates[key];
         return update === undefined || update !== "";
       }),
     );
-    for (const [key, value] of Object.entries(updates)) {
+    for (const [key, value] of Object.entries(mergedUpdates)) {
       if (value === undefined || value === "") continue;
       cleaned[key] = value;
     }
     session.metadata = cleaned;
+    session.status = deriveLegacyStatus(session.lifecycle, session.status);
   }
 
   function makeFingerprint(ids: string[]): string {
@@ -1216,6 +1378,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const oldStatus =
       tracked ?? ((session.metadata?.["status"] as SessionStatus | undefined) || session.status);
     const newStatus = await determineStatus(session);
+    const lifecycleChanged = session.metadata["statePayload"] !== JSON.stringify(session.lifecycle);
     let transitionReaction: { key: string; result: ReactionResult | null } | undefined;
 
     if (newStatus !== oldStatus) {
@@ -1293,6 +1456,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     } else {
       // No transition but track current state
       states.set(session.id, newStatus);
+      if (lifecycleChanged) {
+        updateSessionMetadata(session, { status: newStatus });
+      }
     }
 
     // Pin first quality summary for title stability

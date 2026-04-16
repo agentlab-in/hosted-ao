@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import {
   SessionNotFoundError,
   SessionNotRestorableError,
+  createInitialCanonicalLifecycle,
   type Session,
   type SessionManager,
   type OrchestratorConfig,
@@ -16,10 +17,17 @@ import { getSCM } from "@/lib/services";
 // Provides test sessions covering the key states the dashboard needs.
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
+  const lifecycle = createInitialCanonicalLifecycle("worker", new Date());
+  lifecycle.session.state = "working";
+  lifecycle.session.reason = "task_in_progress";
+  lifecycle.session.startedAt = lifecycle.session.lastTransitionAt;
+  lifecycle.runtime.state = "alive";
+  lifecycle.runtime.reason = "process_running";
   return {
     projectId: "my-app",
     status: "working",
     activity: "active",
+    lifecycle,
     branch: null,
     issueId: null,
     pr: null,

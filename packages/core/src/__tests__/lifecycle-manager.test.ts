@@ -114,6 +114,75 @@ describe("check (single session)", () => {
     expect(meta!["status"]).toBe("working");
   });
 
+  it("clears stale lifecycle compatibility metadata in memory and on disk", async () => {
+    const session = makeSession({
+      status: "working",
+      lifecycle: {
+        ...makeSession().lifecycle,
+        pr: {
+          state: "none",
+          reason: "not_created",
+          number: null,
+          url: null,
+          lastObservedAt: null,
+        },
+        runtime: {
+          state: "alive",
+          reason: "process_running",
+          lastObservedAt: null,
+          handle: null,
+          tmuxName: null,
+        },
+      },
+      runtimeHandle: null,
+      pr: null,
+      metadata: {
+        pr: "https://github.com/org/repo/pull/42",
+        runtimeHandle: JSON.stringify({ id: "stale", runtimeName: "mock", data: {} }),
+        tmuxName: "stale-tmux",
+        role: "orchestrator",
+      },
+    });
+    const persistedMetadata = {
+      worktree: "/tmp",
+      branch: session.branch ?? "main",
+      status: session.status,
+      project: "my-app",
+      pr: "https://github.com/org/repo/pull/42",
+      runtimeHandle: JSON.stringify({ id: "stale", runtimeName: "mock", data: {} }),
+      tmuxName: "stale-tmux",
+      role: "orchestrator",
+    };
+    const currentSession = {
+      ...session,
+      metadata: {
+        ...session.metadata,
+        ...persistedMetadata,
+      },
+    };
+
+    vi.mocked(mockSessionManager.get).mockResolvedValue(currentSession);
+    writeMetadata(env.sessionsDir, "app-1", persistedMetadata);
+
+    const lm = createLifecycleManager({
+      config,
+      registry: mockRegistry,
+      sessionManager: mockSessionManager,
+    });
+
+    await lm.check("app-1");
+
+    const metadata = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(metadata?.["pr"]).toBeUndefined();
+    expect(metadata?.["runtimeHandle"]).toBeUndefined();
+    expect(metadata?.["tmuxName"]).toBeUndefined();
+    expect(metadata?.["role"]).toBeUndefined();
+    expect(currentSession.metadata["pr"]).toBeUndefined();
+    expect(currentSession.metadata["runtimeHandle"]).toBeUndefined();
+    expect(currentSession.metadata["tmuxName"]).toBeUndefined();
+    expect(currentSession.metadata["role"]).toBeUndefined();
+  });
+
   it("does not kill a spawning session when its runtime handle has not been persisted yet", async () => {
     vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
 
