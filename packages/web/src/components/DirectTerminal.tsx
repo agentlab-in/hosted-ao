@@ -9,7 +9,8 @@ import { useMux } from "@/hooks/useMux";
 // Import xterm CSS (must be imported in client component)
 import "@xterm/xterm/css/xterm.css";
 
-// Dynamically import xterm types for TypeScript
+// Static type-only imports (erased at compile time, no SSR impact).
+// The runtime Terminal class is loaded via dynamic import() inside useEffect to avoid SSR.
 import type { ITheme, Terminal as TerminalType } from "@xterm/xterm";
 import type { FitAddon as FitAddonType } from "@xterm/addon-fit";
 
