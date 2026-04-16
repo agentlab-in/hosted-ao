@@ -57,11 +57,14 @@ export async function validateSession(
   };
 
   let runtimeAlive = false;
+  let runtimeProbeSucceeded = false;
   if (runtime && runtimeHandle) {
     try {
       runtimeAlive = await runtime.isAlive(runtimeHandle);
+      runtimeProbeSucceeded = true;
     } catch {
       runtimeAlive = false;
+      runtimeProbeSucceeded = false;
     }
   }
 
@@ -82,12 +85,15 @@ export async function validateSession(
   }
 
   let agentProcessRunning = false;
+  let processProbeSucceeded = false;
   const agentActivity: ActivityState | null = null;
   if (agent && runtimeHandle) {
     try {
       agentProcessRunning = await agent.isProcessRunning(runtimeHandle);
+      processProbeSucceeded = true;
     } catch {
       agentProcessRunning = false;
+      processProbeSucceeded = false;
     }
   }
 
@@ -97,15 +103,40 @@ export async function validateSession(
     workspaceExists,
     agentProcessRunning,
     metadataStatus,
+    runtimeProbeSucceeded,
+    processProbeSucceeded,
+    runtimeHandle !== null,
   );
-  const action = determineAction(classification, metadataStatus, recoveryConfig);
+  const signalDisagreement =
+    runtimeProbeSucceeded &&
+    processProbeSucceeded &&
+    ((runtimeAlive && !agentProcessRunning) || (!runtimeAlive && agentProcessRunning));
+  const recoveryRule = determineRecoveryRule(
+    classification,
+    signalDisagreement,
+    metadataStatus,
+    recoveryConfig,
+  );
+  const action = determineAction(classification, metadataStatus, recoveryConfig, recoveryRule);
 
   return {
     sessionId,
     projectId,
     classification,
     action,
-    reason: getReason(classification, runtimeAlive, workspaceExists, agentProcessRunning),
+    reason: getReason(
+      classification,
+      runtimeAlive,
+      workspaceExists,
+      agentProcessRunning,
+      runtimeProbeSucceeded,
+      processProbeSucceeded,
+      signalDisagreement,
+    ),
+    runtimeProbeSucceeded,
+    processProbeSucceeded,
+    signalDisagreement,
+    recoveryRule,
     runtimeAlive,
     runtimeHandle,
     workspaceExists,
@@ -123,16 +154,24 @@ function classifySession(
   workspaceExists: boolean,
   agentProcessRunning: boolean,
   metadataStatus: SessionStatus,
+  runtimeProbeSucceeded: boolean,
+  processProbeSucceeded: boolean,
+  hasRuntimeHandle: boolean,
 ): RecoveryClassification {
+  if (TERMINAL_STATUSES_SET.has(metadataStatus)) {
+    return "unrecoverable";
+  }
+
   if (runtimeAlive && workspaceExists && agentProcessRunning) {
     return "live";
   }
 
-  if (!runtimeAlive && !workspaceExists) {
-    if (TERMINAL_STATUSES_SET.has(metadataStatus)) {
-      return "unrecoverable";
-    }
+  if (!workspaceExists && (!hasRuntimeHandle || (runtimeProbeSucceeded && !runtimeAlive))) {
     return "dead";
+  }
+
+  if (metadataStatus === "detecting" || !runtimeProbeSucceeded || !processProbeSucceeded) {
+    return "partial";
   }
 
   if (runtimeAlive && !workspaceExists) {
@@ -150,11 +189,40 @@ function classifySession(
   return "partial";
 }
 
+function determineRecoveryRule(
+  classification: RecoveryClassification,
+  signalDisagreement: boolean,
+  metadataStatus: SessionStatus,
+  recoveryConfig: RecoveryConfig = DEFAULT_RECOVERY_CONFIG,
+): "auto" | "human" | "skip" {
+  if (classification === "unrecoverable") return "skip";
+  if (signalDisagreement) {
+    return "human";
+  }
+  if (classification === "live" || classification === "dead") {
+    return "auto";
+  }
+  if (metadataStatus === "detecting") {
+    return "human";
+  }
+  if (classification === "partial") {
+    return recoveryConfig.escalatePartial ? "human" : "auto";
+  }
+  return "human";
+}
+
 function determineAction(
   classification: RecoveryClassification,
   _metadataStatus: SessionStatus,
   recoveryConfig: RecoveryConfig,
+  recoveryRule: "auto" | "human" | "skip",
 ): RecoveryAction {
+  if (recoveryRule === "skip") {
+    return "skip";
+  }
+  if (recoveryRule === "human") {
+    return "escalate";
+  }
   switch (classification) {
     case "live":
       return "recover";
@@ -174,7 +242,16 @@ function getReason(
   runtimeAlive: boolean,
   workspaceExists: boolean,
   agentProcessRunning: boolean,
+  runtimeProbeSucceeded: boolean,
+  processProbeSucceeded: boolean,
+  signalDisagreement: boolean,
 ): string {
+  if (!runtimeProbeSucceeded || !processProbeSucceeded) {
+    return `Probe uncertainty: runtimeProbe=${runtimeProbeSucceeded}, processProbe=${processProbeSucceeded}`;
+  }
+  if (signalDisagreement) {
+    return `Signal disagreement: runtime=${runtimeAlive}, workspace=${workspaceExists}, agent=${agentProcessRunning}`;
+  }
   switch (classification) {
     case "live":
       return "Session is running normally";

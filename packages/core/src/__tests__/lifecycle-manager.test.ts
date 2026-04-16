@@ -264,7 +264,7 @@ describe("check (single session)", () => {
       runtimeName: "mock",
       data: {},
     });
-    expect(lm.getStates().get("app-1")).toBe("killed");
+    expect(lm.getStates().get("app-1")).toBe("detecting");
   });
 
   it("uses worker-specific agent fallback when metadata does not persist an agent", async () => {
@@ -313,6 +313,8 @@ describe("check (single session)", () => {
 
   it("detects killed state when runtime is dead", async () => {
     vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "idle" });
+    vi.mocked(plugins.agent.isProcessRunning).mockResolvedValue(false);
 
     const lm = setupCheck("app-1", {
       session: makeSession({ status: "working" }),
@@ -324,6 +326,21 @@ describe("check (single session)", () => {
 
   it("detects killed state when getActivityState returns exited", async () => {
     vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "exited" });
+    vi.mocked(plugins.runtime.isAlive).mockResolvedValue(true);
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "working" }),
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("detecting");
+  });
+
+  it("detects killed via terminal fallback when getActivityState returns null", async () => {
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
+    vi.mocked(plugins.agent.detectActivity).mockReturnValue("idle");
+    vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
+    vi.mocked(plugins.agent.isProcessRunning).mockResolvedValue(false);
 
     const lm = setupCheck("app-1", {
       session: makeSession({ status: "working" }),
@@ -333,9 +350,12 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("killed");
   });
 
-  it("detects killed via terminal fallback when getActivityState returns null", async () => {
-    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
-    vi.mocked(plugins.agent.detectActivity).mockReturnValue("idle");
+  it("enters detecting when runtime is dead but recent activity is still fresh", async () => {
+    vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue({
+      state: "active",
+      timestamp: new Date(Date.now() - 30_000),
+    });
     vi.mocked(plugins.agent.isProcessRunning).mockResolvedValue(false);
 
     const lm = setupCheck("app-1", {
@@ -343,7 +363,62 @@ describe("check (single session)", () => {
     });
 
     await lm.check("app-1");
-    expect(lm.getStates().get("app-1")).toBe("killed");
+
+    expect(lm.getStates().get("app-1")).toBe("detecting");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["detectingAttempts"]).toBe("1");
+    expect(meta?.["lifecycleEvidence"]).toContain("signal_disagreement");
+  });
+
+  it("enters detecting when runtime is dead but process state is unknown", async () => {
+    const registryWithoutAgent = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+    });
+    vi.mocked(registryWithoutAgent.get).mockImplementation((slot: string, name?: string) => {
+      if (slot === "runtime") return plugins.runtime;
+      if (slot === "agent") return null;
+      return null;
+    });
+    vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "working" }),
+      registry: registryWithoutAgent,
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("detecting");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["lifecycleEvidence"]).toContain("runtime_dead process_unknown");
+    expect(meta?.["detectingAttempts"]).toBe("1");
+  });
+
+  it("escalates detecting to stuck after bounded retries", async () => {
+    vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue({
+      state: "active",
+      timestamp: new Date(Date.now() - 30_000),
+    });
+    vi.mocked(plugins.agent.isProcessRunning).mockResolvedValue(false);
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({
+        status: "detecting",
+        metadata: { detectingAttempts: "3" },
+      }),
+      metaOverrides: {
+        detectingAttempts: "3",
+      },
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("stuck");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["detectingAttempts"]).toBe("4");
+    expect(meta?.["detectingEscalatedAt"]).toBeDefined();
   });
 
   it("stays working when agent is idle but process is still running (fallback path)", async () => {
@@ -625,6 +700,25 @@ describe("check (single session)", () => {
 
     await lm.check("app-1");
     expect(lm.getStates().get("app-1")).toBe("merged");
+  });
+
+  it("treats closed PRs as done when the canonical lifecycle marks them complete", async () => {
+    const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("closed") });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "pr_open", pr: makePR() }),
+      registry,
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("done");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["status"]).toBe("done");
   });
 
   it("detects mergeable when approved + CI green", async () => {

@@ -113,6 +113,7 @@ export interface CanonicalSessionLifecycle {
 export type SessionStatus =
   | "spawning"
   | "working"
+  | "detecting"
   | "pr_open"
   | "ci_failed"
   | "review_pending"
@@ -177,6 +178,7 @@ export const DEFAULT_ACTIVE_WINDOW_MS = 30_000; // 30 seconds
 export const SESSION_STATUS = {
   SPAWNING: "spawning" as const,
   WORKING: "working" as const,
+  DETECTING: "detecting" as const,
   PR_OPEN: "pr_open" as const,
   CI_FAILED: "ci_failed" as const,
   REVIEW_PENDING: "review_pending" as const,

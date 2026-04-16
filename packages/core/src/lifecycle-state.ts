@@ -266,15 +266,7 @@ export function deriveLegacyStatus(
     case "idle":
       return lifecycle.pr.state === "merged" ? "merged" : "idle";
     case "detecting":
-      if (
-        lifecycle.session.reason === "runtime_lost" ||
-        lifecycle.session.reason === "agent_process_exited" ||
-        lifecycle.runtime.state === "missing" ||
-        lifecycle.runtime.state === "exited"
-      ) {
-        return "killed";
-      }
-      return TERMINAL_COMPATIBILITY_STATUS.has(previousStatus) ? "working" : previousStatus;
+      return "detecting";
     case "working":
       if (lifecycle.pr.reason === "ci_failing") return "ci_failed";
       if (lifecycle.pr.reason === "changes_requested") return "changes_requested";
@@ -285,15 +277,6 @@ export function deriveLegacyStatus(
       return "working";
   }
 }
-
-const TERMINAL_COMPATIBILITY_STATUS: ReadonlySet<SessionStatus> = new Set([
-  "killed",
-  "terminated",
-  "done",
-  "cleanup",
-  "errored",
-  "merged",
-]);
 
 export function buildLifecycleMetadataPatch(
   lifecycle: CanonicalSessionLifecycle,
