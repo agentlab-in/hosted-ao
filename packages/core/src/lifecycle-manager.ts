@@ -39,6 +39,11 @@ import {
 import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 import { updateMetadata } from "./metadata.js";
 import { getSessionsDir } from "./paths.js";
+import {
+  isAgentReportFresh,
+  mapAgentReportToLifecycle,
+  readAgentReport,
+} from "./agent-report.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
 import { resolveNotifierTarget } from "./notifier-resolution.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
@@ -781,6 +786,25 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       } catch {
         // Keep current status on SCM failure.
       }
+    }
+
+    // Fresh agent reports outrank weak inference (idle-beyond-threshold /
+    // default-to-working) but runtime death, activity waiting_input, and SCM
+    // ground truth already short-circuited above. Orchestrator sessions and
+    // terminal states are skipped intentionally.
+    const agentReport = readAgentReport(session.metadata);
+    if (
+      agentReport &&
+      isAgentReportFresh(agentReport) &&
+      session.metadata["role"] !== "orchestrator" &&
+      !session.id.endsWith("-orchestrator") &&
+      lifecycle.session.state !== "terminated" &&
+      lifecycle.session.state !== "done"
+    ) {
+      const mapped = mapAgentReportToLifecycle(agentReport.state);
+      setSessionState(mapped.sessionState, mapped.sessionReason);
+      const legacy = deriveLegacyStatus(lifecycle, session.status);
+      return commit(legacy, `agent_report:${agentReport.state}`, 0);
     }
 
     if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
