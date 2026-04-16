@@ -244,4 +244,20 @@ describe("generateOrchestratorPrompt", () => {
 
     expect(prompt).toContain("First block\n\n\nSecond block");
   });
+
+  it("allows literal handlebars inside project-specific rules", async () => {
+    const generateOrchestratorPrompt = await loadGenerateOrchestratorPrompt();
+    const projectWithHandlebarsRules: ProjectConfig = {
+      ...config.projects["my-app"]!,
+      orchestratorRules: "Use {{example}} literally in the docs.",
+    };
+
+    const prompt = generateOrchestratorPrompt({
+      config,
+      projectId: "my-app",
+      project: projectWithHandlebarsRules,
+    });
+
+    expect(prompt).toContain("Use {{example}} literally in the docs.");
+  });
 });

@@ -161,20 +161,20 @@ function createRenderData(opts: OrchestratorPromptConfig): OrchestratorPromptRen
 }
 
 function renderTemplate(template: string, data: OrchestratorPromptRenderData): string {
-  const rendered = template.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, rawKey: string) => {
+  const unresolvedPlaceholder = template
+    .replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, "")
+    .match(/\{\{[^}]+\}\}/);
+  if (unresolvedPlaceholder) {
+    throw new Error(`Unresolved template placeholder: ${unresolvedPlaceholder[0]}`);
+  }
+
+  return template.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, rawKey: string) => {
     if (!hasRenderDataKey(data, rawKey)) {
       throw new Error(`Unresolved template placeholder: ${rawKey}`);
     }
 
     return data[rawKey];
   });
-
-  const unresolvedPlaceholder = rendered.match(/\{\{[^}]+\}\}/);
-  if (unresolvedPlaceholder) {
-    throw new Error(`Unresolved template placeholder: ${unresolvedPlaceholder[0]}`);
-  }
-
-  return rendered;
 }
 
 function finalizeRenderedPrompt(prompt: string): string {
