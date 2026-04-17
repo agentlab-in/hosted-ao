@@ -286,8 +286,7 @@ export function isDashboardSessionDone(session: DashboardSession): boolean {
     return (
       session.lifecycle.sessionState === "done" ||
       session.lifecycle.sessionState === "terminated" ||
-      session.lifecycle.prState === "merged" ||
-      session.lifecycle.prState === "closed"
+      session.lifecycle.prState === "merged"
     );
   }
   if (
@@ -299,7 +298,7 @@ export function isDashboardSessionDone(session: DashboardSession): boolean {
   ) {
     return true;
   }
-  return session.pr?.state === "merged" || session.pr?.state === "closed";
+  return session.pr?.state === "merged";
 }
 
 export function isDashboardSessionTerminal(session: DashboardSession): boolean {
@@ -329,8 +328,18 @@ export function isDashboardRuntimeEnded(session: DashboardSession): boolean {
 }
 
 export function isDashboardSessionRestorable(session: DashboardSession): boolean {
+  if (session.lifecycle) {
+    const terminalByCoreTruth =
+      session.lifecycle.sessionState === "done" ||
+      session.lifecycle.sessionState === "terminated" ||
+      session.lifecycle.runtimeState === "missing" ||
+      session.lifecycle.runtimeState === "exited";
+    return (
+      terminalByCoreTruth && session.lifecycle.prState !== "merged" && session.status !== "merged"
+    );
+  }
   if (!isDashboardSessionTerminal(session)) return false;
-  return session.lifecycle?.prState !== "merged" && session.status !== "merged";
+  return session.pr?.state !== "merged" && session.status !== "merged";
 }
 
 /** Determines which attention zone a session belongs to */
