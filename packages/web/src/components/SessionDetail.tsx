@@ -55,7 +55,10 @@ interface SessionDetailProps {
   orchestratorZones?: OrchestratorZones;
   projectOrchestratorId?: string | null;
   projects?: ProjectInfo[];
-  sidebarSessions?: DashboardSession[];
+  sidebarSessions?: DashboardSession[] | null;
+  sidebarLoading?: boolean;
+  sidebarError?: boolean;
+  onRetrySidebar?: () => void;
 }
 
 function truthBadgeTone(label: string): string {
@@ -540,6 +543,9 @@ export function SessionDetail({
   projectOrchestratorId = null,
   projects = [],
   sidebarSessions = [],
+  sidebarLoading = false,
+  sidebarError = false,
+  onRetrySidebar,
 }: SessionDetailProps) {
   const searchParams = useSearchParams();
   const isMobile = useMediaQuery(MOBILE_BREAKPOINT);
@@ -685,6 +691,9 @@ export function SessionDetail({
             <ProjectSidebar
               projects={projects}
               sessions={sidebarSessions}
+              loading={sidebarLoading}
+              error={sidebarError}
+              onRetry={onRetrySidebar}
               activeProjectId={session.projectId}
               activeSessionId={session.id}
               collapsed={sidebarCollapsed}

@@ -2,13 +2,15 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { notFound, useParams } from "next/navigation";
-import { isOrchestratorSession } from "@aoagents/ao-core/types";
+import { ACTIVITY_STATE, SESSION_STATUS, isOrchestratorSession } from "@aoagents/ao-core/types";
 import { SessionDetail } from "@/components/SessionDetail";
 import { type DashboardSession, type ActivityState, getAttentionLevel, type AttentionLevel } from "@/lib/types";
 import { activityIcon } from "@/lib/activity-icons";
 import type { ProjectInfo } from "@/lib/project-name";
 import { getSessionTitle } from "@/lib/format";
 import { useSSESessionActivity } from "@/hooks/useSSESessionActivity";
+import { useMuxOptional } from "@/providers/MuxProvider";
+import type { SessionPatch } from "@/lib/mux-protocol";
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "..." : s;
@@ -52,16 +54,116 @@ interface ProjectSessionsBody {
   orchestrators?: Array<{ id: string; projectId: string; projectName: string }>;
 }
 
+let cachedProjects: ProjectInfo[] | null = null;
+let cachedSidebarSessions: DashboardSession[] | null = null;
+const validSessionStatuses = new Set<string>(Object.values(SESSION_STATUS));
+const validActivityStates = new Set<string>(Object.values(ACTIVITY_STATE));
+const warnedMuxPatchValues = new Set<string>();
+
+function isDashboardSessionStatus(value: string): value is DashboardSession["status"] {
+  return validSessionStatuses.has(value);
+}
+
+function isActivityState(value: string): value is ActivityState {
+  return validActivityStates.has(value);
+}
+
+function areProjectsEqual(previous: ProjectInfo[] | null, next: ProjectInfo[]): boolean {
+  if (!previous || previous.length !== next.length) {
+    return false;
+  }
+
+  return previous.every((project, index) => {
+    const candidate = next[index];
+    return JSON.stringify(project) === JSON.stringify(candidate);
+  });
+}
+
+function areSidebarSessionsEqual(
+  previous: DashboardSession[] | null,
+  next: DashboardSession[],
+): boolean {
+  if (!previous || previous.length !== next.length) {
+    return false;
+  }
+
+  return previous.every((session, index) => {
+    const candidate = next[index];
+    return JSON.stringify(session) === JSON.stringify(candidate);
+  });
+}
+
+function applyMuxSessionPatches(current: DashboardSession[] | null, patches: SessionPatch[]): DashboardSession[] | null {
+  if (!current || patches.length === 0) {
+    return current;
+  }
+
+  const patchById = new Map(patches.map((patch) => [patch.id, patch]));
+  let changed = false;
+
+  const next = current.map((session) => {
+    const patch = patchById.get(session.id);
+    if (!patch) {
+      return session;
+    }
+
+    if (!isDashboardSessionStatus(patch.status)) {
+      const warningKey = `status:${patch.status}`;
+      if (!warnedMuxPatchValues.has(warningKey)) {
+        warnedMuxPatchValues.add(warningKey);
+        console.warn("Ignoring mux session patch with unknown status", {
+          sessionId: patch.id,
+          status: patch.status,
+        });
+      }
+      return session;
+    }
+
+    if (patch.activity !== null && !isActivityState(patch.activity)) {
+      const warningKey = `activity:${patch.activity}`;
+      if (!warnedMuxPatchValues.has(warningKey)) {
+        warnedMuxPatchValues.add(warningKey);
+        console.warn("Ignoring mux session patch with unknown activity", {
+          sessionId: patch.id,
+          activity: patch.activity,
+        });
+      }
+      return session;
+    }
+
+    if (
+      session.status === patch.status &&
+      session.activity === patch.activity &&
+      session.lastActivityAt === patch.lastActivityAt
+    ) {
+      return session;
+    }
+
+    changed = true;
+    const nextSession: DashboardSession = {
+      ...session,
+      status: patch.status,
+      activity: patch.activity,
+      lastActivityAt: patch.lastActivityAt,
+    };
+    return nextSession;
+  });
+
+  return changed ? next : current;
+}
+
 export default function SessionPage() {
   const params = useParams();
   const id = params.id as string;
+  const mux = useMuxOptional();
 
   const [session, setSession] = useState<DashboardSession | null>(null);
   const [zoneCounts, setZoneCounts] = useState<ZoneCounts | null>(null);
   const [projectOrchestratorId, setProjectOrchestratorId] = useState<string | null | undefined>(undefined);
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [sidebarSessions, setSidebarSessions] = useState<DashboardSession[]>([]);
+  const [projects, setProjects] = useState<ProjectInfo[]>(() => cachedProjects ?? []);
+  const [sidebarSessions, setSidebarSessions] = useState<DashboardSession[] | null>(() => cachedSidebarSessions);
   const [loading, setLoading] = useState(true);
+  const [sidebarError, setSidebarError] = useState(false);
   const [routeError, setRouteError] = useState<Error | null>(null);
   const [sessionMissing, setSessionMissing] = useState(false);
   const [prefixByProject, setPrefixByProject] = useState<Map<string, string>>(new Map());
@@ -75,6 +177,8 @@ export default function SessionPage() {
   const resolvedProjectSessionsKeyRef = useRef<string | null>(null);
   const prefixByProjectRef = useRef<Map<string, string>>(new Map());
   const hasLoadedSessionRef = useRef(false);
+  const pendingMuxSessionsRef = useRef<SessionPatch[] | null>(null);
+  const sidebarFetchIdRef = useRef(0);
 
   // Keep prefixByProjectRef in sync so fetchProjectSessions (stable [] dep) reads latest map
   useEffect(() => {
@@ -82,18 +186,32 @@ export default function SessionPage() {
   }, [prefixByProject]);
 
   // Fetch project prefix map once on mount so isOrchestratorSession can use the correct prefix
-  useEffect(() => {
-    fetch("/api/projects")
-      .then((res) => res.ok ? res.json() : null)
-      .then((data: { projects?: ProjectInfo[] } | null) => {
-        if (data?.projects) {
-          setProjects(data.projects);
-          setPrefixByProject(
-            new Map(data.projects.map((p) => [p.id, p.sessionPrefix ?? p.id])),
-          );
-        }
-      })
-      .catch(() => {/* non-critical — falls back to role metadata check */});
+  const fetchProjects = useCallback(async () => {
+    if (cachedProjects) {
+      setProjects(cachedProjects);
+      setPrefixByProject(
+        new Map(cachedProjects.map((p) => [p.id, p.sessionPrefix ?? p.id])),
+      );
+    }
+
+    try {
+      const res = await fetch("/api/projects");
+      if (!res.ok) {
+        console.error("Failed to fetch projects:", new Error(`HTTP ${res.status}`));
+        return;
+      }
+      const data = (await res.json()) as { projects?: ProjectInfo[] } | null;
+      if (!data?.projects) return;
+      if (!areProjectsEqual(cachedProjects, data.projects)) {
+        cachedProjects = data.projects;
+        setProjects(data.projects);
+        setPrefixByProject(
+          new Map(data.projects.map((p) => [p.id, p.sessionPrefix ?? p.id])),
+        );
+      }
+    } catch (err) {
+      console.error("Failed to fetch projects:", err);
+    }
   }, []);
 
   // Subscribe to SSE for real-time activity updates (title emoji)
@@ -154,7 +272,10 @@ export default function SessionPage() {
         ? `/api/sessions?project=${encodeURIComponent(projectId)}`
         : `/api/sessions?project=${encodeURIComponent(projectId)}&orchestratorOnly=true`;
       const res = await fetch(query);
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.error("Failed to fetch project sessions for", projectId, new Error(`HTTP ${res.status}`));
+        return;
+      }
       const body = (await res.json()) as ProjectSessionsBody;
       const sessions = body.sessions ?? [];
       const orchestratorId =
@@ -183,21 +304,78 @@ export default function SessionPage() {
         }
       }
       setZoneCounts(counts);
-    } catch {
-      // non-critical - status strip just won't show
+    } catch (err) {
+      console.error("Failed to fetch project sessions for", projectId, err);
     }
   }, []);
 
   const fetchSidebarSessions = useCallback(async () => {
+    // Track a per-invocation token so out-of-order responses from concurrent
+    // callers (5s poll, mux refetch, retry button) don't overwrite newer data.
+    const fetchId = ++sidebarFetchIdRef.current;
     try {
       const res = await fetch("/api/sessions");
-      if (!res.ok) return;
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const body = (await res.json()) as { sessions?: DashboardSession[] } | null;
-      setSidebarSessions(body?.sessions ?? []);
-    } catch {
-      // non-critical
+      if (fetchId !== sidebarFetchIdRef.current) return;
+      const restSessions = body?.sessions ?? [];
+      const nextSessions =
+        applyMuxSessionPatches(restSessions, pendingMuxSessionsRef.current ?? []) ?? restSessions;
+      cachedSidebarSessions = nextSessions;
+      setSidebarError(false);
+      setSidebarSessions((current) => (
+        areSidebarSessionsEqual(current, nextSessions) ? current : nextSessions
+      ));
+    } catch (err) {
+      console.error("Failed to fetch sidebar sessions:", err);
+      if (fetchId !== sidebarFetchIdRef.current) return;
+      setSidebarError(true);
+      setSidebarSessions((current) => (current === null ? [] : current));
     }
   }, []);
+
+  useEffect(() => {
+    if (!mux?.sessions) return;
+
+    // Only overlay mux snapshots onto REST refreshes while the WebSocket is
+    // live. After a disconnect `mux.sessions` retains the last snapshot, which
+    // would silently overwrite fresher REST data via `pendingMuxSessionsRef`.
+    if (mux.status !== "connected") {
+      pendingMuxSessionsRef.current = null;
+      return;
+    }
+
+    pendingMuxSessionsRef.current = mux.sessions;
+
+    // Read current sessions via the module-level cache so this effect reacts to
+    // new mux data only — keeping `sidebarSessions` out of the dep array avoids
+    // re-running on every state change that the effect itself produces.
+    const next = applyMuxSessionPatches(cachedSidebarSessions, mux.sessions);
+    if (next !== cachedSidebarSessions) {
+      cachedSidebarSessions = next;
+      setSidebarSessions(next);
+    }
+
+    if (mux.sessions.length === 0 || !cachedSidebarSessions) {
+      return;
+    }
+
+    const cachedIds = new Set(cachedSidebarSessions.map((sidebarSession) => sidebarSession.id));
+    const muxIds = new Set(mux.sessions.map((muxSession) => muxSession.id));
+    if (cachedIds.size !== muxIds.size) {
+      void fetchSidebarSessions();
+      return;
+    }
+
+    for (const muxId of muxIds) {
+      if (!cachedIds.has(muxId)) {
+        void fetchSidebarSessions();
+        return;
+      }
+    }
+  }, [fetchSidebarSessions, mux?.sessions, mux?.status]);
 
   useEffect(() => {
     if (!sessionIsOrchestrator) {
@@ -205,14 +383,19 @@ export default function SessionPage() {
     }
   }, [sessionIsOrchestrator]);
 
-  // Initial fetch — session first, zone counts after (avoids blocking on slow /api/sessions)
+  // Initial fetch — load independent sidebar/session data in parallel.
   useEffect(() => {
-    fetchSession();
-    fetchSidebarSessions();
-    // Delay zone counts so the heavy /api/sessions call doesn't contend with session load
-    const t = setTimeout(fetchProjectSessions, 2000);
-    return () => clearTimeout(t);
-  }, [fetchSession, fetchProjectSessions, fetchSidebarSessions]);
+    void Promise.all([
+      fetchProjects(),
+      fetchSession(),
+      fetchSidebarSessions(),
+    ]);
+  }, [fetchProjects, fetchSession, fetchSidebarSessions]);
+
+  useEffect(() => {
+    if (!sessionProjectId) return;
+    void fetchProjectSessions();
+  }, [fetchProjectSessions, sessionIsOrchestrator, sessionProjectId]);
 
   // Poll every 5s
   useEffect(() => {
@@ -253,6 +436,9 @@ export default function SessionPage() {
       projectOrchestratorId={projectOrchestratorId}
       projects={projects}
       sidebarSessions={sidebarSessions}
+      sidebarLoading={sidebarSessions === null}
+      sidebarError={sidebarError}
+      onRetrySidebar={fetchSidebarSessions}
     />
   );
 }
