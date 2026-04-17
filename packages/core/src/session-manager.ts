@@ -1876,7 +1876,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         if (session.pr && plugins.scm) {
           try {
             const prState = await plugins.scm.getPRState(session.pr);
-            if (prState === PR_STATE.MERGED || prState === PR_STATE.CLOSED) {
+            if (prState === PR_STATE.CLOSED) {
               shouldKill = true;
             }
           } catch {

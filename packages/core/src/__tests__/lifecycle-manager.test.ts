@@ -375,7 +375,7 @@ describe("check (single session)", () => {
       runtime: plugins.runtime,
       agent: plugins.agent,
     });
-    vi.mocked(registryWithoutAgent.get).mockImplementation((slot: string, name?: string) => {
+    vi.mocked(registryWithoutAgent.get).mockImplementation((slot: string, _name?: string) => {
       if (slot === "runtime") return plugins.runtime;
       if (slot === "agent") return null;
       return null;
@@ -584,6 +584,38 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("ci_failed");
   });
 
+  it("keeps canonical session state idle while waiting on external review", async () => {
+    const mockSCM = createMockSCM({ getReviewDecision: vi.fn().mockResolvedValue("pending") });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+    const session = makeSession({ status: "pr_open", pr: makePR() });
+    vi.mocked(mockSessionManager.get).mockResolvedValue(session);
+
+    writeMetadata(env.sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: session.branch ?? "main",
+      status: session.status,
+      project: "my-app",
+      pr: session.pr?.url,
+      runtimeHandle: session.runtimeHandle ? JSON.stringify(session.runtimeHandle) : undefined,
+    });
+
+    const lm = createLifecycleManager({
+      config,
+      registry,
+      sessionManager: mockSessionManager,
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("review_pending");
+    expect(session.lifecycle.session.state).toBe("idle");
+    expect(session.lifecycle.session.reason).toBe("awaiting_external_review");
+  });
+
   it("skips PR auto-detection when metadata disables it", async () => {
     const mockSCM = createMockSCM({ detectPR: vi.fn().mockResolvedValue(makePR()) });
     const registry = createMockRegistry({
@@ -702,23 +734,36 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("merged");
   });
 
-  it("treats closed PRs as done when the canonical lifecycle marks them complete", async () => {
+  it("keeps closed PR sessions idle and emits a PR-closed notification", async () => {
     const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("closed") });
+    const notifier = createMockNotifier();
     const registry = createMockRegistry({
       runtime: plugins.runtime,
       agent: plugins.agent,
       scm: mockSCM,
+      notifier,
     });
 
+    const session = makeSession({ status: "pr_open", pr: makePR() });
     const lm = setupCheck("app-1", {
-      session: makeSession({ status: "pr_open", pr: makePR() }),
+      session,
       registry,
+      configOverride: {
+        ...config,
+        notificationRouting: {
+          ...config.notificationRouting,
+          info: ["desktop"],
+        },
+      },
     });
 
     await lm.check("app-1");
-    expect(lm.getStates().get("app-1")).toBe("done");
+    expect(lm.getStates().get("app-1")).toBe("idle");
     const meta = readMetadataRaw(env.sessionsDir, "app-1");
-    expect(meta?.["status"]).toBe("done");
+    expect(meta?.["status"]).toBe("idle");
+    expect(meta?.["statePayload"]).toContain('"state":"closed"');
+    expect(meta?.["statePayload"]).toContain('"reason":"pr_closed_waiting_decision"');
+    expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "pr.closed" }));
   });
 
   it("detects mergeable when approved + CI green", async () => {

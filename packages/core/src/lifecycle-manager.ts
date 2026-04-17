@@ -142,6 +142,19 @@ function statusToEventType(_from: SessionStatus | undefined, to: SessionStatus):
   }
 }
 
+function prStateToEventType(
+  from: Session["lifecycle"]["pr"]["state"],
+  to: Session["lifecycle"]["pr"]["state"],
+): EventType | null {
+  if (from === to) return null;
+  switch (to) {
+    case "closed":
+      return "pr.closed";
+    default:
+      return null;
+  }
+}
+
 /** Map event type to reaction config key. */
 function eventToReactionKey(eventType: EventType): string | null {
   switch (eventType) {
@@ -683,8 +696,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (cachedData.state === PR_STATE.CLOSED) {
             lifecycle.pr.state = "closed";
             lifecycle.pr.reason = "closed_unmerged";
-            setSessionState("done", "research_complete");
-            return commit(SESSION_STATUS.DONE, "pr_closed", 0);
+            setSessionState("idle", "pr_closed_waiting_decision");
+            return commit(SESSION_STATUS.IDLE, "pr_closed", 0);
           }
 
           lifecycle.pr.state = "open";
@@ -701,18 +714,18 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
             if (cachedData.mergeable) {
               lifecycle.pr.reason = "merge_ready";
-              setSessionState("working", "awaiting_external_review");
+              setSessionState("idle", "awaiting_external_review");
               return commit(SESSION_STATUS.MERGEABLE, "merge_ready", 0);
             }
             if (cachedData.reviewDecision === "approved") {
               lifecycle.pr.reason = "approved";
-              setSessionState("working", "awaiting_external_review");
+              setSessionState("idle", "awaiting_external_review");
               return commit(SESSION_STATUS.APPROVED, "review_approved", 0);
             }
           }
           if (cachedData.reviewDecision === "pending") {
             lifecycle.pr.reason = "review_pending";
-            setSessionState("working", "awaiting_external_review");
+            setSessionState("idle", "awaiting_external_review");
             return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
           }
 
@@ -723,7 +736,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           }
 
           lifecycle.pr.reason = "in_progress";
-          setSessionState("working", "pr_created");
+          setSessionState("idle", "pr_created");
           return commit(SESSION_STATUS.PR_OPEN, "pr_open", 0);
         }
 
@@ -737,8 +750,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         if (prState === PR_STATE.CLOSED) {
           lifecycle.pr.state = "closed";
           lifecycle.pr.reason = "closed_unmerged";
-          setSessionState("done", "research_complete");
-          return commit(SESSION_STATUS.DONE, "pr_closed", 0);
+          setSessionState("idle", "pr_closed_waiting_decision");
+          return commit(SESSION_STATUS.IDLE, "pr_closed", 0);
         }
 
         lifecycle.pr.state = "open";
@@ -759,18 +772,18 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           const mergeReady = await scm.getMergeability(session.pr);
           if (mergeReady.mergeable) {
             lifecycle.pr.reason = "merge_ready";
-            setSessionState("working", "awaiting_external_review");
+            setSessionState("idle", "awaiting_external_review");
             return commit(SESSION_STATUS.MERGEABLE, "merge_ready", 0);
           }
           if (reviewDecision === "approved") {
             lifecycle.pr.reason = "approved";
-            setSessionState("working", "awaiting_external_review");
+            setSessionState("idle", "awaiting_external_review");
             return commit(SESSION_STATUS.APPROVED, "review_approved", 0);
           }
         }
         if (reviewDecision === "pending") {
           lifecycle.pr.reason = "review_pending";
-          setSessionState("working", "awaiting_external_review");
+          setSessionState("idle", "awaiting_external_review");
           return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
         }
 
@@ -781,7 +794,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         }
 
         lifecycle.pr.reason = "in_progress";
-        setSessionState("working", "pr_created");
+        setSessionState("idle", "pr_created");
         return commit(SESSION_STATUS.PR_OPEN, "pr_open", 0);
       } catch {
         // Keep current status on SCM failure.
@@ -1463,6 +1476,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const tracked = states.get(session.id);
     const oldStatus =
       tracked ?? ((session.metadata?.["status"] as SessionStatus | undefined) || session.status);
+    const previousPRState = session.lifecycle.pr.state;
     const assessment = await determineStatus(session);
     const newStatus = assessment.status;
     const lifecycleChanged = session.metadata["statePayload"] !== JSON.stringify(session.lifecycle);
@@ -1570,6 +1584,22 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       if (lifecycleChanged) {
         updateSessionMetadata(session, { status: newStatus });
       }
+    }
+
+    const prEventType = prStateToEventType(previousPRState, session.lifecycle.pr.state);
+    if (prEventType) {
+      const prEvent = createEvent(prEventType, {
+        sessionId: session.id,
+        projectId: session.projectId,
+        message: `${session.id}: PR ${previousPRState} → ${session.lifecycle.pr.state}`,
+        data: {
+          oldPRState: previousPRState,
+          newPRState: session.lifecycle.pr.state,
+          prNumber: session.lifecycle.pr.number,
+          prUrl: session.lifecycle.pr.url,
+        },
+      });
+      await notifyHuman(prEvent, inferPriority(prEventType));
     }
 
     // Pin first quality summary for title stability
