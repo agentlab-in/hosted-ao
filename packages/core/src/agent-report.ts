@@ -71,7 +71,13 @@ export const AGENT_REPORT_METADATA_KEYS = {
 /** Freshness window — agent reports older than this are ignored. */
 export const AGENT_REPORT_FRESHNESS_MS = 300_000; // 5 minutes
 
-/** CLI surface accepts these hyphen/underscore aliases for convenience. */
+/**
+ * CLI surface accepts these hyphen/underscore aliases for convenience.
+ *
+ * Note: `done` is intentionally NOT an alias — agents cannot self-report
+ * terminal `done` state (AO owns that transition via SCM ground truth). Use
+ * `completed` for finished non-coding research/analysis work.
+ */
 const INPUT_ALIASES: Record<string, AgentReportedState> = {
   "start": "started",
   "started": "started",
@@ -90,7 +96,6 @@ const INPUT_ALIASES: Record<string, AgentReportedState> = {
   "reviews": "addressing_reviews",
   "completed": "completed",
   "complete": "completed",
-  "done": "completed",
 };
 
 /** Normalize a user-supplied report name into the canonical form. */
@@ -141,7 +146,7 @@ export interface AgentReportTransitionResult {
  */
 export function validateAgentReportTransition(
   lifecycle: CanonicalSessionLifecycle,
-  next: AgentReportedState,
+  _next: AgentReportedState,
 ): AgentReportTransitionResult {
   if (lifecycle.session.kind === "orchestrator") {
     return { ok: false, reason: "orchestrator sessions cannot self-report" };
@@ -149,7 +154,9 @@ export function validateAgentReportTransition(
   if (lifecycle.session.state === "terminated") {
     return { ok: false, reason: "session is terminated" };
   }
-  if (lifecycle.session.state === "done" && next !== "completed") {
+  // Terminal states cannot be re-opened by an agent — including `completed`,
+  // which maps back to `idle` and would otherwise reanimate a `done` session.
+  if (lifecycle.session.state === "done") {
     return { ok: false, reason: "session is already done" };
   }
   if (lifecycle.pr.state === "merged") {
@@ -261,7 +268,13 @@ export function readAgentReport(meta: Record<string, string> | null | undefined)
   };
 }
 
-/** Check whether an agent report is fresh (within the freshness window). */
+/**
+ * Check whether an agent report is fresh (within the freshness window).
+ *
+ * Future timestamps (clock skew, malformed input) are rejected — otherwise a
+ * single skewed `agentReportedAt` could appear "fresh" indefinitely and
+ * override stronger inference signals.
+ */
 export function isAgentReportFresh(
   report: AgentReport,
   now: Date = new Date(),
@@ -269,5 +282,7 @@ export function isAgentReportFresh(
 ): boolean {
   const reportedAt = Date.parse(report.timestamp);
   if (Number.isNaN(reportedAt)) return false;
-  return now.getTime() - reportedAt <= windowMs;
+  const currentTime = now.getTime();
+  if (reportedAt > currentTime) return false;
+  return currentTime - reportedAt <= windowMs;
 }

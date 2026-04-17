@@ -67,12 +67,15 @@ describe("normalizeAgentReportedState", () => {
     expect(normalizeAgentReportedState("addressing-reviews")).toBe("addressing_reviews");
     expect(normalizeAgentReportedState("ci")).toBe("fixing_ci");
     expect(normalizeAgentReportedState("reviews")).toBe("addressing_reviews");
-    expect(normalizeAgentReportedState("done")).toBe("completed");
     expect(normalizeAgentReportedState("complete")).toBe("completed");
     expect(normalizeAgentReportedState("input")).toBe("needs_input");
     expect(normalizeAgentReportedState("start")).toBe("started");
     expect(normalizeAgentReportedState("work")).toBe("working");
     expect(normalizeAgentReportedState("wait")).toBe("waiting");
+  });
+
+  it("does not alias `done` (agents cannot self-report terminal done)", () => {
+    expect(normalizeAgentReportedState("done")).toBeNull();
   });
 
   it("is case-insensitive and trims whitespace", () => {
@@ -134,11 +137,14 @@ describe("validateAgentReportTransition", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("rejects when session is done (unless next=completed)", () => {
+  it("rejects all reports when session is done (terminal state cannot reopen)", () => {
     const lifecycle = createInitialCanonicalLifecycle("worker");
     lifecycle.session.state = "done";
+    // `completed` maps back to `idle` and would reanimate a `done` session, so
+    // it must also be rejected — not just the obvious working/needs_input ones.
     expect(validateAgentReportTransition(lifecycle, "working").ok).toBe(false);
-    expect(validateAgentReportTransition(lifecycle, "completed").ok).toBe(true);
+    expect(validateAgentReportTransition(lifecycle, "completed").ok).toBe(false);
+    expect(validateAgentReportTransition(lifecycle, "needs_input").ok).toBe(false);
   });
 
   it("rejects reports on merged PRs", () => {
@@ -306,6 +312,16 @@ describe("readAgentReport + isAgentReportFresh", () => {
     })!;
     expect(isAgentReportFresh(fresh, now)).toBe(true);
     expect(isAgentReportFresh(stale, now)).toBe(false);
+  });
+
+  it("rejects future timestamps (clock skew must not appear forever-fresh)", () => {
+    const now = new Date("2025-01-01T12:00:00.000Z");
+    const futureAt = "2025-01-01T12:10:00.000Z"; // 10m in the future
+    const future = readAgentReport({
+      [AGENT_REPORT_METADATA_KEYS.STATE]: "working",
+      [AGENT_REPORT_METADATA_KEYS.AT]: futureAt,
+    })!;
+    expect(isAgentReportFresh(future, now)).toBe(false);
   });
 
   it("exposes the default freshness window (5 minutes)", () => {
