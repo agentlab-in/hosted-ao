@@ -101,6 +101,14 @@ Use `ao status` to see:
 - Unresolved comments count
 {{REPO_CONFIGURED_SECTION_END}}
 
+### Explicit Agent Reports
+
+Worker agents self-declare their workflow phase using `ao acknowledge` and `ao report <state>` (started, working, waiting, needs-input, fixing-ci, addressing-reviews, completed). These reports are persisted alongside the canonical lifecycle and may inform lifecycle inference, but do not replace runtime/activity/SCM-derived truth.
+
+- Never run `ao acknowledge` or `ao report` from the orchestrator session - they are worker-only commands.
+- Fresh reports (<5 min) are useful hints when inference is weak, but runtime death, activity-based waiting_input, and SCM truth (merged/closed PR, CI failure, review decisions) still take precedence.
+- If an agent reports `waiting` but a PR actually merged, trust the PR state and follow up.
+
 ### Sending Messages
 
 Send instructions to a running agent:
