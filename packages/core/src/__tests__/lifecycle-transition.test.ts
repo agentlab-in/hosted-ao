@@ -198,6 +198,24 @@ describe("buildTransitionMetadataPatch", () => {
     expect(patch["statePayload"]).toBeDefined();
     expect(JSON.parse(patch["statePayload"])).toHaveProperty("version", 2);
   });
+
+  it("clears stale PR, runtime, and role metadata when lifecycle no longer carries them", () => {
+    const lifecycle = createInitialCanonicalLifecycle("worker");
+    const decision: LifecycleDecision = {
+      status: "working",
+      evidence: "active",
+      detectingAttempts: 0,
+      sessionState: "working",
+      sessionReason: "task_in_progress",
+    };
+
+    const patch = buildTransitionMetadataPatch(lifecycle, decision, "working");
+
+    expect(patch["pr"]).toBe("");
+    expect(patch["runtimeHandle"]).toBe("");
+    expect(patch["tmuxName"]).toBe("");
+    expect(patch["role"]).toBe("");
+  });
 });
 
 describe("applyLifecycleDecision (integration)", () => {
@@ -267,7 +285,7 @@ describe("applyLifecycleDecision (integration)", () => {
     expect(meta?.["lifecycleEvidence"]).toBe("agent_started");
   });
 
-  it("merges additional metadata", () => {
+  it("merges non-conflicting additional metadata", () => {
     writeTestSession("test-2", {
       status: "working",
       worktree: "/tmp/test",
@@ -286,14 +304,79 @@ describe("applyLifecycleDecision (integration)", () => {
       },
       source: "agent_report",
       additionalMetadata: {
-        pr: "https://github.com/test/repo/pull/123",
+        summary: "worker reported PR creation",
       },
     });
 
     expect(result.success).toBe(true);
 
     const meta = readMetadataRaw(dataDir, "test-2");
-    expect(meta?.["pr"]).toBe("https://github.com/test/repo/pull/123");
+    expect(meta?.["summary"]).toBe("worker reported PR creation");
+  });
+
+  it("clears stale metadata fields that are absent from the next lifecycle", () => {
+    const lifecycle = createInitialCanonicalLifecycle("worker");
+    lifecycle.session.state = "working";
+    lifecycle.session.reason = "task_in_progress";
+    lifecycle.session.startedAt = "2026-04-17T10:00:00.000Z";
+    lifecycle.session.lastTransitionAt = "2026-04-17T10:00:00.000Z";
+
+    writeTestSession("test-3", {
+      status: "working",
+      stateVersion: "2",
+      statePayload: JSON.stringify(lifecycle),
+      pr: "https://github.com/test/repo/pull/456",
+      runtimeHandle: JSON.stringify({ id: "rt-1", runtimeName: "tmux", data: {} }),
+      tmuxName: "tmux-1",
+      role: "orchestrator",
+      worktree: "/tmp/test",
+      branch: "main",
+    });
+
+    const result = applyLifecycleDecision({
+      dataDir,
+      sessionId: "test-3",
+      decision: {
+        status: "working",
+        evidence: "active",
+        detectingAttempts: 0,
+        sessionState: "working",
+        sessionReason: "task_in_progress",
+      },
+      source: "poll",
+    });
+
+    expect(result.success).toBe(true);
+
+    const meta = readMetadataRaw(dataDir, "test-3");
+    expect(meta?.["pr"]).toBeUndefined();
+    expect(meta?.["runtimeHandle"]).toBeUndefined();
+    expect(meta?.["tmuxName"]).toBeUndefined();
+    expect(meta?.["role"]).toBeUndefined();
+  });
+
+  it("validates stored legacy status before deriving the previous status", () => {
+    writeTestSession("test-4", {
+      status: "not-a-real-status",
+      worktree: "/tmp/test",
+      branch: "main",
+    });
+
+    const result = applyLifecycleDecision({
+      dataDir,
+      sessionId: "test-4",
+      decision: {
+        status: "working",
+        evidence: "agent_started",
+        detectingAttempts: 0,
+        sessionState: "working",
+        sessionReason: "task_in_progress",
+      },
+      source: "poll",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.previousStatus).toBe("spawning");
   });
 });
 

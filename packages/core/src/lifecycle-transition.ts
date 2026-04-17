@@ -22,6 +22,7 @@ import type {
 import { cloneLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 import { updateMetadata, readMetadataRaw, readCanonicalLifecycle } from "./metadata.js";
 import type { LifecycleDecision } from "./lifecycle-status-decisions.js";
+import { validateStatus } from "./utils/validation.js";
 
 /**
  * Source of the lifecycle transition — used for audit and observability.
@@ -146,23 +147,12 @@ export function buildTransitionMetadataPatch(
     patch["detectingEvidenceHash"] = "";
   }
 
-  // Include PR URL if present in lifecycle
-  if (lifecycle.pr.url) {
-    patch["pr"] = lifecycle.pr.url;
-  }
+  patch["pr"] = lifecycle.pr.url ?? "";
 
-  // Include runtime handle if present
-  if (lifecycle.runtime.handle) {
-    patch["runtimeHandle"] = JSON.stringify(lifecycle.runtime.handle);
-  }
-  if (lifecycle.runtime.tmuxName) {
-    patch["tmuxName"] = lifecycle.runtime.tmuxName;
-  }
+  patch["runtimeHandle"] = lifecycle.runtime.handle ? JSON.stringify(lifecycle.runtime.handle) : "";
+  patch["tmuxName"] = lifecycle.runtime.tmuxName ?? "";
 
-  // Include role if orchestrator
-  if (lifecycle.session.kind === "orchestrator") {
-    patch["role"] = "orchestrator";
-  }
+  patch["role"] = lifecycle.session.kind === "orchestrator" ? "orchestrator" : "";
 
   return patch;
 }
@@ -217,7 +207,7 @@ export function applyLifecycleDecision(
   const previousLifecycle = cloneLifecycle(currentLifecycle);
   const previousStatus = deriveLegacyStatus(
     previousLifecycle,
-    (rawMeta["status"] as SessionStatus) ?? "working",
+    validateStatus(rawMeta["status"]),
   );
 
   // Apply the decision to the lifecycle

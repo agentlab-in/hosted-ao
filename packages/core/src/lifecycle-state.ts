@@ -192,44 +192,93 @@ function normalizePayloadLifecycle(
   options: ParseCanonicalLifecycleOptions = {},
 ): CanonicalSessionLifecycle {
   const synthesized = synthesizeCanonicalLifecycle(meta, options);
+  const payloadSession = payload.session;
+  const payloadPr = payload.pr;
+  const payloadRuntime = payload.runtime;
+  const hasPayloadSessionKind = Object.hasOwn(payloadSession ?? {}, "kind");
+  const hasPayloadSessionState = Object.hasOwn(payloadSession ?? {}, "state");
+  const hasPayloadSessionReason = Object.hasOwn(payloadSession ?? {}, "reason");
+  const hasPayloadSessionStartedAt = Object.hasOwn(payloadSession ?? {}, "startedAt");
+  const hasPayloadSessionCompletedAt = Object.hasOwn(payloadSession ?? {}, "completedAt");
+  const hasPayloadSessionTerminatedAt = Object.hasOwn(payloadSession ?? {}, "terminatedAt");
+  const hasPayloadSessionLastTransitionAt = Object.hasOwn(payloadSession ?? {}, "lastTransitionAt");
+  const hasPayloadPrState = Object.hasOwn(payloadPr ?? {}, "state");
+  const hasPayloadPrReason = Object.hasOwn(payloadPr ?? {}, "reason");
+  const hasPayloadPrNumber = Object.hasOwn(payloadPr ?? {}, "number");
+  const hasPayloadPrUrl = Object.hasOwn(payloadPr ?? {}, "url");
+  const hasPayloadPrLastObservedAt = Object.hasOwn(payloadPr ?? {}, "lastObservedAt");
+  const hasPayloadRuntimeState = Object.hasOwn(payloadRuntime ?? {}, "state");
+  const hasPayloadRuntimeReason = Object.hasOwn(payloadRuntime ?? {}, "reason");
+  const hasPayloadRuntimeLastObservedAt = Object.hasOwn(payloadRuntime ?? {}, "lastObservedAt");
+  const hasPayloadRuntimeHandle = Object.hasOwn(payloadRuntime ?? {}, "handle");
+  const hasPayloadRuntimeTmuxName = Object.hasOwn(payloadRuntime ?? {}, "tmuxName");
+
   return {
     version: 2,
     session: {
-      kind: payload.session?.kind === "orchestrator" ? "orchestrator" : synthesized.session.kind,
-      state: (payload.session?.state as CanonicalSessionState | undefined) ?? synthesized.session.state,
+      kind: hasPayloadSessionKind
+        ? payloadSession?.kind === "orchestrator"
+          ? "orchestrator"
+          : "worker"
+        : synthesized.session.kind,
+      state: hasPayloadSessionState
+        ? (payloadSession?.state as CanonicalSessionState | undefined) ?? synthesized.session.state
+        : synthesized.session.state,
       reason:
-        (payload.session?.reason as CanonicalSessionReason | undefined) ?? synthesized.session.reason,
-      startedAt: normalizeTimestamp(payload.session?.startedAt, synthesized.session.startedAt),
-      completedAt: normalizeTimestamp(payload.session?.completedAt, synthesized.session.completedAt),
-      terminatedAt: normalizeTimestamp(
-        payload.session?.terminatedAt,
-        synthesized.session.terminatedAt,
-      ),
-      lastTransitionAt:
-        normalizeTimestamp(payload.session?.lastTransitionAt, synthesized.session.lastTransitionAt) ??
-        synthesized.session.lastTransitionAt,
+        hasPayloadSessionReason
+          ? (payloadSession?.reason as CanonicalSessionReason | undefined) ?? synthesized.session.reason
+          : synthesized.session.reason,
+      startedAt: hasPayloadSessionStartedAt
+        ? normalizeTimestamp(payloadSession?.startedAt)
+        : synthesized.session.startedAt,
+      completedAt: hasPayloadSessionCompletedAt
+        ? normalizeTimestamp(payloadSession?.completedAt)
+        : synthesized.session.completedAt,
+      terminatedAt: hasPayloadSessionTerminatedAt
+        ? normalizeTimestamp(payloadSession?.terminatedAt)
+        : synthesized.session.terminatedAt,
+      lastTransitionAt: hasPayloadSessionLastTransitionAt
+        ? normalizeTimestamp(payloadSession?.lastTransitionAt, synthesized.session.lastTransitionAt) ??
+          synthesized.session.lastTransitionAt
+        : synthesized.session.lastTransitionAt,
     },
     pr: {
-      state: (payload.pr?.state as CanonicalPRState | undefined) ?? synthesized.pr.state,
-      reason: (payload.pr?.reason as CanonicalPRReason | undefined) ?? synthesized.pr.reason,
-      number: typeof payload.pr?.number === "number" ? payload.pr.number : synthesized.pr.number,
-      url: typeof payload.pr?.url === "string" ? payload.pr.url : synthesized.pr.url,
-      lastObservedAt: normalizeTimestamp(payload.pr?.lastObservedAt, synthesized.pr.lastObservedAt),
+      state: hasPayloadPrState
+        ? (payloadPr?.state as CanonicalPRState | undefined) ?? synthesized.pr.state
+        : synthesized.pr.state,
+      reason: hasPayloadPrReason
+        ? (payloadPr?.reason as CanonicalPRReason | undefined) ?? synthesized.pr.reason
+        : synthesized.pr.reason,
+      number: hasPayloadPrNumber
+        ? typeof payloadPr?.number === "number"
+          ? payloadPr.number
+          : null
+        : synthesized.pr.number,
+      url: hasPayloadPrUrl ? (typeof payloadPr?.url === "string" ? payloadPr.url : null) : synthesized.pr.url,
+      lastObservedAt: hasPayloadPrLastObservedAt
+        ? normalizeTimestamp(payloadPr?.lastObservedAt)
+        : synthesized.pr.lastObservedAt,
     },
     runtime: {
-      state: (payload.runtime?.state as CanonicalRuntimeState | undefined) ?? synthesized.runtime.state,
+      state: hasPayloadRuntimeState
+        ? (payloadRuntime?.state as CanonicalRuntimeState | undefined) ?? synthesized.runtime.state
+        : synthesized.runtime.state,
       reason:
-        (payload.runtime?.reason as CanonicalRuntimeReason | undefined) ??
-        synthesized.runtime.reason,
-      lastObservedAt: normalizeTimestamp(
-        payload.runtime?.lastObservedAt,
-        synthesized.runtime.lastObservedAt,
-      ),
-      handle: normalizeRuntimeHandle(payload.runtime?.handle) ?? synthesized.runtime.handle,
-      tmuxName:
-        typeof payload.runtime?.tmuxName === "string"
-          ? payload.runtime.tmuxName
-          : synthesized.runtime.tmuxName,
+        hasPayloadRuntimeReason
+          ? (payloadRuntime?.reason as CanonicalRuntimeReason | undefined) ??
+            synthesized.runtime.reason
+          : synthesized.runtime.reason,
+      lastObservedAt: hasPayloadRuntimeLastObservedAt
+        ? normalizeTimestamp(payloadRuntime?.lastObservedAt)
+        : synthesized.runtime.lastObservedAt,
+      handle: hasPayloadRuntimeHandle
+        ? normalizeRuntimeHandle(payloadRuntime?.handle)
+        : synthesized.runtime.handle,
+      tmuxName: hasPayloadRuntimeTmuxName
+        ? typeof payloadRuntime?.tmuxName === "string"
+          ? payloadRuntime.tmuxName
+          : null
+        : synthesized.runtime.tmuxName,
     },
   };
 }

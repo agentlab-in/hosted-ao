@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createInitialCanonicalLifecycle, deriveLegacyStatus } from "../lifecycle-state.js";
+import {
+  createInitialCanonicalLifecycle,
+  deriveLegacyStatus,
+  parseCanonicalLifecycle,
+} from "../lifecycle-state.js";
 
 function createOpenPRLifecycle() {
   const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
@@ -55,5 +59,31 @@ describe("deriveLegacyStatus", () => {
 
     expect(deriveLegacyStatus(reviewPending)).toBe("review_pending");
     expect(deriveLegacyStatus(mergeReady)).toBe("mergeable");
+  });
+});
+
+describe("parseCanonicalLifecycle", () => {
+  it("preserves explicit null payload fields instead of rehydrating stale flat metadata", () => {
+    const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
+    lifecycle.session.state = "working";
+    lifecycle.session.reason = "task_in_progress";
+    lifecycle.session.startedAt = "2025-01-01T00:00:00.000Z";
+    lifecycle.runtime.state = "alive";
+    lifecycle.runtime.reason = "process_running";
+
+    const parsed = parseCanonicalLifecycle({
+      status: "working",
+      role: "orchestrator",
+      pr: "https://github.com/org/repo/pull/42",
+      runtimeHandle: JSON.stringify({ id: "rt-1", runtimeName: "tmux", data: {} }),
+      tmuxName: "tmux-1",
+      stateVersion: "2",
+      statePayload: JSON.stringify(lifecycle),
+    });
+
+    expect(parsed.session.kind).toBe("worker");
+    expect(parsed.pr.url).toBeNull();
+    expect(parsed.runtime.handle).toBeNull();
+    expect(parsed.runtime.tmuxName).toBeNull();
   });
 });
