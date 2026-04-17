@@ -386,16 +386,17 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
               });
             },
             log(level, message) {
-              // Log to stderr for observability
-              process.stderr.write(
-                JSON.stringify({
-                  source: "ao-graphql-batch",
-                  level,
-                  message,
+              observer?.recordDiagnostic?.({
+                operation: "batch_enrichment.log",
+                correlationId: createCorrelationId("graphql-batch"),
+                projectId: scopedProjectId,
+                message,
+                level,
+                data: {
                   plugin: pluginKey,
-                  timestamp: new Date().toISOString(),
-                }) + "\n"
-              );
+                  source: "ao-graphql-batch",
+                },
+              });
             },
           },
         );
