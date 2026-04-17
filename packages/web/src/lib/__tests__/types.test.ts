@@ -9,6 +9,8 @@ import {
   TERMINAL_STATUSES,
   TERMINAL_ACTIVITIES,
   NON_RESTORABLE_STATUSES,
+  isDashboardSessionDone,
+  isDashboardSessionRestorable,
   type DashboardSession,
   type DashboardPR,
 } from "../types";
@@ -77,9 +79,19 @@ describe("getAttentionLevel", () => {
           prReason: "merged",
           runtimeState: "alive",
           runtimeReason: "process_running",
-          session: { state: "idle", reason: "merged_waiting_decision", label: "merged, waiting decision", reasonLabel: "merged waiting decision" },
+          session: {
+            state: "idle",
+            reason: "merged_waiting_decision",
+            label: "merged, waiting decision",
+            reasonLabel: "merged waiting decision",
+          },
           pr: { state: "merged", reason: "merged", label: "merged", reasonLabel: "merged" },
-          runtime: { state: "alive", reason: "process_running", label: "alive", reasonLabel: "process running" },
+          runtime: {
+            state: "alive",
+            reason: "process_running",
+            label: "alive",
+            reasonLabel: "process running",
+          },
           legacyStatus: "merged",
           evidence: null,
           detectingAttempts: 0,
@@ -116,9 +128,41 @@ describe("getAttentionLevel", () => {
       expect(getAttentionLevel(session)).toBe("done");
     });
 
-    it("should return 'done' for closed PR regardless of session status", () => {
+    it("should keep closed-unmerged PR sessions actionable", () => {
       const session = createSession({
         status: "working",
+        lifecycle: {
+          sessionState: "idle",
+          sessionReason: "pr_closed_waiting_decision",
+          prState: "closed",
+          prReason: "closed_unmerged",
+          runtimeState: "alive",
+          runtimeReason: "process_running",
+          session: {
+            state: "idle",
+            reason: "pr_closed_waiting_decision",
+            label: "idle",
+            reasonLabel: "pr closed waiting decision",
+          },
+          pr: {
+            state: "closed",
+            reason: "closed_unmerged",
+            label: "closed",
+            reasonLabel: "closed unmerged",
+          },
+          runtime: {
+            state: "alive",
+            reason: "process_running",
+            label: "alive",
+            reasonLabel: "process running",
+          },
+          legacyStatus: "idle",
+          evidence: null,
+          detectingAttempts: 0,
+          detectingEscalatedAt: null,
+          summary: "PR closed without merge",
+          guidance: null,
+        },
         pr: {
           number: 1,
           url: "https://github.com/test/repo/pull/1",
@@ -145,7 +189,9 @@ describe("getAttentionLevel", () => {
           unresolvedComments: [],
         },
       });
-      expect(getAttentionLevel(session)).toBe("done");
+      expect(isDashboardSessionDone(session)).toBe(false);
+      expect(isDashboardSessionRestorable(session)).toBe(false);
+      expect(getAttentionLevel(session)).toBe("pending");
     });
 
     it("should ignore metadata attention overrides for terminal sessions", () => {
@@ -209,6 +255,43 @@ describe("getAttentionLevel", () => {
     });
   });
 
+  describe("restore affordances", () => {
+    it("should not mark merged sessions as restorable", () => {
+      const session = createSession({
+        status: "merged",
+        lifecycle: {
+          sessionState: "idle",
+          sessionReason: "merged_waiting_decision",
+          prState: "merged",
+          prReason: "merged",
+          runtimeState: "alive",
+          runtimeReason: "process_running",
+          session: {
+            state: "idle",
+            reason: "merged_waiting_decision",
+            label: "merged, waiting decision",
+            reasonLabel: "merged waiting decision",
+          },
+          pr: { state: "merged", reason: "merged", label: "merged", reasonLabel: "merged" },
+          runtime: {
+            state: "alive",
+            reason: "process_running",
+            label: "alive",
+            reasonLabel: "process running",
+          },
+          legacyStatus: "merged",
+          evidence: null,
+          detectingAttempts: 0,
+          detectingEscalatedAt: null,
+          summary: "PR merged; worker is still available for a keep-or-kill decision",
+          guidance: null,
+        },
+      });
+
+      expect(isDashboardSessionRestorable(session)).toBe(false);
+    });
+  });
+
   describe("respond state", () => {
     it("should return 'respond' for waiting_input activity", () => {
       const session = createSession({ activity: "waiting_input" });
@@ -225,9 +308,19 @@ describe("getAttentionLevel", () => {
           prReason: "in_progress",
           runtimeState: "probe_failed",
           runtimeReason: "probe_error",
-          session: { state: "detecting", reason: "probe_failure", label: "detecting", reasonLabel: "probe failure" },
+          session: {
+            state: "detecting",
+            reason: "probe_failure",
+            label: "detecting",
+            reasonLabel: "probe failure",
+          },
           pr: { state: "open", reason: "in_progress", label: "open", reasonLabel: "in progress" },
-          runtime: { state: "probe_failed", reason: "probe_error", label: "probe failed", reasonLabel: "probe error" },
+          runtime: {
+            state: "probe_failed",
+            reason: "probe_error",
+            label: "probe failed",
+            reasonLabel: "probe error",
+          },
           legacyStatus: "detecting",
           evidence: "signal_disagreement",
           detectingAttempts: 1,
@@ -454,9 +547,19 @@ describe("getAttentionLevel", () => {
           prReason: "in_progress",
           runtimeState: "alive",
           runtimeReason: "process_running",
-          session: { state: "working", reason: "task_in_progress", label: "working", reasonLabel: "task in progress" },
+          session: {
+            state: "working",
+            reason: "task_in_progress",
+            label: "working",
+            reasonLabel: "task in progress",
+          },
           pr: { state: "open", reason: "in_progress", label: "open", reasonLabel: "in progress" },
-          runtime: { state: "alive", reason: "process_running", label: "alive", reasonLabel: "process running" },
+          runtime: {
+            state: "alive",
+            reason: "process_running",
+            label: "alive",
+            reasonLabel: "process running",
+          },
           legacyStatus: "pr_open",
           evidence: null,
           detectingAttempts: 0,

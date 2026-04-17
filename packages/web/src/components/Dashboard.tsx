@@ -12,6 +12,7 @@ import {
   isPRRateLimited,
   isPRMergeReady,
   isPRUnenriched,
+  isDashboardSessionRestorable,
 } from "@/lib/types";
 import { AttentionZone } from "./AttentionZone";
 import { DynamicFavicon, countNeedingAttention } from "./DynamicFavicon";
@@ -98,6 +99,7 @@ function DoneCard({
     session.lifecycle?.sessionState === "terminated" ||
     session.status === "killed" ||
     session.status === "terminated";
+  const isRestorable = isDashboardSessionRestorable(session);
   const badgeLabel = isMerged ? "merged" : isTerminated ? "terminated" : "done";
   const badgeClass = `done-card__badge ${isTerminated ? "done-card__badge--terminated" : "done-card__badge--merged"}`;
 
@@ -114,7 +116,14 @@ function DoneCard({
             className="done-card__pr"
             onClick={(e) => e.stopPropagation()}
           >
-            <svg width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <svg
+              width="9"
+              height="9"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              viewBox="0 0 24 24"
+            >
               <circle cx="18" cy="18" r="3" />
               <circle cx="6" cy="6" r="3" />
               <path d="M6 9v3a6 6 0 0 0 6 6h3" />
@@ -123,16 +132,18 @@ function DoneCard({
           </a>
         ) : null}
         <span className="done-card__age">{formatRelativeTimeCompact(session.lastActivityAt)}</span>
-        <button
-          type="button"
-          className="done-card__restore"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRestore(session.id);
-          }}
-        >
-          Restore
-        </button>
+        {isRestorable ? (
+          <button
+            type="button"
+            className="done-card__restore"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRestore(session.id);
+            }}
+          >
+            Restore
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -149,7 +160,11 @@ function getCiPillClass(pr: DashboardPR): string {
 
 function getCiLabel(pr: DashboardPR): string {
   if (isPRRateLimited(pr) || isPRUnenriched(pr)) return "";
-  return pr.ciStatus === "passing" ? "CI passing" : pr.ciStatus === "failing" ? "CI failed" : "CI pending";
+  return pr.ciStatus === "passing"
+    ? "CI passing"
+    : pr.ciStatus === "failing"
+      ? "CI failed"
+      : "CI pending";
 }
 
 function getReviewPillClass(pr: DashboardPR): string {
@@ -187,11 +202,7 @@ function MobileFeedCard({
   const pr = session.pr;
 
   return (
-    <button
-      type="button"
-      className="mobile-feed-card"
-      onClick={() => onTap(session)}
-    >
+    <button type="button" className="mobile-feed-card" onClick={() => onTap(session)}>
       <div className="mobile-feed-card__strip" data-level={level} />
       <div className="mobile-feed-card__content">
         <div className="mobile-feed-card__header">
@@ -205,13 +216,10 @@ function MobileFeedCard({
           {session.branch ? (
             <span className="mobile-feed-card__branch">{session.branch}</span>
           ) : null}
-          {pr ? (
-            <span className="mobile-feed-card__pr">#{pr.number}</span>
-          ) : null}
+          {pr ? <span className="mobile-feed-card__pr">#{pr.number}</span> : null}
           {pr && !isPRRateLimited(pr) && !isPRUnenriched(pr) ? (
             <span className="mobile-feed-card__diff">
-              <span style={{ color: "var(--color-accent-green)" }}>+{pr.additions}</span>
-              {" "}
+              <span style={{ color: "var(--color-accent-green)" }}>+{pr.additions}</span>{" "}
               <span style={{ color: "var(--color-accent-red)" }}>-{pr.deletions}</span>
             </span>
           ) : null}
@@ -468,9 +476,10 @@ function DashboardInner({
   }, []);
 
   const mobileFeedSessions = useMemo(() => {
-    const levels = mobileFilter === "all"
-      ? MOBILE_KANBAN_ORDER
-      : MOBILE_KANBAN_ORDER.filter((level) => level === mobileFilter);
+    const levels =
+      mobileFilter === "all"
+        ? MOBILE_KANBAN_ORDER
+        : MOBILE_KANBAN_ORDER.filter((level) => level === mobileFilter);
     const feed: Array<{ session: DashboardSession; level: AttentionLevel }> = [];
     for (const level of levels) {
       for (const session of grouped[level]) {
