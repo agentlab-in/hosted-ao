@@ -371,13 +371,17 @@ export function applyAgentReport(
     typeof input.prNumber === "number" && Number.isInteger(input.prNumber) && input.prNumber > 0
       ? input.prNumber
       : undefined;
-  const inferredPrNumber =
-    trimmedPrUrl && parsedPrNumber === undefined
-      ? (() => {
-          const parsed = parsePrFromUrl(trimmedPrUrl);
-          return parsed?.number;
-        })()
-      : undefined;
+  const parsedPrFromUrl = trimmedPrUrl ? parsePrFromUrl(trimmedPrUrl) : null;
+  const urlPrNumber = parsedPrFromUrl?.number;
+  if (
+    trimmedPrUrl &&
+    parsedPrNumber !== undefined &&
+    urlPrNumber !== undefined &&
+    parsedPrNumber !== urlPrNumber
+  ) {
+    throw new Error(`PR number ${parsedPrNumber} does not match PR URL ${trimmedPrUrl}`);
+  }
+  const inferredPrNumber = urlPrNumber;
   const prNumber = parsedPrNumber ?? inferredPrNumber;
   const prIsDraft =
     input.state === "draft_pr_created"
@@ -385,6 +389,12 @@ export function applyAgentReport(
       : input.state === "pr_created" || input.state === "ready_for_review"
         ? false
         : undefined;
+  const existingPrUrl = raw[AGENT_REPORT_METADATA_KEYS.PR_URL]?.trim() || undefined;
+  const existingPrNumberRaw = raw[AGENT_REPORT_METADATA_KEYS.PR_NUMBER];
+  const existingPrNumber =
+    existingPrNumberRaw && /^\d+$/.test(existingPrNumberRaw)
+      ? Number.parseInt(existingPrNumberRaw, 10)
+      : undefined;
   let before: AgentReportAuditSnapshot | null = null;
   let previousState: CanonicalSessionState | null = null;
   let nextState: CanonicalSessionState | null = null;
@@ -419,17 +429,17 @@ export function applyAgentReport(
     current.session.reason = mapped.sessionReason;
     current.session.lastTransitionAt = now;
     if (isPRWorkflowReport(input.state)) {
+      const effectivePrUrl = trimmedPrUrl ?? current.pr.url ?? existingPrUrl;
+      const effectivePrNumber =
+        prNumber ?? current.pr.number ?? existingPrNumber ?? parsedPrFromUrl?.number;
       current.pr.state = "open";
       current.pr.reason = input.state === "ready_for_review" ? "review_pending" : "in_progress";
       current.pr.lastObservedAt = now;
-      if (trimmedPrUrl) {
-        current.pr.url = trimmedPrUrl;
+      if (effectivePrUrl) {
+        current.pr.url = effectivePrUrl;
       }
-      if (prNumber !== undefined) {
-        current.pr.number = prNumber;
-      } else if (trimmedPrUrl) {
-        const parsed = parsePrFromUrl(trimmedPrUrl);
-        current.pr.number = parsed?.number ?? current.pr.number;
+      if (effectivePrNumber !== undefined) {
+        current.pr.number = effectivePrNumber;
       }
     }
     if (mapped.sessionState === "working" && current.session.startedAt === null) {
@@ -454,20 +464,16 @@ export function applyAgentReport(
     // Clear stale notes from previous reports so they don't mislead humans.
     metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = "";
   }
-  if (trimmedPrUrl) {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_URL] = trimmedPrUrl;
-  } else {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_URL] = "";
-  }
-  if (prNumber !== undefined) {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_NUMBER] = String(prNumber);
-  } else {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_NUMBER] = "";
-  }
-  if (prIsDraft !== undefined) {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] = prIsDraft ? "true" : "false";
-  } else {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] = "";
+  if (isPRWorkflowReport(input.state)) {
+    if (trimmedPrUrl) {
+      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_URL] = trimmedPrUrl;
+    }
+    if (prNumber !== undefined) {
+      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_NUMBER] = String(prNumber);
+    }
+    if (prIsDraft !== undefined) {
+      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] = prIsDraft ? "true" : "false";
+    }
   }
   updateMetadata(dataDir, sessionId, metadataUpdates);
 

@@ -310,6 +310,53 @@ describe("applyAgentReport", () => {
     expect(payload.pr.number).toBe(44);
   });
 
+  it("preserves prior PR URL when ready_for_review only supplies a PR number", () => {
+    applyAgentReport(dataDir, sessionId, {
+      state: "draft_pr_created",
+      prUrl: "https://github.com/test/repo/pull/45",
+      now: new Date("2025-01-02T10:00:00.000Z"),
+    });
+
+    applyAgentReport(dataDir, sessionId, {
+      state: "ready_for_review",
+      prNumber: 45,
+      now: new Date("2025-01-02T10:05:00.000Z"),
+    });
+
+    const meta = readMetadataRaw(dataDir, sessionId)!;
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_URL]).toBe("https://github.com/test/repo/pull/45");
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_NUMBER]).toBe("45");
+  });
+
+  it("does not clear PR metadata on later non-PR workflow reports", () => {
+    applyAgentReport(dataDir, sessionId, {
+      state: "pr_created",
+      prUrl: "https://github.com/test/repo/pull/46",
+      now: new Date("2025-01-02T10:00:00.000Z"),
+    });
+
+    applyAgentReport(dataDir, sessionId, {
+      state: "working",
+      now: new Date("2025-01-02T10:05:00.000Z"),
+    });
+
+    const meta = readMetadataRaw(dataDir, sessionId)!;
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_URL]).toBe("https://github.com/test/repo/pull/46");
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_NUMBER]).toBe("46");
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT]).toBe("false");
+  });
+
+  it("rejects conflicting PR URL and PR number inputs", () => {
+    expect(() =>
+      applyAgentReport(dataDir, sessionId, {
+        state: "pr_created",
+        prUrl: "https://github.com/test/repo/pull/47",
+        prNumber: 99,
+        now: new Date("2025-01-02T10:00:00.000Z"),
+      }),
+    ).toThrow(/does not match PR URL/);
+  });
+
   it("sets startedAt on the first working transition", () => {
     const now = new Date("2025-01-01T12:00:00.000Z");
     // Re-seed with startedAt explicitly null so we exercise the first-start
