@@ -52,6 +52,11 @@ import {
   mapAgentReportToLifecycle,
   readAgentReport,
 } from "./agent-report.js";
+import {
+  auditAgentReports,
+  getReactionKeyForTrigger,
+  REPORT_WATCHER_METADATA_KEYS,
+} from "./report-watcher.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
 import { resolveNotifierTarget } from "./notifier-resolution.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
@@ -219,6 +224,10 @@ interface DeterminedStatus {
   status: SessionStatus;
   evidence: string;
   detectingAttempts: number;
+  /** ISO timestamp when detecting first started. */
+  detectingStartedAt?: string;
+  /** Hash of evidence for unchanged-evidence detection. */
+  detectingEvidenceHash?: string;
 }
 
 interface ProbeResult {
@@ -516,6 +525,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     let idleWasBlocked = false;
     const canProbeRuntimeIdentity = session.status !== SESSION_STATUS.SPAWNING;
     const currentDetectingAttempts = parseAttemptCount(session.metadata["detectingAttempts"]);
+    const currentDetectingStartedAt = session.metadata["detectingStartedAt"] || undefined;
+    const currentDetectingEvidenceHash = session.metadata["detectingEvidenceHash"] || undefined;
 
     const commit = (
       decision: LifecycleDecision = {
@@ -532,6 +543,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         status: decision.status,
         evidence: decision.evidence,
         detectingAttempts: decision.detectingAttempts,
+        detectingStartedAt: decision.detectingStartedAt,
+        detectingEvidenceHash: decision.detectingEvidenceHash,
       };
     };
 
@@ -665,6 +678,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             currentAttempts: currentDetectingAttempts,
             idleWasBlocked,
             evidence: activityEvidence,
+            detectingStartedAt: currentDetectingStartedAt,
+            previousEvidenceHash: currentDetectingEvidenceHash,
           }),
         );
       }
@@ -697,6 +712,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       activitySignal,
       activityEvidence,
       idleWasBlocked,
+      detectingStartedAt: currentDetectingStartedAt,
+      previousEvidenceHash: currentDetectingEvidenceHash,
     });
     if (probeDecision) {
       return commit(probeDecision);
@@ -1550,6 +1567,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const nextLifecycleEvidence = assessment.evidence;
     const nextDetectingAttempts =
       assessment.detectingAttempts > 0 ? String(assessment.detectingAttempts) : "";
+    const nextDetectingStartedAt = assessment.detectingStartedAt ?? "";
+    const nextDetectingEvidenceHash = assessment.detectingEvidenceHash ?? "";
     const isDetectingEscalated =
       newStatus === SESSION_STATUS.STUCK &&
       assessment.detectingAttempts > DETECTING_MAX_ATTEMPTS;
@@ -1563,6 +1582,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     }
     if ((session.metadata["detectingAttempts"] || "") !== nextDetectingAttempts) {
       metadataUpdates["detectingAttempts"] = nextDetectingAttempts;
+    }
+    if ((session.metadata["detectingStartedAt"] || "") !== nextDetectingStartedAt) {
+      metadataUpdates["detectingStartedAt"] = nextDetectingStartedAt;
+    }
+    if ((session.metadata["detectingEvidenceHash"] || "") !== nextDetectingEvidenceHash) {
+      metadataUpdates["detectingEvidenceHash"] = nextDetectingEvidenceHash;
     }
     if ((session.metadata["detectingEscalatedAt"] || "") !== nextDetectingEscalatedAt) {
       metadataUpdates["detectingEscalatedAt"] = nextDetectingEscalatedAt;
@@ -1751,6 +1776,78 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       maybeDispatchCIFailureDetails(session, oldStatus, newStatus, transitionReaction),
       maybeDispatchMergeConflicts(session, newStatus),
     ]);
+
+    // Report watcher: audit agent reports for issues (#140)
+    await auditAndReactToReports(session);
+  }
+
+  /**
+   * Audit agent reports and trigger reactions when issues are detected.
+   * Called at the end of each checkSession cycle.
+   */
+  async function auditAndReactToReports(session: Session): Promise<void> {
+    const auditResult = auditAgentReports(session);
+    const now = new Date().toISOString();
+
+    // If no trigger, clear any active trigger metadata
+    if (!auditResult || !auditResult.trigger) {
+      const hadActiveTrigger = session.metadata[REPORT_WATCHER_METADATA_KEYS.ACTIVE_TRIGGER];
+      if (hadActiveTrigger) {
+        updateSessionMetadata(session, {
+          [REPORT_WATCHER_METADATA_KEYS.LAST_AUDITED_AT]: now,
+          [REPORT_WATCHER_METADATA_KEYS.ACTIVE_TRIGGER]: "",
+          [REPORT_WATCHER_METADATA_KEYS.TRIGGER_ACTIVATED_AT]: "",
+          [REPORT_WATCHER_METADATA_KEYS.TRIGGER_COUNT]: "",
+        });
+      }
+      return;
+    }
+
+    const reactionKey = getReactionKeyForTrigger(auditResult.trigger);
+    const reactionConfig = getReactionConfigForSession(session, reactionKey);
+
+    // Update audit metadata
+    const currentTriggerCount = parseInt(
+      session.metadata[REPORT_WATCHER_METADATA_KEYS.TRIGGER_COUNT] ?? "0",
+      10,
+    );
+    const isNewTrigger =
+      session.metadata[REPORT_WATCHER_METADATA_KEYS.ACTIVE_TRIGGER] !== auditResult.trigger;
+
+    updateSessionMetadata(session, {
+      [REPORT_WATCHER_METADATA_KEYS.LAST_AUDITED_AT]: now,
+      [REPORT_WATCHER_METADATA_KEYS.ACTIVE_TRIGGER]: auditResult.trigger,
+      [REPORT_WATCHER_METADATA_KEYS.TRIGGER_ACTIVATED_AT]: isNewTrigger
+        ? now
+        : (session.metadata[REPORT_WATCHER_METADATA_KEYS.TRIGGER_ACTIVATED_AT] ?? now),
+      [REPORT_WATCHER_METADATA_KEYS.TRIGGER_COUNT]: String(
+        isNewTrigger ? 1 : currentTriggerCount + 1,
+      ),
+    });
+
+    // Log the audit finding
+    observer.recordOperation({
+      metric: "lifecycle_poll",
+      operation: "report_watcher.audit",
+      outcome: "success",
+      correlationId: createCorrelationId("report-watcher"),
+      projectId: session.projectId,
+      sessionId: session.id,
+      reason: auditResult.trigger,
+      data: {
+        trigger: auditResult.trigger,
+        message: auditResult.message,
+        timeSinceSpawnMs: auditResult.timeSinceSpawnMs,
+        timeSinceReportMs: auditResult.timeSinceReportMs,
+        reportState: auditResult.report?.state,
+      },
+      level: "warn",
+    });
+
+    // Execute reaction if configured
+    if (reactionConfig && reactionConfig.auto !== false) {
+      await executeReaction(session.id, session.projectId, reactionKey, reactionConfig);
+    }
   }
 
   /** Run one polling cycle across all sessions. */

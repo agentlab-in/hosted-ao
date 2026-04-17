@@ -41,6 +41,44 @@ export {
 } from "./metadata.js";
 export { createInitialCanonicalLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 
+// Lifecycle transitions — centralized transition boundary (#137)
+export {
+  applyLifecycleDecision,
+  applyDecisionToLifecycle,
+  buildTransitionMetadataPatch,
+  createStateTransitionDecision,
+} from "./lifecycle-transition.js";
+export type {
+  TransitionSource,
+  TransitionResult,
+  ApplyDecisionInput,
+} from "./lifecycle-transition.js";
+
+// Lifecycle status decisions — pure decision helpers (#136)
+export {
+  DETECTING_MAX_ATTEMPTS,
+  DETECTING_MAX_DURATION_MS,
+  hashEvidence,
+  isDetectingTimedOut,
+} from "./lifecycle-status-decisions.js";
+
+// Report watcher — background trigger system for agent reports (#140)
+export {
+  auditAgentReports,
+  checkAcknowledgeTimeout,
+  checkStaleReport,
+  checkBlockedAgent,
+  shouldAuditSession,
+  getReactionKeyForTrigger,
+  DEFAULT_REPORT_WATCHER_CONFIG,
+  REPORT_WATCHER_METADATA_KEYS,
+} from "./report-watcher.js";
+export type {
+  ReportWatcherTrigger,
+  ReportAuditResult,
+  ReportWatcherConfig,
+} from "./report-watcher.js";
+
 // Agent reports — explicit workflow transitions declared by worker agents (Stage 3)
 export {
   AGENT_REPORTED_STATES,
