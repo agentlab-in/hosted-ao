@@ -48,6 +48,7 @@ export {
   AGENT_REPORT_FRESHNESS_MS,
   applyAgentReport,
   readAgentReport,
+  readAgentReportAuditTrail,
   isAgentReportFresh,
   mapAgentReportToLifecycle,
   normalizeAgentReportedState,
@@ -55,6 +56,8 @@ export {
 } from "./agent-report.js";
 export type {
   AgentReport,
+  AgentReportAuditEntry,
+  AgentReportAuditSnapshot,
   AgentReportedState,
   ApplyAgentReportInput,
   ApplyAgentReportResult,

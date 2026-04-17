@@ -1,22 +1,15 @@
+import type { CSSProperties, ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
-import { Geist, JetBrains_Mono } from "next/font/google";
 import { getProjectName } from "@/lib/project-name";
 import { ServiceWorkerRegistrar } from "@/components/ServiceWorkerRegistrar";
 import { Providers } from "@/app/providers";
 import "./globals.css";
 
-const geistSans = Geist({
-  subsets: ["latin"],
-  variable: "--font-geist-sans",
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
-  display: "swap",
-  weight: ["400", "500"],
-});
+const rootFontVariables = {
+  "--font-geist-sans": '"SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  "--font-jetbrains-mono":
+    '"SF Mono", "JetBrains Mono", "Menlo", "Consolas", "Liberation Mono", monospace',
+} as CSSProperties;
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -44,9 +37,14 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`dark ${geistSans.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
+    <html
+      lang="en"
+      className="dark"
+      style={rootFontVariables}
+      suppressHydrationWarning
+    >
       <body className="bg-[var(--color-bg-base)] text-[var(--color-text-primary)] antialiased">
         <Providers>{children}</Providers>
         <ServiceWorkerRegistrar />

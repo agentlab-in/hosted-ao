@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } fro
 import { useSearchParams } from "next/navigation";
 import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
+  type DashboardAgentReportAuditEntry,
   type DashboardSession,
   type DashboardPR,
   NON_RESTORABLE_STATUSES,
@@ -220,6 +221,78 @@ function SessionTruthPanel({ session }: { session: DashboardSession }) {
           Evidence: {evidence}
         </p>
       ) : null}
+    </section>
+  );
+}
+
+function formatAuditTimestamp(isoDate: string): string {
+  const parsed = Date.parse(isoDate);
+  if (Number.isNaN(parsed)) return isoDate;
+  return new Date(parsed).toLocaleString();
+}
+
+function SessionReportAuditPanel({
+  entries,
+}: {
+  entries: DashboardAgentReportAuditEntry[];
+}) {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="mb-4 rounded-[20px] border border-[var(--color-border-muted)] bg-[var(--color-bg-panel)] px-4 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
+        Agent Report Audit
+      </p>
+      <div className="mt-3 space-y-3">
+        {entries.map((entry) => (
+          <div
+            key={`${entry.timestamp}-${entry.reportState}-${entry.actor}`}
+            className="rounded-[16px] border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] px-3 py-3"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={{
+                  background: entry.accepted
+                    ? "color-mix(in srgb, var(--color-status-ready) 14%, transparent)"
+                    : "color-mix(in srgb, var(--color-status-error) 14%, transparent)",
+                  color: entry.accepted
+                    ? "var(--color-status-ready)"
+                    : "var(--color-status-error)",
+                }}
+              >
+                {entry.accepted ? "Accepted" : "Rejected"}
+              </span>
+              <span className="text-[12px] font-medium text-[var(--color-text-primary)]">
+                {entry.source === "acknowledge" ? "ao acknowledge" : `ao report ${entry.reportState}`}
+              </span>
+              <span className="text-[12px] text-[var(--color-text-secondary)]">
+                by {entry.actor}
+              </span>
+              <span className="text-[11px] text-[var(--color-text-tertiary)]">
+                {formatAuditTimestamp(entry.timestamp)}
+              </span>
+            </div>
+            <div className="mt-2 text-[12px] text-[var(--color-text-secondary)]">
+              {entry.before.legacyStatus} / {entry.before.sessionState}
+              {" -> "}
+              {entry.after.legacyStatus} / {entry.after.sessionState}
+            </div>
+            {entry.note ? (
+              <p className="mt-2 text-[12px] text-[var(--color-text-secondary)]">
+                Note: {entry.note}
+              </p>
+            ) : null}
+            {entry.rejectionReason ? (
+              <p className="mt-2 text-[12px] text-[var(--color-status-error)]">
+                Rejection: {entry.rejectionReason}
+              </p>
+            ) : null}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -559,7 +632,7 @@ export function SessionDetail({
   const startFullscreen = searchParams.get("fullscreen") === "true";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
-  const pr = session.pr;
+  const pr = isOrchestrator ? null : session.pr;
   const terminalEnded = isDashboardRuntimeEnded(session);
   const isRestorable =
     !isOrchestrator &&
@@ -718,7 +791,7 @@ export function SessionDetail({
                       crumbId={session.id}
                       activityLabel={activity.label}
                       activityColor={activity.color}
-                      branch={session.branch}
+                      branch={isOrchestrator ? null : session.branch}
                       pr={pr}
                       isOrchestrator={isOrchestrator}
                       crumbHref={crumbHref}
@@ -728,7 +801,7 @@ export function SessionDetail({
                     />
                   )}
 
-                  {pr ? (
+                  {!isOrchestrator && pr ? (
                     <section id="session-pr-section" className="session-detail-pr-section">
                       <SessionDetailPRCard
                         pr={pr}
@@ -739,7 +812,10 @@ export function SessionDetail({
                     </section>
                   ) : null}
 
-                  <SessionTruthPanel session={session} />
+                  {!isOrchestrator ? <SessionTruthPanel session={session} /> : null}
+                  {!isOrchestrator ? (
+                    <SessionReportAuditPanel entries={session.agentReportAudit ?? []} />
+                  ) : null}
 
                   <section className="session-detail-terminal-wrap">
                     <div id="session-terminal-section" aria-hidden="true" />

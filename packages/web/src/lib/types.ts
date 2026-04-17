@@ -91,7 +91,27 @@ export interface DashboardSession {
   lastActivityAt: string;
   pr: DashboardPR | null;
   metadata: Record<string, string>;
+  agentReportAudit?: DashboardAgentReportAuditEntry[];
   attentionLevel?: AttentionLevel;
+}
+
+export interface DashboardAgentReportAuditSnapshot {
+  legacyStatus: SessionStatus;
+  sessionState: CanonicalSessionState;
+  sessionReason: CanonicalSessionReason;
+  lastTransitionAt: string | null;
+}
+
+export interface DashboardAgentReportAuditEntry {
+  timestamp: string;
+  actor: string;
+  source: "acknowledge" | "report";
+  reportState: string;
+  note?: string;
+  accepted: boolean;
+  rejectionReason?: string;
+  before: DashboardAgentReportAuditSnapshot;
+  after: DashboardAgentReportAuditSnapshot;
 }
 
 export interface DashboardActivitySignal {
