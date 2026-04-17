@@ -386,7 +386,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
               });
             },
             log(level, message) {
-              observer?.recordDiagnostic({
+              observer?.recordDiagnostic?.({
                 operation: "batch_enrichment.log",
                 correlationId: createCorrelationId("graphql-batch"),
                 projectId: scopedProjectId,

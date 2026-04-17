@@ -1,10 +1,12 @@
 import {
   appendFileSync,
+  statSync,
   mkdirSync,
   existsSync,
   readFileSync,
   readdirSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -130,7 +132,7 @@ export interface SetHealthInput {
 export interface ProjectObserver {
   readonly component: string;
   recordOperation(input: RecordOperationInput): void;
-  recordDiagnostic(input: {
+  recordDiagnostic?(input: {
     operation: string;
     correlationId: string;
     projectId?: string;
@@ -145,6 +147,7 @@ export interface ProjectObserver {
 
 const TRACE_LIMIT = 80;
 const SESSION_LIMIT = 200;
+const AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024;
 const LEVEL_ORDER: Record<ObservabilityLevel, number> = {
   debug: 10,
   info: 20,
@@ -209,7 +212,30 @@ function appendAuditLog(
   level: ObservabilityLevel,
 ): void {
   const filePath = getAuditLogPath(config, component);
+  const rotatedPath = `${filePath}.1`;
+  if (existsSync(filePath)) {
+    const currentSize = statSync(filePath).size;
+    if (currentSize >= AUDIT_LOG_MAX_BYTES) {
+      if (existsSync(rotatedPath)) {
+        unlinkSync(rotatedPath);
+      }
+      renameSync(filePath, rotatedPath);
+    }
+  }
   appendFileSync(filePath, `${JSON.stringify({ ...payload, level })}\n`, "utf-8");
+}
+
+function appendObservabilityFailure(
+  config: OrchestratorConfig,
+  component: string,
+  payload: Record<string, unknown>,
+): void {
+  try {
+    const filePath = join(getObservabilityDir(config), "observability-errors.ndjson");
+    appendFileSync(filePath, `${JSON.stringify(payload)}\n`, "utf-8");
+  } catch {
+    // Best effort only — avoid recursive observability failures.
+  }
 }
 
 function readSnapshot(filePath: string, component: string): ProcessObservabilitySnapshot {
@@ -344,21 +370,21 @@ export function createProjectObserver(
       const snapshot = readSnapshot(filePath, normalizedComponent);
       updater(snapshot);
       writeSnapshot(config, snapshot);
-      if (logEntry) {
+      if (logEntry && shouldLog(logEntry.level)) {
         appendAuditLog(config, normalizedComponent, logEntry.payload, logEntry.level);
         emitStructuredLog(logEntry.payload, logEntry.level);
       }
     } catch (error) {
-      emitStructuredLog(
-        {
-          source: "ao-observability",
-          component: normalizedComponent,
-          outcome: "failure",
-          operation: "observability.write",
-          reason: error instanceof Error ? error.message : String(error),
-        },
-        "error",
-      );
+      const payload = {
+        source: "ao-observability",
+        timestamp: nowIso(),
+        component: normalizedComponent,
+        outcome: "failure",
+        operation: "observability.write",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+      appendObservabilityFailure(config, normalizedComponent, payload);
+      emitStructuredLog(payload, "error");
     }
   }
 
@@ -428,6 +454,7 @@ export function createProjectObserver(
           level,
           payload: {
             source: "ao-observability",
+            timestamp,
             component: normalizedComponent,
             metric: input.metric,
             operation,
@@ -489,6 +516,7 @@ export function createProjectObserver(
           level,
           payload: {
             source: "ao-observability",
+            timestamp,
             component: normalizedComponent,
             operation: input.operation,
             correlationId: input.correlationId,
@@ -523,6 +551,7 @@ export function createProjectObserver(
           level: input.status === "error" ? "error" : input.status === "warn" ? "warn" : "info",
           payload: {
             source: "ao-observability",
+            timestamp: updatedAt,
             component: normalizedComponent,
             surface: input.surface,
             status: input.status,

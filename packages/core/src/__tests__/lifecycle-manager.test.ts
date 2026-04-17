@@ -145,15 +145,27 @@ describe("check (single session)", () => {
   });
 
   it("does not mirror lifecycle transition observability logs to stderr during polling", async () => {
+    const originalAoObservabilityStderr = process.env["AO_OBSERVABILITY_STDERR"];
+    delete process.env["AO_OBSERVABILITY_STDERR"];
+
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const lm = setupCheck("app-1", {
-      session: makeSession({ status: "spawning" }),
-    });
 
-    await lm.check("app-1");
+    try {
+      const lm = setupCheck("app-1", {
+        session: makeSession({ status: "spawning" }),
+      });
 
-    expect(stderrSpy).not.toHaveBeenCalled();
-    stderrSpy.mockRestore();
+      await lm.check("app-1");
+
+      expect(stderrSpy).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+      if (originalAoObservabilityStderr === undefined) {
+        delete process.env["AO_OBSERVABILITY_STDERR"];
+      } else {
+        process.env["AO_OBSERVABILITY_STDERR"] = originalAoObservabilityStderr;
+      }
+    }
   });
 
   it("clears stale lifecycle compatibility metadata in memory and on disk", async () => {

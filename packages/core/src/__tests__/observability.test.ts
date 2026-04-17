@@ -104,46 +104,58 @@ describe("observability snapshot", () => {
   });
 
   it("writes observability diagnostics to audit files without mirroring to stderr by default", () => {
+    const originalObservabilityStderr = process.env["AO_OBSERVABILITY_STDERR"];
+    delete process.env["AO_OBSERVABILITY_STDERR"];
+
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const observer = createProjectObserver(config, "session-manager");
 
-    observer.recordOperation({
-      metric: "spawn",
-      operation: "session.spawn",
-      outcome: "success",
-      correlationId: "corr-1",
-      projectId: "my-app",
-      sessionId: "app-1",
-      level: "info",
-    });
+    try {
+      const observer = createProjectObserver(config, "session-manager");
 
-    observer.recordDiagnostic({
-      operation: "batch_enrichment.log",
-      correlationId: "corr-2",
-      projectId: "my-app",
-      message: "GraphQL batch returned cached result",
-      level: "info",
-      data: { plugin: "github" },
-    });
+      observer.recordOperation({
+        metric: "spawn",
+        operation: "session.spawn",
+        outcome: "success",
+        correlationId: "corr-1",
+        projectId: "my-app",
+        sessionId: "app-1",
+        level: "warn",
+      });
 
-    observer.setHealth({
-      surface: "lifecycle.worker",
-      status: "ok",
-      projectId: "my-app",
-      correlationId: "corr-3",
-      details: { projectId: "my-app" },
-    });
+      observer.recordDiagnostic?.({
+        operation: "batch_enrichment.log",
+        correlationId: "corr-2",
+        projectId: "my-app",
+        message: "GraphQL batch returned cached result",
+        level: "warn",
+        data: { plugin: "github" },
+      });
 
-    const auditDir = join(getObservabilityBaseDir(config.configPath), "processes");
-    const auditFiles = readdirSync(auditDir).filter((fileName) => fileName.endsWith(".ndjson"));
-    expect(auditFiles.length).toBeGreaterThan(0);
+      observer.setHealth({
+        surface: "lifecycle.worker",
+        status: "warn",
+        projectId: "my-app",
+        correlationId: "corr-3",
+        details: { projectId: "my-app" },
+      });
 
-    const auditLog = readFileSync(join(auditDir, auditFiles[0]!), "utf-8");
-    expect(auditLog).toContain('"operation":"session.spawn"');
-    expect(auditLog).toContain('"operation":"batch_enrichment.log"');
-    expect(auditLog).toContain('"message":"GraphQL batch returned cached result"');
-    expect(stderrSpy).not.toHaveBeenCalled();
+      const auditDir = join(getObservabilityBaseDir(config.configPath), "processes");
+      const auditFiles = readdirSync(auditDir).filter((fileName) => fileName.endsWith(".ndjson"));
+      expect(auditFiles.length).toBeGreaterThan(0);
 
-    stderrSpy.mockRestore();
+      const auditLog = readFileSync(join(auditDir, auditFiles[0]!), "utf-8");
+      expect(auditLog).toContain('"operation":"session.spawn"');
+      expect(auditLog).toContain('"operation":"batch_enrichment.log"');
+      expect(auditLog).toContain('"message":"GraphQL batch returned cached result"');
+      expect(auditLog).toContain('"timestamp"');
+      expect(stderrSpy).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+      if (originalObservabilityStderr === undefined) {
+        delete process.env["AO_OBSERVABILITY_STDERR"];
+      } else {
+        process.env["AO_OBSERVABILITY_STDERR"] = originalObservabilityStderr;
+      }
+    }
   });
 });
