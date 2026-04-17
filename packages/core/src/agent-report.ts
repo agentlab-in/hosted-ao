@@ -28,6 +28,7 @@ import type {
 } from "./types.js";
 import { updateCanonicalLifecycle, updateMetadata, readMetadataRaw } from "./metadata.js";
 import { deriveLegacyStatus } from "./lifecycle-state.js";
+import { parsePrFromUrl } from "./utils/pr.js";
 import { validateStatus } from "./utils/validation.js";
 
 /**
@@ -39,11 +40,13 @@ import { validateStatus } from "./utils/validation.js";
  * - `needs_input`       — blocked on human input
  * - `fixing_ci`         — responding to a failing CI run
  * - `addressing_reviews`— responding to requested review changes
+ * - `pr_created` / `draft_pr_created` / `ready_for_review`
+ *                       — non-terminal PR workflow events with optional PR metadata
  * - `completed`         — finished research/non-coding work (not "merged")
  *
- * Note: agents cannot self-report `done`, `terminated`, or PR-state transitions.
- * Those remain owned by AO so ground-truth sources (SCM, runtime) stay
- * authoritative.
+ * Note: agents cannot self-report `done`, `terminated`, or terminal PR states
+ * like `merged` / `closed`. Those remain owned by AO so ground-truth sources
+ * (SCM, runtime) stay authoritative.
  */
 export const AGENT_REPORTED_STATES = [
   "started",
@@ -52,6 +55,9 @@ export const AGENT_REPORTED_STATES = [
   "needs_input",
   "fixing_ci",
   "addressing_reviews",
+  "pr_created",
+  "draft_pr_created",
+  "ready_for_review",
   "completed",
 ] as const;
 
@@ -63,6 +69,12 @@ export interface AgentReport {
   timestamp: string;
   /** Optional free-text note the agent may include (e.g. brief status line). */
   note?: string;
+  /** Optional PR number attached to PR workflow reports. */
+  prNumber?: number;
+  /** Optional PR URL attached to PR workflow reports. */
+  prUrl?: string;
+  /** Optional draft hint attached to PR workflow reports. */
+  prIsDraft?: boolean;
   /** Local actor identity when available (e.g. $USER). */
   actor?: string;
   /** Which CLI surface produced this report. */
@@ -82,6 +94,9 @@ export interface AgentReportAuditEntry {
   source: "acknowledge" | "report";
   reportState: AgentReportedState;
   note?: string;
+  prNumber?: number;
+  prUrl?: string;
+  prIsDraft?: boolean;
   accepted: boolean;
   rejectionReason?: string;
   before: AgentReportAuditSnapshot;
@@ -93,6 +108,9 @@ export const AGENT_REPORT_METADATA_KEYS = {
   STATE: "agentReportedState",
   AT: "agentReportedAt",
   NOTE: "agentReportedNote",
+  PR_NUMBER: "agentReportedPrNumber",
+  PR_URL: "agentReportedPrUrl",
+  PR_IS_DRAFT: "agentReportedPrIsDraft",
 } as const;
 
 /** Freshness window — agent reports older than this are ignored. */
@@ -106,23 +124,29 @@ export const AGENT_REPORT_FRESHNESS_MS = 300_000; // 5 minutes
  * `completed` for finished non-coding research/analysis work.
  */
 const INPUT_ALIASES: Record<string, AgentReportedState> = {
-  "start": "started",
-  "started": "started",
-  "working": "working",
-  "work": "working",
-  "wait": "waiting",
-  "waiting": "waiting",
+  start: "started",
+  started: "started",
+  working: "working",
+  work: "working",
+  wait: "waiting",
+  waiting: "waiting",
   "needs-input": "needs_input",
-  "needs_input": "needs_input",
-  "input": "needs_input",
+  needs_input: "needs_input",
+  input: "needs_input",
   "fixing-ci": "fixing_ci",
-  "fixing_ci": "fixing_ci",
-  "ci": "fixing_ci",
+  fixing_ci: "fixing_ci",
+  ci: "fixing_ci",
   "addressing-reviews": "addressing_reviews",
-  "addressing_reviews": "addressing_reviews",
-  "reviews": "addressing_reviews",
-  "completed": "completed",
-  "complete": "completed",
+  addressing_reviews: "addressing_reviews",
+  reviews: "addressing_reviews",
+  "pr-created": "pr_created",
+  pr_created: "pr_created",
+  "draft-pr-created": "draft_pr_created",
+  draft_pr_created: "draft_pr_created",
+  "ready-for-review": "ready_for_review",
+  ready_for_review: "ready_for_review",
+  completed: "completed",
+  complete: "completed",
 };
 
 /** Normalize a user-supplied report name into the canonical form. */
@@ -149,9 +173,19 @@ export function mapAgentReportToLifecycle(state: AgentReportedState): {
       return { sessionState: "working", sessionReason: "fixing_ci" };
     case "addressing_reviews":
       return { sessionState: "working", sessionReason: "resolving_review_comments" };
+    case "pr_created":
+      return { sessionState: "idle", sessionReason: "pr_created" };
+    case "draft_pr_created":
+      return { sessionState: "working", sessionReason: "task_in_progress" };
+    case "ready_for_review":
+      return { sessionState: "idle", sessionReason: "awaiting_external_review" };
     case "completed":
       return { sessionState: "idle", sessionReason: "research_complete" };
   }
+}
+
+function isPRWorkflowReport(state: AgentReportedState): boolean {
+  return state === "pr_created" || state === "draft_pr_created" || state === "ready_for_review";
 }
 
 export interface AgentReportTransitionResult {
@@ -186,8 +220,8 @@ export function validateAgentReportTransition(
   if (lifecycle.session.state === "done") {
     return { ok: false, reason: "session is already done" };
   }
-  if (lifecycle.pr.state === "merged") {
-    return { ok: false, reason: "PR already merged" };
+  if (lifecycle.pr.state === "merged" || lifecycle.pr.state === "closed") {
+    return { ok: false, reason: `PR already ${lifecycle.pr.state}` };
   }
   if (lifecycle.runtime.state === "missing" || lifecycle.runtime.state === "exited") {
     return { ok: false, reason: "runtime is not alive" };
@@ -198,6 +232,8 @@ export function validateAgentReportTransition(
 export interface ApplyAgentReportInput {
   state: AgentReportedState;
   note?: string;
+  prNumber?: number;
+  prUrl?: string;
   actor?: string;
   source?: "acknowledge" | "report";
   /** Override the current clock — used by tests. */
@@ -330,46 +366,88 @@ export function applyAgentReport(
   const source = input.source ?? "report";
   const actor = normalizeActor(input.actor);
   const trimmedNote = input.note?.trim() || undefined;
+  const trimmedPrUrl = input.prUrl?.trim() || undefined;
+  const parsedPrNumber =
+    typeof input.prNumber === "number" && Number.isInteger(input.prNumber) && input.prNumber > 0
+      ? input.prNumber
+      : undefined;
+  const parsedPrFromUrl = trimmedPrUrl ? parsePrFromUrl(trimmedPrUrl) : null;
+  const urlPrNumber = parsedPrFromUrl?.number;
+  if (
+    trimmedPrUrl &&
+    parsedPrNumber !== undefined &&
+    urlPrNumber !== undefined &&
+    parsedPrNumber !== urlPrNumber
+  ) {
+    throw new Error(`PR number ${parsedPrNumber} does not match PR URL ${trimmedPrUrl}`);
+  }
+  const inferredPrNumber = urlPrNumber;
+  const prNumber = parsedPrNumber ?? inferredPrNumber;
+  const prIsDraft =
+    input.state === "draft_pr_created"
+      ? true
+      : input.state === "pr_created" || input.state === "ready_for_review"
+        ? false
+        : undefined;
+  const existingPrUrl = raw[AGENT_REPORT_METADATA_KEYS.PR_URL]?.trim() || undefined;
+  const existingPrNumberRaw = raw[AGENT_REPORT_METADATA_KEYS.PR_NUMBER];
+  const existingPrNumber =
+    existingPrNumberRaw && /^\d+$/.test(existingPrNumberRaw)
+      ? Number.parseInt(existingPrNumberRaw, 10)
+      : undefined;
   let before: AgentReportAuditSnapshot | null = null;
   let previousState: CanonicalSessionState | null = null;
   let nextState: CanonicalSessionState | null = null;
   let legacyStatus: SessionStatus | null = null;
   let previousLegacyStatus: SessionStatus | null = null;
 
-  const nextLifecycle = updateCanonicalLifecycle(
-    dataDir,
-    sessionId,
-    (current) => {
-      previousLegacyStatus = deriveLegacyStatus(current, validateStatus(raw["status"]));
-      before = buildAuditSnapshot(current, previousLegacyStatus);
-      const validation = validateAgentReportTransition(current, input.state);
-      if (!validation.ok) {
-        appendAgentReportAuditEntry(dataDir, sessionId, {
-          timestamp: now,
-          actor,
-          source,
-          reportState: input.state,
-          note: trimmedNote,
-          accepted: false,
-          rejectionReason: validation.reason ?? "transition rejected",
-          before,
-          after: before,
-        });
-        throw new Error(validation.reason ?? "transition rejected");
+  const nextLifecycle = updateCanonicalLifecycle(dataDir, sessionId, (current) => {
+    previousLegacyStatus = deriveLegacyStatus(current, validateStatus(raw["status"]));
+    before = buildAuditSnapshot(current, previousLegacyStatus);
+    const validation = validateAgentReportTransition(current, input.state);
+    if (!validation.ok) {
+      appendAgentReportAuditEntry(dataDir, sessionId, {
+        timestamp: now,
+        actor,
+        source,
+        reportState: input.state,
+        note: trimmedNote,
+        prNumber,
+        prUrl: trimmedPrUrl,
+        prIsDraft,
+        accepted: false,
+        rejectionReason: validation.reason ?? "transition rejected",
+        before,
+        after: before,
+      });
+      throw new Error(validation.reason ?? "transition rejected");
+    }
+    const mapped = mapAgentReportToLifecycle(input.state);
+    previousState = current.session.state;
+    nextState = mapped.sessionState;
+    current.session.state = mapped.sessionState;
+    current.session.reason = mapped.sessionReason;
+    current.session.lastTransitionAt = now;
+    if (isPRWorkflowReport(input.state)) {
+      const effectivePrUrl = trimmedPrUrl ?? current.pr.url ?? existingPrUrl;
+      const effectivePrNumber =
+        prNumber ?? current.pr.number ?? existingPrNumber ?? parsedPrFromUrl?.number;
+      current.pr.state = "open";
+      current.pr.reason = input.state === "ready_for_review" ? "review_pending" : "in_progress";
+      current.pr.lastObservedAt = now;
+      if (effectivePrUrl) {
+        current.pr.url = effectivePrUrl;
       }
-      const mapped = mapAgentReportToLifecycle(input.state);
-      previousState = current.session.state;
-      nextState = mapped.sessionState;
-      current.session.state = mapped.sessionState;
-      current.session.reason = mapped.sessionReason;
-      current.session.lastTransitionAt = now;
-      if (mapped.sessionState === "working" && current.session.startedAt === null) {
-        current.session.startedAt = now;
+      if (effectivePrNumber !== undefined) {
+        current.pr.number = effectivePrNumber;
       }
-      legacyStatus = deriveLegacyStatus(current, previousLegacyStatus);
-      return current;
-    },
-  );
+    }
+    if (mapped.sessionState === "working" && current.session.startedAt === null) {
+      current.session.startedAt = now;
+    }
+    legacyStatus = deriveLegacyStatus(current, previousLegacyStatus);
+    return current;
+  });
 
   if (!nextLifecycle || !before || !previousState || !nextState || !legacyStatus) {
     throw new Error(`Failed to apply agent report for session ${sessionId}`);
@@ -386,6 +464,17 @@ export function applyAgentReport(
     // Clear stale notes from previous reports so they don't mislead humans.
     metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = "";
   }
+  if (isPRWorkflowReport(input.state)) {
+    if (trimmedPrUrl) {
+      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_URL] = trimmedPrUrl;
+    }
+    if (prNumber !== undefined) {
+      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_NUMBER] = String(prNumber);
+    }
+    if (prIsDraft !== undefined) {
+      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] = prIsDraft ? "true" : "false";
+    }
+  }
   updateMetadata(dataDir, sessionId, metadataUpdates);
 
   const after = buildAuditSnapshot(nextLifecycle, legacyStatus);
@@ -395,6 +484,9 @@ export function applyAgentReport(
     source,
     reportState: input.state,
     note: trimmedNote,
+    prNumber,
+    prUrl: trimmedPrUrl,
+    prIsDraft,
     accepted: true,
     before,
     after,
@@ -406,6 +498,9 @@ export function applyAgentReport(
       state: input.state,
       timestamp: now,
       note: trimmedNote,
+      prNumber,
+      prUrl: trimmedPrUrl,
+      prIsDraft,
       actor,
       source,
     },
@@ -417,7 +512,9 @@ export function applyAgentReport(
 }
 
 /** Read an agent report out of a session's raw metadata, or null if absent. */
-export function readAgentReport(meta: Record<string, string> | null | undefined): AgentReport | null {
+export function readAgentReport(
+  meta: Record<string, string> | null | undefined,
+): AgentReport | null {
   if (!meta) return null;
   const state = meta[AGENT_REPORT_METADATA_KEYS.STATE];
   const at = meta[AGENT_REPORT_METADATA_KEYS.AT];
@@ -426,10 +523,19 @@ export function readAgentReport(meta: Record<string, string> | null | undefined)
   const parsed = Date.parse(at);
   if (Number.isNaN(parsed)) return null;
   const note = meta[AGENT_REPORT_METADATA_KEYS.NOTE];
+  const rawPrNumber = meta[AGENT_REPORT_METADATA_KEYS.PR_NUMBER];
+  const prNumber =
+    rawPrNumber && /^\d+$/.test(rawPrNumber) ? Number.parseInt(rawPrNumber, 10) : undefined;
+  const prUrl = meta[AGENT_REPORT_METADATA_KEYS.PR_URL] || undefined;
+  const rawPrIsDraft = meta[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT];
+  const prIsDraft = rawPrIsDraft === "true" ? true : rawPrIsDraft === "false" ? false : undefined;
   return {
     state: state as AgentReportedState,
     timestamp: new Date(parsed).toISOString(),
     note: note && note.length > 0 ? note : undefined,
+    prNumber,
+    prUrl,
+    prIsDraft,
   };
 }
 
