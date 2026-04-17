@@ -12,6 +12,7 @@ import {
   mapAgentReportToLifecycle,
   normalizeAgentReportedState,
   readAgentReport,
+  readAgentReportAuditTrail,
   validateAgentReportTransition,
 } from "../agent-report.js";
 import { writeMetadata, writeCanonicalLifecycle, readMetadataRaw } from "../metadata.js";
@@ -197,6 +198,23 @@ describe("applyAgentReport", () => {
     expect(meta![AGENT_REPORT_METADATA_KEYS.STATE]).toBe("needs_input");
     expect(meta![AGENT_REPORT_METADATA_KEYS.AT]).toBe(now.toISOString());
     expect(meta![AGENT_REPORT_METADATA_KEYS.NOTE]).toBe("please clarify the spec");
+    const audit = readAgentReportAuditTrail(dataDir, sessionId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      accepted: true,
+      source: "report",
+      actor: "unknown",
+      reportState: "needs_input",
+      note: "please clarify the spec",
+      before: {
+        legacyStatus: "working",
+        sessionState: "working",
+      },
+      after: {
+        legacyStatus: "needs_input",
+        sessionState: "needs_input",
+      },
+    });
   });
 
   it("sets startedAt on the first working transition", () => {
@@ -244,6 +262,18 @@ describe("applyAgentReport", () => {
         now: new Date(),
       }),
     ).toThrow(/terminated/);
+    const audit = readAgentReportAuditTrail(dataDir, sessionId);
+    expect(audit[0]).toMatchObject({
+      accepted: false,
+      reportState: "working",
+      rejectionReason: "session is terminated",
+      before: {
+        sessionState: "terminated",
+      },
+      after: {
+        sessionState: "terminated",
+      },
+    });
   });
 
   it("throws when the session does not exist", () => {

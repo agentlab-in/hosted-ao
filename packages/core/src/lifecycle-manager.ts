@@ -904,9 +904,12 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       isWeakActivityEvidence(activitySignal) &&
       (session.status === SESSION_STATUS.DETECTING ||
         session.status === SESSION_STATUS.STUCK ||
-        session.status === SESSION_STATUS.NEEDS_INPUT)
+        session.status === SESSION_STATUS.NEEDS_INPUT ||
+        lifecycle.session.state === "detecting" ||
+        lifecycle.session.state === "stuck" ||
+        lifecycle.session.state === "needs_input")
     ) {
-      return commit(session.status, activityEvidence, 0);
+      return commit(deriveLegacyStatus(lifecycle, session.status), activityEvidence, 0);
     }
 
     if (

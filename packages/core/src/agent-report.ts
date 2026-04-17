@@ -16,6 +16,9 @@
  *   6. Default to working
  */
 
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   CanonicalSessionLifecycle,
   CanonicalSessionReason,
@@ -25,6 +28,7 @@ import type {
 } from "./types.js";
 import { updateCanonicalLifecycle, updateMetadata, readMetadataRaw } from "./metadata.js";
 import { deriveLegacyStatus } from "./lifecycle-state.js";
+import { validateStatus } from "./utils/validation.js";
 
 /**
  * Canonical set of states an agent can self-declare.
@@ -59,6 +63,29 @@ export interface AgentReport {
   timestamp: string;
   /** Optional free-text note the agent may include (e.g. brief status line). */
   note?: string;
+  /** Local actor identity when available (e.g. $USER). */
+  actor?: string;
+  /** Which CLI surface produced this report. */
+  source?: "acknowledge" | "report";
+}
+
+export interface AgentReportAuditSnapshot {
+  legacyStatus: SessionStatus;
+  sessionState: CanonicalSessionState;
+  sessionReason: CanonicalSessionReason;
+  lastTransitionAt: string | null;
+}
+
+export interface AgentReportAuditEntry {
+  timestamp: string;
+  actor: string;
+  source: "acknowledge" | "report";
+  reportState: AgentReportedState;
+  note?: string;
+  accepted: boolean;
+  rejectionReason?: string;
+  before: AgentReportAuditSnapshot;
+  after: AgentReportAuditSnapshot;
 }
 
 /** Metadata keys written by `applyAgentReport`. Keep in sync with CLI parsing. */
@@ -171,6 +198,8 @@ export function validateAgentReportTransition(
 export interface ApplyAgentReportInput {
   state: AgentReportedState;
   note?: string;
+  actor?: string;
+  source?: "acknowledge" | "report";
   /** Override the current clock — used by tests. */
   now?: Date;
 }
@@ -180,6 +209,103 @@ export interface ApplyAgentReportResult {
   legacyStatus: SessionStatus;
   previousState: CanonicalSessionState;
   nextState: CanonicalSessionState;
+  auditEntry: AgentReportAuditEntry;
+}
+
+function buildAuditDir(dataDir: string): string {
+  return join(dataDir, ".agent-report-audit");
+}
+
+const VALID_AUDIT_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
+
+function validateAuditSessionId(sessionId: SessionId): void {
+  if (!VALID_AUDIT_SESSION_ID.test(sessionId)) {
+    throw new Error(`Invalid session ID: ${sessionId}`);
+  }
+}
+
+function buildAuditFilePath(dataDir: string, sessionId: SessionId): string {
+  validateAuditSessionId(sessionId);
+  return join(buildAuditDir(dataDir), `${sessionId}.ndjson`);
+}
+
+function normalizeActor(actor: string | undefined): string {
+  const trimmed = actor?.trim();
+  if (trimmed) return trimmed;
+  return "unknown";
+}
+
+function buildAuditSnapshot(
+  lifecycle: CanonicalSessionLifecycle,
+  legacyStatus: SessionStatus,
+): AgentReportAuditSnapshot {
+  return {
+    legacyStatus,
+    sessionState: lifecycle.session.state,
+    sessionReason: lifecycle.session.reason,
+    lastTransitionAt: lifecycle.session.lastTransitionAt,
+  };
+}
+
+function appendAgentReportAuditEntry(
+  dataDir: string,
+  sessionId: SessionId,
+  entry: AgentReportAuditEntry,
+): void {
+  const auditDir = buildAuditDir(dataDir);
+  mkdirSync(auditDir, { recursive: true });
+  appendFileSync(buildAuditFilePath(dataDir, sessionId), `${JSON.stringify(entry)}\n`, "utf8");
+}
+
+export function readAgentReportAuditTrail(
+  dataDir: string,
+  sessionId: SessionId,
+): AgentReportAuditEntry[] {
+  const auditFilePath = buildAuditFilePath(dataDir, sessionId);
+  if (!existsSync(auditFilePath)) {
+    return [];
+  }
+
+  return parseAgentReportAuditTrail(readFileSync(auditFilePath, "utf8"));
+}
+
+export async function readAgentReportAuditTrailAsync(
+  dataDir: string,
+  sessionId: SessionId,
+): Promise<AgentReportAuditEntry[]> {
+  const auditFilePath = buildAuditFilePath(dataDir, sessionId);
+  if (!existsSync(auditFilePath)) {
+    return [];
+  }
+
+  return parseAgentReportAuditTrail(await readFile(auditFilePath, "utf8"));
+}
+
+function parseAgentReportAuditTrail(content: string): AgentReportAuditEntry[] {
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as Partial<AgentReportAuditEntry>;
+        if (
+          typeof parsed.timestamp !== "string" ||
+          typeof parsed.actor !== "string" ||
+          (parsed.source !== "acknowledge" && parsed.source !== "report") ||
+          !AGENT_REPORTED_STATES.includes(parsed.reportState as AgentReportedState) ||
+          typeof parsed.accepted !== "boolean" ||
+          !parsed.before ||
+          !parsed.after
+        ) {
+          return [];
+        }
+        return [parsed as AgentReportAuditEntry];
+      } catch {
+        return [];
+      }
+    })
+    .reverse();
 }
 
 /**
@@ -199,17 +325,36 @@ export function applyAgentReport(
     throw new Error(`Session not found: ${sessionId}`);
   }
 
+  validateAuditSessionId(sessionId);
   const now = (input.now ?? new Date()).toISOString();
+  const source = input.source ?? "report";
+  const actor = normalizeActor(input.actor);
+  const trimmedNote = input.note?.trim() || undefined;
+  let before: AgentReportAuditSnapshot | null = null;
   let previousState: CanonicalSessionState | null = null;
   let nextState: CanonicalSessionState | null = null;
   let legacyStatus: SessionStatus | null = null;
+  let previousLegacyStatus: SessionStatus | null = null;
 
   const nextLifecycle = updateCanonicalLifecycle(
     dataDir,
     sessionId,
     (current) => {
+      previousLegacyStatus = deriveLegacyStatus(current, validateStatus(raw["status"]));
+      before = buildAuditSnapshot(current, previousLegacyStatus);
       const validation = validateAgentReportTransition(current, input.state);
       if (!validation.ok) {
+        appendAgentReportAuditEntry(dataDir, sessionId, {
+          timestamp: now,
+          actor,
+          source,
+          reportState: input.state,
+          note: trimmedNote,
+          accepted: false,
+          rejectionReason: validation.reason ?? "transition rejected",
+          before,
+          after: before,
+        });
         throw new Error(validation.reason ?? "transition rejected");
       }
       const mapped = mapAgentReportToLifecycle(input.state);
@@ -221,12 +366,12 @@ export function applyAgentReport(
       if (mapped.sessionState === "working" && current.session.startedAt === null) {
         current.session.startedAt = now;
       }
-      legacyStatus = deriveLegacyStatus(current);
+      legacyStatus = deriveLegacyStatus(current, previousLegacyStatus);
       return current;
     },
   );
 
-  if (!nextLifecycle || !previousState || !nextState || !legacyStatus) {
+  if (!nextLifecycle || !before || !previousState || !nextState || !legacyStatus) {
     throw new Error(`Failed to apply agent report for session ${sessionId}`);
   }
 
@@ -235,19 +380,39 @@ export function applyAgentReport(
     [AGENT_REPORT_METADATA_KEYS.STATE]: input.state,
     [AGENT_REPORT_METADATA_KEYS.AT]: now,
   };
-  if (input.note && input.note.trim()) {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = input.note.trim();
+  if (trimmedNote) {
+    metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = trimmedNote;
   } else {
     // Clear stale notes from previous reports so they don't mislead humans.
     metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = "";
   }
   updateMetadata(dataDir, sessionId, metadataUpdates);
 
+  const after = buildAuditSnapshot(nextLifecycle, legacyStatus);
+  const auditEntry: AgentReportAuditEntry = {
+    timestamp: now,
+    actor,
+    source,
+    reportState: input.state,
+    note: trimmedNote,
+    accepted: true,
+    before,
+    after,
+  };
+  appendAgentReportAuditEntry(dataDir, sessionId, auditEntry);
+
   return {
-    report: { state: input.state, timestamp: now, note: input.note?.trim() || undefined },
+    report: {
+      state: input.state,
+      timestamp: now,
+      note: trimmedNote,
+      actor,
+      source,
+    },
     legacyStatus,
     previousState,
     nextState,
+    auditEntry,
   };
 }
 

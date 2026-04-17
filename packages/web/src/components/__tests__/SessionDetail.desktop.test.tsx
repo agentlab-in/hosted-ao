@@ -60,6 +60,28 @@ describe("SessionDetail desktop layout", () => {
           projectId: "my-app",
           summary: "Desktop session detail",
           branch: "feat/desktop-detail",
+          agentReportAudit: [
+            {
+              timestamp: "2025-01-01T10:00:00.000Z",
+              actor: "codex",
+              source: "report",
+              reportState: "working",
+              note: "Running final verification",
+              accepted: true,
+              before: {
+                legacyStatus: "working",
+                sessionState: "working",
+                sessionReason: "task_in_progress",
+                lastTransitionAt: "2025-01-01T09:55:00.000Z",
+              },
+              after: {
+                legacyStatus: "working",
+                sessionState: "working",
+                sessionReason: "task_in_progress",
+                lastTransitionAt: "2025-01-01T10:00:00.000Z",
+              },
+            },
+          ],
           pr: makePR({
             number: 310,
             title: "Desktop detail coverage",
@@ -125,6 +147,9 @@ describe("SessionDetail desktop layout", () => {
     expect(screen.getByText(/Unresolved Comments/i)).toBeInTheDocument();
     expect(screen.getByText("Tighten the copy")).toBeInTheDocument();
     expect(screen.getByText("The empty state text needs to be shorter.")).toBeInTheDocument();
+    expect(screen.getByText("Agent Report Audit")).toBeInTheDocument();
+    expect(screen.getByText(/ao report working/i)).toBeInTheDocument();
+    expect(screen.getByText(/by codex/i)).toBeInTheDocument();
     expect(screen.getByText("Live Terminal")).toBeInTheDocument();
   });
 
@@ -210,5 +235,7 @@ describe("SessionDetail desktop layout", () => {
 
     expect(screen.queryByRole("link", { name: "Orchestrator" })).not.toBeInTheDocument();
     expect(screen.getByText("orchestrator")).toBeInTheDocument();
+    expect(screen.queryByText("Lifecycle Truth")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent Report Audit")).not.toBeInTheDocument();
   });
 });

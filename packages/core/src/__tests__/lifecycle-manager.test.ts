@@ -717,6 +717,27 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("needs_input");
   });
 
+  it("preserves canonical needs_input when persisted status is stale working", async () => {
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
+    vi.mocked(plugins.runtime.getOutput).mockResolvedValue("");
+
+    const session = makeSession({ status: "working" });
+    session.lifecycle.session.state = "needs_input";
+    session.lifecycle.session.reason = "awaiting_user_input";
+
+    const lm = setupCheck("app-1", {
+      session,
+      metaOverrides: {
+        status: "working",
+      },
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("needs_input");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["status"]).toBe("needs_input");
+  });
+
   it("detects PR states from SCM", async () => {
     const mockSCM = createMockSCM({ getCISummary: vi.fn().mockResolvedValue("failing") });
     const registry = createMockRegistry({

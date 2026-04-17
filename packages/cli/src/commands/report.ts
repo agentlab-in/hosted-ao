@@ -43,6 +43,7 @@ async function writeReport(
   sessionName: string,
   state: AgentReportedState,
   note: string | undefined,
+  source: "acknowledge" | "report",
 ): Promise<void> {
   const config = loadConfig();
   const sm = await getSessionManager(config);
@@ -58,7 +59,12 @@ async function writeReport(
   }
   const sessionsDir = getSessionsDir(config.configPath, project.path);
   try {
-    const result = applyAgentReport(sessionsDir, sessionName, { state, note });
+    const result = applyAgentReport(sessionsDir, sessionName, {
+      state,
+      note,
+      source,
+      actor: process.env["USER"] ?? process.env["LOGNAME"] ?? process.env["USERNAME"],
+    });
     const label =
       result.previousState === result.nextState
         ? chalk.dim(`(${result.nextState})`)
@@ -86,7 +92,7 @@ export function registerAcknowledge(program: Command): void {
     .option("--note <text>", "Optional brief note to include with the acknowledgment")
     .action(async (session: string | undefined, opts: { note?: string }) => {
       const sessionId = resolveSessionId(session);
-      await writeReport(sessionId, "started", opts.note);
+      await writeReport(sessionId, "started", opts.note, "acknowledge");
     });
 }
 
@@ -111,6 +117,6 @@ export function registerReport(program: Command): void {
         process.exit(1);
       }
       const sessionId = resolveSessionId(opts.session);
-      await writeReport(sessionId, canonical, opts.note);
+      await writeReport(sessionId, canonical, opts.note, "report");
     });
 }

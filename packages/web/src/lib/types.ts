@@ -47,6 +47,7 @@ import {
   type CanonicalRuntimeState,
   type CanonicalRuntimeReason,
 } from "@aoagents/ao-core/types";
+import type { AgentReportedState } from "@aoagents/ao-core";
 
 // Re-export for use in client components
 export { CI_STATUS, TERMINAL_STATUSES, TERMINAL_ACTIVITIES, NON_RESTORABLE_STATUSES };
@@ -91,7 +92,27 @@ export interface DashboardSession {
   lastActivityAt: string;
   pr: DashboardPR | null;
   metadata: Record<string, string>;
+  agentReportAudit?: DashboardAgentReportAuditEntry[];
   attentionLevel?: AttentionLevel;
+}
+
+export interface DashboardAgentReportAuditSnapshot {
+  legacyStatus: SessionStatus;
+  sessionState: CanonicalSessionState;
+  sessionReason: CanonicalSessionReason;
+  lastTransitionAt: string | null;
+}
+
+export interface DashboardAgentReportAuditEntry {
+  timestamp: string;
+  actor: string;
+  source: "acknowledge" | "report";
+  reportState: AgentReportedState;
+  note?: string;
+  accepted: boolean;
+  rejectionReason?: string;
+  before: DashboardAgentReportAuditSnapshot;
+  after: DashboardAgentReportAuditSnapshot;
 }
 
 export interface DashboardActivitySignal {
