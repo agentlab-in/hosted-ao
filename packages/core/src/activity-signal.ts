@@ -112,6 +112,10 @@ export function supportsRecentLiveness(signal: ActivitySignal, now: Date = new D
   );
 }
 
+export function isWeakActivityEvidence(signal: ActivitySignal): boolean {
+  return signal.state !== "valid";
+}
+
 export function formatActivitySignalEvidence(signal: ActivitySignal): string {
   const source = signal.source === "none" ? "" : ` via_${signal.source}`;
   const activity = signal.activity ? ` activity=${signal.activity}` : "";

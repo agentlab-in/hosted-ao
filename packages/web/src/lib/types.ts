@@ -76,7 +76,7 @@ export interface DashboardSession {
   projectId: string;
   status: SessionStatus;
   activity: ActivityState | null;
-  activitySignal: DashboardActivitySignal;
+  activitySignal?: DashboardActivitySignal;
   lifecycle?: DashboardLifecycle;
   branch: string | null;
   issueId: string | null; // Deprecated: use issueUrl instead

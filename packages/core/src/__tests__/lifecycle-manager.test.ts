@@ -675,6 +675,48 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("stuck");
   });
 
+  it("preserves needs_input state when getActivityState returns null with no terminal evidence", async () => {
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
+    vi.mocked(plugins.runtime.getOutput).mockResolvedValue("");
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "needs_input" }),
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("needs_input");
+  });
+
+  it("preserves stuck state across repeated polls with unchanged weak evidence", async () => {
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
+    vi.mocked(plugins.runtime.getOutput).mockResolvedValue("");
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "stuck" }),
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("stuck");
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("stuck");
+  });
+
+  it("preserves needs_input across repeated polls with unchanged weak evidence", async () => {
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
+    vi.mocked(plugins.runtime.getOutput).mockResolvedValue("");
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "needs_input" }),
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("needs_input");
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("needs_input");
+  });
+
   it("detects PR states from SCM", async () => {
     const mockSCM = createMockSCM({ getCISummary: vi.fn().mockResolvedValue("failing") });
     const registry = createMockRegistry({

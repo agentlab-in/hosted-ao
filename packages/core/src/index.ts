@@ -129,6 +129,7 @@ export {
   createActivitySignal,
   formatActivitySignalEvidence,
   hasPositiveIdleEvidence,
+  isWeakActivityEvidence,
   summarizeActivityFreshness,
   supportsRecentLiveness,
 } from "./activity-signal.js";

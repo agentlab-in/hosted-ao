@@ -45,6 +45,7 @@ import {
   createActivitySignal,
   formatActivitySignalEvidence,
   hasPositiveIdleEvidence,
+  isWeakActivityEvidence,
   supportsRecentLiveness,
 } from "./activity-signal.js";
 import {
@@ -897,6 +898,15 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     ) {
       setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
       return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
+    }
+
+    if (
+      isWeakActivityEvidence(activitySignal) &&
+      (session.status === SESSION_STATUS.DETECTING ||
+        session.status === SESSION_STATUS.STUCK ||
+        session.status === SESSION_STATUS.NEEDS_INPUT)
+    ) {
+      return commit(session.status, activityEvidence, 0);
     }
 
     if (

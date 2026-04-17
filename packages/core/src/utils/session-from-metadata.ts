@@ -15,6 +15,22 @@ interface SessionFromMetadataOptions {
   restoredAt?: Date;
 }
 
+function deriveDefaultActivitySignal(options: SessionFromMetadataOptions): ActivitySignal {
+  if (options.activitySignal) {
+    return options.activitySignal;
+  }
+
+  if (options.activity === undefined || options.activity === null) {
+    return createActivitySignal("unavailable");
+  }
+
+  return createActivitySignal("valid", {
+    activity: options.activity,
+    timestamp: options.lastActivityAt,
+    source: options.activity === "exited" ? "runtime" : "native",
+  });
+}
+
 export function sessionFromMetadata(
   sessionId: SessionId,
   meta: Record<string, string>,
@@ -40,7 +56,7 @@ export function sessionFromMetadata(
     projectId: meta["project"] ?? options.projectId ?? "",
     status,
     activity: options.activity ?? null,
-    activitySignal: options.activitySignal ?? createActivitySignal("unavailable"),
+    activitySignal: deriveDefaultActivitySignal(options),
     lifecycle,
     branch: meta["branch"] || null,
     issueId: meta["issue"] || null,
