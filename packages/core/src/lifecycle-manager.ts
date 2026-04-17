@@ -791,13 +791,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // Fresh agent reports outrank weak inference (idle-beyond-threshold /
     // default-to-working) but runtime death, activity waiting_input, and SCM
     // ground truth already short-circuited above. Orchestrator sessions and
-    // terminal states are skipped intentionally.
+    // terminal states are skipped intentionally — `lifecycle.session.kind` is
+    // the authoritative source (string-matching role/id suffixes misses
+    // numbered orchestrator IDs like `${prefix}-orchestrator-1`).
     const agentReport = readAgentReport(session.metadata);
     if (
       agentReport &&
       isAgentReportFresh(agentReport) &&
-      session.metadata["role"] !== "orchestrator" &&
-      !session.id.endsWith("-orchestrator") &&
+      lifecycle.session.kind !== "orchestrator" &&
       lifecycle.session.state !== "terminated" &&
       lifecycle.session.state !== "done"
     ) {
