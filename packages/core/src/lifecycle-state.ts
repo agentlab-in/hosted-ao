@@ -252,6 +252,23 @@ export function deriveLegacyStatus(
   lifecycle: CanonicalSessionLifecycle,
   _previousStatus: SessionStatus = "working",
 ): SessionStatus {
+  switch (lifecycle.session.state) {
+    case "not_started":
+      return "spawning";
+    case "needs_input":
+      return "needs_input";
+    case "stuck":
+      return "stuck";
+    case "done":
+      return "done";
+    case "terminated":
+      return "terminated";
+    case "detecting":
+      return "detecting";
+    default:
+      break;
+  }
+
   if (lifecycle.pr.state === "merged") {
     return "merged";
   }
@@ -265,20 +282,8 @@ export function deriveLegacyStatus(
   }
 
   switch (lifecycle.session.state) {
-    case "not_started":
-      return "spawning";
-    case "needs_input":
-      return "needs_input";
-    case "stuck":
-      return "stuck";
-    case "done":
-      return "done";
-    case "terminated":
-      return "terminated";
     case "idle":
       return "idle";
-    case "detecting":
-      return "detecting";
     case "working":
       return "working";
   }

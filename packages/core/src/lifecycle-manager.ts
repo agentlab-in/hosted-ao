@@ -158,6 +158,8 @@ function prStateToEventType(
 /** Map event type to reaction config key. */
 function eventToReactionKey(eventType: EventType): string | null {
   switch (eventType) {
+    case "pr.closed":
+      return "pr-closed";
     case "ci.failing":
       return "ci-failed";
     case "review.changes_requested":
@@ -1588,18 +1590,33 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     const prEventType = prStateToEventType(previousPRState, session.lifecycle.pr.state);
     if (prEventType) {
-      const prEvent = createEvent(prEventType, {
-        sessionId: session.id,
-        projectId: session.projectId,
-        message: `${session.id}: PR ${previousPRState} → ${session.lifecycle.pr.state}`,
-        data: {
-          oldPRState: previousPRState,
-          newPRState: session.lifecycle.pr.state,
-          prNumber: session.lifecycle.pr.number,
-          prUrl: session.lifecycle.pr.url,
-        },
-      });
-      await notifyHuman(prEvent, inferPriority(prEventType));
+      let reactionHandledNotify = false;
+      const reactionKey = eventToReactionKey(prEventType);
+
+      if (reactionKey) {
+        const reactionConfig = getReactionConfigForSession(session, reactionKey);
+        if (reactionConfig && reactionConfig.action) {
+          if (reactionConfig.auto !== false || reactionConfig.action === "notify") {
+            await executeReaction(session.id, session.projectId, reactionKey, reactionConfig);
+            reactionHandledNotify = true;
+          }
+        }
+      }
+
+      if (!reactionHandledNotify) {
+        const prEvent = createEvent(prEventType, {
+          sessionId: session.id,
+          projectId: session.projectId,
+          message: `${session.id}: PR ${previousPRState} → ${session.lifecycle.pr.state}`,
+          data: {
+            oldPRState: previousPRState,
+            newPRState: session.lifecycle.pr.state,
+            prNumber: session.lifecycle.pr.number,
+            prUrl: session.lifecycle.pr.url,
+          },
+        });
+        await notifyHuman(prEvent, inferPriority(prEventType));
+      }
     }
 
     // Pin first quality summary for title stability

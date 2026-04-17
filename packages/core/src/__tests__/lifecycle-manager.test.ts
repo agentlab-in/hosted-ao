@@ -766,6 +766,47 @@ describe("check (single session)", () => {
     expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "pr.closed" }));
   });
 
+  it("routes closed PR transitions through the pr-closed reaction key", async () => {
+    const notifier = createMockNotifier();
+    const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("closed") });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+      notifier,
+    });
+
+    const session = makeSession({ status: "pr_open", pr: makePR() });
+    const lm = setupCheck("app-1", {
+      session,
+      registry,
+      configOverride: {
+        ...config,
+        reactions: {
+          ...config.reactions,
+          "pr-closed": {
+            auto: true,
+            action: "notify",
+            priority: "action",
+          },
+        },
+        notificationRouting: {
+          ...config.notificationRouting,
+          action: ["desktop"],
+        },
+      },
+    });
+
+    await lm.check("app-1");
+
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "reaction.triggered",
+        data: expect.objectContaining({ reactionKey: "pr-closed" }),
+      }),
+    );
+  });
+
   it("detects mergeable when approved + CI green", async () => {
     const mockSCM = createMockSCM({
       getReviewDecision: vi.fn().mockResolvedValue("approved"),
