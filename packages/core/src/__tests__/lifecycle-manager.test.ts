@@ -542,6 +542,27 @@ describe("check (single session)", () => {
     expect(meta?.["lifecycleEvidence"]).toContain("activity_signal=probe_failure");
   });
 
+  it("degrades stuck probe-failure sessions to detecting when runtime is alive but activity is unavailable", async () => {
+    const registryWithoutAgent: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return plugins.runtime;
+        return null;
+      }),
+    };
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "stuck" }),
+      registry: registryWithoutAgent,
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("detecting");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["lifecycleEvidence"]).toContain("activity_signal=unavailable");
+  });
+
   it("detects needs_input from agent", async () => {
     vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "waiting_input" });
 
