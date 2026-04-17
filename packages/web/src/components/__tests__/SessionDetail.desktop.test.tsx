@@ -147,10 +147,57 @@ describe("SessionDetail desktop layout", () => {
     expect(screen.getByText(/Unresolved Comments/i)).toBeInTheDocument();
     expect(screen.getByText("Tighten the copy")).toBeInTheDocument();
     expect(screen.getByText("The empty state text needs to be shorter.")).toBeInTheDocument();
-    expect(screen.getByText("Agent Report Audit")).toBeInTheDocument();
-    expect(screen.getByText(/ao report working/i)).toBeInTheDocument();
-    expect(screen.getByText(/by codex/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Agent Reports/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getAllByText("worker-desktop").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("ao report working")).toBeInTheDocument();
+    expect(screen.getByText("codex")).toBeInTheDocument();
     expect(screen.getByText("Live Terminal")).toBeInTheDocument();
+  });
+
+  it("toggles the agent reports section", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-audit-toggle",
+          projectId: "my-app",
+          agentReportAudit: [
+            {
+              timestamp: "2025-01-01T10:00:00.000Z",
+              actor: "codex",
+              source: "acknowledge",
+              reportState: "started",
+              accepted: true,
+              before: {
+                legacyStatus: "spawning",
+                sessionState: "spawning",
+                sessionReason: "agent_spawned",
+                lastTransitionAt: "2025-01-01T09:55:00.000Z",
+              },
+              after: {
+                legacyStatus: "working",
+                sessionState: "working",
+                sessionReason: "agent_acknowledged",
+                lastTransitionAt: "2025-01-01T10:00:00.000Z",
+              },
+            },
+          ],
+        })}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: /Agent Reports/i });
+    expect(screen.getByText("ao acknowledge")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("ao acknowledge")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("ao acknowledge")).toBeInTheDocument();
   });
 
   it("sends unresolved comments back to the agent and shows sent state", async () => {
@@ -236,6 +283,6 @@ describe("SessionDetail desktop layout", () => {
     expect(screen.queryByRole("link", { name: "Orchestrator" })).not.toBeInTheDocument();
     expect(screen.getByText("orchestrator")).toBeInTheDocument();
     expect(screen.queryByText("Lifecycle Truth")).not.toBeInTheDocument();
-    expect(screen.queryByText("Agent Report Audit")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Agent Reports/i })).not.toBeInTheDocument();
   });
 });
