@@ -52,9 +52,9 @@ describe("shouldAuditSession", () => {
     }
   });
 
-  it("returns false for spawning sessions", () => {
+  it("returns true for spawning sessions (allows acknowledge timeout check)", () => {
     const session = createMockSession({ status: "spawning" });
-    expect(shouldAuditSession(session)).toBe(false);
+    expect(shouldAuditSession(session)).toBe(true);
   });
 
   it("returns false for orchestrator sessions", () => {
@@ -214,8 +214,8 @@ describe("checkBlockedAgent", () => {
 });
 
 describe("auditAgentReports", () => {
-  it("returns null for sessions that should not be audited", () => {
-    const session = createMockSession({ status: "spawning" });
+  it("returns null for terminal sessions", () => {
+    const session = createMockSession({ status: "done" });
     expect(auditAgentReports(session)).toBeNull();
   });
 
@@ -254,7 +254,6 @@ describe("getReactionKeyForTrigger", () => {
   it("maps triggers to reaction keys", () => {
     expect(getReactionKeyForTrigger("no_acknowledge")).toBe("report-no-acknowledge");
     expect(getReactionKeyForTrigger("stale_report")).toBe("report-stale");
-    expect(getReactionKeyForTrigger("agent_blocked")).toBe("report-blocked");
     expect(getReactionKeyForTrigger("agent_needs_input")).toBe("report-needs-input");
   });
 });

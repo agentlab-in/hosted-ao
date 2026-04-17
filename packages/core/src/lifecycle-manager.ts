@@ -1787,13 +1787,26 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
    */
   async function auditAndReactToReports(session: Session): Promise<void> {
     const auditResult = auditAgentReports(session);
-    if (!auditResult || !auditResult.trigger) return;
+    const now = new Date().toISOString();
+
+    // If no trigger, clear any active trigger metadata
+    if (!auditResult || !auditResult.trigger) {
+      const hadActiveTrigger = session.metadata[REPORT_WATCHER_METADATA_KEYS.ACTIVE_TRIGGER];
+      if (hadActiveTrigger) {
+        updateSessionMetadata(session, {
+          [REPORT_WATCHER_METADATA_KEYS.LAST_AUDITED_AT]: now,
+          [REPORT_WATCHER_METADATA_KEYS.ACTIVE_TRIGGER]: "",
+          [REPORT_WATCHER_METADATA_KEYS.TRIGGER_ACTIVATED_AT]: "",
+          [REPORT_WATCHER_METADATA_KEYS.TRIGGER_COUNT]: "",
+        });
+      }
+      return;
+    }
 
     const reactionKey = getReactionKeyForTrigger(auditResult.trigger);
     const reactionConfig = getReactionConfigForSession(session, reactionKey);
 
     // Update audit metadata
-    const now = new Date().toISOString();
     const currentTriggerCount = parseInt(
       session.metadata[REPORT_WATCHER_METADATA_KEYS.TRIGGER_COUNT] ?? "0",
       10,

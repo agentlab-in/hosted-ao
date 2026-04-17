@@ -18,7 +18,6 @@ import { readAgentReport, isAgentReportFresh, type AgentReport } from "./agent-r
 export type ReportWatcherTrigger =
   | "no_acknowledge"
   | "stale_report"
-  | "agent_blocked"
   | "agent_needs_input";
 
 /**
@@ -80,6 +79,7 @@ const TERMINAL_STATUSES: Set<SessionStatus> = new Set([
 
 /**
  * Check if a session should be audited for report issues.
+ * Note: spawning sessions are included so acknowledge timeout can fire.
  */
 export function shouldAuditSession(session: Session): boolean {
   // Skip terminal sessions
@@ -90,10 +90,7 @@ export function shouldAuditSession(session: Session): boolean {
   if (session.lifecycle?.session.kind === "orchestrator") {
     return false;
   }
-  // Skip sessions still spawning (give them time to start)
-  if (session.status === "spawning") {
-    return false;
-  }
+  // Note: spawning sessions are NOT skipped — they need acknowledge timeout checks
   return true;
 }
 
@@ -237,8 +234,6 @@ export function getReactionKeyForTrigger(trigger: ReportWatcherTrigger): string 
       return "report-no-acknowledge";
     case "stale_report":
       return "report-stale";
-    case "agent_blocked":
-      return "report-blocked";
     case "agent_needs_input":
       return "report-needs-input";
   }

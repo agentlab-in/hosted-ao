@@ -95,14 +95,14 @@ export function applyDecisionToLifecycle(
     lifecycle.session.reason = decision.sessionReason;
     lifecycle.session.lastTransitionAt = nowIso;
 
-    // Handle special timestamp fields
+    // Handle special timestamp fields (only set if not already set)
     if (decision.sessionState === "working" && lifecycle.session.startedAt === null) {
       lifecycle.session.startedAt = nowIso;
     }
-    if (decision.sessionState === "done") {
+    if (decision.sessionState === "done" && lifecycle.session.completedAt === null) {
       lifecycle.session.completedAt = nowIso;
     }
-    if (decision.sessionState === "terminated") {
+    if (decision.sessionState === "terminated" && lifecycle.session.terminatedAt === null) {
       lifecycle.session.terminatedAt = nowIso;
     }
   }
@@ -227,18 +227,24 @@ export function applyLifecycleDecision(
   const nextStatus = deriveLegacyStatus(nextLifecycle, previousStatus);
   const statusChanged = nextStatus !== previousStatus;
 
-  // Build and apply metadata patch
-  const metadataPatch = buildTransitionMetadataPatch(
-    nextLifecycle,
-    input.decision,
-    previousStatus,
-  );
+  // Build metadata patch, starting with additional metadata (so lifecycle keys take precedence)
+  const metadataPatch: Record<string, string> = {};
 
-  // Merge additional metadata
+  // Apply additional metadata first
   if (input.additionalMetadata) {
     for (const [key, value] of Object.entries(input.additionalMetadata)) {
       metadataPatch[key] = value;
     }
+  }
+
+  // Apply lifecycle patch second (overwrites any conflicting keys from additionalMetadata)
+  const lifecyclePatch = buildTransitionMetadataPatch(
+    nextLifecycle,
+    input.decision,
+    previousStatus,
+  );
+  for (const [key, value] of Object.entries(lifecyclePatch)) {
+    metadataPatch[key] = value;
   }
 
   // Persist

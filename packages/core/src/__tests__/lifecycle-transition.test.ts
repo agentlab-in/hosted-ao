@@ -97,6 +97,38 @@ describe("applyDecisionToLifecycle", () => {
     expect(lifecycle.session.terminatedAt).toBe(nowIso);
   });
 
+  it("does not overwrite completedAt if already set", () => {
+    lifecycle.session.completedAt = "2026-04-16T12:00:00.000Z";
+
+    const decision: LifecycleDecision = {
+      status: "done",
+      evidence: "test",
+      detectingAttempts: 0,
+      sessionState: "done",
+      sessionReason: "research_complete",
+    };
+
+    applyDecisionToLifecycle(lifecycle, decision, nowIso);
+
+    expect(lifecycle.session.completedAt).toBe("2026-04-16T12:00:00.000Z");
+  });
+
+  it("does not overwrite terminatedAt if already set", () => {
+    lifecycle.session.terminatedAt = "2026-04-16T12:00:00.000Z";
+
+    const decision: LifecycleDecision = {
+      status: "terminated",
+      evidence: "test",
+      detectingAttempts: 0,
+      sessionState: "terminated",
+      sessionReason: "manually_killed",
+    };
+
+    applyDecisionToLifecycle(lifecycle, decision, nowIso);
+
+    expect(lifecycle.session.terminatedAt).toBe("2026-04-16T12:00:00.000Z");
+  });
+
   it("applies PR state and reason", () => {
     const decision: LifecycleDecision = {
       status: "pr_open",
