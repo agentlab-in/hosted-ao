@@ -913,7 +913,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         activitySignal.state === "unavailable" &&
         lifecycle.session.state === "stuck" &&
         lifecycle.session.reason === "probe_failure" &&
-        lifecycle.runtime.state === "alive";
+        runtimeProbe.state === "alive" &&
+        !runtimeProbe.failed;
 
       if (preservingProbeFailureStuck) {
         setSessionState("detecting", "probe_failure");
