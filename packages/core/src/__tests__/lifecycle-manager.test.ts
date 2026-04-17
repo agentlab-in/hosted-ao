@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createLifecycleManager } from "../lifecycle-manager.js";
+import {
+  createLifecycleManager,
+  resolvePREnrichmentDecision,
+  resolvePRLiveDecision,
+  resolveProbeDecision,
+} from "../lifecycle-manager.js";
 import { createSessionManager } from "../session-manager.js";
 import { writeMetadata, readMetadataRaw } from "../metadata.js";
 import { readObservabilitySummary } from "../observability.js";
@@ -40,6 +45,82 @@ beforeEach(() => {
 
 afterEach(() => {
   env.cleanup();
+});
+
+describe("status decision helpers", () => {
+  it("promotes conflicting runtime evidence into detecting instead of terminating", () => {
+    const decision = resolveProbeDecision({
+      currentAttempts: 1,
+      runtimeProbe: { state: "dead", failed: false },
+      processProbe: { state: "alive", failed: false },
+      canProbeRuntimeIdentity: true,
+      activitySignal: {
+        state: "valid",
+        activity: "active",
+        timestamp: new Date(),
+        source: "native",
+      },
+      activityEvidence: "activity_signal=valid via_native activity=active",
+      idleWasBlocked: false,
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        status: "detecting",
+        sessionState: "detecting",
+        sessionReason: "runtime_lost",
+        detectingAttempts: 2,
+      }),
+    );
+  });
+
+  it("maps merged enrichment data to merged lifecycle state", () => {
+    const decision = resolvePREnrichmentDecision(
+      {
+        state: "merged",
+        ciStatus: "none",
+        reviewDecision: "none",
+        mergeable: false,
+      },
+      {
+        shouldEscalateIdleToStuck: false,
+        idleWasBlocked: false,
+        activityEvidence: "activity_signal=valid",
+      },
+    );
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        status: "merged",
+        prState: "merged",
+        prReason: "merged",
+        sessionState: "idle",
+        sessionReason: "merged_waiting_decision",
+      }),
+    );
+  });
+
+  it("maps live PR checks to review_pending without mutating other state", () => {
+    const decision = resolvePRLiveDecision({
+      prState: "open",
+      ciStatus: "passing",
+      reviewDecision: "pending",
+      mergeable: false,
+      shouldEscalateIdleToStuck: false,
+      idleWasBlocked: false,
+      activityEvidence: "activity_signal=valid",
+    });
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        status: "review_pending",
+        prState: "open",
+        prReason: "review_pending",
+        sessionState: "idle",
+        sessionReason: "awaiting_external_review",
+      }),
+    );
+  });
 });
 
 /** Helper: write standard session metadata and return a lifecycle manager */
@@ -924,6 +1005,31 @@ describe("check (single session)", () => {
 
     await lm.check("app-1");
     expect(lm.getStates().get("app-1")).toBe("merged");
+  });
+
+  it("preserves merged PR truth in metadata instead of regressing to no-pr lifecycle state", async () => {
+    const pr = makePR();
+    const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("merged") });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "pr_open", pr }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(lm.getStates().get("app-1")).toBe("merged");
+    expect(meta?.["status"]).toBe("merged");
+    expect(meta?.["pr"]).toBe(pr.url);
+    expect(meta?.["statePayload"]).toContain('"state":"merged"');
+    expect(meta?.["statePayload"]).toContain('"reason":"merged"');
+    expect(meta?.["statePayload"]).not.toContain('"reason":"not_created"');
   });
 
   it("keeps closed PR sessions idle and emits a PR-closed notification", async () => {

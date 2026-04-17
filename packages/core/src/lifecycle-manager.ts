@@ -207,6 +207,342 @@ function transitionLogLevel(status: SessionStatus): "info" | "warn" | "error" {
   return "info";
 }
 
+const DETECTING_MAX_ATTEMPTS = 3;
+
+type ProbeState = "alive" | "dead" | "unknown";
+
+interface ProbeResult {
+  state: ProbeState;
+  failed: boolean;
+}
+
+interface DeterminedStatus {
+  status: SessionStatus;
+  evidence: string;
+  detectingAttempts: number;
+}
+
+type LifecycleSessionState = CanonicalSessionLifecycle["session"]["state"];
+type LifecycleSessionReason = CanonicalSessionLifecycle["session"]["reason"];
+type LifecyclePRState = CanonicalSessionLifecycle["pr"]["state"];
+type LifecyclePRReason = CanonicalSessionLifecycle["pr"]["reason"];
+type PRReviewDecision = PREnrichmentData["reviewDecision"];
+
+interface LifecycleDecision {
+  status: SessionStatus;
+  evidence: string;
+  detectingAttempts: number;
+  sessionState?: LifecycleSessionState;
+  sessionReason?: LifecycleSessionReason;
+  prState?: LifecyclePRState;
+  prReason?: LifecyclePRReason;
+}
+
+interface OpenPRDecisionInput {
+  reviewDecision: PRReviewDecision;
+  ciFailing: boolean;
+  mergeable: boolean;
+  shouldEscalateIdleToStuck: boolean;
+  idleWasBlocked: boolean;
+  activityEvidence: string;
+}
+
+interface ProbeDecisionInput {
+  currentAttempts: number;
+  runtimeProbe: ProbeResult;
+  processProbe: ProbeResult;
+  canProbeRuntimeIdentity: boolean;
+  activitySignal: Session["activitySignal"];
+  activityEvidence: string;
+  idleWasBlocked: boolean;
+}
+
+function parseAttemptCount(raw: string | undefined): number {
+  if (!raw) return 0;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function createLifecycleDecision(decision: LifecycleDecision): LifecycleDecision {
+  return decision;
+}
+
+function createDetectingDecision(
+  input: Pick<ProbeDecisionInput, "currentAttempts" | "idleWasBlocked"> & {
+    evidence: string;
+    reason?: LifecycleSessionReason;
+  },
+): LifecycleDecision {
+  const attempts = input.currentAttempts + 1;
+  if (attempts > DETECTING_MAX_ATTEMPTS) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.STUCK,
+      evidence: input.evidence,
+      detectingAttempts: attempts,
+      sessionState: "stuck",
+      sessionReason: input.idleWasBlocked ? "error_in_process" : "probe_failure",
+    });
+  }
+
+  return createLifecycleDecision({
+    status: SESSION_STATUS.DETECTING,
+    evidence: input.evidence,
+    detectingAttempts: attempts,
+    sessionState: "detecting",
+    sessionReason: input.reason ?? "probe_failure",
+  });
+}
+
+export function resolveProbeDecision(input: ProbeDecisionInput): LifecycleDecision | null {
+  const recentActivitySupportsLiveness = supportsRecentLiveness(input.activitySignal);
+
+  if (input.runtimeProbe.failed || input.processProbe.failed) {
+    return createDetectingDecision({
+      currentAttempts: input.currentAttempts,
+      idleWasBlocked: input.idleWasBlocked,
+      evidence: `probe_failed runtime=${input.runtimeProbe.state} process=${input.processProbe.state} ${input.activityEvidence}`,
+    });
+  }
+
+  if (
+    (input.runtimeProbe.state === "dead" && input.processProbe.state === "alive") ||
+    (input.runtimeProbe.state === "alive" && input.processProbe.state === "dead") ||
+    (input.runtimeProbe.state === "dead" && recentActivitySupportsLiveness)
+  ) {
+    return createDetectingDecision({
+      currentAttempts: input.currentAttempts,
+      idleWasBlocked: input.idleWasBlocked,
+      evidence: `signal_disagreement runtime=${input.runtimeProbe.state} process=${input.processProbe.state} ${input.activityEvidence}`,
+      reason: input.runtimeProbe.state === "dead" ? "runtime_lost" : "agent_process_exited",
+    });
+  }
+
+  if (
+    input.runtimeProbe.state === "dead" &&
+    input.processProbe.state === "unknown" &&
+    input.canProbeRuntimeIdentity
+  ) {
+    return createDetectingDecision({
+      currentAttempts: input.currentAttempts,
+      idleWasBlocked: input.idleWasBlocked,
+      evidence: `runtime_dead process_unknown ${input.activityEvidence}`,
+      reason: "runtime_lost",
+    });
+  }
+
+  if (
+    input.runtimeProbe.state === "dead" &&
+    input.processProbe.state === "dead" &&
+    !recentActivitySupportsLiveness
+  ) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.KILLED,
+      evidence: `runtime_dead process_dead ${input.activityEvidence}`,
+      detectingAttempts: 0,
+      sessionState: "terminated",
+      sessionReason: "runtime_lost",
+    });
+  }
+
+  return null;
+}
+
+function resolveOpenPRDecision(input: OpenPRDecisionInput): LifecycleDecision {
+  if (input.ciFailing) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.CI_FAILED,
+      evidence: "ci_failing",
+      detectingAttempts: 0,
+      prState: "open",
+      prReason: "ci_failing",
+      sessionState: "working",
+      sessionReason: "fixing_ci",
+    });
+  }
+
+  if (input.reviewDecision === "changes_requested") {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.CHANGES_REQUESTED,
+      evidence: "review_changes_requested",
+      detectingAttempts: 0,
+      prState: "open",
+      prReason: "changes_requested",
+      sessionState: "working",
+      sessionReason: "resolving_review_comments",
+    });
+  }
+
+  if (input.reviewDecision === "approved" || input.reviewDecision === "none") {
+    if (input.mergeable) {
+      return createLifecycleDecision({
+        status: SESSION_STATUS.MERGEABLE,
+        evidence: "merge_ready",
+        detectingAttempts: 0,
+        prState: "open",
+        prReason: "merge_ready",
+        sessionState: "idle",
+        sessionReason: "awaiting_external_review",
+      });
+    }
+
+    if (input.reviewDecision === "approved") {
+      return createLifecycleDecision({
+        status: SESSION_STATUS.APPROVED,
+        evidence: "review_approved",
+        detectingAttempts: 0,
+        prState: "open",
+        prReason: "approved",
+        sessionState: "idle",
+        sessionReason: "awaiting_external_review",
+      });
+    }
+  }
+
+  if (input.reviewDecision === "pending") {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.REVIEW_PENDING,
+      evidence: "review_pending",
+      detectingAttempts: 0,
+      prState: "open",
+      prReason: "review_pending",
+      sessionState: "idle",
+      sessionReason: "awaiting_external_review",
+    });
+  }
+
+  if (input.shouldEscalateIdleToStuck) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.STUCK,
+      evidence: `idle_beyond_threshold ${input.activityEvidence}`,
+      detectingAttempts: 0,
+      prState: "open",
+      prReason: "in_progress",
+      sessionState: "stuck",
+      sessionReason: input.idleWasBlocked ? "error_in_process" : "probe_failure",
+    });
+  }
+
+  return createLifecycleDecision({
+    status: SESSION_STATUS.PR_OPEN,
+    evidence: "pr_open",
+    detectingAttempts: 0,
+    prState: "open",
+    prReason: "in_progress",
+    sessionState: "idle",
+    sessionReason: "pr_created",
+  });
+}
+
+export function resolvePREnrichmentDecision(
+  cachedData: PREnrichmentData,
+  options: Pick<
+    OpenPRDecisionInput,
+    "shouldEscalateIdleToStuck" | "idleWasBlocked" | "activityEvidence"
+  >,
+): LifecycleDecision {
+  if (cachedData.state === PR_STATE.MERGED) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.MERGED,
+      evidence: "pr_merged",
+      detectingAttempts: 0,
+      prState: "merged",
+      prReason: "merged",
+      sessionState: "idle",
+      sessionReason: "merged_waiting_decision",
+    });
+  }
+
+  if (cachedData.state === PR_STATE.CLOSED) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.IDLE,
+      evidence: "pr_closed",
+      detectingAttempts: 0,
+      prState: "closed",
+      prReason: "closed_unmerged",
+      sessionState: "idle",
+      sessionReason: "pr_closed_waiting_decision",
+    });
+  }
+
+  return resolveOpenPRDecision({
+    reviewDecision: cachedData.reviewDecision,
+    ciFailing: cachedData.ciStatus === CI_STATUS.FAILING,
+    mergeable: cachedData.mergeable,
+    shouldEscalateIdleToStuck: options.shouldEscalateIdleToStuck,
+    idleWasBlocked: options.idleWasBlocked,
+    activityEvidence: options.activityEvidence,
+  });
+}
+
+export function resolvePRLiveDecision(input: {
+  prState: typeof PR_STATE[keyof typeof PR_STATE];
+  ciStatus: typeof CI_STATUS[keyof typeof CI_STATUS];
+  reviewDecision: PRReviewDecision;
+  mergeable: boolean;
+  shouldEscalateIdleToStuck: boolean;
+  idleWasBlocked: boolean;
+  activityEvidence: string;
+}): LifecycleDecision {
+  if (input.prState === PR_STATE.MERGED) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.MERGED,
+      evidence: "pr_merged",
+      detectingAttempts: 0,
+      prState: "merged",
+      prReason: "merged",
+      sessionState: "idle",
+      sessionReason: "merged_waiting_decision",
+    });
+  }
+
+  if (input.prState === PR_STATE.CLOSED) {
+    return createLifecycleDecision({
+      status: SESSION_STATUS.IDLE,
+      evidence: "pr_closed",
+      detectingAttempts: 0,
+      prState: "closed",
+      prReason: "closed_unmerged",
+      sessionState: "idle",
+      sessionReason: "pr_closed_waiting_decision",
+    });
+  }
+
+  return resolveOpenPRDecision({
+    reviewDecision: input.reviewDecision,
+    ciFailing: input.ciStatus === CI_STATUS.FAILING,
+    mergeable: input.mergeable,
+    shouldEscalateIdleToStuck: input.shouldEscalateIdleToStuck,
+    idleWasBlocked: input.idleWasBlocked,
+    activityEvidence: input.activityEvidence,
+  });
+}
+
+function applyLifecycleDecision(
+  lifecycle: CanonicalSessionLifecycle,
+  decision: LifecycleDecision,
+  nowIso: string,
+): void {
+  if (decision.prState && decision.prReason) {
+    lifecycle.pr.state = decision.prState;
+    lifecycle.pr.reason = decision.prReason;
+  }
+
+  if (decision.sessionState && decision.sessionReason) {
+    lifecycle.session.state = decision.sessionState;
+    lifecycle.session.reason = decision.sessionReason;
+    lifecycle.session.lastTransitionAt = nowIso;
+    if (decision.sessionState === "working" && lifecycle.session.startedAt === null) {
+      lifecycle.session.startedAt = nowIso;
+    }
+    if (decision.sessionState === "done") {
+      lifecycle.session.completedAt = nowIso;
+    }
+    if (decision.sessionState === "terminated") {
+      lifecycle.session.terminatedAt = nowIso;
+    }
+  }
+}
+
 function splitEvidenceSignals(evidence: string): string[] {
   return evidence
     .split(/\s+/)
@@ -441,27 +777,6 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return idleMs > stuckThresholdMs;
   }
 
-  const DETECTING_MAX_ATTEMPTS = 3;
-
-  type ProbeState = "alive" | "dead" | "unknown";
-
-  interface ProbeResult {
-    state: ProbeState;
-    failed: boolean;
-  }
-
-  interface DeterminedStatus {
-    status: SessionStatus;
-    evidence: string;
-    detectingAttempts: number;
-  }
-
-  function parseAttemptCount(raw: string | undefined): number {
-    if (!raw) return 0;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-  }
-
   /** Determine current status for a session by polling plugins. */
   async function determineStatus(session: Session): Promise<DeterminedStatus> {
     const project = config.projects[session.projectId];
@@ -492,54 +807,24 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     let detectedIdleTimestamp: Date | null = null;
     let idleWasBlocked = false;
     const canProbeRuntimeIdentity = session.status !== SESSION_STATUS.SPAWNING;
+    const currentDetectingAttempts = parseAttemptCount(session.metadata["detectingAttempts"]);
 
     const commit = (
-      status: SessionStatus = deriveLegacyStatus(lifecycle, session.status),
-      evidence = "lifecycle_commit",
-      detectingAttempts = parseAttemptCount(session.metadata["detectingAttempts"]),
+      decision: LifecycleDecision = createLifecycleDecision({
+        status: deriveLegacyStatus(lifecycle, session.status),
+        evidence: "lifecycle_commit",
+        detectingAttempts: currentDetectingAttempts,
+      }),
     ): DeterminedStatus => {
+      applyLifecycleDecision(lifecycle, decision, nowIso);
       session.lifecycle = lifecycle;
-      session.status = status;
+      session.status = decision.status;
       session.activitySignal = activitySignal;
       return {
-        status,
-        evidence,
-        detectingAttempts,
+        status: decision.status,
+        evidence: decision.evidence,
+        detectingAttempts: decision.detectingAttempts,
       };
-    };
-
-    const setSessionState = (
-      state: typeof lifecycle.session.state,
-      reason: typeof lifecycle.session.reason,
-    ): void => {
-      lifecycle.session.state = state;
-      lifecycle.session.reason = reason;
-      lifecycle.session.lastTransitionAt = nowIso;
-      if (state === "working" && lifecycle.session.startedAt === null) {
-        lifecycle.session.startedAt = nowIso;
-      }
-      if (state === "done") {
-        lifecycle.session.completedAt = nowIso;
-      }
-      if (state === "terminated") {
-        lifecycle.session.terminatedAt = nowIso;
-      }
-    };
-
-    const buildDetectingAssessment = (
-      evidence: string,
-      reason: typeof lifecycle.session.reason = "probe_failure",
-      fallbackReason: typeof lifecycle.session.reason = idleWasBlocked
-        ? "error_in_process"
-        : "probe_failure",
-    ): DeterminedStatus => {
-      const attempts = parseAttemptCount(session.metadata["detectingAttempts"]) + 1;
-      if (attempts > DETECTING_MAX_ATTEMPTS) {
-        setSessionState("stuck", fallbackReason);
-        return commit(SESSION_STATUS.STUCK, evidence, attempts);
-      }
-      setSessionState("detecting", reason);
-      return commit(SESSION_STATUS.DETECTING, evidence, attempts);
     };
 
     let runtimeProbe: ProbeResult = { state: "unknown", failed: false };
@@ -600,8 +885,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             lifecycle.runtime.reason = "process_running";
           }
           if (detectedActivity.state === "waiting_input") {
-            setSessionState("needs_input", "awaiting_user_input");
-            return commit(SESSION_STATUS.NEEDS_INPUT, activityEvidence, 0);
+            return commit({
+              status: SESSION_STATUS.NEEDS_INPUT,
+              evidence: activityEvidence,
+              detectingAttempts: 0,
+              sessionState: "needs_input",
+              sessionReason: "awaiting_user_input",
+            });
           }
           if (detectedActivity.state === "exited" && canProbeRuntimeIdentity) {
             processProbe = { state: "dead", failed: false };
@@ -623,8 +913,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             activitySignal = classifyActivitySignal({ state: activity }, "terminal");
             activityEvidence = formatActivitySignalEvidence(activitySignal);
             if (activity === "waiting_input") {
-              setSessionState("needs_input", "awaiting_user_input");
-              return commit(SESSION_STATUS.NEEDS_INPUT, activityEvidence, 0);
+              return commit({
+                status: SESSION_STATUS.NEEDS_INPUT,
+                evidence: activityEvidence,
+                detectingAttempts: 0,
+                sessionState: "needs_input",
+                sessionReason: "awaiting_user_input",
+              });
             }
 
             try {
@@ -651,9 +946,19 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           lifecycle.session.state === "needs_input" ||
           lifecycle.session.state === "detecting"
         ) {
-          return commit(session.status, activityEvidence);
+          return commit({
+            status: session.status,
+            evidence: activityEvidence,
+            detectingAttempts: currentDetectingAttempts,
+          });
         }
-        return buildDetectingAssessment(activityEvidence);
+        return commit(
+          createDetectingDecision({
+            currentAttempts: currentDetectingAttempts,
+            idleWasBlocked,
+            evidence: activityEvidence,
+          }),
+        );
       }
     }
 
@@ -676,43 +981,17 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       }
     }
 
-    const recentActivitySupportsLiveness = supportsRecentLiveness(activitySignal);
-
-    if (runtimeProbe.failed || processProbe.failed) {
-      return buildDetectingAssessment(
-        `probe_failed runtime=${runtimeProbe.state} process=${processProbe.state} ${activityEvidence}`,
-      );
-    }
-
-    if (
-      (runtimeProbe.state === "dead" && processProbe.state === "alive") ||
-      (runtimeProbe.state === "alive" && processProbe.state === "dead") ||
-      (runtimeProbe.state === "dead" && recentActivitySupportsLiveness)
-    ) {
-      return buildDetectingAssessment(
-        `signal_disagreement runtime=${runtimeProbe.state} process=${processProbe.state} ${activityEvidence}`,
-        runtimeProbe.state === "dead" ? "runtime_lost" : "agent_process_exited",
-      );
-    }
-
-    if (
-      runtimeProbe.state === "dead" &&
-      processProbe.state === "unknown" &&
-      canProbeRuntimeIdentity
-    ) {
-      return buildDetectingAssessment(
-        `runtime_dead process_unknown ${activityEvidence}`,
-        "runtime_lost",
-      );
-    }
-
-    if (
-      runtimeProbe.state === "dead" &&
-      processProbe.state === "dead" &&
-      !recentActivitySupportsLiveness
-    ) {
-      setSessionState("terminated", "runtime_lost");
-      return commit(SESSION_STATUS.KILLED, `runtime_dead process_dead ${activityEvidence}`, 0);
+    const probeDecision = resolveProbeDecision({
+      currentAttempts: currentDetectingAttempts,
+      runtimeProbe,
+      processProbe,
+      canProbeRuntimeIdentity,
+      activitySignal,
+      activityEvidence,
+      idleWasBlocked,
+    });
+    if (probeDecision) {
+      return commit(probeDecision);
     }
 
     if (
@@ -747,125 +1026,67 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         lifecycle.pr.number = session.pr.number;
         lifecycle.pr.url = session.pr.url;
         lifecycle.pr.lastObservedAt = nowIso;
+        const shouldEscalateIdleToStuck =
+          detectedIdleTimestamp !== null && hasPositiveIdleEvidence(activitySignal)
+            ? isIdleBeyondThreshold(session, detectedIdleTimestamp)
+            : false;
 
         if (cachedData) {
-          if (cachedData.state === PR_STATE.MERGED) {
-            lifecycle.pr.state = "merged";
-            lifecycle.pr.reason = "merged";
-            setSessionState("idle", "merged_waiting_decision");
-            return commit(SESSION_STATUS.MERGED, "pr_merged", 0);
-          }
-          if (cachedData.state === PR_STATE.CLOSED) {
-            lifecycle.pr.state = "closed";
-            lifecycle.pr.reason = "closed_unmerged";
-            setSessionState("idle", "pr_closed_waiting_decision");
-            return commit(SESSION_STATUS.IDLE, "pr_closed", 0);
-          }
-
-          lifecycle.pr.state = "open";
-          if (cachedData.ciStatus === CI_STATUS.FAILING) {
-            lifecycle.pr.reason = "ci_failing";
-            setSessionState("working", "fixing_ci");
-            return commit(SESSION_STATUS.CI_FAILED, "ci_failing", 0);
-          }
-          if (cachedData.reviewDecision === "changes_requested") {
-            lifecycle.pr.reason = "changes_requested";
-            setSessionState("working", "resolving_review_comments");
-            return commit(SESSION_STATUS.CHANGES_REQUESTED, "review_changes_requested", 0);
-          }
-          if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
-            if (cachedData.mergeable) {
-              lifecycle.pr.reason = "merge_ready";
-              setSessionState("idle", "awaiting_external_review");
-              return commit(SESSION_STATUS.MERGEABLE, "merge_ready", 0);
-            }
-            if (cachedData.reviewDecision === "approved") {
-              lifecycle.pr.reason = "approved";
-              setSessionState("idle", "awaiting_external_review");
-              return commit(SESSION_STATUS.APPROVED, "review_approved", 0);
-            }
-          }
-          if (cachedData.reviewDecision === "pending") {
-            lifecycle.pr.reason = "review_pending";
-            setSessionState("idle", "awaiting_external_review");
-            return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
-          }
-
-          if (
-            detectedIdleTimestamp &&
-            hasPositiveIdleEvidence(activitySignal) &&
-            isIdleBeyondThreshold(session, detectedIdleTimestamp)
-          ) {
-            lifecycle.pr.reason = "in_progress";
-            setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
-            return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
-          }
-
-          lifecycle.pr.reason = "in_progress";
-          setSessionState("idle", "pr_created");
-          return commit(SESSION_STATUS.PR_OPEN, "pr_open", 0);
+          return commit(
+            resolvePREnrichmentDecision(cachedData, {
+              shouldEscalateIdleToStuck,
+              idleWasBlocked,
+              activityEvidence,
+            }),
+          );
         }
 
         const prState = await scm.getPRState(session.pr);
-        if (prState === PR_STATE.MERGED) {
-          lifecycle.pr.state = "merged";
-          lifecycle.pr.reason = "merged";
-          setSessionState("idle", "merged_waiting_decision");
-          return commit(SESSION_STATUS.MERGED, "pr_merged", 0);
-        }
-        if (prState === PR_STATE.CLOSED) {
-          lifecycle.pr.state = "closed";
-          lifecycle.pr.reason = "closed_unmerged";
-          setSessionState("idle", "pr_closed_waiting_decision");
-          return commit(SESSION_STATUS.IDLE, "pr_closed", 0);
+        if (prState === PR_STATE.MERGED || prState === PR_STATE.CLOSED) {
+          return commit(
+            resolvePRLiveDecision({
+              prState,
+              ciStatus: CI_STATUS.NONE,
+              reviewDecision: "none",
+              mergeable: false,
+              shouldEscalateIdleToStuck,
+              idleWasBlocked,
+              activityEvidence,
+            }),
+          );
         }
 
-        lifecycle.pr.state = "open";
         const ciStatus = await scm.getCISummary(session.pr);
         if (ciStatus === CI_STATUS.FAILING) {
-          lifecycle.pr.reason = "ci_failing";
-          setSessionState("working", "fixing_ci");
-          return commit(SESSION_STATUS.CI_FAILED, "ci_failing", 0);
+          return commit(
+            resolvePRLiveDecision({
+              prState,
+              ciStatus,
+              reviewDecision: "none",
+              mergeable: false,
+              shouldEscalateIdleToStuck,
+              idleWasBlocked,
+              activityEvidence,
+            }),
+          );
         }
 
         const reviewDecision = await scm.getReviewDecision(session.pr);
-        if (reviewDecision === "changes_requested") {
-          lifecycle.pr.reason = "changes_requested";
-          setSessionState("working", "resolving_review_comments");
-          return commit(SESSION_STATUS.CHANGES_REQUESTED, "review_changes_requested", 0);
-        }
-        if (reviewDecision === "approved" || reviewDecision === "none") {
-          const mergeReady = await scm.getMergeability(session.pr);
-          if (mergeReady.mergeable) {
-            lifecycle.pr.reason = "merge_ready";
-            setSessionState("idle", "awaiting_external_review");
-            return commit(SESSION_STATUS.MERGEABLE, "merge_ready", 0);
-          }
-          if (reviewDecision === "approved") {
-            lifecycle.pr.reason = "approved";
-            setSessionState("idle", "awaiting_external_review");
-            return commit(SESSION_STATUS.APPROVED, "review_approved", 0);
-          }
-        }
-        if (reviewDecision === "pending") {
-          lifecycle.pr.reason = "review_pending";
-          setSessionState("idle", "awaiting_external_review");
-          return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
-        }
-
-        if (
-          detectedIdleTimestamp &&
-          hasPositiveIdleEvidence(activitySignal) &&
-          isIdleBeyondThreshold(session, detectedIdleTimestamp)
-        ) {
-          lifecycle.pr.reason = "in_progress";
-          setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
-          return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
-        }
-
-        lifecycle.pr.reason = "in_progress";
-        setSessionState("idle", "pr_created");
-        return commit(SESSION_STATUS.PR_OPEN, "pr_open", 0);
+        const mergeReady =
+          reviewDecision === "approved" || reviewDecision === "none"
+            ? await scm.getMergeability(session.pr)
+            : { mergeable: false };
+        return commit(
+          resolvePRLiveDecision({
+            prState,
+            ciStatus,
+            reviewDecision,
+            mergeable: mergeReady.mergeable,
+            shouldEscalateIdleToStuck,
+            idleWasBlocked,
+            activityEvidence,
+          }),
+        );
       } catch {
         // Keep current status on SCM failure.
       }
@@ -886,9 +1107,23 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       lifecycle.session.state !== "done"
     ) {
       const mapped = mapAgentReportToLifecycle(agentReport.state);
-      setSessionState(mapped.sessionState, mapped.sessionReason);
-      const legacy = deriveLegacyStatus(lifecycle, session.status);
-      return commit(legacy, `agent_report:${agentReport.state}`, 0);
+      return commit({
+        status: deriveLegacyStatus(
+          {
+            ...lifecycle,
+            session: {
+              ...lifecycle.session,
+              state: mapped.sessionState,
+              reason: mapped.sessionReason,
+            },
+          },
+          session.status,
+        ),
+        evidence: `agent_report:${agentReport.state}`,
+        detectingAttempts: 0,
+        sessionState: mapped.sessionState,
+        sessionReason: mapped.sessionReason,
+      });
     }
 
     if (
@@ -896,8 +1131,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       hasPositiveIdleEvidence(activitySignal) &&
       isIdleBeyondThreshold(session, detectedIdleTimestamp)
     ) {
-      setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
-      return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
+      return commit({
+        status: SESSION_STATUS.STUCK,
+        evidence: `idle_beyond_threshold ${activityEvidence}`,
+        detectingAttempts: 0,
+        sessionState: "stuck",
+        sessionReason: idleWasBlocked ? "error_in_process" : "probe_failure",
+      });
     }
 
     if (
@@ -917,11 +1157,20 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         !runtimeProbe.failed;
 
       if (preservingProbeFailureStuck) {
-        setSessionState("detecting", "probe_failure");
-        return commit(SESSION_STATUS.DETECTING, activityEvidence, 0);
+        return commit({
+          status: SESSION_STATUS.DETECTING,
+          evidence: activityEvidence,
+          detectingAttempts: 0,
+          sessionState: "detecting",
+          sessionReason: "probe_failure",
+        });
       }
 
-      return commit(deriveLegacyStatus(lifecycle, session.status), activityEvidence, 0);
+      return commit({
+        status: deriveLegacyStatus(lifecycle, session.status),
+        evidence: activityEvidence,
+        detectingAttempts: 0,
+      });
     }
 
     if (
@@ -930,11 +1179,20 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       session.status === SESSION_STATUS.STUCK ||
       session.status === SESSION_STATUS.NEEDS_INPUT
     ) {
-      setSessionState("working", "task_in_progress");
-      return commit(SESSION_STATUS.WORKING, activityEvidence, 0);
+      return commit({
+        status: SESSION_STATUS.WORKING,
+        evidence: activityEvidence,
+        detectingAttempts: 0,
+        sessionState: "working",
+        sessionReason: "task_in_progress",
+      });
     }
 
-    return commit(session.status, activityEvidence);
+    return commit({
+      status: session.status,
+      evidence: activityEvidence,
+      detectingAttempts: 0,
+    });
   }
 
   /** Execute a reaction for a session. */
