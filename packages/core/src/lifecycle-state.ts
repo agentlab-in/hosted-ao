@@ -250,7 +250,7 @@ export function parseCanonicalLifecycle(
 
 export function deriveLegacyStatus(
   lifecycle: CanonicalSessionLifecycle,
-  previousStatus: SessionStatus = "working",
+  _previousStatus: SessionStatus = "working",
 ): SessionStatus {
   switch (lifecycle.session.state) {
     case "not_started":

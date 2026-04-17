@@ -6,11 +6,19 @@ import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
   type DashboardSession,
   type DashboardPR,
-  TERMINAL_STATUSES,
   NON_RESTORABLE_STATUSES,
   isPRMergeReady,
   isPRRateLimited,
   isPRUnenriched,
+  getSessionTruthLabel,
+  getSessionTruthReasonLabel,
+  getPRTruthLabel,
+  getPRTruthReasonLabel,
+  getRuntimeTruthLabel,
+  getRuntimeTruthReasonLabel,
+  getLifecycleGuidance,
+  getLifecycleEvidence,
+  isDashboardSessionTerminal,
 } from "@/lib/types";
 import { CI_STATUS } from "@aoagents/ao-core/types";
 import { cn } from "@/lib/cn";
@@ -47,6 +55,18 @@ interface SessionDetailProps {
   projectOrchestratorId?: string | null;
   projects?: ProjectInfo[];
   sidebarSessions?: DashboardSession[];
+}
+
+function truthBadgeTone(label: string): string {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("detect")) return "var(--color-status-attention)";
+  if (normalized.includes("terminated") || normalized.includes("missing")) {
+    return "var(--color-status-error)";
+  }
+  if (normalized.includes("merged") || normalized.includes("alive")) {
+    return "var(--color-status-ready)";
+  }
+  return "var(--color-accent)";
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -123,6 +143,74 @@ function activityStateClass(activityLabel: string): string {
     return "session-detail-status-pill--error";
   }
   return "session-detail-status-pill--neutral";
+}
+
+function SessionTruthPanel({ session }: { session: DashboardSession }) {
+  if (!session.lifecycle) return null;
+
+  const facts = [
+    {
+      heading: "Session",
+      label: getSessionTruthLabel(session),
+      reason: getSessionTruthReasonLabel(session),
+    },
+    {
+      heading: "PR",
+      label: getPRTruthLabel(session),
+      reason: getPRTruthReasonLabel(session),
+    },
+    {
+      heading: "Runtime",
+      label: getRuntimeTruthLabel(session),
+      reason: getRuntimeTruthReasonLabel(session),
+    },
+  ];
+  const guidance = getLifecycleGuidance(session);
+  const evidence = getLifecycleEvidence(session);
+
+  return (
+    <section className="mb-4 rounded-[20px] border border-[var(--color-border-muted)] bg-[var(--color-bg-panel)] px-4 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
+        Lifecycle Truth
+      </p>
+      <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
+        {session.lifecycle.summary}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {facts.map((fact) => (
+          <div
+            key={fact.heading}
+            className="rounded-full border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] px-3 py-1.5"
+          >
+            <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
+              {fact.heading}
+            </div>
+            <div
+              className="mt-0.5 text-[12px] font-medium"
+              style={{ color: truthBadgeTone(fact.label) }}
+            >
+              {fact.label}
+            </div>
+            {fact.reason ? (
+              <div className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
+                {fact.reason}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {guidance ? (
+        <p className="mt-3 text-[12px] text-[var(--color-status-attention)]">
+          {guidance}
+        </p>
+      ) : null}
+      {evidence ? (
+        <p className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+          Evidence: {evidence}
+        </p>
+      ) : null}
+    </section>
+  );
 }
 
 function SessionTopStrip({
@@ -458,7 +546,7 @@ export function SessionDetail({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const pr = session.pr;
-  const terminalEnded = TERMINAL_STATUSES.has(session.status);
+  const terminalEnded = isDashboardSessionTerminal(session);
   const isRestorable = terminalEnded && !NON_RESTORABLE_STATUSES.has(session.status);
   const activity = (session.activity && activityMeta[session.activity]) ?? {
     label: session.activity ?? "unknown",
@@ -626,9 +714,12 @@ export function SessionDetail({
                         pr={pr}
                         sessionId={session.id}
                         metadata={session.metadata}
+                        lifecyclePrReason={session.lifecycle?.prReason}
                       />
                     </section>
                   ) : null}
+
+                  <SessionTruthPanel session={session} />
 
                   <section className="session-detail-terminal-wrap">
                     <div id="session-terminal-section" aria-hidden="true" />
@@ -765,7 +856,17 @@ export function SessionDetail({
 
 // ── Session detail PR card ────────────────────────────────────────────
 
-function SessionDetailPRCard({ pr, sessionId, metadata }: { pr: DashboardPR; sessionId: string; metadata: Record<string, string> }) {
+function SessionDetailPRCard({
+  pr,
+  sessionId,
+  metadata,
+  lifecyclePrReason,
+}: {
+  pr: DashboardPR;
+  sessionId: string;
+  metadata: Record<string, string>;
+  lifecyclePrReason?: string;
+}) {
   const [sendingComments, setSendingComments] = useState<Set<string>>(new Set());
   const [sentComments, setSentComments] = useState<Set<string>>(new Set());
   const [errorComments, setErrorComments] = useState<Set<string>>(new Set());
@@ -836,7 +937,7 @@ function SessionDetailPRCard({ pr, sessionId, metadata }: { pr: DashboardPR; ses
   };
 
   const allGreen = isPRMergeReady(pr);
-  const blockerIssues = buildBlockerChips(pr, metadata);
+  const blockerIssues = buildBlockerChips(pr, metadata, lifecyclePrReason);
   const fileCount = pr.changedFiles ?? 0;
 
   return (
@@ -1029,7 +1130,11 @@ interface BlockerChip {
   notified?: boolean;
 }
 
-function buildBlockerChips(pr: DashboardPR, metadata: Record<string, string>): BlockerChip[] {
+function buildBlockerChips(
+  pr: DashboardPR,
+  metadata: Record<string, string>,
+  lifecyclePrReason?: string,
+): BlockerChip[] {
   const chips: BlockerChip[] = [];
 
   const ciNotified = Boolean(metadata["lastCIFailureDispatchHash"]);
@@ -1037,9 +1142,14 @@ function buildBlockerChips(pr: DashboardPR, metadata: Record<string, string>): B
   const reviewNotified = Boolean(metadata["lastPendingReviewDispatchHash"]);
   const lifecycleStatus = metadata["status"];
 
-  const ciIsFailing = pr.ciStatus === CI_STATUS.FAILING || lifecycleStatus === "ci_failed";
+  const ciIsFailing =
+    pr.ciStatus === CI_STATUS.FAILING ||
+    lifecyclePrReason === "ci_failing" ||
+    lifecycleStatus === "ci_failed";
   const hasChangesRequested =
-    pr.reviewDecision === "changes_requested" || lifecycleStatus === "changes_requested";
+    pr.reviewDecision === "changes_requested" ||
+    lifecyclePrReason === "changes_requested" ||
+    lifecycleStatus === "changes_requested";
   const hasConflicts = pr.state !== "merged" && !pr.mergeability.noConflicts;
 
   if (ciIsFailing) {
