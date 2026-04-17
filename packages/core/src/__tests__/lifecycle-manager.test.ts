@@ -138,8 +138,8 @@ describe("check (single session)", () => {
       previousRuntimeState: "alive",
       newRuntimeState: "alive",
       primaryReason: "task_in_progress",
-      evidence: "activity:active",
-      signalsConsulted: ["activity:active"],
+      evidence: "activity_signal=valid via_native activity=active",
+      signalsConsulted: ["activity_signal=valid", "via_native", "activity=active"],
       recoveryAction: null,
     });
   });
@@ -486,6 +486,60 @@ describe("check (single session)", () => {
 
     await lm.check("app-1");
     expect(lm.getStates().get("app-1")).toBe("working");
+  });
+
+  it("does not mark a session stuck from terminal-only idle evidence without a timestamp", async () => {
+    config.reactions = {
+      "agent-stuck": { auto: true, action: "notify", threshold: "1m" },
+    };
+
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue(null);
+    vi.mocked(plugins.agent.detectActivity).mockReturnValue("idle");
+    vi.mocked(plugins.agent.isProcessRunning).mockResolvedValue(true);
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "working" }),
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("working");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["lifecycleEvidence"]).toContain("activity_signal=stale");
+    expect(meta?.["lifecycleEvidence"]).toContain("activity=idle");
+  });
+
+  it("does not treat stale activity as recent liveness evidence during runtime-loss detection", async () => {
+    vi.mocked(plugins.runtime.isAlive).mockResolvedValue(false);
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue({
+      state: "active",
+      timestamp: new Date(Date.now() - 10 * 60_000),
+    });
+    vi.mocked(plugins.agent.isProcessRunning).mockResolvedValue(false);
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "working" }),
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("killed");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["lifecycleEvidence"]).toContain("activity_signal=stale");
+  });
+
+  it("records explicit probe-failure activity evidence", async () => {
+    vi.mocked(plugins.agent.getActivityState).mockRejectedValue(new Error("boom"));
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "working" }),
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("detecting");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["lifecycleEvidence"]).toContain("activity_signal=probe_failure");
   });
 
   it("detects needs_input from agent", async () => {

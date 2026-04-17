@@ -27,6 +27,12 @@ function createSession(overrides?: Partial<DashboardSession>): DashboardSession 
     projectId: "test",
     status: "working",
     activity: "active",
+    activitySignal: {
+      state: "valid",
+      activity: "active",
+      timestamp: new Date().toISOString(),
+      source: "native",
+    },
     branch: "feat/test",
     issueId: null,
     issueUrl: null,

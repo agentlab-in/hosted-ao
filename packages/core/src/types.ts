@@ -150,6 +150,23 @@ export const ACTIVITY_STATE = {
   EXITED: "exited" as const,
 } satisfies Record<string, ActivityState>;
 
+export type ActivitySignalState = "valid" | "stale" | "null" | "unavailable" | "probe_failure";
+
+export type ActivitySignalSource = "native" | "terminal" | "runtime" | "none";
+
+export interface ActivitySignal {
+  /** Confidence bucket for the activity probe result. */
+  state: ActivitySignalState;
+  /** The observed activity value, if one was surfaced. */
+  activity: ActivityState | null;
+  /** Timestamp that makes timing-based inferences safe, when available. */
+  timestamp?: Date;
+  /** Where the activity signal came from. */
+  source: ActivitySignalSource;
+  /** Optional extra detail for stale / failed probes. */
+  detail?: string;
+}
+
 /** Result of activity detection, carrying both the state and an optional timestamp. */
 export interface ActivityDetection {
   state: ActivityState;
@@ -274,6 +291,9 @@ export interface Session {
 
   /** Activity state from agent plugin (null = not yet determined) */
   activity: ActivityState | null;
+
+  /** Explicit confidence/availability contract for the current activity signal. */
+  activitySignal: ActivitySignal;
 
   /** Canonical lifecycle truth persisted in metadata. */
   lifecycle: CanonicalSessionLifecycle;

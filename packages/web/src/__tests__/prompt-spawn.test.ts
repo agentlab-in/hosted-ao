@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import {
   createInitialCanonicalLifecycle,
+  createActivitySignal,
   type Session,
   type SessionManager,
   type OrchestratorConfig,
@@ -37,6 +38,11 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
     projectId: "my-app",
     status: "working",
     activity: "active",
+    activitySignal: createActivitySignal("valid", {
+      activity: "active",
+      timestamp: new Date("2025-01-01T00:00:00Z"),
+      source: "native",
+    }),
     lifecycle,
     branch: null,
     issueId: null,

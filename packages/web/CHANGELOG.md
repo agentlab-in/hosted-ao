@@ -1,5 +1,11 @@
 # @composio/ao-web
 
+## Unreleased
+
+### Patch Changes
+
+- Update dashboard lifecycle truth rendering to expose explicit activity-signal uncertainty, keep activity/runtime labels aligned with core lifecycle semantics, and cover stale, null, and probe-failure cases in tests.
+
 ## 0.2.2
 
 ### Patch Changes

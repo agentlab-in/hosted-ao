@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { getSessionsDir, getProjectBaseDir } from "../paths.js";
 import { createInitialCanonicalLifecycle, deriveLegacyStatus } from "../lifecycle-state.js";
+import { createActivitySignal } from "../activity-signal.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -86,6 +87,11 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     projectId: "my-app",
     status: deriveLegacyStatus(lifecycle),
     activity: "active",
+    activitySignal: createActivitySignal("valid", {
+      activity: "active",
+      timestamp: new Date(),
+      source: "native",
+    }),
     lifecycle,
     branch: "feat/test",
     issueId: null,

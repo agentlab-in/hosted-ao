@@ -1,5 +1,11 @@
 # @composio/ao-core
 
+## Unreleased
+
+### Patch Changes
+
+- Fix lifecycle activity inference to model missing evidence explicitly, prevent null or failed probes from being treated as idle proof, and require valid idle timing before sessions can transition to `stuck`.
+
 ## 0.2.0
 
 ### Minor Changes

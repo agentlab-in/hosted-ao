@@ -11,6 +11,8 @@
 export type {
   SessionStatus,
   ActivityState,
+  ActivitySignalState,
+  ActivitySignalSource,
   CIStatus,
   ReviewDecision,
   MergeReadiness,
@@ -35,6 +37,8 @@ import {
   type CIStatus,
   type SessionStatus,
   type ActivityState,
+  type ActivitySignalState,
+  type ActivitySignalSource,
   type ReviewDecision,
   type CanonicalSessionState,
   type CanonicalSessionReason,
@@ -72,6 +76,7 @@ export interface DashboardSession {
   projectId: string;
   status: SessionStatus;
   activity: ActivityState | null;
+  activitySignal: DashboardActivitySignal;
   lifecycle?: DashboardLifecycle;
   branch: string | null;
   issueId: string | null; // Deprecated: use issueUrl instead
@@ -87,6 +92,14 @@ export interface DashboardSession {
   pr: DashboardPR | null;
   metadata: Record<string, string>;
   attentionLevel?: AttentionLevel;
+}
+
+export interface DashboardActivitySignal {
+  state: ActivitySignalState;
+  activity: ActivityState | null;
+  timestamp: string | null;
+  source: ActivitySignalSource;
+  detail?: string;
 }
 
 export interface DashboardLifecycleFacet<
@@ -249,28 +262,28 @@ function humanizeLifecycleToken(token: string): string {
 }
 
 export function getSessionTruthLabel(session: DashboardSession): string {
-  return session.lifecycle?.session.label ?? humanizeLifecycleToken(session.status);
+  return session.lifecycle?.session?.label ?? humanizeLifecycleToken(session.status);
 }
 
 export function getSessionTruthReasonLabel(session: DashboardSession): string | null {
-  return session.lifecycle?.session.reasonLabel ?? null;
+  return session.lifecycle?.session?.reasonLabel ?? null;
 }
 
 export function getPRTruthLabel(session: DashboardSession): string {
-  if (session.lifecycle) return session.lifecycle.pr.label;
+  if (session.lifecycle?.pr?.label) return session.lifecycle.pr.label;
   return session.pr?.state ? humanizeLifecycleToken(session.pr.state) : "not created";
 }
 
 export function getPRTruthReasonLabel(session: DashboardSession): string | null {
-  return session.lifecycle?.pr.reasonLabel ?? null;
+  return session.lifecycle?.pr?.reasonLabel ?? null;
 }
 
 export function getRuntimeTruthLabel(session: DashboardSession): string {
-  return session.lifecycle?.runtime.label ?? "unknown";
+  return session.lifecycle?.runtime?.label ?? "unknown";
 }
 
 export function getRuntimeTruthReasonLabel(session: DashboardSession): string | null {
-  return session.lifecycle?.runtime.reasonLabel ?? null;
+  return session.lifecycle?.runtime?.reasonLabel ?? null;
 }
 
 export function getLifecycleGuidance(session: DashboardSession): string | null {
@@ -279,6 +292,43 @@ export function getLifecycleGuidance(session: DashboardSession): string | null {
 
 export function getLifecycleEvidence(session: DashboardSession): string | null {
   return session.lifecycle?.evidence ?? session.metadata["lifecycleEvidence"] ?? null;
+}
+
+function resolveActivitySignal(session: DashboardSession): DashboardActivitySignal {
+  return (
+    session.activitySignal ?? {
+      state: session.activity === null ? "unavailable" : "valid",
+      activity: session.activity,
+      timestamp: null,
+      source: "none",
+    }
+  );
+}
+
+export function getActivitySignalLabel(session: DashboardSession): string {
+  const signal = resolveActivitySignal(session);
+  switch (signal.state) {
+    case "valid":
+      return signal.activity ? humanizeLifecycleToken(signal.activity) : "valid";
+    case "stale":
+      return signal.activity ? `${humanizeLifecycleToken(signal.activity)} (stale)` : "stale";
+    case "null":
+      return "no activity signal";
+    case "unavailable":
+      return "activity unavailable";
+    case "probe_failure":
+      return "activity probe failed";
+  }
+}
+
+export function getActivitySignalReasonLabel(session: DashboardSession): string | null {
+  const signal = resolveActivitySignal(session);
+  const parts = [
+    signal.source !== "none" ? `source ${signal.source}` : null,
+    signal.timestamp ? `observed ${signal.timestamp}` : null,
+    signal.detail ? humanizeLifecycleToken(signal.detail) : null,
+  ].filter((value): value is string => value !== null);
+  return parts.length > 0 ? parts.join(" • ") : null;
 }
 
 export function isDashboardSessionDone(session: DashboardSession): boolean {

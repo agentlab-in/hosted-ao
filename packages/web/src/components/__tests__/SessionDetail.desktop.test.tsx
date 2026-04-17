@@ -120,7 +120,7 @@ describe("SessionDetail desktop layout", () => {
     );
     expect(screen.getByText("3 files")).toBeInTheDocument();
     expect(screen.getByText("Draft")).toBeInTheDocument();
-    expect(screen.getByText(/Changes requested/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Changes requested/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Merge conflicts/i)).toBeInTheDocument();
     expect(screen.getByText(/Unresolved Comments/i)).toBeInTheDocument();
     expect(screen.getByText("Tighten the copy")).toBeInTheDocument();

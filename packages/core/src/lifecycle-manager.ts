@@ -41,6 +41,13 @@ import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus } from 
 import { updateMetadata } from "./metadata.js";
 import { getSessionsDir } from "./paths.js";
 import {
+  classifyActivitySignal,
+  createActivitySignal,
+  formatActivitySignalEvidence,
+  hasPositiveIdleEvidence,
+  supportsRecentLiveness,
+} from "./activity-signal.js";
+import {
   isAgentReportFresh,
   mapAgentReportToLifecycle,
   readAgentReport,
@@ -433,8 +440,6 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return idleMs > stuckThresholdMs;
   }
 
-  const ACTIVITY_STRONG_WINDOW_MS = 60_000;
-  const ACTIVITY_WEAK_WINDOW_MS = 5 * 60_000;
   const DETECTING_MAX_ATTEMPTS = 3;
 
   type ProbeState = "alive" | "dead" | "unknown";
@@ -454,14 +459,6 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     if (!raw) return 0;
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-  }
-
-  function summarizeActivityFreshness(timestamp: Date | undefined): "strong" | "weak" | "stale" | "none" {
-    if (!timestamp) return "none";
-    const ageMs = Date.now() - timestamp.getTime();
-    if (ageMs <= ACTIVITY_STRONG_WINDOW_MS) return "strong";
-    if (ageMs <= ACTIVITY_WEAK_WINDOW_MS) return "weak";
-    return "stale";
   }
 
   /** Determine current status for a session by polling plugins. */
@@ -502,6 +499,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     ): DeterminedStatus => {
       session.lifecycle = lifecycle;
       session.status = status;
+      session.activitySignal = activitySignal;
       return {
         status,
         evidence,
@@ -568,9 +566,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       }
     }
 
-    let activityState: Awaited<ReturnType<Agent["getActivityState"]>> | null = null;
+    let activitySignal = createActivitySignal("unavailable");
     let processProbe: ProbeResult = { state: "unknown", failed: false };
-    let activityEvidence = "activity_unavailable";
+    let activityEvidence = formatActivitySignalEvidence(activitySignal);
 
     if (agent && (session.runtimeHandle || session.workspacePath)) {
       try {
@@ -591,37 +589,38 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           }
         }
 
-        activityState = await agent.getActivityState(session, config.readyThresholdMs);
-        if (activityState) {
-          activityEvidence = `activity:${activityState.state}`;
+        const detectedActivity = await agent.getActivityState(session, config.readyThresholdMs);
+        if (detectedActivity) {
+          activitySignal = classifyActivitySignal(detectedActivity, "native");
+          activityEvidence = formatActivitySignalEvidence(activitySignal);
           lifecycle.runtime.lastObservedAt = nowIso;
           if (lifecycle.runtime.state !== "missing" && lifecycle.runtime.state !== "probe_failed") {
             lifecycle.runtime.state = "alive";
             lifecycle.runtime.reason = "process_running";
           }
-          if (activityState.state === "waiting_input") {
+          if (detectedActivity.state === "waiting_input") {
             setSessionState("needs_input", "awaiting_user_input");
             return commit(SESSION_STATUS.NEEDS_INPUT, activityEvidence, 0);
           }
-          if (activityState.state === "exited" && canProbeRuntimeIdentity) {
+          if (detectedActivity.state === "exited" && canProbeRuntimeIdentity) {
             processProbe = { state: "dead", failed: false };
             lifecycle.runtime.state = "exited";
             lifecycle.runtime.reason = "process_missing";
           }
 
-          if (
-            (activityState.state === "idle" || activityState.state === "blocked") &&
-            activityState.timestamp
-          ) {
-            detectedIdleTimestamp = activityState.timestamp;
-            idleWasBlocked = activityState.state === "blocked";
+          if (hasPositiveIdleEvidence(activitySignal)) {
+            detectedIdleTimestamp = activitySignal.timestamp;
+            idleWasBlocked = activitySignal.activity === "blocked";
           }
         } else if (session.runtimeHandle && canProbeRuntimeIdentity) {
+          activitySignal = createActivitySignal("null", { source: "native" });
+          activityEvidence = formatActivitySignalEvidence(activitySignal);
           const runtime = registry.get<Runtime>("runtime", project.runtime ?? config.defaults.runtime);
           const terminalOutput = runtime ? await runtime.getOutput(session.runtimeHandle, 10) : "";
           if (terminalOutput) {
             const activity = agent.detectActivity(terminalOutput);
-            activityEvidence = `terminal:${activity}`;
+            activitySignal = classifyActivitySignal({ state: activity }, "terminal");
+            activityEvidence = formatActivitySignalEvidence(activitySignal);
             if (activity === "waiting_input") {
               setSessionState("needs_input", "awaiting_user_input");
               return commit(SESSION_STATUS.NEEDS_INPUT, activityEvidence, 0);
@@ -639,16 +638,21 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
               processProbe = { state: "unknown", failed: true };
             }
           }
+        } else {
+          activitySignal = createActivitySignal("null", { source: "native" });
+          activityEvidence = formatActivitySignalEvidence(activitySignal);
         }
       } catch {
+        activitySignal = createActivitySignal("probe_failure", { source: "native" });
+        activityEvidence = formatActivitySignalEvidence(activitySignal);
         if (
           lifecycle.session.state === "stuck" ||
           lifecycle.session.state === "needs_input" ||
           lifecycle.session.state === "detecting"
         ) {
-          return commit(session.status, "activity_probe_failed_preserved");
+          return commit(session.status, activityEvidence);
         }
-        return buildDetectingAssessment("activity_probe_failed");
+        return buildDetectingAssessment(activityEvidence);
       }
     }
 
@@ -671,9 +675,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       }
     }
 
-    const activityFreshness = summarizeActivityFreshness(activityState?.timestamp);
-    const recentActivitySupportsLiveness =
-      activityFreshness === "strong" || activityFreshness === "weak";
+    const recentActivitySupportsLiveness = supportsRecentLiveness(activitySignal);
 
     if (runtimeProbe.failed || processProbe.failed) {
       return buildDetectingAssessment(
@@ -687,7 +689,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       (runtimeProbe.state === "dead" && recentActivitySupportsLiveness)
     ) {
       return buildDetectingAssessment(
-        `signal_disagreement runtime=${runtimeProbe.state} process=${processProbe.state} activity=${activityFreshness}`,
+        `signal_disagreement runtime=${runtimeProbe.state} process=${processProbe.state} ${activityEvidence}`,
         runtimeProbe.state === "dead" ? "runtime_lost" : "agent_process_exited",
       );
     }
@@ -698,7 +700,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       canProbeRuntimeIdentity
     ) {
       return buildDetectingAssessment(
-        `runtime_dead process_unknown activity=${activityFreshness}`,
+        `runtime_dead process_unknown ${activityEvidence}`,
         "runtime_lost",
       );
     }
@@ -709,7 +711,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       !recentActivitySupportsLiveness
     ) {
       setSessionState("terminated", "runtime_lost");
-      return commit(SESSION_STATUS.KILLED, `runtime_dead process_dead activity=${activityFreshness}`, 0);
+      return commit(SESSION_STATUS.KILLED, `runtime_dead process_dead ${activityEvidence}`, 0);
     }
 
     if (
@@ -788,10 +790,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
           }
 
-          if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
+          if (
+            detectedIdleTimestamp &&
+            hasPositiveIdleEvidence(activitySignal) &&
+            isIdleBeyondThreshold(session, detectedIdleTimestamp)
+          ) {
             lifecycle.pr.reason = "in_progress";
             setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
-            return commit(SESSION_STATUS.STUCK, "idle_beyond_threshold", 0);
+            return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
           }
 
           lifecycle.pr.reason = "in_progress";
@@ -846,10 +852,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
         }
 
-        if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
+        if (
+          detectedIdleTimestamp &&
+          hasPositiveIdleEvidence(activitySignal) &&
+          isIdleBeyondThreshold(session, detectedIdleTimestamp)
+        ) {
           lifecycle.pr.reason = "in_progress";
           setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
-          return commit(SESSION_STATUS.STUCK, "idle_beyond_threshold", 0);
+          return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
         }
 
         lifecycle.pr.reason = "in_progress";
@@ -880,9 +890,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       return commit(legacy, `agent_report:${agentReport.state}`, 0);
     }
 
-    if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
+    if (
+      detectedIdleTimestamp &&
+      hasPositiveIdleEvidence(activitySignal) &&
+      isIdleBeyondThreshold(session, detectedIdleTimestamp)
+    ) {
       setSessionState("stuck", idleWasBlocked ? "error_in_process" : "probe_failure");
-      return commit(SESSION_STATUS.STUCK, "idle_beyond_threshold", 0);
+      return commit(SESSION_STATUS.STUCK, `idle_beyond_threshold ${activityEvidence}`, 0);
     }
 
     if (

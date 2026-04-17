@@ -1,4 +1,5 @@
 import {
+  createActivitySignal,
   createInitialCanonicalLifecycle,
   type OrchestratorEvent,
   type Session,
@@ -42,6 +43,11 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     projectId: "my-project",
     status: "working" as SessionStatus,
     activity: "active" as ActivityState,
+    activitySignal: createActivitySignal("valid", {
+      activity: "active",
+      timestamp: new Date("2025-06-15T12:00:00Z"),
+      source: "native",
+    }),
     lifecycle,
     branch: "feat/test",
     issueId: null,

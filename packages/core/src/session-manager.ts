@@ -60,6 +60,7 @@ import {
   parseCanonicalLifecycle,
 } from "./lifecycle-state.js";
 import { buildPrompt } from "./prompt-builder.js";
+import { classifyActivitySignal, createActivitySignal } from "./activity-signal.js";
 import {
   getSessionsDir,
   getWorktreesDir,
@@ -975,6 +976,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             session.status = "killed";
           }
           session.activity = "exited";
+          session.activitySignal = createActivitySignal("valid", {
+            activity: "exited",
+            source: "runtime",
+          });
           return;
         }
       } catch {
@@ -991,10 +996,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // external scripts (which don't store runtimeHandle) to always show "unknown".
     // This now runs for ALL sessions, including terminal statuses, so a merged
     // session with a live agent shows accurate activity (ready/idle/waiting_input).
+    session.activitySignal = createActivitySignal("unavailable");
     if (plugins.agent) {
       try {
         const detected = await plugins.agent.getActivityState(session, config.readyThresholdMs);
         if (detected !== null) {
+          session.activitySignal = classifyActivitySignal(detected, "native");
           session.activity = detected.state;
           session.lifecycle.runtime.state = "alive";
           session.lifecycle.runtime.reason = "process_running";
@@ -1002,9 +1009,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           if (detected.timestamp && detected.timestamp > session.lastActivityAt) {
             session.lastActivityAt = detected.timestamp;
           }
+        } else {
+          session.activitySignal = createActivitySignal("null", { source: "native" });
         }
       } catch {
-        // Can't detect activity — keep existing value
+        session.activitySignal = createActivitySignal("probe_failure", { source: "native" });
       }
 
       // Enrich with live agent session info (summary, cost).
@@ -1233,6 +1242,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       projectId: spawnConfig.projectId,
       status: deriveLegacyStatus(lifecycle),
       activity: "active",
+      activitySignal: createActivitySignal("valid", {
+        activity: "active",
+        timestamp: createdAt,
+        source: "runtime",
+      }),
       lifecycle,
       branch,
       issueId: spawnConfig.issueId ?? null,
@@ -1566,6 +1580,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       projectId: orchestratorConfig.projectId,
       status: deriveLegacyStatus(lifecycle),
       activity: "active",
+      activitySignal: createActivitySignal("valid", {
+        activity: "active",
+        timestamp: createdAt,
+        source: "runtime",
+      }),
       lifecycle,
       branch,
       issueId: null,
