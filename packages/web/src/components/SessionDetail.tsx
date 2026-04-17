@@ -257,14 +257,14 @@ function SessionReportAuditPanel({
         aria-controls="session-report-audit-panel"
         onClick={() => setIsExpanded((current) => !current)}
       >
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
+        <span className="block">
+          <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
             Agent Reports
-          </p>
-          <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
+          </span>
+          <span className="mt-1 block text-[12px] text-[var(--color-text-secondary)]">
             {entries.length} audit {entries.length === 1 ? "entry" : "entries"}
-          </p>
-        </div>
+          </span>
+        </span>
         <span
           className="flex h-7 w-7 items-center justify-center rounded-full border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] text-[var(--color-text-secondary)]"
           aria-hidden="true"
