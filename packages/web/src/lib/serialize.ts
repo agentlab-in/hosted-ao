@@ -18,13 +18,13 @@ import {
   type OrchestratorConfig,
   type PluginRegistry,
 } from "@aoagents/ao-core";
-import type {
-  DashboardSession,
-  DashboardPR,
-  DashboardStats,
-  DashboardOrchestratorLink,
+import {
+  type DashboardSession,
+  type DashboardPR,
+  type DashboardStats,
+  type DashboardOrchestratorLink,
+  getAttentionLevel,
 } from "./types.js";
-import { getAttentionLevel } from "@/lib/types";
 import { TTLCache, prCache, prCacheKey, type PREnrichmentData } from "./cache";
 
 /** Cache for issue titles (5 min TTL — issue titles rarely change) */

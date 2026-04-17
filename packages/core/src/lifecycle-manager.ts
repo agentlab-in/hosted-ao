@@ -224,11 +224,13 @@ function buildTransitionObservabilityData(
   newStatus: SessionStatus,
   evidence: string,
   detectingAttempts: number,
+  statusTransition: boolean,
   reaction?: { key: string; result: ReactionResult | null },
 ): Record<string, unknown> {
   return {
     oldStatus,
     newStatus,
+    statusTransition,
     previousSessionState: previous.session.state,
     newSessionState: next.session.state,
     previousSessionReason: previous.session.reason,
@@ -1583,6 +1585,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           newStatus,
           assessment.evidence,
           assessment.detectingAttempts,
+          true,
         ),
         level: transitionLogLevel(newStatus),
       });
@@ -1635,6 +1638,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
                   newStatus,
                   assessment.evidence,
                   assessment.detectingAttempts,
+                  true,
                   transitionReaction,
                 ),
                 level: reactionResult.success ? "info" : "warn",
@@ -1669,7 +1673,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         updateSessionMetadata(session, { status: newStatus });
         observer.recordOperation({
           metric: "lifecycle_poll",
-          operation: "lifecycle.transition",
+          operation: "lifecycle.sync",
           outcome: "success",
           correlationId: createCorrelationId("lifecycle-sync"),
           projectId: session.projectId,
@@ -1682,6 +1686,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             newStatus,
             assessment.evidence,
             assessment.detectingAttempts,
+            false,
           ),
           level: transitionLogLevel(newStatus),
         });

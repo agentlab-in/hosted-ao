@@ -316,6 +316,18 @@ export function isDashboardSessionTerminal(session: DashboardSession): boolean {
   );
 }
 
+export function isDashboardRuntimeEnded(session: DashboardSession): boolean {
+  if (session.lifecycle) {
+    return (
+      session.lifecycle.runtimeState === "missing" || session.lifecycle.runtimeState === "exited"
+    );
+  }
+  return (
+    TERMINAL_STATUSES.has(session.status) ||
+    (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))
+  );
+}
+
 export function isDashboardSessionRestorable(session: DashboardSession): boolean {
   if (!isDashboardSessionTerminal(session)) return false;
   return session.lifecycle?.prState !== "merged" && session.status !== "merged";

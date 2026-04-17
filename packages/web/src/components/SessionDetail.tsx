@@ -18,7 +18,8 @@ import {
   getRuntimeTruthReasonLabel,
   getLifecycleGuidance,
   getLifecycleEvidence,
-  isDashboardSessionTerminal,
+  isDashboardRuntimeEnded,
+  isDashboardSessionRestorable,
 } from "@/lib/types";
 import { CI_STATUS } from "@aoagents/ao-core/types";
 import { cn } from "@/lib/cn";
@@ -546,8 +547,11 @@ export function SessionDetail({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const pr = session.pr;
-  const terminalEnded = isDashboardSessionTerminal(session);
-  const isRestorable = terminalEnded && !NON_RESTORABLE_STATUSES.has(session.status);
+  const terminalEnded = isDashboardRuntimeEnded(session);
+  const isRestorable =
+    !isOrchestrator &&
+    isDashboardSessionRestorable(session) &&
+    !NON_RESTORABLE_STATUSES.has(session.status);
   const activity = (session.activity && activityMeta[session.activity]) ?? {
     label: session.activity ?? "unknown",
     color: "var(--color-text-muted)",
