@@ -63,6 +63,7 @@ import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js"
 import {
   DETECTING_MAX_ATTEMPTS,
   createDetectingDecision,
+  isDetectingTimedOut,
   parseAttemptCount,
   resolvePREnrichmentDecision,
   resolvePRLiveDecision,
@@ -1569,9 +1570,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       assessment.detectingAttempts > 0 ? String(assessment.detectingAttempts) : "";
     const nextDetectingStartedAt = assessment.detectingStartedAt ?? "";
     const nextDetectingEvidenceHash = assessment.detectingEvidenceHash ?? "";
+    // Escalation can happen via attempt limit OR time limit
     const isDetectingEscalated =
       newStatus === SESSION_STATUS.STUCK &&
-      assessment.detectingAttempts > DETECTING_MAX_ATTEMPTS;
+      (assessment.detectingAttempts > DETECTING_MAX_ATTEMPTS ||
+        isDetectingTimedOut(nextDetectingStartedAt));
     const nextDetectingEscalatedAt = isDetectingEscalated
       ? (session.metadata["detectingEscalatedAt"] || new Date().toISOString())
       : "";

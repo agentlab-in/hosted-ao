@@ -1186,6 +1186,9 @@ export interface OrchestratorConfig {
   /** Project configurations */
   projects: Record<string, ProjectConfig>;
 
+  /** Dashboard UI configuration */
+  dashboard?: DashboardConfig;
+
   /** Notification channel configs */
   notifiers: Record<string, NotifierConfig>;
 
@@ -1231,6 +1234,22 @@ export interface ExternalPluginEntryRef {
    * When undefined, any manifest.name is accepted and config is updated with it.
    */
   expectedPluginName?: string;
+}
+
+/**
+ * Dashboard attention zone display mode.
+ *
+ * - "simple" (default): collapses the 5 detailed zones into 4 by merging
+ *   REVIEW + RESPOND into a single ACTION column. The card-level badges
+ *   still expose the underlying state (ci_failed, needs_input, changes_requested).
+ * - "detailed": preserves the original 5-zone Kanban layout for power users
+ *   who want REVIEW and RESPOND as distinct columns.
+ */
+export type DashboardAttentionZoneMode = "simple" | "detailed";
+
+export interface DashboardConfig {
+  /** Attention zone layout (defaults to "simple") */
+  attentionZones?: DashboardAttentionZoneMode;
 }
 
 export interface DefaultPlugins {

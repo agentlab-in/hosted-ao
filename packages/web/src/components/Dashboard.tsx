@@ -8,6 +8,7 @@ import {
   type DashboardPR,
   type AttentionLevel,
   type DashboardOrchestratorLink,
+  type DashboardAttentionZoneMode,
   getAttentionLevel,
   isPRRateLimited,
   isPRMergeReady,
@@ -33,12 +34,23 @@ interface DashboardProps {
   projectName?: string;
   projects?: ProjectInfo[];
   orchestrators?: DashboardOrchestratorLink[];
+  /** Dashboard attention zone mode (defaults to "simple" — 4 zones). */
+  attentionZones?: DashboardAttentionZoneMode;
 }
 
-const KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as const;
+const SIMPLE_KANBAN_LEVELS = ["working", "pending", "action", "merge"] as const;
+const DETAILED_KANBAN_LEVELS = ["working", "pending", "review", "respond", "merge"] as const;
 /** Urgency-first order for the mobile accordion (reversed from desktop) */
-const MOBILE_KANBAN_ORDER = ["respond", "merge", "review", "pending", "working"] as const;
-const MOBILE_FILTERS = [
+const SIMPLE_MOBILE_KANBAN_ORDER = ["action", "merge", "pending", "working"] as const;
+const DETAILED_MOBILE_KANBAN_ORDER = ["respond", "merge", "review", "pending", "working"] as const;
+const SIMPLE_MOBILE_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "action", label: "Action" },
+  { value: "merge", label: "Ready" },
+  { value: "pending", label: "Pending" },
+  { value: "working", label: "Working" },
+] as const;
+const DETAILED_MOBILE_FILTERS = [
   { value: "all", label: "All" },
   { value: "respond", label: "Respond" },
   { value: "merge", label: "Ready" },
@@ -47,7 +59,9 @@ const MOBILE_FILTERS = [
   { value: "working", label: "Working" },
 ] as const;
 
-type MobileFilterValue = (typeof MOBILE_FILTERS)[number]["value"];
+type MobileFilterValue =
+  | (typeof SIMPLE_MOBILE_FILTERS)[number]["value"]
+  | (typeof DETAILED_MOBILE_FILTERS)[number]["value"];
 const EMPTY_ORCHESTRATORS: DashboardOrchestratorLink[] = [];
 
 function formatRelativeTimeCompact(isoDate: string | null): string {
@@ -249,23 +263,28 @@ function DashboardInner({
   projectName,
   projects = [],
   orchestrators,
+  attentionZones = "simple",
 }: DashboardProps) {
   const orchestratorLinks = orchestrators ?? EMPTY_ORCHESTRATORS;
   const mux = useMuxOptional();
+  const kanbanLevels = attentionZones === "detailed" ? DETAILED_KANBAN_LEVELS : SIMPLE_KANBAN_LEVELS;
+  const mobileKanbanOrder =
+    attentionZones === "detailed" ? DETAILED_MOBILE_KANBAN_ORDER : SIMPLE_MOBILE_KANBAN_ORDER;
+  const mobileFilters = attentionZones === "detailed" ? DETAILED_MOBILE_FILTERS : SIMPLE_MOBILE_FILTERS;
   const initialAttentionLevels = useMemo(() => {
     const levels: Record<string, AttentionLevel> = {};
     for (const s of initialSessions) {
-      levels[s.id] = getAttentionLevel(s);
+      levels[s.id] = getAttentionLevel(s, attentionZones);
     }
     return levels;
-  }, [initialSessions]);
-  const { sessions, connectionStatus, sseAttentionLevels } = useSessionEvents(
+  }, [initialSessions, attentionZones]);
+  const { sessions, connectionStatus, sseAttentionLevels } = useSessionEvents({
     initialSessions,
-    projectId,
-    mux?.status === "connected" ? mux.sessions : undefined,
+    project: projectId,
+    muxSessions: mux?.status === "connected" ? mux.sessions : undefined,
     initialAttentionLevels,
-    false,
-  );
+    attentionZones,
+  });
   const searchParams = useSearchParams();
   const activeSessionId = searchParams.get("session") ?? undefined;
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
@@ -371,9 +390,9 @@ function DashboardInner({
 
   useEffect(() => {
     if (!sheetState || sheetState.mode !== "confirm-kill" || !hydratedSheetSession) return;
-    if (getAttentionLevel(hydratedSheetSession) !== "done") return;
+    if (getAttentionLevel(hydratedSheetSession, attentionZones) !== "done") return;
     setSheetState(null);
-  }, [hydratedSheetSession, sheetState]);
+  }, [hydratedSheetSession, sheetState, attentionZones]);
 
   useEffect(() => {
     if (!sheetState) {
@@ -406,6 +425,7 @@ function DashboardInner({
   const grouped = useMemo(() => {
     const zones: Record<AttentionLevel, DashboardSession[]> = {
       merge: [],
+      action: [],
       respond: [],
       review: [],
       pending: [],
@@ -413,10 +433,10 @@ function DashboardInner({
       done: [],
     };
     for (const session of displaySessions) {
-      zones[getAttentionLevel(session)].push(session);
+      zones[getAttentionLevel(session, attentionZones)].push(session);
     }
     return zones;
-  }, [displaySessions]);
+  }, [displaySessions, attentionZones]);
 
   // Auto-expand the most urgent non-empty section when switching to mobile.
   // Intentionally seeded once per mobile mode change, not on every session update.
@@ -444,6 +464,7 @@ function DashboardInner({
       const projectSessions = sessionsByProject.get(project.id) ?? [];
       const counts: Record<AttentionLevel, number> = {
         merge: 0,
+        action: 0,
         respond: 0,
         review: 0,
         pending: 0,
@@ -452,7 +473,7 @@ function DashboardInner({
       };
 
       for (const session of projectSessions) {
-        counts[getAttentionLevel(session)]++;
+        counts[getAttentionLevel(session, attentionZones)]++;
       }
 
       return {
@@ -464,7 +485,7 @@ function DashboardInner({
         counts,
       };
     });
-  }, [activeOrchestrators, allProjectsView, projects, sessionsByProject]);
+  }, [activeOrchestrators, allProjectsView, attentionZones, projects, sessionsByProject]);
 
   const handlePillTap = useCallback((level: AttentionLevel) => {
     if (level === "done") return;
@@ -476,10 +497,10 @@ function DashboardInner({
   }, []);
 
   const mobileFeedSessions = useMemo(() => {
-    const levels =
+    const levels: ReadonlyArray<AttentionLevel> =
       mobileFilter === "all"
-        ? MOBILE_KANBAN_ORDER
-        : MOBILE_KANBAN_ORDER.filter((level) => level === mobileFilter);
+        ? mobileKanbanOrder
+        : mobileKanbanOrder.filter((level) => level === mobileFilter);
     const feed: Array<{ session: DashboardSession; level: AttentionLevel }> = [];
     for (const level of levels) {
       for (const session of grouped[level]) {
@@ -487,7 +508,7 @@ function DashboardInner({
       }
     }
     return feed;
-  }, [grouped, mobileFilter]);
+  }, [grouped, mobileFilter, mobileKanbanOrder]);
 
   const showDesktopPrsLink = hasMounted && !isMobile;
 
@@ -654,7 +675,7 @@ function DashboardInner({
     }
   };
 
-  const hasAnySessions = KANBAN_LEVELS.some((level) => grouped[level].length > 0);
+  const hasAnySessions = kanbanLevels.some((level) => grouped[level].length > 0);
   const showEmptyState = !allProjectsView && !hasAnySessions;
 
   const anyRateLimited = useMemo(
@@ -800,13 +821,14 @@ function DashboardInner({
                     onSpawnOrchestrator={handleSpawnOrchestrator}
                     spawningProjectIds={spawningProjectIds}
                     spawnErrors={spawnErrors}
+                    attentionZones={attentionZones}
                   />
                 )}
 
                 {!allProjectsView && hasAnySessions && (
                   <div className="kanban-board-wrap">
                     <div className="kanban-board">
-                      {KANBAN_LEVELS.map((level) => (
+                      {kanbanLevels.map((level) => (
                         <AttentionZone
                           key={level}
                           level={level}
@@ -942,13 +964,17 @@ function DashboardInner({
             {isMobile ? (
               <section className="mobile-priority-row" aria-label="Needs attention">
                 <div className="mobile-priority-row__label">Needs attention</div>
-                <MobileActionStrip grouped={grouped} onPillTap={handlePillTap} />
+                <MobileActionStrip
+                  grouped={grouped}
+                  onPillTap={handlePillTap}
+                  attentionZones={attentionZones}
+                />
               </section>
             ) : null}
 
             {isMobile ? (
               <section className="mobile-filter-row" aria-label="Dashboard filters">
-                {MOBILE_FILTERS.map((filter) => (
+                {mobileFilters.map((filter) => (
                   <button
                     key={filter.value}
                     type="button"
@@ -1002,6 +1028,7 @@ function DashboardInner({
                 onSpawnOrchestrator={handleSpawnOrchestrator}
                 spawningProjectIds={spawningProjectIds}
                 spawnErrors={spawnErrors}
+                attentionZones={attentionZones}
               />
             )}
 
@@ -1024,7 +1051,7 @@ function DashboardInner({
                   </div>
                 ) : (
                   <div className="kanban-board">
-                    {KANBAN_LEVELS.map((level) => (
+                    {kanbanLevels.map((level) => (
                       <AttentionZone
                         key={level}
                         level={level}
@@ -1115,6 +1142,7 @@ function ProjectOverviewGrid({
   onSpawnOrchestrator,
   spawningProjectIds,
   spawnErrors,
+  attentionZones,
 }: {
   overviews: Array<{
     project: ProjectInfo;
@@ -1126,6 +1154,7 @@ function ProjectOverviewGrid({
   onSpawnOrchestrator: (project: ProjectInfo) => Promise<void>;
   spawningProjectIds: string[];
   spawnErrors: Record<string, string>;
+  attentionZones: DashboardAttentionZoneMode;
 }) {
   return (
     <div className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1154,8 +1183,18 @@ function ProjectOverviewGrid({
 
           <div className="mb-4 flex flex-wrap gap-2">
             <ProjectMetric label="Merge" value={counts.merge} tone="ready" />
-            <ProjectMetric label="Respond" value={counts.respond} tone="error" />
-            <ProjectMetric label="Review" value={counts.review} tone="orange" />
+            {attentionZones === "detailed" ? (
+              <>
+                <ProjectMetric label="Respond" value={counts.respond} tone="error" />
+                <ProjectMetric label="Review" value={counts.review} tone="orange" />
+              </>
+            ) : (
+              // "action" collapses respond + review — use orange (the less
+              // severe of the two merged tones) to match the favicon's
+              // yellow-severity treatment. Red would cry wolf on routine
+              // review work like ci_failed / changes_requested.
+              <ProjectMetric label="Action" value={counts.action} tone="orange" />
+            )}
             <ProjectMetric label="Pending" value={counts.pending} tone="attention" />
             <ProjectMetric label="Working" value={counts.working} tone="working" />
           </div>
@@ -1212,7 +1251,11 @@ function ProjectMetric({ label, value, tone }: { label: string; value: number; t
   );
 }
 
-const MOBILE_ACTION_STRIP_LEVELS = [
+const SIMPLE_MOBILE_ACTION_STRIP_LEVELS = [
+  { level: "action" as const, label: "action" },
+  { level: "merge" as const, label: "merge" },
+] satisfies Array<{ level: AttentionLevel; label: string }>;
+const DETAILED_MOBILE_ACTION_STRIP_LEVELS = [
   { level: "respond" as const, label: "respond" },
   { level: "merge" as const, label: "merge" },
   { level: "review" as const, label: "review" },
@@ -1221,11 +1264,17 @@ const MOBILE_ACTION_STRIP_LEVELS = [
 function MobileActionStrip({
   grouped,
   onPillTap,
+  attentionZones,
 }: {
   grouped: Record<AttentionLevel, DashboardSession[]>;
   onPillTap: (level: AttentionLevel) => void;
+  attentionZones: DashboardAttentionZoneMode;
 }) {
-  const activePills = MOBILE_ACTION_STRIP_LEVELS.filter(({ level }) => grouped[level].length > 0);
+  const stripLevels =
+    attentionZones === "detailed"
+      ? DETAILED_MOBILE_ACTION_STRIP_LEVELS
+      : SIMPLE_MOBILE_ACTION_STRIP_LEVELS;
+  const activePills = stripLevels.filter(({ level }) => grouped[level].length > 0);
 
   if (activePills.length === 0) {
     return (
