@@ -1,5 +1,11 @@
 # @composio/ao-core
 
+## Unreleased
+
+### Fixed
+
+- Keep lifecycle observability traces out of terminal-visible stderr by writing them to observability audit files instead.
+
 ## 0.2.0
 
 ### Minor Changes

@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import {
   createProjectObserver,
+  getObservabilityBaseDir,
   readObservabilitySummary,
   type OrchestratorConfig,
 } from "../index.js";
@@ -100,5 +101,49 @@ describe("observability snapshot", () => {
     expect(project.recentTraces.some((trace) => trace.operation === "session.spawn")).toBe(true);
     expect(project.health["lifecycle.worker"]?.status).toBe("warn");
     expect(summary.overallStatus).toBe("warn");
+  });
+
+  it("writes observability diagnostics to audit files without mirroring to stderr by default", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const observer = createProjectObserver(config, "session-manager");
+
+    observer.recordOperation({
+      metric: "spawn",
+      operation: "session.spawn",
+      outcome: "success",
+      correlationId: "corr-1",
+      projectId: "my-app",
+      sessionId: "app-1",
+      level: "info",
+    });
+
+    observer.recordDiagnostic({
+      operation: "batch_enrichment.log",
+      correlationId: "corr-2",
+      projectId: "my-app",
+      message: "GraphQL batch returned cached result",
+      level: "info",
+      data: { plugin: "github" },
+    });
+
+    observer.setHealth({
+      surface: "lifecycle.worker",
+      status: "ok",
+      projectId: "my-app",
+      correlationId: "corr-3",
+      details: { projectId: "my-app" },
+    });
+
+    const auditDir = join(getObservabilityBaseDir(config.configPath), "processes");
+    const auditFiles = readdirSync(auditDir).filter((fileName) => fileName.endsWith(".ndjson"));
+    expect(auditFiles.length).toBeGreaterThan(0);
+
+    const auditLog = readFileSync(join(auditDir, auditFiles[0]!), "utf-8");
+    expect(auditLog).toContain('"operation":"session.spawn"');
+    expect(auditLog).toContain('"operation":"batch_enrichment.log"');
+    expect(auditLog).toContain('"message":"GraphQL batch returned cached result"');
+    expect(stderrSpy).not.toHaveBeenCalled();
+
+    stderrSpy.mockRestore();
   });
 });

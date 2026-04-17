@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   mkdirSync,
   existsSync,
   readFileSync,
@@ -129,6 +130,16 @@ export interface SetHealthInput {
 export interface ProjectObserver {
   readonly component: string;
   recordOperation(input: RecordOperationInput): void;
+  recordDiagnostic(input: {
+    operation: string;
+    correlationId: string;
+    projectId?: string;
+    sessionId?: SessionId;
+    message: string;
+    level?: ObservabilityLevel;
+    path?: string;
+    data?: Record<string, unknown>;
+  }): void;
   setHealth(input: SetHealthInput): void;
 }
 
@@ -161,8 +172,13 @@ function shouldLog(level: ObservabilityLevel): boolean {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[getLogLevel()];
 }
 
+function shouldMirrorStructuredLogsToStderr(): boolean {
+  const raw = process.env["AO_OBSERVABILITY_STDERR"]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 function emitStructuredLog(entry: Record<string, unknown>, level: ObservabilityLevel): void {
-  if (!shouldLog(level)) return;
+  if (!shouldMirrorStructuredLogsToStderr() || !shouldLog(level)) return;
   process.stderr.write(`${JSON.stringify({ ...entry, level })}\n`);
 }
 
@@ -180,6 +196,20 @@ function getObservabilityDir(config: OrchestratorConfig): string {
 
 function getSnapshotPath(config: OrchestratorConfig, component: string): string {
   return join(getObservabilityDir(config), `${sanitizeComponent(component)}-${process.pid}.json`);
+}
+
+function getAuditLogPath(config: OrchestratorConfig, component: string): string {
+  return join(getObservabilityDir(config), `${sanitizeComponent(component)}-${process.pid}.ndjson`);
+}
+
+function appendAuditLog(
+  config: OrchestratorConfig,
+  component: string,
+  payload: Record<string, unknown>,
+  level: ObservabilityLevel,
+): void {
+  const filePath = getAuditLogPath(config, component);
+  appendFileSync(filePath, `${JSON.stringify({ ...payload, level })}\n`, "utf-8");
 }
 
 function readSnapshot(filePath: string, component: string): ProcessObservabilitySnapshot {
@@ -315,6 +345,7 @@ export function createProjectObserver(
       updater(snapshot);
       writeSnapshot(config, snapshot);
       if (logEntry) {
+        appendAuditLog(config, normalizedComponent, logEntry.payload, logEntry.level);
         emitStructuredLog(logEntry.payload, logEntry.level);
       }
     } catch (error) {
@@ -408,6 +439,66 @@ export function createProjectObserver(
             durationMs: input.durationMs,
             path: input.path,
             data: input.data,
+          },
+        },
+      );
+    },
+
+    recordDiagnostic(input) {
+      const timestamp = nowIso();
+      const level = input.level ?? "info";
+      const trace: ObservabilityTraceRecord = {
+        id: randomUUID(),
+        timestamp,
+        component: normalizedComponent,
+        operation: input.operation,
+        outcome: "success",
+        correlationId: input.correlationId,
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        path: input.path,
+        data: {
+          message: input.message,
+          ...input.data,
+        },
+      };
+
+      updateSnapshot(
+        (snapshot) => {
+          snapshot.traces = [trace, ...snapshot.traces]
+            .sort((a, b) => compareIsoDesc(a.timestamp, b.timestamp))
+            .slice(0, TRACE_LIMIT);
+
+          if (input.sessionId) {
+            snapshot.sessions[input.sessionId] = {
+              sessionId: input.sessionId,
+              projectId: input.projectId,
+              correlationId: input.correlationId,
+              operation: input.operation,
+              outcome: "success",
+              updatedAt: timestamp,
+            };
+
+            const sessionEntries = Object.entries(snapshot.sessions).sort(([, a], [, b]) =>
+              compareIsoDesc(a.updatedAt, b.updatedAt),
+            );
+            snapshot.sessions = Object.fromEntries(sessionEntries.slice(0, SESSION_LIMIT));
+          }
+        },
+        {
+          level,
+          payload: {
+            source: "ao-observability",
+            component: normalizedComponent,
+            operation: input.operation,
+            correlationId: input.correlationId,
+            projectId: input.projectId,
+            sessionId: input.sessionId,
+            path: input.path,
+            data: {
+              message: input.message,
+              ...input.data,
+            },
           },
         },
       );

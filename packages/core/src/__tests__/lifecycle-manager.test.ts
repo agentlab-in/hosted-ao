@@ -144,6 +144,18 @@ describe("check (single session)", () => {
     });
   });
 
+  it("does not mirror lifecycle transition observability logs to stderr during polling", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "spawning" }),
+    });
+
+    await lm.check("app-1");
+
+    expect(stderrSpy).not.toHaveBeenCalled();
+    stderrSpy.mockRestore();
+  });
+
   it("clears stale lifecycle compatibility metadata in memory and on disk", async () => {
     const session = makeSession({
       status: "working",
