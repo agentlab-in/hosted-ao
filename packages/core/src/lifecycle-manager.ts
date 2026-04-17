@@ -909,6 +909,17 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         lifecycle.session.state === "stuck" ||
         lifecycle.session.state === "needs_input")
     ) {
+      const preservingProbeFailureStuck =
+        activitySignal.state === "unavailable" &&
+        lifecycle.session.state === "stuck" &&
+        lifecycle.session.reason === "probe_failure" &&
+        lifecycle.runtime.state === "alive";
+
+      if (preservingProbeFailureStuck) {
+        setSessionState("detecting", "probe_failure");
+        return commit(SESSION_STATUS.DETECTING, activityEvidence, 0);
+      }
+
       return commit(deriveLegacyStatus(lifecycle, session.status), activityEvidence, 0);
     }
 
