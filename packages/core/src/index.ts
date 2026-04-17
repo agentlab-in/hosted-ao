@@ -49,6 +49,7 @@ export {
   applyAgentReport,
   readAgentReport,
   readAgentReportAuditTrail,
+  readAgentReportAuditTrailAsync,
   isAgentReportFresh,
   mapAgentReportToLifecycle,
   normalizeAgentReportedState,

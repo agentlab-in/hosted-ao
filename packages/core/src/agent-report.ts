@@ -17,6 +17,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   CanonicalSessionLifecycle,
@@ -26,7 +27,7 @@ import type {
   SessionStatus,
 } from "./types.js";
 import { updateCanonicalLifecycle, updateMetadata, readMetadataRaw } from "./metadata.js";
-import { deriveLegacyStatus, parseCanonicalLifecycle } from "./lifecycle-state.js";
+import { deriveLegacyStatus } from "./lifecycle-state.js";
 import { validateStatus } from "./utils/validation.js";
 
 /**
@@ -215,7 +216,16 @@ function buildAuditDir(dataDir: string): string {
   return join(dataDir, ".agent-report-audit");
 }
 
+const VALID_AUDIT_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
+
+function validateAuditSessionId(sessionId: SessionId): void {
+  if (!VALID_AUDIT_SESSION_ID.test(sessionId)) {
+    throw new Error(`Invalid session ID: ${sessionId}`);
+  }
+}
+
 function buildAuditFilePath(dataDir: string, sessionId: SessionId): string {
+  validateAuditSessionId(sessionId);
   return join(buildAuditDir(dataDir), `${sessionId}.ndjson`);
 }
 
@@ -256,7 +266,23 @@ export function readAgentReportAuditTrail(
     return [];
   }
 
-  return readFileSync(auditFilePath, "utf8")
+  return parseAgentReportAuditTrail(readFileSync(auditFilePath, "utf8"));
+}
+
+export async function readAgentReportAuditTrailAsync(
+  dataDir: string,
+  sessionId: SessionId,
+): Promise<AgentReportAuditEntry[]> {
+  const auditFilePath = buildAuditFilePath(dataDir, sessionId);
+  if (!existsSync(auditFilePath)) {
+    return [];
+  }
+
+  return parseAgentReportAuditTrail(await readFile(auditFilePath, "utf8"));
+}
+
+function parseAgentReportAuditTrail(content: string): AgentReportAuditEntry[] {
+  return content
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
@@ -299,40 +325,38 @@ export function applyAgentReport(
     throw new Error(`Session not found: ${sessionId}`);
   }
 
+  validateAuditSessionId(sessionId);
   const now = (input.now ?? new Date()).toISOString();
   const source = input.source ?? "report";
   const actor = normalizeActor(input.actor);
   const trimmedNote = input.note?.trim() || undefined;
-  const currentLifecycle = parseCanonicalLifecycle(raw, {
-    sessionId,
-    status: validateStatus(raw["status"]),
-  });
-  const previousLegacyStatus = validateStatus(raw["status"]);
-  const before = buildAuditSnapshot(currentLifecycle, previousLegacyStatus);
-  const validation = validateAgentReportTransition(currentLifecycle, input.state);
-  if (!validation.ok) {
-    appendAgentReportAuditEntry(dataDir, sessionId, {
-      timestamp: now,
-      actor,
-      source,
-      reportState: input.state,
-      note: trimmedNote,
-      accepted: false,
-      rejectionReason: validation.reason ?? "transition rejected",
-      before,
-      after: before,
-    });
-    throw new Error(validation.reason ?? "transition rejected");
-  }
-
+  let before: AgentReportAuditSnapshot | null = null;
   let previousState: CanonicalSessionState | null = null;
   let nextState: CanonicalSessionState | null = null;
   let legacyStatus: SessionStatus | null = null;
+  let previousLegacyStatus: SessionStatus | null = null;
 
   const nextLifecycle = updateCanonicalLifecycle(
     dataDir,
     sessionId,
     (current) => {
+      previousLegacyStatus = deriveLegacyStatus(current, validateStatus(raw["status"]));
+      before = buildAuditSnapshot(current, previousLegacyStatus);
+      const validation = validateAgentReportTransition(current, input.state);
+      if (!validation.ok) {
+        appendAgentReportAuditEntry(dataDir, sessionId, {
+          timestamp: now,
+          actor,
+          source,
+          reportState: input.state,
+          note: trimmedNote,
+          accepted: false,
+          rejectionReason: validation.reason ?? "transition rejected",
+          before,
+          after: before,
+        });
+        throw new Error(validation.reason ?? "transition rejected");
+      }
       const mapped = mapAgentReportToLifecycle(input.state);
       previousState = current.session.state;
       nextState = mapped.sessionState;
@@ -347,7 +371,7 @@ export function applyAgentReport(
     },
   );
 
-  if (!nextLifecycle || !previousState || !nextState || !legacyStatus) {
+  if (!nextLifecycle || !before || !previousState || !nextState || !legacyStatus) {
     throw new Error(`Failed to apply agent report for session ${sessionId}`);
   }
 

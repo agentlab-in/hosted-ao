@@ -47,6 +47,7 @@ import {
   type CanonicalRuntimeState,
   type CanonicalRuntimeReason,
 } from "@aoagents/ao-core/types";
+import type { AgentReportedState } from "@aoagents/ao-core";
 
 // Re-export for use in client components
 export { CI_STATUS, TERMINAL_STATUSES, TERMINAL_ACTIVITIES, NON_RESTORABLE_STATUSES };
@@ -106,7 +107,7 @@ export interface DashboardAgentReportAuditEntry {
   timestamp: string;
   actor: string;
   source: "acknowledge" | "report";
-  reportState: string;
+  reportState: AgentReportedState;
   note?: string;
   accepted: boolean;
   rejectionReason?: string;

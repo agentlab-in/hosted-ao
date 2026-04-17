@@ -246,9 +246,9 @@ function SessionReportAuditPanel({
         Agent Report Audit
       </p>
       <div className="mt-3 space-y-3">
-        {entries.map((entry) => (
+        {entries.map((entry, index) => (
           <div
-            key={`${entry.timestamp}-${entry.reportState}-${entry.actor}`}
+            key={`${entry.timestamp}-${entry.reportState}-${entry.actor}-${entry.source}-${String(entry.accepted)}-${index}`}
             className="rounded-[16px] border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] px-3 py-3"
           >
             <div className="flex flex-wrap items-center gap-2">
