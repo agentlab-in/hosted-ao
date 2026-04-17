@@ -41,6 +41,7 @@ export type CanonicalSessionReason =
   | "agent_acknowledged"
   | "task_in_progress"
   | "pr_created"
+  | "pr_closed_waiting_decision"
   | "fixing_ci"
   | "resolving_review_comments"
   | "awaiting_user_input"

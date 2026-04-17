@@ -129,7 +129,9 @@ async function labelIssuesForVerification(
 ): Promise<void> {
   const mergedSessions = sessions.filter(
     (s) =>
-      s.status === "merged" && s.issueId && !processedIssues.has(`${s.projectId}:${s.issueId}`),
+      s.lifecycle.pr.state === "merged" &&
+      s.issueId &&
+      !processedIssues.has(`${s.projectId}:${s.issueId}`),
   );
 
   for (const session of mergedSessions) {
