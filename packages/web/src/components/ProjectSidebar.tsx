@@ -23,7 +23,14 @@ interface ProjectSidebarProps {
   onMobileClose?: () => void;
 }
 
-type SessionDotLevel = "respond" | "review" | "pending" | "working" | "merge" | "done";
+type SessionDotLevel =
+  | "respond"
+  | "review"
+  | "action"
+  | "pending"
+  | "working"
+  | "merge"
+  | "done";
 
 function SessionDot({ level }: { level: SessionDotLevel }) {
   return (
@@ -37,11 +44,17 @@ function SessionDot({ level }: { level: SessionDotLevel }) {
   );
 }
 
+// ProjectSidebar consumes `getAttentionLevel()` without passing a mode,
+// so the function defaults to "detailed" and `action` never appears here
+// in practice. The entry is kept for exhaustiveness — TypeScript requires
+// every `AttentionLevel` variant to be present in this `Record` — and
+// as forward-compat in case the sidebar ever opts into simple mode.
 const LEVEL_LABELS: Record<AttentionLevel, string> = {
   working: "working",
   pending: "pending",
   review: "review",
   respond: "respond",
+  action: "action",
   merge: "merge",
   done: "done",
 };

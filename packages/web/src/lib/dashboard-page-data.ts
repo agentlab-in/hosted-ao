@@ -1,7 +1,12 @@
 import "server-only";
 
 import { cache } from "react";
-import { type DashboardSession, type DashboardOrchestratorLink } from "@/lib/types";
+import {
+  TERMINAL_STATUSES,
+  type DashboardSession,
+  type DashboardOrchestratorLink,
+  type DashboardAttentionZoneMode,
+} from "@/lib/types";
 import { getServices, getSCM } from "@/lib/services";
 import {
   sessionToDashboard,
@@ -23,7 +28,11 @@ interface DashboardPageData {
   projectName: string;
   projects: ProjectInfo[];
   selectedProjectId?: string;
+  attentionZones: DashboardAttentionZoneMode;
 }
+
+/** Default zone mode when no config is loaded or `dashboard` block is absent. */
+export const DEFAULT_ATTENTION_ZONE_MODE: DashboardAttentionZoneMode = "simple";
 
 export const getDashboardProjectName = cache(function getDashboardProjectName(
   projectFilter: string | undefined,
@@ -54,10 +63,12 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
     projectName: getDashboardProjectName(projectFilter),
     projects: getAllProjects(),
     selectedProjectId: projectFilter === "all" ? undefined : projectFilter,
+    attentionZones: DEFAULT_ATTENTION_ZONE_MODE,
   };
 
   try {
     const { config, registry, sessionManager } = await getServices();
+    pageData.attentionZones = config.dashboard?.attentionZones ?? DEFAULT_ATTENTION_ZONE_MODE;
     const allSessions = await sessionManager.list();
 
     const visibleSessions = filterProjectSessions(allSessions, projectFilter, config.projects);

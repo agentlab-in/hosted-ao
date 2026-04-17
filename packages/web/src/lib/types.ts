@@ -23,6 +23,7 @@ export type {
   CanonicalPRReason,
   CanonicalRuntimeState,
   CanonicalRuntimeReason,
+  DashboardAttentionZoneMode,
 } from "@aoagents/ao-core/types";
 
 import {
@@ -46,6 +47,7 @@ import {
   type CanonicalPRReason,
   type CanonicalRuntimeState,
   type CanonicalRuntimeReason,
+  type DashboardAttentionZoneMode,
 } from "@aoagents/ao-core/types";
 import type { AgentReportedState } from "@aoagents/ao-core";
 
@@ -53,16 +55,28 @@ import type { AgentReportedState } from "@aoagents/ao-core";
 export { CI_STATUS, TERMINAL_STATUSES, TERMINAL_ACTIVITIES, NON_RESTORABLE_STATUSES };
 
 /**
- * Attention zone priority level, ordered by human action urgency:
+ * Attention zone priority level, ordered by human action urgency.
  *
+ * Detailed levels (5-zone Kanban):
  * 1. merge   — PR approved + CI green. One click to clear. Highest ROI.
  * 2. respond — Agent waiting for human input. Quick unblock, agent resumes.
  * 3. review  — CI failed, changes requested, conflicts. Needs investigation.
  * 4. pending — Waiting on external (reviewer, CI). Nothing to do right now.
  * 5. working — Agents doing their thing. Don't interrupt.
  * 6. done    — Merged or terminated. Archive.
+ *
+ * Simple levels (4-zone Kanban, default): respond + review collapse into a
+ * single `action` zone. The card-level badges still expose the underlying
+ * granular state (ci_failed, needs_input, changes_requested).
  */
-export type AttentionLevel = "merge" | "respond" | "review" | "pending" | "working" | "done";
+export type AttentionLevel =
+  | "merge"
+  | "action"
+  | "respond"
+  | "review"
+  | "pending"
+  | "working"
+  | "done";
 
 /**
  * Flattened session for dashboard rendering.
@@ -434,8 +448,31 @@ export function isDashboardSessionRestorable(session: DashboardSession): boolean
   return session.pr?.state !== "merged" && session.status !== "merged";
 }
 
-/** Determines which attention zone a session belongs to */
-export function getAttentionLevel(session: DashboardSession): AttentionLevel {
+/**
+ * Determines which attention zone a session belongs to.
+ *
+ * @param session - the session to classify
+ * @param mode - "detailed" (default) returns the granular 5-zone result.
+ *               "simple" collapses respond + review into a single "action"
+ *               zone for the 4-column Kanban layout.
+ *
+ * Note: the function defaults to "detailed" so card-level callers
+ * (SessionCard, BottomSheet, ProjectSidebar, etc.) keep their granular
+ * behavior. Only the Dashboard kanban grouping passes "simple" when the
+ * config opts into the 4-zone layout.
+ */
+export function getAttentionLevel(
+  session: DashboardSession,
+  mode: DashboardAttentionZoneMode = "detailed",
+): AttentionLevel {
+  const level = getDetailedAttentionLevel(session);
+  if (mode === "simple" && (level === "respond" || level === "review")) {
+    return "action";
+  }
+  return level;
+}
+
+function getDetailedAttentionLevel(session: DashboardSession): AttentionLevel {
   // ── Done: terminal states ─────────────────────────────────────────
   if (isDashboardSessionDone(session)) {
     return "done";
