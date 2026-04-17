@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createActivitySignal,
   createInitialCanonicalLifecycle,
   type ProjectConfig,
   type SCMWebhookEvent,
@@ -93,6 +94,11 @@ describe("findAffectedSessions", () => {
         projectId: "my-app",
         status: "working",
         activity: "active",
+        activitySignal: createActivitySignal("valid", {
+          activity: "active",
+          timestamp: new Date(),
+          source: "native",
+        }),
         lifecycle: activeLifecycle,
         branch: "feat/one",
         issueId: null,
@@ -118,6 +124,11 @@ describe("findAffectedSessions", () => {
         projectId: "my-app",
         status: "merged",
         activity: "exited",
+        activitySignal: createActivitySignal("valid", {
+          activity: "exited",
+          timestamp: new Date(),
+          source: "runtime",
+        }),
         lifecycle: mergedLifecycle,
         branch: "feat/one",
         issueId: null,

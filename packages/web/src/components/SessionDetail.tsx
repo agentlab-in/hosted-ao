@@ -18,6 +18,8 @@ import {
   getRuntimeTruthReasonLabel,
   getLifecycleGuidance,
   getLifecycleEvidence,
+  getActivitySignalLabel,
+  getActivitySignalReasonLabel,
   isDashboardRuntimeEnded,
   isDashboardSessionRestorable,
 } from "@/lib/types";
@@ -153,6 +155,11 @@ function SessionTruthPanel({ session }: { session: DashboardSession }) {
   if (!session.lifecycle) return null;
 
   const facts = [
+    {
+      heading: "Activity",
+      label: getActivitySignalLabel(session),
+      reason: getActivitySignalReasonLabel(session),
+    },
     {
       heading: "Session",
       label: getSessionTruthLabel(session),
@@ -559,7 +566,7 @@ export function SessionDetail({
     isDashboardSessionRestorable(session) &&
     !NON_RESTORABLE_STATUSES.has(session.status);
   const activity = (session.activity && activityMeta[session.activity]) ?? {
-    label: session.activity ?? "unknown",
+    label: getActivitySignalLabel(session),
     color: "var(--color-text-muted)",
   };
   const headline = getSessionTitle(session);

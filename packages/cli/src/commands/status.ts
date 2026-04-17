@@ -2,6 +2,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import {
   createInitialCanonicalLifecycle,
+  createActivitySignal,
   type Agent,
   type SCM,
   type Session,
@@ -488,6 +489,7 @@ async function showFallbackStatus(): Promise<void> {
         projectId: "",
         status: "working",
         activity: null,
+        activitySignal: createActivitySignal("unavailable"),
         lifecycle,
         branch: null,
         issueId: null,

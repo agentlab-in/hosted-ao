@@ -166,6 +166,13 @@ export function sessionToDashboard(session: Session): DashboardSession {
     projectId: session.projectId,
     status: session.status,
     activity: session.activity,
+    activitySignal: {
+      state: session.activitySignal.state,
+      activity: session.activitySignal.activity,
+      timestamp: session.activitySignal.timestamp?.toISOString() ?? null,
+      source: session.activitySignal.source,
+      detail: session.activitySignal.detail,
+    },
     lifecycle: buildDashboardLifecycle(session),
     branch: session.branch,
     issueId: session.issueId, // Deprecated: kept for backwards compatibility

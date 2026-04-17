@@ -122,6 +122,17 @@ export {
   classifyTerminalActivity,
   recordTerminalActivity,
 } from "./activity-log.js";
+export {
+  ACTIVITY_STRONG_WINDOW_MS,
+  ACTIVITY_WEAK_WINDOW_MS,
+  classifyActivitySignal,
+  createActivitySignal,
+  formatActivitySignalEvidence,
+  hasPositiveIdleEvidence,
+  isWeakActivityEvidence,
+  summarizeActivityFreshness,
+  supportsRecentLiveness,
+} from "./activity-signal.js";
 
 // Agent workspace hooks — shared PATH-wrapper setup for non-Claude agents
 export {

@@ -2,7 +2,7 @@
  * Factory helpers to build Session and RuntimeHandle objects for tests.
  */
 
-import { createInitialCanonicalLifecycle, type RuntimeHandle, type Session } from "@aoagents/ao-core";
+import { createActivitySignal, createInitialCanonicalLifecycle, type RuntimeHandle, type Session } from "@aoagents/ao-core";
 
 /** Build a tmux RuntimeHandle for a given session name. */
 export function makeTmuxHandle(sessionName: string): RuntimeHandle {
@@ -31,6 +31,11 @@ export function makeSession(
     projectId: "inttest",
     status: "working",
     activity: "active",
+    activitySignal: createActivitySignal("valid", {
+      activity: "active",
+      timestamp: new Date(),
+      source: "native",
+    }),
     lifecycle,
     branch: null,
     issueId: null,

@@ -315,6 +315,7 @@ describe("list", () => {
 
     // Should keep null (absent) when getActivityState fails
     expect(sessions[0].activity).toBeNull();
+    expect(sessions[0].activitySignal.state).toBe("probe_failure");
   });
 
   it("keeps existing activity when getActivityState returns null", async () => {
@@ -345,6 +346,36 @@ describe("list", () => {
     // null = "I don't know" — activity stays null (absent)
     expect(agentWithNull.getActivityState).toHaveBeenCalled();
     expect(sessions[0].activity).toBeNull();
+    expect(sessions[0].activitySignal.state).toBe("null");
+  });
+
+  it("marks terminal fallback-free stale activity explicitly when timing is missing", async () => {
+    const agentWithIdleNoTimestamp: Agent = {
+      ...mockAgent,
+      getActivityState: vi.fn().mockResolvedValue({ state: "idle" }),
+    };
+    const registryWithStaleSignal: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return agentWithIdleNoTimestamp;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: "a",
+      status: "working",
+      project: "my-app",
+      runtimeHandle: JSON.stringify(makeHandle("rt-1")),
+    });
+
+    const sm = createSessionManager({ config, registry: registryWithStaleSignal });
+    const sessions = await sm.list();
+
+    expect(sessions[0].activity).toBe("idle");
+    expect(sessions[0].activitySignal.state).toBe("stale");
   });
 
   it("updates lastActivityAt when detection timestamp is newer", async () => {

@@ -40,6 +40,12 @@ function createCoreSession(overrides?: Partial<Session>): Session {
     projectId: "test",
     status: "working",
     activity: "active",
+    activitySignal: {
+      state: "valid",
+      activity: "active",
+      timestamp: new Date("2025-01-01T01:00:00Z"),
+      source: "native",
+    },
     lifecycle,
     branch: "feat/test",
     issueId: null,
@@ -130,6 +136,13 @@ describe("sessionToDashboard", () => {
     expect(dashboard.projectId).toBe("test");
     expect(dashboard.status).toBe("working");
     expect(dashboard.activity).toBe("active");
+    expect(dashboard.activitySignal).toEqual({
+      state: "valid",
+      activity: "active",
+      timestamp: "2025-01-01T01:00:00.000Z",
+      source: "native",
+      detail: undefined,
+    });
     expect(dashboard.branch).toBe("feat/test");
     expect(dashboard.createdAt).toBe("2025-01-01T00:00:00.000Z");
     expect(dashboard.lastActivityAt).toBe("2025-01-01T01:00:00.000Z");
@@ -510,6 +523,12 @@ describe("enrichSessionPR", () => {
       projectId: "test",
       status: "working",
       activity: "active",
+      activitySignal: {
+        state: "valid",
+        activity: "active",
+        timestamp: new Date().toISOString(),
+        source: "native",
+      },
       branch: "feat/test",
       issueId: null,
       issueUrl: null,
@@ -717,6 +736,12 @@ describe("enrichSessionIssueTitle", () => {
       projectId: "test",
       status: "working",
       activity: "active",
+      activitySignal: {
+        state: "valid",
+        activity: "active",
+        timestamp: new Date().toISOString(),
+        source: "native",
+      },
       branch: "feat/test",
       issueId: null,
       issueUrl: null,
