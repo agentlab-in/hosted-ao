@@ -387,7 +387,6 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   if (
     session.lifecycle?.sessionState === "idle" ||
     session.lifecycle?.prReason === "review_pending" ||
-    session.lifecycle?.prReason === "in_progress" ||
     session.status === "review_pending"
   ) {
     return "pending";

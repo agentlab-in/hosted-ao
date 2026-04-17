@@ -443,6 +443,32 @@ describe("getAttentionLevel", () => {
       expect(getAttentionLevel(session)).toBe("pending");
     });
 
+    it("should not mark an actively working session as pending only because PR truth is in progress", () => {
+      const session = createSession({
+        status: "working",
+        activity: "active",
+        lifecycle: {
+          sessionState: "working",
+          sessionReason: "task_in_progress",
+          prState: "open",
+          prReason: "in_progress",
+          runtimeState: "alive",
+          runtimeReason: "process_running",
+          session: { state: "working", reason: "task_in_progress", label: "working", reasonLabel: "task in progress" },
+          pr: { state: "open", reason: "in_progress", label: "open", reasonLabel: "in progress" },
+          runtime: { state: "alive", reason: "process_running", label: "alive", reasonLabel: "process running" },
+          legacyStatus: "pr_open",
+          evidence: null,
+          detectingAttempts: 0,
+          detectingEscalatedAt: null,
+          summary: "Session working (task in progress)",
+          guidance: null,
+        },
+      });
+
+      expect(getAttentionLevel(session)).toBe("working");
+    });
+
     it("should not flag draft PRs as pending", () => {
       const session = createSession({
         status: "working",
