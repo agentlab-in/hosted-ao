@@ -1649,6 +1649,42 @@ describe("reactions", () => {
     expect(metadata?.["lastMergeConflictDispatched"]).toBeFalsy();
   });
 
+  it("clears merge conflict tracking when PR is closed", async () => {
+    config.reactions = {
+      "merge-conflicts": {
+        auto: true,
+        action: "send-to-agent",
+        message: "Resolve merge conflicts.",
+      },
+    };
+
+    const getMergeability = vi.fn();
+    const mockSCM = createMockSCM({
+      getPRState: vi.fn().mockResolvedValue("closed"),
+      getMergeability,
+    });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({
+        status: "pr_open",
+        pr: makePR(),
+        metadata: { lastMergeConflictDispatched: "true" },
+      }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    const metadata = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(metadata?.["lastMergeConflictDispatched"]).toBeFalsy();
+    expect(getMergeability).not.toHaveBeenCalled();
+  });
+
   it("notifies humans on significant transitions without reaction config", async () => {
     const notifier = createMockNotifier();
     const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("merged") });
@@ -2153,6 +2189,49 @@ describe("rate limiting optimizations", () => {
     // Third check: throttle expired — API called again
     await lm.check("app-1");
     expect(getPendingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears review backlog tracking when PR is closed", async () => {
+    const getPendingMock = vi.fn();
+    const getAutomatedMock = vi.fn();
+    const mockSCM = createMockSCM({
+      getPRState: vi.fn().mockResolvedValue("closed"),
+      getPendingComments: getPendingMock,
+      getAutomatedComments: getAutomatedMock,
+    });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({
+        status: "pr_open",
+        pr: makePR(),
+        metadata: {
+          lastPendingReviewFingerprint: "fingerprint",
+          lastPendingReviewDispatchHash: "dispatch",
+          lastPendingReviewDispatchAt: "2025-01-01T00:00:00.000Z",
+          lastAutomatedReviewFingerprint: "auto-fingerprint",
+          lastAutomatedReviewDispatchHash: "auto-dispatch",
+          lastAutomatedReviewDispatchAt: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    const metadata = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(metadata?.["lastPendingReviewFingerprint"]).toBeFalsy();
+    expect(metadata?.["lastPendingReviewDispatchHash"]).toBeFalsy();
+    expect(metadata?.["lastPendingReviewDispatchAt"]).toBeFalsy();
+    expect(metadata?.["lastAutomatedReviewFingerprint"]).toBeFalsy();
+    expect(metadata?.["lastAutomatedReviewDispatchHash"]).toBeFalsy();
+    expect(metadata?.["lastAutomatedReviewDispatchAt"]).toBeFalsy();
+    expect(getPendingMock).not.toHaveBeenCalled();
+    expect(getAutomatedMock).not.toHaveBeenCalled();
   });
 });
 describe("summary pinning", () => {

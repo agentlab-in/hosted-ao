@@ -1033,7 +1033,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const humanReactionKey = "changes-requested";
     const automatedReactionKey = "bugbot-comments";
 
-    if (TERMINAL_STATUSES.has(newStatus)) {
+    if (TERMINAL_STATUSES.has(newStatus) || session.lifecycle.pr.state !== "open") {
       clearReactionTracker(session.id, humanReactionKey);
       clearReactionTracker(session.id, automatedReactionKey);
       lastReviewBacklogCheckAt.delete(session.id);
@@ -1365,8 +1365,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     const conflictReactionKey = "merge-conflicts";
 
-    // Clear tracking when PR is closed/merged
-    if (newStatus === "merged" || newStatus === "killed") {
+    // Clear tracking when PR is no longer open.
+    if (session.lifecycle.pr.state !== "open" || newStatus === "killed") {
       clearReactionTracker(session.id, conflictReactionKey);
       updateSessionMetadata(session, {
         lastMergeConflictDispatched: "",

@@ -33,6 +33,16 @@ describe("deriveLegacyStatus", () => {
     expect(deriveLegacyStatus(terminated)).toBe("terminated");
   });
 
+  it("preserves prior terminal legacy statuses for terminated sessions", () => {
+    const terminated = createOpenPRLifecycle();
+    terminated.session.state = "terminated";
+    terminated.session.reason = "manually_killed";
+
+    expect(deriveLegacyStatus(terminated, "killed")).toBe("killed");
+    expect(deriveLegacyStatus(terminated, "cleanup")).toBe("cleanup");
+    expect(deriveLegacyStatus(terminated, "errored")).toBe("errored");
+  });
+
   it("keeps PR-oriented aliases for idle workers with open PRs", () => {
     const reviewPending = createOpenPRLifecycle();
     reviewPending.session.state = "idle";

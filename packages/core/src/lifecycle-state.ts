@@ -250,8 +250,18 @@ export function parseCanonicalLifecycle(
 
 export function deriveLegacyStatus(
   lifecycle: CanonicalSessionLifecycle,
-  _previousStatus: SessionStatus = "working",
+  previousStatus: SessionStatus = "working",
 ): SessionStatus {
+  if (
+    lifecycle.session.state === "terminated" &&
+    (previousStatus === "cleanup" ||
+      previousStatus === "errored" ||
+      previousStatus === "killed" ||
+      previousStatus === "terminated")
+  ) {
+    return previousStatus;
+  }
+
   switch (lifecycle.session.state) {
     case "not_started":
       return "spawning";

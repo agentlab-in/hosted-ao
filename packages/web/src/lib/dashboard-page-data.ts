@@ -73,8 +73,7 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
       FAST_METADATA_ENRICH_TIMEOUT_MS,
     );
 
-    // PR cache hits only (in-memory lookup, no SCM API calls)
-    // TERMINAL_STATUSES includes merged, killed, cleanup, done, terminated, errored
+    // PR cache hits only (in-memory lookup, no SCM API calls).
     for (let i = 0; i < coreSessions.length; i++) {
       const core = coreSessions[i];
       if (!core.pr) continue;
@@ -83,7 +82,6 @@ export const getDashboardPageData = cache(async function getDashboardPageData(pr
       if (scm) {
         await enrichSessionPR(pageData.sessions[i], scm, core.pr, { cacheOnly: true });
       }
-
     }
   } catch {
     pageData.sessions = [];
