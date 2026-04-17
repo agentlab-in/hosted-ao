@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import {
   getAttentionLevel,
+  getActivitySignalLabel,
+  getActivitySignalReasonLabel,
   isPRMergeReady,
   TERMINAL_STATUSES,
   TERMINAL_ACTIVITIES,
@@ -777,5 +779,37 @@ describe("constants sync with core", () => {
 
   it("NON_RESTORABLE_STATUSES matches core", () => {
     expect(NON_RESTORABLE_STATUSES).toBe(CORE_NON_RESTORABLE_STATUSES);
+  });
+});
+
+describe("activity signal fallback", () => {
+  it("treats legacy idle activity without a timestamp as stale", () => {
+    const session = createSession({
+      activity: "idle",
+      activitySignal: undefined,
+    });
+
+    expect(getActivitySignalLabel(session)).toBe("idle (stale)");
+    expect(getActivitySignalReasonLabel(session)).toBe("missing timestamp");
+  });
+
+  it("treats legacy blocked activity without a timestamp as stale", () => {
+    const session = createSession({
+      activity: "blocked",
+      activitySignal: undefined,
+    });
+
+    expect(getActivitySignalLabel(session)).toBe("blocked (stale)");
+    expect(getActivitySignalReasonLabel(session)).toBe("missing timestamp");
+  });
+
+  it("keeps legacy active activity valid", () => {
+    const session = createSession({
+      activity: "active",
+      activitySignal: undefined,
+    });
+
+    expect(getActivitySignalLabel(session)).toBe("active");
+    expect(getActivitySignalReasonLabel(session)).toBeNull();
   });
 });

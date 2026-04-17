@@ -295,14 +295,35 @@ export function getLifecycleEvidence(session: DashboardSession): string | null {
 }
 
 function resolveActivitySignal(session: DashboardSession): DashboardActivitySignal {
-  return (
-    session.activitySignal ?? {
-      state: session.activity === null ? "unavailable" : "valid",
+  if (session.activitySignal) {
+    return session.activitySignal;
+  }
+
+  if (session.activity === null) {
+    return {
+      state: "unavailable",
+      activity: null,
+      timestamp: null,
+      source: "none",
+    };
+  }
+
+  if (session.activity === "idle" || session.activity === "blocked") {
+    return {
+      state: "stale",
       activity: session.activity,
       timestamp: null,
       source: "none",
-    }
-  );
+      detail: "missing_timestamp",
+    };
+  }
+
+  return {
+    state: "valid",
+    activity: session.activity,
+    timestamp: null,
+    source: "none",
+  };
 }
 
 export function getActivitySignalLabel(session: DashboardSession): string {
