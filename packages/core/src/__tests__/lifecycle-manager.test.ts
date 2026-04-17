@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createLifecycleManager } from "../lifecycle-manager.js";
 import { createSessionManager } from "../session-manager.js";
 import { writeMetadata, readMetadataRaw } from "../metadata.js";
+import { readObservabilitySummary } from "../observability.js";
 import type {
   OrchestratorConfig,
   PluginRegistry,
@@ -112,6 +113,35 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("working");
     const meta = readMetadataRaw(env.sessionsDir, "app-1");
     expect(meta!["status"]).toBe("working");
+  });
+
+  it("records split lifecycle observability for transitions", async () => {
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "spawning" }),
+    });
+
+    await lm.check("app-1");
+
+    const summary = readObservabilitySummary(config);
+    const trace = summary.projects["my-app"]?.recentTraces.find(
+      (entry) => entry.operation === "lifecycle.transition" && entry.sessionId === "app-1",
+    );
+
+    expect(trace?.reason).toBe("task_in_progress");
+    expect(trace?.data).toMatchObject({
+      oldStatus: "spawning",
+      newStatus: "working",
+      previousSessionState: "not_started",
+      newSessionState: "working",
+      previousPRState: "none",
+      newPRState: "none",
+      previousRuntimeState: "alive",
+      newRuntimeState: "alive",
+      primaryReason: "task_in_progress",
+      evidence: "activity:active",
+      signalsConsulted: ["activity:active"],
+      recoveryAction: null,
+    });
   });
 
   it("clears stale lifecycle compatibility metadata in memory and on disk", async () => {

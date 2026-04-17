@@ -93,8 +93,11 @@ function DoneCard({
     session.issueTitle ||
     session.summary ||
     session.id;
-  const isMerged = session.pr?.state === "merged";
-  const isTerminated = session.status === "killed" || session.status === "terminated";
+  const isMerged = session.lifecycle?.prState === "merged" || session.pr?.state === "merged";
+  const isTerminated =
+    session.lifecycle?.sessionState === "terminated" ||
+    session.status === "killed" ||
+    session.status === "terminated";
   const badgeLabel = isMerged ? "merged" : isTerminated ? "terminated" : "done";
   const badgeClass = `done-card__badge ${isTerminated ? "done-card__badge--terminated" : "done-card__badge--merged"}`;
 

@@ -15,6 +15,12 @@ export type {
   ReviewDecision,
   MergeReadiness,
   PRState,
+  CanonicalSessionState,
+  CanonicalSessionReason,
+  CanonicalPRState,
+  CanonicalPRReason,
+  CanonicalRuntimeState,
+  CanonicalRuntimeReason,
 } from "@aoagents/ao-core/types";
 
 import {
@@ -30,6 +36,12 @@ import {
   type SessionStatus,
   type ActivityState,
   type ReviewDecision,
+  type CanonicalSessionState,
+  type CanonicalSessionReason,
+  type CanonicalPRState,
+  type CanonicalPRReason,
+  type CanonicalRuntimeState,
+  type CanonicalRuntimeReason,
 } from "@aoagents/ao-core/types";
 
 // Re-export for use in client components
@@ -60,14 +72,7 @@ export interface DashboardSession {
   projectId: string;
   status: SessionStatus;
   activity: ActivityState | null;
-  lifecycle?: {
-    sessionState: string;
-    sessionReason: string;
-    prState: string;
-    prReason: string;
-    runtimeState: string;
-    runtimeReason: string;
-  };
+  lifecycle?: DashboardLifecycle;
   branch: string | null;
   issueId: string | null; // Deprecated: use issueUrl instead
   issueUrl: string | null; // Full issue URL
@@ -81,6 +86,46 @@ export interface DashboardSession {
   lastActivityAt: string;
   pr: DashboardPR | null;
   metadata: Record<string, string>;
+  attentionLevel?: AttentionLevel;
+}
+
+export interface DashboardLifecycleFacet<
+  TState extends string = string,
+  TReason extends string = string,
+> {
+  state: TState;
+  reason: TReason;
+  label: string;
+  reasonLabel: string;
+}
+
+export interface DashboardLifecycle {
+  sessionState: CanonicalSessionState;
+  sessionReason: CanonicalSessionReason;
+  prState: CanonicalPRState;
+  prReason: CanonicalPRReason;
+  runtimeState: CanonicalRuntimeState;
+  runtimeReason: CanonicalRuntimeReason;
+  session: DashboardLifecycleFacet<CanonicalSessionState, CanonicalSessionReason> & {
+    startedAt?: string | null;
+    completedAt?: string | null;
+    terminatedAt?: string | null;
+    lastTransitionAt?: string | null;
+  };
+  pr: DashboardLifecycleFacet<CanonicalPRState, CanonicalPRReason> & {
+    number?: number | null;
+    url?: string | null;
+    lastObservedAt?: string | null;
+  };
+  runtime: DashboardLifecycleFacet<CanonicalRuntimeState, CanonicalRuntimeReason> & {
+    lastObservedAt?: string | null;
+  };
+  legacyStatus: SessionStatus;
+  evidence: string | null;
+  detectingAttempts: number;
+  detectingEscalatedAt: string | null;
+  summary: string;
+  guidance: string | null;
 }
 
 /**
@@ -199,9 +244,52 @@ export function isPRMergeReady(pr: DashboardPR): boolean {
   );
 }
 
-/** Determines which attention zone a session belongs to */
-export function getAttentionLevel(session: DashboardSession): AttentionLevel {
-  // ── Done: terminal states ─────────────────────────────────────────
+function humanizeLifecycleToken(token: string): string {
+  return token.replace(/_/g, " ");
+}
+
+export function getSessionTruthLabel(session: DashboardSession): string {
+  return session.lifecycle?.session.label ?? humanizeLifecycleToken(session.status);
+}
+
+export function getSessionTruthReasonLabel(session: DashboardSession): string | null {
+  return session.lifecycle?.session.reasonLabel ?? null;
+}
+
+export function getPRTruthLabel(session: DashboardSession): string {
+  if (session.lifecycle) return session.lifecycle.pr.label;
+  return session.pr?.state ? humanizeLifecycleToken(session.pr.state) : "not created";
+}
+
+export function getPRTruthReasonLabel(session: DashboardSession): string | null {
+  return session.lifecycle?.pr.reasonLabel ?? null;
+}
+
+export function getRuntimeTruthLabel(session: DashboardSession): string {
+  return session.lifecycle?.runtime.label ?? "unknown";
+}
+
+export function getRuntimeTruthReasonLabel(session: DashboardSession): string | null {
+  return session.lifecycle?.runtime.reasonLabel ?? null;
+}
+
+export function getLifecycleGuidance(session: DashboardSession): string | null {
+  return session.lifecycle?.guidance ?? null;
+}
+
+export function getLifecycleEvidence(session: DashboardSession): string | null {
+  return session.lifecycle?.evidence ?? session.metadata["lifecycleEvidence"] ?? null;
+}
+
+export function isDashboardSessionDone(session: DashboardSession): boolean {
+  if (session.lifecycle) {
+    return (
+      session.lifecycle.sessionState === "done" ||
+      session.lifecycle.sessionState === "terminated" ||
+      session.lifecycle.prState === "merged" ||
+      session.lifecycle.prState === "closed"
+    );
+  }
   if (
     session.status === "merged" ||
     session.status === "killed" ||
@@ -209,18 +297,58 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
     session.status === "done" ||
     session.status === "terminated"
   ) {
-    return "done";
+    return true;
   }
-  if (session.pr) {
-    if (session.pr.state === "merged" || session.pr.state === "closed") {
-      return "done";
-    }
+  return session.pr?.state === "merged" || session.pr?.state === "closed";
+}
+
+export function isDashboardSessionTerminal(session: DashboardSession): boolean {
+  if (session.lifecycle) {
+    return (
+      isDashboardSessionDone(session) ||
+      session.lifecycle.runtimeState === "missing" ||
+      session.lifecycle.runtimeState === "exited"
+    );
+  }
+  return (
+    TERMINAL_STATUSES.has(session.status) ||
+    (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))
+  );
+}
+
+export function isDashboardRuntimeEnded(session: DashboardSession): boolean {
+  if (session.lifecycle) {
+    return (
+      session.lifecycle.runtimeState === "missing" || session.lifecycle.runtimeState === "exited"
+    );
+  }
+  return (
+    TERMINAL_STATUSES.has(session.status) ||
+    (session.activity !== null && TERMINAL_ACTIVITIES.has(session.activity))
+  );
+}
+
+export function isDashboardSessionRestorable(session: DashboardSession): boolean {
+  if (!isDashboardSessionTerminal(session)) return false;
+  return session.lifecycle?.prState !== "merged" && session.status !== "merged";
+}
+
+/** Determines which attention zone a session belongs to */
+export function getAttentionLevel(session: DashboardSession): AttentionLevel {
+  // ── Done: terminal states ─────────────────────────────────────────
+  if (isDashboardSessionDone(session)) {
+    return "done";
   }
 
   // ── Merge: PR is ready — one click to clear ───────────────────────
   // Check this early: if the PR is mergeable, that's the most valuable
   // action for the human regardless of agent activity.
-  if (session.status === "mergeable" || session.status === "approved") {
+  if (
+    session.lifecycle?.prReason === "merge_ready" ||
+    session.lifecycle?.prReason === "approved" ||
+    session.status === "mergeable" ||
+    session.status === "approved"
+  ) {
     return "merge";
   }
   if (session.pr && !isPRUnenriched(session.pr) && session.pr.mergeability.mergeable) {
@@ -231,6 +359,9 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   // Check status-based error conditions first — these are authoritative
   // and should not be masked by a stale activity value.
   if (
+    session.lifecycle?.sessionState === "detecting" ||
+    session.lifecycle?.sessionState === "needs_input" ||
+    session.lifecycle?.sessionState === "stuck" ||
     session.status === SESSION_STATUS.ERRORED ||
     session.status === SESSION_STATUS.NEEDS_INPUT ||
     session.status === SESSION_STATUS.STUCK
@@ -249,7 +380,12 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   }
 
   // ── Review: problems that need investigation ──────────────────────
-  if (session.status === "ci_failed" || session.status === "changes_requested") {
+  if (
+    session.lifecycle?.prReason === "ci_failing" ||
+    session.lifecycle?.prReason === "changes_requested" ||
+    session.status === "ci_failed" ||
+    session.status === "changes_requested"
+  ) {
     return "review";
   }
   if (session.pr && !isPRRateLimited(session.pr) && !isPRUnenriched(session.pr)) {
@@ -260,7 +396,11 @@ export function getAttentionLevel(session: DashboardSession): AttentionLevel {
   }
 
   // ── Pending: waiting on external (reviewer, CI) ───────────────────
-  if (session.status === "review_pending") {
+  if (
+    session.lifecycle?.sessionState === "idle" ||
+    session.lifecycle?.prReason === "review_pending" ||
+    session.status === "review_pending"
+  ) {
     return "pending";
   }
   if (session.pr && !isPRRateLimited(session.pr) && !isPRUnenriched(session.pr)) {

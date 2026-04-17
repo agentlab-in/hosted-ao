@@ -31,6 +31,7 @@ import {
   type SCM,
   type Notifier,
   type Session,
+  type CanonicalSessionLifecycle,
   type EventPriority,
   type ProjectConfig as _ProjectConfig,
   type PREnrichmentData,
@@ -196,6 +197,61 @@ function transitionLogLevel(status: SessionStatus): "info" | "warn" | "error" {
     return "warn";
   }
   return "info";
+}
+
+function splitEvidenceSignals(evidence: string): string[] {
+  return evidence
+    .split(/\s+/)
+    .map((signal) => signal.trim())
+    .filter((signal) => signal.length > 0);
+}
+
+function primaryLifecycleReason(lifecycle: CanonicalSessionLifecycle): string {
+  if (lifecycle.session.state === "detecting") return lifecycle.session.reason;
+  if (lifecycle.pr.reason !== "not_created" && lifecycle.pr.reason !== "in_progress") {
+    return lifecycle.pr.reason;
+  }
+  if (lifecycle.runtime.reason !== "process_running") {
+    return lifecycle.runtime.reason;
+  }
+  return lifecycle.session.reason;
+}
+
+function buildTransitionObservabilityData(
+  previous: CanonicalSessionLifecycle,
+  next: CanonicalSessionLifecycle,
+  oldStatus: SessionStatus,
+  newStatus: SessionStatus,
+  evidence: string,
+  detectingAttempts: number,
+  statusTransition: boolean,
+  reaction?: { key: string; result: ReactionResult | null },
+): Record<string, unknown> {
+  return {
+    oldStatus,
+    newStatus,
+    statusTransition,
+    previousSessionState: previous.session.state,
+    newSessionState: next.session.state,
+    previousSessionReason: previous.session.reason,
+    newSessionReason: next.session.reason,
+    previousPRState: previous.pr.state,
+    newPRState: next.pr.state,
+    previousPRReason: previous.pr.reason,
+    newPRReason: next.pr.reason,
+    previousRuntimeState: previous.runtime.state,
+    newRuntimeState: next.runtime.state,
+    previousRuntimeReason: previous.runtime.reason,
+    newRuntimeReason: next.runtime.reason,
+    primaryReason: primaryLifecycleReason(next),
+    evidence,
+    signalsConsulted: splitEvidenceSignals(evidence),
+    detectingAttempts,
+    recoveryAction: reaction?.result?.action ?? null,
+    reactionKey: reaction?.key ?? null,
+    reactionSuccess: reaction?.result?.success ?? null,
+    escalated: reaction?.result?.escalated ?? null,
+  };
 }
 
 export interface LifecycleManagerDeps {
@@ -1478,6 +1534,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const tracked = states.get(session.id);
     const oldStatus =
       tracked ?? ((session.metadata?.["status"] as SessionStatus | undefined) || session.status);
+    const previousLifecycle = cloneLifecycle(session.lifecycle);
     const previousPRState = session.lifecycle.pr.state;
     const assessment = await determineStatus(session);
     const newStatus = assessment.status;
@@ -1520,7 +1577,16 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         correlationId,
         projectId: session.projectId,
         sessionId: session.id,
-        data: { oldStatus, newStatus },
+        reason: primaryLifecycleReason(session.lifecycle),
+        data: buildTransitionObservabilityData(
+          previousLifecycle,
+          session.lifecycle,
+          oldStatus,
+          newStatus,
+          assessment.evidence,
+          assessment.detectingAttempts,
+          true,
+        ),
         level: transitionLogLevel(newStatus),
       });
 
@@ -1557,6 +1623,26 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
                 reactionConfig,
               );
               transitionReaction = { key: reactionKey, result: reactionResult };
+              observer.recordOperation({
+                metric: "lifecycle_poll",
+                operation: "lifecycle.transition.reaction",
+                outcome: reactionResult.success ? "success" : "failure",
+                correlationId,
+                projectId: session.projectId,
+                sessionId: session.id,
+                reason: primaryLifecycleReason(session.lifecycle),
+                data: buildTransitionObservabilityData(
+                  previousLifecycle,
+                  session.lifecycle,
+                  oldStatus,
+                  newStatus,
+                  assessment.evidence,
+                  assessment.detectingAttempts,
+                  true,
+                  transitionReaction,
+                ),
+                level: reactionResult.success ? "info" : "warn",
+              });
               // Reaction is handling this event — suppress immediate human notification.
               // "send-to-agent" retries + escalates on its own; "notify"/"auto-merge"
               // already call notifyHuman internally. Notifying here would bypass the
@@ -1585,6 +1671,25 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       states.set(session.id, newStatus);
       if (lifecycleChanged) {
         updateSessionMetadata(session, { status: newStatus });
+        observer.recordOperation({
+          metric: "lifecycle_poll",
+          operation: "lifecycle.sync",
+          outcome: "success",
+          correlationId: createCorrelationId("lifecycle-sync"),
+          projectId: session.projectId,
+          sessionId: session.id,
+          reason: primaryLifecycleReason(session.lifecycle),
+          data: buildTransitionObservabilityData(
+            previousLifecycle,
+            session.lifecycle,
+            oldStatus,
+            newStatus,
+            assessment.evidence,
+            assessment.detectingAttempts,
+            false,
+          ),
+          level: transitionLogLevel(newStatus),
+        });
       }
     }
 

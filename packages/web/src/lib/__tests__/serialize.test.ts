@@ -139,14 +139,39 @@ describe("sessionToDashboard", () => {
     const coreSession = createCoreSession();
     const dashboard = sessionToDashboard(coreSession);
 
-    expect(dashboard.lifecycle).toEqual({
-      sessionState: "working",
-      sessionReason: "task_in_progress",
-      prState: "none",
-      prReason: "not_created",
-      runtimeState: "alive",
-      runtimeReason: "process_running",
+    expect(dashboard.lifecycle?.sessionState).toBe("working");
+    expect(dashboard.lifecycle?.sessionReason).toBe("task_in_progress");
+    expect(dashboard.lifecycle?.prState).toBe("none");
+    expect(dashboard.lifecycle?.prReason).toBe("not_created");
+    expect(dashboard.lifecycle?.runtimeState).toBe("alive");
+    expect(dashboard.lifecycle?.runtimeReason).toBe("process_running");
+    expect(dashboard.lifecycle?.session.label).toBe("working");
+    expect(dashboard.lifecycle?.pr.label).toBe("not created");
+    expect(dashboard.lifecycle?.runtime.label).toBe("alive");
+    expect(dashboard.lifecycle?.summary).toContain("Session working");
+    expect(dashboard.attentionLevel).toBe("working");
+  });
+
+  it("should expose detecting guidance and evidence from legacy metadata", () => {
+    const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
+    lifecycle.session.state = "detecting";
+    lifecycle.session.reason = "probe_failure";
+    lifecycle.runtime.state = "probe_failed";
+    lifecycle.runtime.reason = "probe_error";
+    const coreSession = createCoreSession({
+      lifecycle,
+      status: "detecting",
+      metadata: {
+        lifecycleEvidence: "signal_disagreement runtime_alive process_unknown",
+        detectingAttempts: "2",
+      },
     });
+
+    const dashboard = sessionToDashboard(coreSession);
+
+    expect(dashboard.lifecycle?.guidance).toContain("Retry 2");
+    expect(dashboard.lifecycle?.evidence).toContain("signal_disagreement");
+    expect(dashboard.attentionLevel).toBe("respond");
   });
 
   it("should seed dashboard PR state from canonical lifecycle truth", () => {
