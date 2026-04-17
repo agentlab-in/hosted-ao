@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { notFound, useParams } from "next/navigation";
 import { ACTIVITY_STATE, SESSION_STATUS, isOrchestratorSession } from "@aoagents/ao-core/types";
 import { SessionDetail } from "@/components/SessionDetail";
-import { type DashboardSession, type ActivityState, getAttentionLevel, type AttentionLevel } from "@/lib/types";
+import { type DashboardSession, type ActivityState, getAttentionLevel } from "@/lib/types";
 import { activityIcon } from "@/lib/activity-icons";
 import type { ProjectInfo } from "@/lib/project-name";
 import { getSessionTitle } from "@/lib/format";
@@ -39,6 +39,12 @@ function buildSessionTitle(
   return emoji ? `${emoji} ${id} | ${detail}` : `${id} | ${detail}`;
 }
 
+// NOTE: No `action` field here by design. This status strip is a detail-page
+// summary, and `SessionDetail.OrchestratorZones` (the consumer of these
+// counts) only renders the detailed 5-zone breakdown. `getAttentionLevel()`
+// below is called without a mode so it defaults to "detailed" and never
+// returns "action" — the strip stays in detailed mode independent of the
+// dashboard's `attentionZones` config.
 interface ZoneCounts {
   merge: number;
   respond: number;
@@ -300,7 +306,11 @@ export default function SessionPage() {
       const allPrefixes = [...prefixByProjectRef.current.values()];
       for (const s of sessions) {
         if (!isOrchestratorSession(s, prefixByProjectRef.current.get(s.projectId), allPrefixes)) {
-          counts[getAttentionLevel(s) as AttentionLevel]++;
+          // Detailed mode by default — "action" never appears. The guard
+          // is a compile-time narrowing hint for the index below.
+          const level = getAttentionLevel(s);
+          if (level === "action") continue;
+          counts[level]++;
         }
       }
       setZoneCounts(counts);
