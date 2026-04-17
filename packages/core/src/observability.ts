@@ -227,7 +227,6 @@ function appendAuditLog(
 
 function appendObservabilityFailure(
   config: OrchestratorConfig,
-  component: string,
   payload: Record<string, unknown>,
 ): void {
   try {
@@ -383,7 +382,7 @@ export function createProjectObserver(
         operation: "observability.write",
         reason: error instanceof Error ? error.message : String(error),
       };
-      appendObservabilityFailure(config, normalizedComponent, payload);
+      appendObservabilityFailure(config, payload);
       emitStructuredLog(payload, "error");
     }
   }
