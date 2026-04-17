@@ -40,6 +40,11 @@ import {
 import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 import { updateMetadata } from "./metadata.js";
 import { getSessionsDir } from "./paths.js";
+import {
+  isAgentReportFresh,
+  mapAgentReportToLifecycle,
+  readAgentReport,
+} from "./agent-report.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
 import { resolveNotifierTarget } from "./notifier-resolution.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
@@ -138,9 +143,24 @@ function statusToEventType(_from: SessionStatus | undefined, to: SessionStatus):
   }
 }
 
+function prStateToEventType(
+  from: Session["lifecycle"]["pr"]["state"],
+  to: Session["lifecycle"]["pr"]["state"],
+): EventType | null {
+  if (from === to) return null;
+  switch (to) {
+    case "closed":
+      return "pr.closed";
+    default:
+      return null;
+  }
+}
+
 /** Map event type to reaction config key. */
 function eventToReactionKey(eventType: EventType): string | null {
   switch (eventType) {
+    case "pr.closed":
+      return "pr-closed";
     case "ci.failing":
       return "ci-failed";
     case "review.changes_requested":
@@ -732,8 +752,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (cachedData.state === PR_STATE.CLOSED) {
             lifecycle.pr.state = "closed";
             lifecycle.pr.reason = "closed_unmerged";
-            setSessionState("done", "research_complete");
-            return commit(SESSION_STATUS.DONE, "pr_closed", 0);
+            setSessionState("idle", "pr_closed_waiting_decision");
+            return commit(SESSION_STATUS.IDLE, "pr_closed", 0);
           }
 
           lifecycle.pr.state = "open";
@@ -750,18 +770,18 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           if (cachedData.reviewDecision === "approved" || cachedData.reviewDecision === "none") {
             if (cachedData.mergeable) {
               lifecycle.pr.reason = "merge_ready";
-              setSessionState("working", "awaiting_external_review");
+              setSessionState("idle", "awaiting_external_review");
               return commit(SESSION_STATUS.MERGEABLE, "merge_ready", 0);
             }
             if (cachedData.reviewDecision === "approved") {
               lifecycle.pr.reason = "approved";
-              setSessionState("working", "awaiting_external_review");
+              setSessionState("idle", "awaiting_external_review");
               return commit(SESSION_STATUS.APPROVED, "review_approved", 0);
             }
           }
           if (cachedData.reviewDecision === "pending") {
             lifecycle.pr.reason = "review_pending";
-            setSessionState("working", "awaiting_external_review");
+            setSessionState("idle", "awaiting_external_review");
             return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
           }
 
@@ -772,7 +792,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           }
 
           lifecycle.pr.reason = "in_progress";
-          setSessionState("working", "pr_created");
+          setSessionState("idle", "pr_created");
           return commit(SESSION_STATUS.PR_OPEN, "pr_open", 0);
         }
 
@@ -786,8 +806,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         if (prState === PR_STATE.CLOSED) {
           lifecycle.pr.state = "closed";
           lifecycle.pr.reason = "closed_unmerged";
-          setSessionState("done", "research_complete");
-          return commit(SESSION_STATUS.DONE, "pr_closed", 0);
+          setSessionState("idle", "pr_closed_waiting_decision");
+          return commit(SESSION_STATUS.IDLE, "pr_closed", 0);
         }
 
         lifecycle.pr.state = "open";
@@ -808,18 +828,18 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           const mergeReady = await scm.getMergeability(session.pr);
           if (mergeReady.mergeable) {
             lifecycle.pr.reason = "merge_ready";
-            setSessionState("working", "awaiting_external_review");
+            setSessionState("idle", "awaiting_external_review");
             return commit(SESSION_STATUS.MERGEABLE, "merge_ready", 0);
           }
           if (reviewDecision === "approved") {
             lifecycle.pr.reason = "approved";
-            setSessionState("working", "awaiting_external_review");
+            setSessionState("idle", "awaiting_external_review");
             return commit(SESSION_STATUS.APPROVED, "review_approved", 0);
           }
         }
         if (reviewDecision === "pending") {
           lifecycle.pr.reason = "review_pending";
-          setSessionState("working", "awaiting_external_review");
+          setSessionState("idle", "awaiting_external_review");
           return commit(SESSION_STATUS.REVIEW_PENDING, "review_pending", 0);
         }
 
@@ -830,11 +850,31 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         }
 
         lifecycle.pr.reason = "in_progress";
-        setSessionState("working", "pr_created");
+        setSessionState("idle", "pr_created");
         return commit(SESSION_STATUS.PR_OPEN, "pr_open", 0);
       } catch {
         // Keep current status on SCM failure.
       }
+    }
+
+    // Fresh agent reports outrank weak inference (idle-beyond-threshold /
+    // default-to-working) but runtime death, activity waiting_input, and SCM
+    // ground truth already short-circuited above. Orchestrator sessions and
+    // terminal states are skipped intentionally — `lifecycle.session.kind` is
+    // the authoritative source (string-matching role/id suffixes misses
+    // numbered orchestrator IDs like `${prefix}-orchestrator-1`).
+    const agentReport = readAgentReport(session.metadata);
+    if (
+      agentReport &&
+      isAgentReportFresh(agentReport) &&
+      lifecycle.session.kind !== "orchestrator" &&
+      lifecycle.session.state !== "terminated" &&
+      lifecycle.session.state !== "done"
+    ) {
+      const mapped = mapAgentReportToLifecycle(agentReport.state);
+      setSessionState(mapped.sessionState, mapped.sessionReason);
+      const legacy = deriveLegacyStatus(lifecycle, session.status);
+      return commit(legacy, `agent_report:${agentReport.state}`, 0);
     }
 
     if (detectedIdleTimestamp && isIdleBeyondThreshold(session, detectedIdleTimestamp)) {
@@ -1047,7 +1087,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const humanReactionKey = "changes-requested";
     const automatedReactionKey = "bugbot-comments";
 
-    if (TERMINAL_STATUSES.has(newStatus)) {
+    if (TERMINAL_STATUSES.has(newStatus) || session.lifecycle.pr.state !== "open") {
       clearReactionTracker(session.id, humanReactionKey);
       clearReactionTracker(session.id, automatedReactionKey);
       lastReviewBacklogCheckAt.delete(session.id);
@@ -1379,8 +1419,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     const conflictReactionKey = "merge-conflicts";
 
-    // Clear tracking when PR is closed/merged
-    if (newStatus === "merged" || newStatus === "killed") {
+    // Clear tracking when PR is no longer open.
+    if (session.lifecycle.pr.state !== "open" || newStatus === "killed") {
       clearReactionTracker(session.id, conflictReactionKey);
       updateSessionMetadata(session, {
         lastMergeConflictDispatched: "",
@@ -1493,6 +1533,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     const oldStatus =
       tracked ?? ((session.metadata?.["status"] as SessionStatus | undefined) || session.status);
     const previousLifecycle = cloneLifecycle(session.lifecycle);
+    const previousPRState = session.lifecycle.pr.state;
     const assessment = await determineStatus(session);
     const newStatus = assessment.status;
     const lifecycleChanged = session.metadata["statePayload"] !== JSON.stringify(session.lifecycle);
@@ -1644,6 +1685,37 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           ),
           level: transitionLogLevel(newStatus),
         });
+      }
+    }
+
+    const prEventType = prStateToEventType(previousPRState, session.lifecycle.pr.state);
+    if (prEventType) {
+      let reactionHandledNotify = false;
+      const reactionKey = eventToReactionKey(prEventType);
+
+      if (reactionKey) {
+        const reactionConfig = getReactionConfigForSession(session, reactionKey);
+        if (reactionConfig && reactionConfig.action) {
+          if (reactionConfig.auto !== false || reactionConfig.action === "notify") {
+            await executeReaction(session.id, session.projectId, reactionKey, reactionConfig);
+            reactionHandledNotify = true;
+          }
+        }
+      }
+
+      if (!reactionHandledNotify) {
+        const prEvent = createEvent(prEventType, {
+          sessionId: session.id,
+          projectId: session.projectId,
+          message: `${session.id}: PR ${previousPRState} → ${session.lifecycle.pr.state}`,
+          data: {
+            oldPRState: previousPRState,
+            newPRState: session.lifecycle.pr.state,
+            prNumber: session.lifecycle.pr.number,
+            prUrl: session.lifecycle.pr.url,
+          },
+        });
+        await notifyHuman(prEvent, inferPriority(prEventType));
       }
     }
 

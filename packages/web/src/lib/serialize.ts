@@ -177,7 +177,12 @@ export function sessionToDashboard(session: Session): DashboardSession {
     summaryIsFallback: agentSummary ? (session.agentInfo?.summaryIsFallback ?? false) : false,
     createdAt: session.createdAt.toISOString(),
     lastActivityAt: session.lastActivityAt.toISOString(),
-    pr: session.pr ? basicPRToDashboard(session.pr) : null,
+    pr: session.pr
+      ? {
+          ...basicPRToDashboard(session.pr),
+          state: normalizeDashboardPRState(session.lifecycle.pr.state),
+        }
+      : null,
     metadata: session.metadata,
   });
 }
@@ -237,6 +242,17 @@ function basicPRToDashboard(pr: PRInfo): DashboardPR {
     unresolvedComments: [],
     enriched: false,
   };
+}
+
+function normalizeDashboardPRState(state: Session["lifecycle"]["pr"]["state"]): DashboardPR["state"] {
+  switch (state) {
+    case "merged":
+      return "merged";
+    case "closed":
+      return "closed";
+    default:
+      return "open";
+  }
 }
 
 /**

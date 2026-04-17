@@ -41,6 +41,26 @@ export {
 } from "./metadata.js";
 export { createInitialCanonicalLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 
+// Agent reports — explicit workflow transitions declared by worker agents (Stage 3)
+export {
+  AGENT_REPORTED_STATES,
+  AGENT_REPORT_METADATA_KEYS,
+  AGENT_REPORT_FRESHNESS_MS,
+  applyAgentReport,
+  readAgentReport,
+  isAgentReportFresh,
+  mapAgentReportToLifecycle,
+  normalizeAgentReportedState,
+  validateAgentReportTransition,
+} from "./agent-report.js";
+export type {
+  AgentReport,
+  AgentReportedState,
+  ApplyAgentReportInput,
+  ApplyAgentReportResult,
+  AgentReportTransitionResult,
+} from "./agent-report.js";
+
 // tmux — command wrappers
 export {
   isTmuxAvailable,

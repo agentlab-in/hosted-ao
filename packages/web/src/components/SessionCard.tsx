@@ -58,6 +58,25 @@ function getDoneStatusInfo(session: DashboardSession): {
     };
   }
 
+  if (prState === "closed") {
+    return {
+      label: "closed",
+      pillClass: "done-status-pill--exited",
+      icon: (
+        <svg
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          viewBox="0 0 24 24"
+          className="h-3 w-3"
+        >
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9 12h6" />
+        </svg>
+      ),
+    };
+  }
+
   if (session.lifecycle?.sessionState === "terminated" || status === "killed" || status === "terminated") {
     return {
       label: getSessionTruthLabel(session),

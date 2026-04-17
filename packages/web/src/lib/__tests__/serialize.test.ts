@@ -174,6 +174,27 @@ describe("sessionToDashboard", () => {
     expect(dashboard.attentionLevel).toBe("respond");
   });
 
+  it("should seed dashboard PR state from canonical lifecycle truth", () => {
+    const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
+    lifecycle.session.state = "idle";
+    lifecycle.session.reason = "merged_waiting_decision";
+    lifecycle.session.startedAt = lifecycle.session.lastTransitionAt;
+    lifecycle.pr.state = "merged";
+    lifecycle.pr.reason = "merged";
+    lifecycle.runtime.state = "alive";
+    lifecycle.runtime.reason = "process_running";
+
+    const coreSession = createCoreSession({
+      status: "idle",
+      lifecycle,
+      pr: createPRInfo(),
+    });
+
+    const dashboard = sessionToDashboard(coreSession);
+
+    expect(dashboard.pr?.state).toBe("merged");
+  });
+
   it("should use agentInfo summary with summaryIsFallback false", () => {
     const coreSession = createCoreSession({
       agentInfo: {

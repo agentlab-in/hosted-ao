@@ -614,6 +614,38 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("ci_failed");
   });
 
+  it("keeps canonical session state idle while waiting on external review", async () => {
+    const mockSCM = createMockSCM({ getReviewDecision: vi.fn().mockResolvedValue("pending") });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+    const session = makeSession({ status: "pr_open", pr: makePR() });
+    vi.mocked(mockSessionManager.get).mockResolvedValue(session);
+
+    writeMetadata(env.sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: session.branch ?? "main",
+      status: session.status,
+      project: "my-app",
+      pr: session.pr?.url,
+      runtimeHandle: session.runtimeHandle ? JSON.stringify(session.runtimeHandle) : undefined,
+    });
+
+    const lm = createLifecycleManager({
+      config,
+      registry,
+      sessionManager: mockSessionManager,
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("review_pending");
+    expect(session.lifecycle.session.state).toBe("idle");
+    expect(session.lifecycle.session.reason).toBe("awaiting_external_review");
+  });
+
   it("skips PR auto-detection when metadata disables it", async () => {
     const mockSCM = createMockSCM({ detectPR: vi.fn().mockResolvedValue(makePR()) });
     const registry = createMockRegistry({
@@ -732,23 +764,77 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("merged");
   });
 
-  it("treats closed PRs as done when the canonical lifecycle marks them complete", async () => {
+  it("keeps closed PR sessions idle and emits a PR-closed notification", async () => {
+    const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("closed") });
+    const notifier = createMockNotifier();
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+      notifier,
+    });
+
+    const session = makeSession({ status: "pr_open", pr: makePR() });
+    const lm = setupCheck("app-1", {
+      session,
+      registry,
+      configOverride: {
+        ...config,
+        notificationRouting: {
+          ...config.notificationRouting,
+          info: ["desktop"],
+        },
+      },
+    });
+
+    await lm.check("app-1");
+    expect(lm.getStates().get("app-1")).toBe("idle");
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["status"]).toBe("idle");
+    expect(meta?.["statePayload"]).toContain('"state":"closed"');
+    expect(meta?.["statePayload"]).toContain('"reason":"pr_closed_waiting_decision"');
+    expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "pr.closed" }));
+  });
+
+  it("routes closed PR transitions through the pr-closed reaction key", async () => {
+    const notifier = createMockNotifier();
     const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("closed") });
     const registry = createMockRegistry({
       runtime: plugins.runtime,
       agent: plugins.agent,
       scm: mockSCM,
+      notifier,
     });
 
+    const session = makeSession({ status: "pr_open", pr: makePR() });
     const lm = setupCheck("app-1", {
-      session: makeSession({ status: "pr_open", pr: makePR() }),
+      session,
       registry,
+      configOverride: {
+        ...config,
+        reactions: {
+          ...config.reactions,
+          "pr-closed": {
+            auto: true,
+            action: "notify",
+            priority: "action",
+          },
+        },
+        notificationRouting: {
+          ...config.notificationRouting,
+          action: ["desktop"],
+        },
+      },
     });
 
     await lm.check("app-1");
-    expect(lm.getStates().get("app-1")).toBe("done");
-    const meta = readMetadataRaw(env.sessionsDir, "app-1");
-    expect(meta?.["status"]).toBe("done");
+
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "reaction.triggered",
+        data: expect.objectContaining({ reactionKey: "pr-closed" }),
+      }),
+    );
   });
 
   it("detects mergeable when approved + CI green", async () => {
@@ -1593,6 +1679,42 @@ describe("reactions", () => {
     expect(metadata?.["lastMergeConflictDispatched"]).toBeFalsy();
   });
 
+  it("clears merge conflict tracking when PR is closed", async () => {
+    config.reactions = {
+      "merge-conflicts": {
+        auto: true,
+        action: "send-to-agent",
+        message: "Resolve merge conflicts.",
+      },
+    };
+
+    const getMergeability = vi.fn();
+    const mockSCM = createMockSCM({
+      getPRState: vi.fn().mockResolvedValue("closed"),
+      getMergeability,
+    });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({
+        status: "pr_open",
+        pr: makePR(),
+        metadata: { lastMergeConflictDispatched: "true" },
+      }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    const metadata = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(metadata?.["lastMergeConflictDispatched"]).toBeFalsy();
+    expect(getMergeability).not.toHaveBeenCalled();
+  });
+
   it("notifies humans on significant transitions without reaction config", async () => {
     const notifier = createMockNotifier();
     const mockSCM = createMockSCM({ getPRState: vi.fn().mockResolvedValue("merged") });
@@ -2097,6 +2219,49 @@ describe("rate limiting optimizations", () => {
     // Third check: throttle expired — API called again
     await lm.check("app-1");
     expect(getPendingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears review backlog tracking when PR is closed", async () => {
+    const getPendingMock = vi.fn();
+    const getAutomatedMock = vi.fn();
+    const mockSCM = createMockSCM({
+      getPRState: vi.fn().mockResolvedValue("closed"),
+      getPendingComments: getPendingMock,
+      getAutomatedComments: getAutomatedMock,
+    });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: mockSCM,
+    });
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({
+        status: "pr_open",
+        pr: makePR(),
+        metadata: {
+          lastPendingReviewFingerprint: "fingerprint",
+          lastPendingReviewDispatchHash: "dispatch",
+          lastPendingReviewDispatchAt: "2025-01-01T00:00:00.000Z",
+          lastAutomatedReviewFingerprint: "auto-fingerprint",
+          lastAutomatedReviewDispatchHash: "auto-dispatch",
+          lastAutomatedReviewDispatchAt: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    const metadata = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(metadata?.["lastPendingReviewFingerprint"]).toBeFalsy();
+    expect(metadata?.["lastPendingReviewDispatchHash"]).toBeFalsy();
+    expect(metadata?.["lastPendingReviewDispatchAt"]).toBeFalsy();
+    expect(metadata?.["lastAutomatedReviewFingerprint"]).toBeFalsy();
+    expect(metadata?.["lastAutomatedReviewDispatchHash"]).toBeFalsy();
+    expect(metadata?.["lastAutomatedReviewDispatchAt"]).toBeFalsy();
+    expect(getPendingMock).not.toHaveBeenCalled();
+    expect(getAutomatedMock).not.toHaveBeenCalled();
   });
 });
 describe("summary pinning", () => {

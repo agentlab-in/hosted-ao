@@ -250,8 +250,18 @@ export function parseCanonicalLifecycle(
 
 export function deriveLegacyStatus(
   lifecycle: CanonicalSessionLifecycle,
-  _previousStatus: SessionStatus = "working",
+  previousStatus: SessionStatus = "working",
 ): SessionStatus {
+  if (
+    lifecycle.session.state === "terminated" &&
+    (previousStatus === "cleanup" ||
+      previousStatus === "errored" ||
+      previousStatus === "killed" ||
+      previousStatus === "terminated")
+  ) {
+    return previousStatus;
+  }
+
   switch (lifecycle.session.state) {
     case "not_started":
       return "spawning";
@@ -263,17 +273,28 @@ export function deriveLegacyStatus(
       return "done";
     case "terminated":
       return "terminated";
-    case "idle":
-      return lifecycle.pr.state === "merged" ? "merged" : "idle";
     case "detecting":
       return "detecting";
+    default:
+      break;
+  }
+
+  if (lifecycle.pr.state === "merged") {
+    return "merged";
+  }
+  if (lifecycle.pr.state === "open") {
+    if (lifecycle.pr.reason === "ci_failing") return "ci_failed";
+    if (lifecycle.pr.reason === "changes_requested") return "changes_requested";
+    if (lifecycle.pr.reason === "review_pending") return "review_pending";
+    if (lifecycle.pr.reason === "approved") return "approved";
+    if (lifecycle.pr.reason === "merge_ready") return "mergeable";
+    return "pr_open";
+  }
+
+  switch (lifecycle.session.state) {
+    case "idle":
+      return "idle";
     case "working":
-      if (lifecycle.pr.reason === "ci_failing") return "ci_failed";
-      if (lifecycle.pr.reason === "changes_requested") return "changes_requested";
-      if (lifecycle.pr.reason === "review_pending") return "review_pending";
-      if (lifecycle.pr.reason === "approved") return "approved";
-      if (lifecycle.pr.reason === "merge_ready") return "mergeable";
-      if (lifecycle.pr.state === "open") return "pr_open";
       return "working";
   }
 }
