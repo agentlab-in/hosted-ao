@@ -24,7 +24,7 @@ import {
   type DashboardStats,
   type DashboardOrchestratorLink,
   getAttentionLevel,
-} from "./types.js";
+} from "./types";
 import { TTLCache, prCache, prCacheKey, type PREnrichmentData } from "./cache";
 
 /** Cache for issue titles (5 min TTL — issue titles rarely change) */
