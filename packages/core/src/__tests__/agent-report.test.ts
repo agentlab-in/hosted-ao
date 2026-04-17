@@ -66,6 +66,9 @@ describe("normalizeAgentReportedState", () => {
     expect(normalizeAgentReportedState("needs-input")).toBe("needs_input");
     expect(normalizeAgentReportedState("fixing-ci")).toBe("fixing_ci");
     expect(normalizeAgentReportedState("addressing-reviews")).toBe("addressing_reviews");
+    expect(normalizeAgentReportedState("pr-created")).toBe("pr_created");
+    expect(normalizeAgentReportedState("draft-pr-created")).toBe("draft_pr_created");
+    expect(normalizeAgentReportedState("ready-for-review")).toBe("ready_for_review");
     expect(normalizeAgentReportedState("ci")).toBe("fixing_ci");
     expect(normalizeAgentReportedState("reviews")).toBe("addressing_reviews");
     expect(normalizeAgentReportedState("complete")).toBe("completed");
@@ -121,6 +124,21 @@ describe("mapAgentReportToLifecycle", () => {
       sessionReason: "resolving_review_comments",
     });
   });
+
+  it("maps PR workflow reports to the expected session phase", () => {
+    expect(mapAgentReportToLifecycle("pr_created")).toEqual({
+      sessionState: "idle",
+      sessionReason: "pr_created",
+    });
+    expect(mapAgentReportToLifecycle("draft_pr_created")).toEqual({
+      sessionState: "working",
+      sessionReason: "task_in_progress",
+    });
+    expect(mapAgentReportToLifecycle("ready_for_review")).toEqual({
+      sessionState: "idle",
+      sessionReason: "awaiting_external_review",
+    });
+  });
 });
 
 describe("validateAgentReportTransition", () => {
@@ -148,9 +166,12 @@ describe("validateAgentReportTransition", () => {
     expect(validateAgentReportTransition(lifecycle, "needs_input").ok).toBe(false);
   });
 
-  it("rejects reports on merged PRs", () => {
+  it("rejects reports on merged or closed PRs", () => {
     const lifecycle = createInitialCanonicalLifecycle("worker");
     lifecycle.pr.state = "merged";
+    expect(validateAgentReportTransition(lifecycle, "working").ok).toBe(false);
+
+    lifecycle.pr.state = "closed";
     expect(validateAgentReportTransition(lifecycle, "working").ok).toBe(false);
   });
 
@@ -215,6 +236,78 @@ describe("applyAgentReport", () => {
         sessionState: "needs_input",
       },
     });
+  });
+
+  it("records pr_created with PR metadata and pr_open lifecycle", () => {
+    const now = new Date("2025-01-02T09:30:00.000Z");
+    const result = applyAgentReport(dataDir, sessionId, {
+      state: "pr_created",
+      prUrl: "https://github.com/test/repo/pull/42",
+      now,
+    });
+
+    expect(result.legacyStatus).toBe("pr_open");
+    expect(result.report.prNumber).toBe(42);
+    expect(result.report.prUrl).toBe("https://github.com/test/repo/pull/42");
+    expect(result.report.prIsDraft).toBe(false);
+
+    const meta = readMetadataRaw(dataDir, sessionId)!;
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_URL]).toBe("https://github.com/test/repo/pull/42");
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_NUMBER]).toBe("42");
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT]).toBe("false");
+
+    const payload = JSON.parse(meta["statePayload"]);
+    expect(payload.session.state).toBe("idle");
+    expect(payload.session.reason).toBe("pr_created");
+    expect(payload.pr.state).toBe("open");
+    expect(payload.pr.reason).toBe("in_progress");
+    expect(payload.pr.number).toBe(42);
+    expect(payload.pr.url).toBe("https://github.com/test/repo/pull/42");
+  });
+
+  it("keeps draft PR creation in working and marks the report as draft", () => {
+    const now = new Date("2025-01-02T10:00:00.000Z");
+    const result = applyAgentReport(dataDir, sessionId, {
+      state: "draft_pr_created",
+      prUrl: "https://github.com/test/repo/pull/43",
+      now,
+    });
+
+    expect(result.legacyStatus).toBe("pr_open");
+    expect(result.nextState).toBe("working");
+    expect(result.report.prIsDraft).toBe(true);
+
+    const meta = readMetadataRaw(dataDir, sessionId)!;
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT]).toBe("true");
+    const payload = JSON.parse(meta["statePayload"]);
+    expect(payload.session.state).toBe("working");
+    expect(payload.pr.state).toBe("open");
+    expect(payload.pr.reason).toBe("in_progress");
+  });
+
+  it("promotes ready_for_review to review_pending and clears draft metadata", () => {
+    applyAgentReport(dataDir, sessionId, {
+      state: "draft_pr_created",
+      prUrl: "https://github.com/test/repo/pull/44",
+      now: new Date("2025-01-02T10:00:00.000Z"),
+    });
+
+    const result = applyAgentReport(dataDir, sessionId, {
+      state: "ready_for_review",
+      prNumber: 44,
+      now: new Date("2025-01-02T10:05:00.000Z"),
+    });
+
+    expect(result.legacyStatus).toBe("review_pending");
+    expect(result.report.prIsDraft).toBe(false);
+
+    const meta = readMetadataRaw(dataDir, sessionId)!;
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT]).toBe("false");
+    const payload = JSON.parse(meta["statePayload"]);
+    expect(payload.session.state).toBe("idle");
+    expect(payload.pr.state).toBe("open");
+    expect(payload.pr.reason).toBe("review_pending");
+    expect(payload.pr.number).toBe(44);
   });
 
   it("sets startedAt on the first working transition", () => {
@@ -326,6 +419,24 @@ describe("readAgentReport + isAgentReportFresh", () => {
       [AGENT_REPORT_METADATA_KEYS.NOTE]: "",
     });
     expect(report?.note).toBeUndefined();
+  });
+
+  it("parses PR workflow payload fields when present", () => {
+    const at = "2025-01-01T00:00:00.000Z";
+    const report = readAgentReport({
+      [AGENT_REPORT_METADATA_KEYS.STATE]: "pr_created",
+      [AGENT_REPORT_METADATA_KEYS.AT]: at,
+      [AGENT_REPORT_METADATA_KEYS.PR_NUMBER]: "55",
+      [AGENT_REPORT_METADATA_KEYS.PR_URL]: "https://github.com/test/repo/pull/55",
+      [AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT]: "false",
+    });
+    expect(report).toEqual({
+      state: "pr_created",
+      timestamp: at,
+      prNumber: 55,
+      prUrl: "https://github.com/test/repo/pull/55",
+      prIsDraft: false,
+    });
   });
 
   it("reports freshness against the default window", () => {

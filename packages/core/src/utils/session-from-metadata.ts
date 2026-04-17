@@ -1,6 +1,7 @@
 import type { ActivitySignal, RuntimeHandle, Session, SessionId, SessionStatus } from "../types.js";
 import { deriveLegacyStatus, parseCanonicalLifecycle } from "../lifecycle-state.js";
 import { createActivitySignal } from "../activity-signal.js";
+import { AGENT_REPORT_METADATA_KEYS } from "../agent-report.js";
 import { parsePrFromUrl } from "./pr.js";
 import { safeJsonParse, validateStatus } from "./validation.js";
 
@@ -50,6 +51,7 @@ export function sessionFromMetadata(
   });
   const status = options.status ?? deriveLegacyStatus(lifecycle, validateStatus(meta["status"]));
   const prUrl = lifecycle.pr.url ?? meta["pr"];
+  const prIsDraft = meta[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] === "true";
 
   return {
     id: sessionId,
@@ -71,7 +73,7 @@ export function sessionFromMetadata(
             repo: parsed?.repo ?? "",
             branch: meta["branch"] ?? "",
             baseBranch: "",
-            isDraft: false,
+            isDraft: prIsDraft,
           };
         })()
       : null,
