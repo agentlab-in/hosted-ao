@@ -472,7 +472,7 @@ export function cloneLifecycle(lifecycle: CanonicalSessionLifecycle): CanonicalS
         ? {
             id: lifecycle.runtime.handle.id,
             runtimeName: lifecycle.runtime.handle.runtimeName,
-            data: { ...lifecycle.runtime.handle.data },
+            data: structuredClone(lifecycle.runtime.handle.data),
           }
         : null,
     },

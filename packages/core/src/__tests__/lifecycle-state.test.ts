@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cloneLifecycle,
   createInitialCanonicalLifecycle,
   deriveLegacyStatus,
   parseCanonicalLifecycle,
@@ -169,5 +170,31 @@ describe("parseCanonicalLifecycle", () => {
     });
     expect(parsed.runtime.state).toBe("unknown");
     expect(parsed.runtime.reason).toBe("spawn_incomplete");
+  });
+});
+
+describe("cloneLifecycle", () => {
+  it("deep-clones nested runtime handle data", () => {
+    const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
+    lifecycle.runtime.handle = {
+      id: "rt-1",
+      runtimeName: "tmux",
+      data: {
+        nested: { attempts: [1, 2, 3] },
+      },
+    };
+
+    const cloned = cloneLifecycle(lifecycle);
+    const clonedNested = cloned.runtime.handle?.data["nested"] as {
+      attempts: number[];
+    };
+    clonedNested.attempts.push(4);
+
+    expect(lifecycle.runtime.handle?.data).toEqual({
+      nested: { attempts: [1, 2, 3] },
+    });
+    expect(cloned.runtime.handle?.data).toEqual({
+      nested: { attempts: [1, 2, 3, 4] },
+    });
   });
 });
