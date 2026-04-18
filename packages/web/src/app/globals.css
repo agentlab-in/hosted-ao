@@ -1854,6 +1854,11 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   background: var(--color-status-ready);
 }
 
+.session-detail-tone--idle {
+  color: var(--color-status-idle);
+  background: var(--color-status-idle);
+}
+
 .session-detail-tone--attention {
   color: var(--color-status-attention);
   background: var(--color-status-attention);

@@ -193,6 +193,12 @@ function applyMetadataUpdates(
   return next;
 }
 
+function normalizeMetadataRecord(data: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined && value !== ""),
+  );
+}
+
 export function mutateMetadata(
   dataDir: string,
   sessionId: SessionId,
@@ -208,7 +214,7 @@ export function mutateMetadata(
     return null;
   }
 
-  const next = updater({ ...existing });
+  const next = normalizeMetadataRecord(updater({ ...existing }));
 
   mkdirSync(dirname(path), { recursive: true });
   atomicWriteFileSync(path, serializeMetadata(next));

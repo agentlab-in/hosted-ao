@@ -131,6 +131,8 @@ function activityToneClass(activityColor: string): string {
       return "session-detail-tone--working";
     case "var(--color-status-ready)":
       return "session-detail-tone--ready";
+    case "var(--color-status-idle)":
+      return "session-detail-tone--idle";
     case "var(--color-status-attention)":
       return "session-detail-tone--attention";
     case "var(--color-status-error)":

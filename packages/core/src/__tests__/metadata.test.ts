@@ -8,6 +8,7 @@ import {
   readMetadataRaw,
   readCanonicalLifecycle,
   readArchivedMetadataRaw,
+  mutateMetadata,
   writeMetadata,
   updateMetadata,
   deleteMetadata,
@@ -211,6 +212,29 @@ describe("updateMetadata", () => {
     const meta = readMetadata(dataDir, "upd-4");
     expect(meta!.status).toBe("pr_open");
     expect(meta!.summary).toBeUndefined();
+  });
+
+  it("returns the normalized record that is actually persisted", () => {
+    writeMetadata(dataDir, "upd-5", {
+      worktree: "/tmp/w",
+      branch: "main",
+      status: "working",
+      summary: "doing stuff",
+    });
+
+    const next = mutateMetadata(dataDir, "upd-5", (existing) => ({
+      ...existing,
+      summary: "",
+      pr: "https://github.com/org/repo/pull/5",
+    }));
+
+    expect(next).toEqual({
+      worktree: "/tmp/w",
+      branch: "main",
+      status: "working",
+      pr: "https://github.com/org/repo/pull/5",
+    });
+    expect(readMetadataRaw(dataDir, "upd-5")).toEqual(next);
   });
 });
 
