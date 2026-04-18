@@ -180,7 +180,7 @@ case "\$1/\$2" in
 
     if [[ \$exit_code -eq 0 ]]; then
       output="\$(cat "\$tmpout")"
-      pr_url="\$(echo "\$output" | grep -Eo 'https://github\\.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)"
+      pr_url="\$(echo "\$output" | grep -Eo 'https?://[^/]+/[^/]+/[^/]+/pull/[0-9]+' | head -1)"
       report_state="pr_created"
       report_draft="false"
       for arg in "\$@"; do

@@ -40,6 +40,7 @@ import {
   cloneLifecycle,
   parseCanonicalLifecycle,
 } from "./lifecycle-state.js";
+import { assertValidSessionIdComponent, SESSION_ID_COMPONENT_PATTERN } from "./utils/session-id.js";
 import { validateStatus } from "./utils/validation.js";
 
 /** Serialize a record back to key=value format. Newlines in values are replaced to prevent injection. */
@@ -52,13 +53,8 @@ function serializeMetadata(data: Record<string, string>): string {
   );
 }
 
-/** Validate sessionId to prevent path traversal. */
-const VALID_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
-
 function validateSessionId(sessionId: SessionId): void {
-  if (!VALID_SESSION_ID.test(sessionId)) {
-    throw new Error(`Invalid session ID: ${sessionId}`);
-  }
+  assertValidSessionIdComponent(sessionId);
 }
 
 /** Get the metadata file path for a session. */
@@ -367,7 +363,7 @@ export function listMetadata(dataDir: string): SessionId[] {
 
   return readdirSync(dir).filter((name) => {
     if (name === "archive" || name.startsWith(".")) return false;
-    if (!VALID_SESSION_ID.test(name)) return false;
+    if (!SESSION_ID_COMPONENT_PATTERN.test(name)) return false;
     try {
       return statSync(join(dir, name)).isFile();
     } catch {
