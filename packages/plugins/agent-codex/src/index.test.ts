@@ -1037,10 +1037,10 @@ describe("getSessionInfo", () => {
     expect(result!.summary).toBe("Codex session (o3-mini)");
     expect(result!.summaryIsFallback).toBe(true);
     expect(result!.cost).toBeDefined();
-    // cached_tokens/reasoning_tokens are subsets, not additive
-    // input: 1000 + 2000 = 3000
+    // cached tokens count toward effective input spend
+    // input: 1000 + 2000 + 200 = 3200
     // output: 500 + 300 = 800
-    expect(result!.cost!.inputTokens).toBe(3000);
+    expect(result!.cost!.inputTokens).toBe(3200);
     expect(result!.cost!.outputTokens).toBe(800);
     expect(result!.cost!.estimatedCostUsd).toBeGreaterThan(0);
   });
@@ -1430,7 +1430,10 @@ describe("getRestoreCommand", () => {
     mockReadFile.mockResolvedValue(content);
     mockStat.mockResolvedValue({ mtimeMs: 1000 });
 
-    const session = makeSession({ workspacePath: "/workspace/test" });
+    const session = makeSession({
+      workspacePath: "/workspace/test",
+      metadata: { role: "orchestrator" },
+    });
     const cmd = await agent.getRestoreCommand!(
       session,
       makeProjectConfig({
@@ -1453,7 +1456,10 @@ describe("getRestoreCommand", () => {
     mockReadFile.mockResolvedValue(content);
     mockStat.mockResolvedValue({ mtimeMs: 1000 });
 
-    const session = makeSession({ workspacePath: "/workspace/test" });
+    const session = makeSession({
+      workspacePath: "/workspace/test",
+      metadata: { role: "orchestrator" },
+    });
     const cmd = await agent.getRestoreCommand!(
       session,
       makeProjectConfig({
@@ -1462,6 +1468,29 @@ describe("getRestoreCommand", () => {
     );
 
     expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("demotes worker restore permissionless mode to ask-for-approval never", async () => {
+    const content = jsonl(
+      { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
+      { threadId: "thread-1" },
+    );
+    mockReaddir.mockResolvedValue(["sess.jsonl"]);
+    setupMockOpen(content);
+    setupMockStream(content);
+    mockReadFile.mockResolvedValue(content);
+    mockStat.mockResolvedValue({ mtimeMs: 1000 });
+
+    const session = makeSession({ workspacePath: "/workspace/test", metadata: { role: "worker" } });
+    const cmd = await agent.getRestoreCommand!(
+      session,
+      makeProjectConfig({
+        agentConfig: { permissions: "permissionless" },
+      }),
+    );
+
+    expect(cmd).toContain("--ask-for-approval never");
+    expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
   it("includes --ask-for-approval never from project config", async () => {
