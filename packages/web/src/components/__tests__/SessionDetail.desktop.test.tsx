@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionDetail } from "../SessionDetail";
+import { buildAgentFixMessage } from "../session-detail-agent-actions";
 import { makePR, makeSession } from "../../__tests__/helpers";
 
 vi.mock("next/navigation", () => ({
@@ -60,6 +61,28 @@ describe("SessionDetail desktop layout", () => {
           projectId: "my-app",
           summary: "Desktop session detail",
           branch: "feat/desktop-detail",
+          agentReportAudit: [
+            {
+              timestamp: "2025-01-01T10:00:00.000Z",
+              actor: "codex",
+              source: "report",
+              reportState: "working",
+              note: "Running final verification",
+              accepted: true,
+              before: {
+                legacyStatus: "working",
+                sessionState: "working",
+                sessionReason: "task_in_progress",
+                lastTransitionAt: "2025-01-01T09:55:00.000Z",
+              },
+              after: {
+                legacyStatus: "working",
+                sessionState: "working",
+                sessionReason: "task_in_progress",
+                lastTransitionAt: "2025-01-01T10:00:00.000Z",
+              },
+            },
+          ],
           pr: makePR({
             number: 310,
             title: "Desktop detail coverage",
@@ -120,12 +143,63 @@ describe("SessionDetail desktop layout", () => {
     );
     expect(screen.getByText("3 files")).toBeInTheDocument();
     expect(screen.getByText("Draft")).toBeInTheDocument();
-    expect(screen.getByText(/Changes requested/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Changes requested/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Merge conflicts/i)).toBeInTheDocument();
     expect(screen.getByText(/Unresolved Comments/i)).toBeInTheDocument();
     expect(screen.getByText("Tighten the copy")).toBeInTheDocument();
     expect(screen.getByText("The empty state text needs to be shorter.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Agent Reports/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Agent Reports/i }));
+    expect(screen.getAllByText("worker-desktop").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("ao report working")).toBeInTheDocument();
+    expect(screen.getByText("codex")).toBeInTheDocument();
     expect(screen.getByText("Live Terminal")).toBeInTheDocument();
+  });
+
+  it("toggles the agent reports section", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-audit-toggle",
+          projectId: "my-app",
+          agentReportAudit: [
+            {
+              timestamp: "2025-01-01T10:00:00.000Z",
+              actor: "codex",
+              source: "acknowledge",
+              reportState: "started",
+              accepted: true,
+              before: {
+                legacyStatus: "spawning",
+                sessionState: "spawning",
+                sessionReason: "agent_spawned",
+                lastTransitionAt: "2025-01-01T09:55:00.000Z",
+              },
+              after: {
+                legacyStatus: "working",
+                sessionState: "working",
+                sessionReason: "agent_acknowledged",
+                lastTransitionAt: "2025-01-01T10:00:00.000Z",
+              },
+            },
+          ],
+        })}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: /Agent Reports/i });
+    expect(screen.getByText("ao acknowledge")).not.toBeVisible();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("ao acknowledge")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("ao acknowledge")).not.toBeVisible();
   });
 
   it("sends unresolved comments back to the agent and shows sent state", async () => {
@@ -170,6 +244,41 @@ describe("SessionDetail desktop layout", () => {
     expect(screen.getByRole("button", { name: "Ask Agent to Fix" })).toBeInTheDocument();
   });
 
+  it("builds branch links from the PR host for GitHub Enterprise repos", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-ghe",
+          projectId: "my-app",
+          branch: "feat/ghe-detail",
+          pr: makePR({
+            number: 312,
+            url: "https://github.enterprise.local/acme/app/pull/312",
+            owner: "acme",
+            repo: "app",
+            branch: "feat/ghe-detail",
+          }),
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "feat/ghe-detail" })).toHaveAttribute(
+      "href",
+      "https://github.enterprise.local/acme/app/tree/feat/ghe-detail",
+    );
+  });
+
+  it("truncates review-comment messages below the API payload cap", () => {
+    const message = buildAgentFixMessage({
+      url: "https://github.com/acme/app/pull/311#discussion_r2",
+      path: `packages/web/${"deep/".repeat(200)}component.tsx`,
+      body: `### ${"T".repeat(500)}\n<!-- DESCRIPTION START -->${"D".repeat(15_000)}<!-- DESCRIPTION END -->`,
+    });
+
+    expect(message.length).toBeLessThanOrEqual(9_500);
+    expect(message).toContain("Resolve the comment at https://github.com/acme/app/pull/311#discussion_r2");
+  });
+
   it("shows terminal-ended placeholder for exited desktop sessions", () => {
     render(
       <SessionDetail
@@ -210,5 +319,7 @@ describe("SessionDetail desktop layout", () => {
 
     expect(screen.queryByRole("link", { name: "Orchestrator" })).not.toBeInTheDocument();
     expect(screen.getByText("orchestrator")).toBeInTheDocument();
+    expect(screen.queryByText("Lifecycle Truth")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Agent Reports/i })).not.toBeInTheDocument();
   });
 });
