@@ -4,23 +4,13 @@ import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } fro
 import { useSearchParams } from "next/navigation";
 import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
-  type DashboardAgentReportAuditEntry,
   type DashboardSession,
   type DashboardPR,
   NON_RESTORABLE_STATUSES,
+  getActivitySignalLabel,
   isPRMergeReady,
   isPRRateLimited,
   isPRUnenriched,
-  getSessionTruthLabel,
-  getSessionTruthReasonLabel,
-  getPRTruthLabel,
-  getPRTruthReasonLabel,
-  getRuntimeTruthLabel,
-  getRuntimeTruthReasonLabel,
-  getLifecycleGuidance,
-  getLifecycleEvidence,
-  getActivitySignalLabel,
-  getActivitySignalReasonLabel,
   isDashboardRuntimeEnded,
   isDashboardSessionRestorable,
 } from "@/lib/types";
@@ -32,6 +22,8 @@ import type { ProjectInfo } from "@/lib/project-name";
 
 import { MobileBottomNav } from "./MobileBottomNav";
 import { ProjectSidebar } from "./ProjectSidebar";
+import { SessionTruthPanel } from "./SessionTruthPanel";
+import { SessionReportAuditPanel } from "./SessionReportAuditPanel";
 
 const DirectTerminal = dynamic(
   () => import("./DirectTerminal").then((m) => ({ default: m.DirectTerminal })),
@@ -62,18 +54,6 @@ interface SessionDetailProps {
   sidebarLoading?: boolean;
   sidebarError?: boolean;
   onRetrySidebar?: () => void;
-}
-
-function truthBadgeTone(label: string): string {
-  const normalized = label.toLowerCase();
-  if (normalized.includes("detect")) return "var(--color-status-attention)";
-  if (normalized.includes("terminated") || normalized.includes("missing")) {
-    return "var(--color-status-error)";
-  }
-  if (normalized.includes("merged") || normalized.includes("alive")) {
-    return "var(--color-status-ready)";
-  }
-  return "var(--color-accent)";
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -150,209 +130,6 @@ function activityStateClass(activityLabel: string): string {
     return "session-detail-status-pill--error";
   }
   return "session-detail-status-pill--neutral";
-}
-
-function SessionTruthPanel({ session }: { session: DashboardSession }) {
-  if (!session.lifecycle) return null;
-
-  const facts = [
-    {
-      heading: "Activity",
-      label: getActivitySignalLabel(session),
-      reason: getActivitySignalReasonLabel(session),
-    },
-    {
-      heading: "Session",
-      label: getSessionTruthLabel(session),
-      reason: getSessionTruthReasonLabel(session),
-    },
-    {
-      heading: "PR",
-      label: getPRTruthLabel(session),
-      reason: getPRTruthReasonLabel(session),
-    },
-    {
-      heading: "Runtime",
-      label: getRuntimeTruthLabel(session),
-      reason: getRuntimeTruthReasonLabel(session),
-    },
-  ];
-  const guidance = getLifecycleGuidance(session);
-  const evidence = getLifecycleEvidence(session);
-
-  return (
-    <section className="mb-4 rounded-[20px] border border-[var(--color-border-muted)] bg-[var(--color-bg-panel)] px-4 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
-        Lifecycle Truth
-      </p>
-      <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
-        {session.lifecycle.summary}
-      </p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {facts.map((fact) => (
-          <div
-            key={fact.heading}
-            className="rounded-full border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] px-3 py-1.5"
-          >
-            <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
-              {fact.heading}
-            </div>
-            <div
-              className="mt-0.5 text-[12px] font-medium"
-              style={{ color: truthBadgeTone(fact.label) }}
-            >
-              {fact.label}
-            </div>
-            {fact.reason ? (
-              <div className="mt-0.5 text-[11px] text-[var(--color-text-tertiary)]">
-                {fact.reason}
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </div>
-      {guidance ? (
-        <p className="mt-3 text-[12px] text-[var(--color-status-attention)]">
-          {guidance}
-        </p>
-      ) : null}
-      {evidence ? (
-        <p className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
-          Evidence: {evidence}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-function formatAuditTimestamp(isoDate: string): string {
-  const parsed = Date.parse(isoDate);
-  if (Number.isNaN(parsed)) return isoDate;
-  return new Date(parsed).toLocaleString();
-}
-
-function getAuditCommandLabel(entry: DashboardAgentReportAuditEntry): string {
-  return entry.source === "acknowledge" ? "ao acknowledge" : `ao report ${entry.reportState}`;
-}
-
-function SessionReportAuditPanel({
-  sessionId,
-  entries,
-}: {
-  sessionId: string;
-  entries: DashboardAgentReportAuditEntry[];
-}) {
-  const [isExpanded, setIsExpanded] = useState(true);
-
-  if (entries.length === 0) {
-    return null;
-  }
-
-  return (
-    <section className="mb-4 rounded-[20px] border border-[var(--color-border-muted)] bg-[var(--color-bg-panel)] px-4 py-3">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-3 text-left"
-        aria-expanded={isExpanded}
-        aria-controls="session-report-audit-panel"
-        onClick={() => setIsExpanded((current) => !current)}
-      >
-        <span className="block">
-          <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
-            Agent Reports
-          </span>
-          <span className="mt-1 block text-[12px] text-[var(--color-text-secondary)]">
-            {entries.length} audit {entries.length === 1 ? "entry" : "entries"}
-          </span>
-        </span>
-        <span
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] text-[var(--color-text-secondary)]"
-          aria-hidden="true"
-        >
-          <svg
-            className={cn(
-              "h-4 w-4 transition-transform duration-200",
-              isExpanded ? "rotate-180" : "rotate-0",
-            )}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            viewBox="0 0 24 24"
-          >
-            <path d="m6 9 6 6 6-6" />
-          </svg>
-        </span>
-      </button>
-      {isExpanded ? (
-        <div id="session-report-audit-panel" className="mt-3 space-y-3">
-          {entries.map((entry, index) => (
-            <div
-              key={`${entry.timestamp}-${entry.reportState}-${entry.actor}-${entry.source}-${String(entry.accepted)}-${index}`}
-              className="rounded-[16px] border border-[var(--color-border-muted)] bg-[var(--color-bg-base)] px-3 py-3"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                  style={{
-                    background: entry.accepted
-                      ? "color-mix(in srgb, var(--color-status-ready) 14%, transparent)"
-                      : "color-mix(in srgb, var(--color-status-error) 14%, transparent)",
-                    color: entry.accepted
-                      ? "var(--color-status-ready)"
-                      : "var(--color-status-error)",
-                  }}
-                >
-                  {entry.accepted ? "Accepted" : "Rejected"}
-                </span>
-                <span className="text-[11px] text-[var(--color-text-tertiary)]">
-                  {formatAuditTimestamp(entry.timestamp)}
-                </span>
-              </div>
-              <div className="mt-3 grid gap-2 text-[12px] text-[var(--color-text-secondary)] sm:grid-cols-3">
-                <div className="rounded-[12px] border border-[var(--color-border-muted)] px-2.5 py-2">
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
-                    Session
-                  </div>
-                  <div className="mt-1 font-[var(--font-mono)] text-[var(--color-text-primary)]">
-                    {sessionId}
-                  </div>
-                </div>
-                <div className="rounded-[12px] border border-[var(--color-border-muted)] px-2.5 py-2">
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
-                    Actor
-                  </div>
-                  <div className="mt-1 text-[var(--color-text-primary)]">{entry.actor}</div>
-                </div>
-                <div className="rounded-[12px] border border-[var(--color-border-muted)] px-2.5 py-2">
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
-                    Source
-                  </div>
-                  <div className="mt-1 font-[var(--font-mono)] text-[var(--color-text-primary)]">
-                    {getAuditCommandLabel(entry)}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 text-[12px] text-[var(--color-text-secondary)]">
-                {entry.before.legacyStatus} / {entry.before.sessionState}
-                {" -> "}
-                {entry.after.legacyStatus} / {entry.after.sessionState}
-              </div>
-              {entry.note ? (
-                <p className="mt-2 text-[12px] text-[var(--color-text-secondary)]">
-                  Note: {entry.note}
-                </p>
-              ) : null}
-              {entry.rejectionReason ? (
-                <p className="mt-2 text-[12px] text-[var(--color-status-error)]">
-                  Rejection: {entry.rejectionReason}
-                </p>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
 }
 
 function SessionTopStrip({

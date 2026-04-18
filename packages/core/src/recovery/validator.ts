@@ -9,6 +9,7 @@ import {
   type RuntimeHandle,
   type SessionStatus,
   type ActivityState,
+  type Session,
 } from "../types.js";
 import { safeJsonParse, validateStatus } from "../utils/validation.js";
 import type { ScannedSession } from "./scanner.js";
@@ -20,6 +21,18 @@ import {
   type RecoveryConfig,
 } from "./types.js";
 import { resolveAgentSelection, resolveSessionRole } from "../agent-selection.js";
+import { createInitialCanonicalLifecycle } from "../lifecycle-state.js";
+import { createActivitySignal } from "../activity-signal.js";
+
+function indicatesLiveAgentActivity(activity: ActivityState | null): boolean {
+  return (
+    activity === "active" ||
+    activity === "ready" ||
+    activity === "idle" ||
+    activity === "waiting_input" ||
+    activity === "blocked"
+  );
+}
 
 export async function validateSession(
   scanned: ScannedSession,
@@ -86,7 +99,7 @@ export async function validateSession(
 
   let agentProcessRunning = false;
   let processProbeSucceeded = false;
-  const agentActivity: ActivityState | null = null;
+  let agentActivity: ActivityState | null = null;
   if (agent && runtimeHandle) {
     try {
       agentProcessRunning = await agent.isProcessRunning(runtimeHandle);
@@ -94,6 +107,37 @@ export async function validateSession(
     } catch {
       agentProcessRunning = false;
       processProbeSucceeded = false;
+    }
+
+    try {
+      const lifecycle = createInitialCanonicalLifecycle("worker");
+      const probeSession: Session = {
+        id: sessionId,
+        projectId,
+        status: metadataStatus,
+        activity: null,
+        activitySignal: createActivitySignal("unavailable"),
+        lifecycle,
+        branch: rawMetadata["branch"] ?? null,
+        issueId: rawMetadata["issue"] ?? null,
+        pr: null,
+        workspacePath,
+        runtimeHandle,
+        agentInfo: null,
+        createdAt: new Date(rawMetadata["createdAt"] ?? Date.now()),
+        lastActivityAt: new Date(rawMetadata["lastActivityAt"] ?? Date.now()),
+        metadata: rawMetadata,
+      };
+      const detection = await agent.getActivityState(probeSession, config.readyThresholdMs);
+      agentActivity = detection?.state ?? null;
+      if (!agentProcessRunning && indicatesLiveAgentActivity(agentActivity)) {
+        agentProcessRunning = true;
+      }
+      if (agentActivity === "exited") {
+        agentProcessRunning = false;
+      }
+    } catch {
+      agentActivity = null;
     }
   }
 

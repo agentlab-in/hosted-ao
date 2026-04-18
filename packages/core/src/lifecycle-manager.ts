@@ -40,6 +40,7 @@ import {
 import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
 import { updateMetadata } from "./metadata.js";
 import { getSessionsDir } from "./paths.js";
+import { applyDecisionToLifecycle as commitLifecycleDecisionInPlace } from "./lifecycle-transition.js";
 import {
   classifyActivitySignal,
   createActivitySignal,
@@ -234,31 +235,6 @@ interface DeterminedStatus {
 interface ProbeResult {
   state: "alive" | "dead" | "unknown";
   failed: boolean;
-}
-function applyLifecycleDecision(
-  lifecycle: CanonicalSessionLifecycle,
-  decision: LifecycleDecision,
-  nowIso: string,
-): void {
-  if (decision.prState && decision.prReason) {
-    lifecycle.pr.state = decision.prState;
-    lifecycle.pr.reason = decision.prReason;
-  }
-
-  if (decision.sessionState && decision.sessionReason) {
-    lifecycle.session.state = decision.sessionState;
-    lifecycle.session.reason = decision.sessionReason;
-    lifecycle.session.lastTransitionAt = nowIso;
-    if (decision.sessionState === "working" && lifecycle.session.startedAt === null) {
-      lifecycle.session.startedAt = nowIso;
-    }
-    if (decision.sessionState === "done") {
-      lifecycle.session.completedAt = nowIso;
-    }
-    if (decision.sessionState === "terminated") {
-      lifecycle.session.terminatedAt = nowIso;
-    }
-  }
 }
 
 function splitEvidenceSignals(evidence: string): string[] {
@@ -536,7 +512,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         detectingAttempts: currentDetectingAttempts,
       },
     ): DeterminedStatus => {
-      applyLifecycleDecision(lifecycle, decision, nowIso);
+      commitLifecycleDecisionInPlace(lifecycle, decision, nowIso);
       session.lifecycle = lifecycle;
       session.status = decision.status;
       session.activitySignal = activitySignal;
@@ -1848,7 +1824,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     });
 
     // Execute reaction if configured
-    if (reactionConfig && reactionConfig.auto !== false) {
+    if (isNewTrigger && reactionConfig && reactionConfig.auto !== false) {
       await executeReaction(session.id, session.projectId, reactionKey, reactionConfig);
     }
   }

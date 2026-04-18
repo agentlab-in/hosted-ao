@@ -149,8 +149,9 @@ describe("SessionDetail desktop layout", () => {
     expect(screen.getByText("The empty state text needs to be shorter.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Agent Reports/i })).toHaveAttribute(
       "aria-expanded",
-      "true",
+      "false",
     );
+    fireEvent.click(screen.getByRole("button", { name: /Agent Reports/i }));
     expect(screen.getAllByText("worker-desktop").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("ao report working")).toBeInTheDocument();
     expect(screen.getByText("codex")).toBeInTheDocument();
@@ -189,15 +190,15 @@ describe("SessionDetail desktop layout", () => {
     );
 
     const toggle = screen.getByRole("button", { name: /Agent Reports/i });
-    expect(screen.getByText("ao acknowledge")).toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("ao acknowledge")).not.toBeInTheDocument();
+    expect(screen.getByText("ao acknowledge")).not.toBeVisible();
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("ao acknowledge")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("ao acknowledge")).not.toBeVisible();
   });
 
   it("sends unresolved comments back to the agent and shows sent state", async () => {

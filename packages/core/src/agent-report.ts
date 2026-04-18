@@ -115,6 +115,7 @@ export const AGENT_REPORT_METADATA_KEYS = {
 
 /** Freshness window — agent reports older than this are ignored. */
 export const AGENT_REPORT_FRESHNESS_MS = 300_000; // 5 minutes
+export const AGENT_REPORT_CLOCK_SKEW_TOLERANCE_MS = 60_000; // 60 seconds
 
 /**
  * CLI surface accepts these hyphen/underscore aliases for convenience.
@@ -432,9 +433,16 @@ export function applyAgentReport(
       const effectivePrUrl = trimmedPrUrl ?? current.pr.url ?? existingPrUrl;
       const effectivePrNumber =
         prNumber ?? current.pr.number ?? existingPrNumber ?? parsedPrFromUrl?.number;
-      current.pr.state = "open";
-      current.pr.reason = input.state === "ready_for_review" ? "review_pending" : "in_progress";
-      current.pr.lastObservedAt = now;
+      const canAdvancePrState =
+        effectivePrUrl !== undefined ||
+        effectivePrNumber !== undefined ||
+        current.pr.state !== "none";
+      if (canAdvancePrState) {
+        current.pr.state = "open";
+        current.pr.reason =
+          input.state === "ready_for_review" ? "review_pending" : "in_progress";
+        current.pr.lastObservedAt = now;
+      }
       if (effectivePrUrl) {
         current.pr.url = effectivePrUrl;
       }
@@ -550,10 +558,11 @@ export function isAgentReportFresh(
   report: AgentReport,
   now: Date = new Date(),
   windowMs: number = AGENT_REPORT_FRESHNESS_MS,
+  clockSkewToleranceMs: number = AGENT_REPORT_CLOCK_SKEW_TOLERANCE_MS,
 ): boolean {
   const reportedAt = Date.parse(report.timestamp);
   if (Number.isNaN(reportedAt)) return false;
   const currentTime = now.getTime();
-  if (reportedAt > currentTime) return false;
+  if (reportedAt > currentTime + clockSkewToleranceMs) return false;
   return currentTime - reportedAt <= windowMs;
 }

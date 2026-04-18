@@ -535,8 +535,8 @@ function getDetailedAttentionLevel(session: DashboardSession): AttentionLevel {
 
   // ── Pending: waiting on external (reviewer, CI) ───────────────────
   if (
-    session.lifecycle?.sessionState === "idle" ||
     session.lifecycle?.prReason === "review_pending" ||
+    session.lifecycle?.prReason === "closed_unmerged" ||
     session.status === "review_pending"
   ) {
     return "pending";

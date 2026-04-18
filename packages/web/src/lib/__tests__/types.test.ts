@@ -611,6 +611,47 @@ describe("getAttentionLevel", () => {
       });
       expect(getAttentionLevel(session)).toBe("working");
     });
+
+    it("should keep idle sessions with open PRs and in-flight CI in working", () => {
+      const session = createSession({
+        status: "working",
+        lifecycle: {
+          sessionState: "idle",
+          sessionReason: "task_in_progress",
+          prState: "open",
+          prReason: "in_progress",
+          runtimeState: "alive",
+          runtimeReason: "process_running",
+          session: {
+            state: "idle",
+            reason: "task_in_progress",
+            label: "idle",
+            reasonLabel: "task in progress",
+          },
+          pr: {
+            state: "open",
+            reason: "in_progress",
+            label: "open",
+            reasonLabel: "in progress",
+          },
+          runtime: {
+            state: "alive",
+            reason: "process_running",
+            label: "alive",
+            reasonLabel: "process running",
+          },
+          legacyStatus: "working",
+          evidence: null,
+          detectingAttempts: 0,
+          detectingEscalatedAt: null,
+          summary: "Session idle while CI is still running",
+          guidance: null,
+        },
+        pr: null,
+      });
+
+      expect(getAttentionLevel(session)).toBe("working");
+    });
   });
 
   describe("working state", () => {

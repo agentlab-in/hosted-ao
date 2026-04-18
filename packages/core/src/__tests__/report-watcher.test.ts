@@ -199,7 +199,7 @@ describe("checkBlockedAgent", () => {
     expect(result?.message).toContain("Need API key");
   });
 
-  it("ignores stale reports", () => {
+  it("keeps needs_input visible even after the freshness window", () => {
     const now = new Date();
     const oldReportTime = new Date(now.getTime() - 10 * 60 * 1000); // 10 minutes ago
     const session = createMockSession();
@@ -209,7 +209,8 @@ describe("checkBlockedAgent", () => {
     };
 
     const result = checkBlockedAgent(session, report, now, config);
-    expect(result).toBeNull();
+    expect(result?.trigger).toBe("agent_needs_input");
+    expect(result?.timeSinceReportMs).toBeGreaterThan(0);
   });
 });
 

@@ -10,7 +10,7 @@
  */
 
 import type { Session, SessionStatus } from "./types.js";
-import { readAgentReport, isAgentReportFresh, type AgentReport } from "./agent-report.js";
+import { readAgentReport, type AgentReport } from "./agent-report.js";
 
 /**
  * Report watcher trigger types.
@@ -174,15 +174,15 @@ export function checkBlockedAgent(
   // If no report, nothing to check
   if (!report) return null;
 
-  // Only check fresh reports (don't re-trigger on old blocked states)
-  if (!isAgentReportFresh(report, now)) return null;
-
   if (report.state === "needs_input") {
+    const reportTime = Date.parse(report.timestamp);
+    const timeSinceReportMs = Number.isNaN(reportTime) ? undefined : now.getTime() - reportTime;
     return {
       trigger: "agent_needs_input",
       message: `Agent needs input: ${report.note ?? "waiting for user decision"}`,
       checkedAt: now.toISOString(),
       report,
+      timeSinceReportMs,
     };
   }
 

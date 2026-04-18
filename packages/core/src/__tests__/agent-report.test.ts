@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import {
+  AGENT_REPORT_CLOCK_SKEW_TOLERANCE_MS,
   AGENT_REPORTED_STATES,
   AGENT_REPORT_FRESHNESS_MS,
   AGENT_REPORT_METADATA_KEYS,
@@ -265,6 +266,24 @@ describe("applyAgentReport", () => {
     expect(payload.pr.url).toBe("https://github.com/test/repo/pull/42");
   });
 
+  it("does not invent an open PR without a URL or number", () => {
+    const now = new Date("2025-01-02T09:35:00.000Z");
+
+    const result = applyAgentReport(dataDir, sessionId, {
+      state: "pr_created",
+      now,
+    });
+
+    expect(result.legacyStatus).toBe("idle");
+
+    const meta = readMetadataRaw(dataDir, sessionId)!;
+    const payload = JSON.parse(meta["statePayload"]);
+    expect(payload.pr.state).toBe("none");
+    expect(payload.pr.reason).toBe("not_created");
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_URL]).toBeUndefined();
+    expect(meta[AGENT_REPORT_METADATA_KEYS.PR_NUMBER]).toBeUndefined();
+  });
+
   it("keeps draft PR creation in working and marks the report as draft", () => {
     const now = new Date("2025-01-02T10:00:00.000Z");
     const result = applyAgentReport(dataDir, sessionId, {
@@ -502,12 +521,24 @@ describe("readAgentReport + isAgentReportFresh", () => {
     expect(isAgentReportFresh(stale, now)).toBe(false);
   });
 
-  it("rejects future timestamps (clock skew must not appear forever-fresh)", () => {
+  it("accepts small future skew inside the tolerance window", () => {
     const now = new Date("2025-01-01T12:00:00.000Z");
-    const futureAt = "2025-01-01T12:10:00.000Z"; // 10m in the future
+    const slightlyFuture = readAgentReport({
+      [AGENT_REPORT_METADATA_KEYS.STATE]: "working",
+      [AGENT_REPORT_METADATA_KEYS.AT]: new Date(
+        now.getTime() + AGENT_REPORT_CLOCK_SKEW_TOLERANCE_MS - 1,
+      ).toISOString(),
+    })!;
+    expect(isAgentReportFresh(slightlyFuture, now)).toBe(true);
+  });
+
+  it("rejects future timestamps outside the skew tolerance", () => {
+    const now = new Date("2025-01-01T12:00:00.000Z");
     const future = readAgentReport({
       [AGENT_REPORT_METADATA_KEYS.STATE]: "working",
-      [AGENT_REPORT_METADATA_KEYS.AT]: futureAt,
+      [AGENT_REPORT_METADATA_KEYS.AT]: new Date(
+        now.getTime() + AGENT_REPORT_CLOCK_SKEW_TOLERANCE_MS + 1,
+      ).toISOString(),
     })!;
     expect(isAgentReportFresh(future, now)).toBe(false);
   });
