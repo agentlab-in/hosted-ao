@@ -26,78 +26,94 @@ const TimestampSchema = z.string().nullable();
 const RuntimeHandleSchema = z.object({
   id: z.string(),
   runtimeName: z.string(),
-  data: z.record(z.unknown()),
+  data: z.preprocess((value) => {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      return value;
+    }
+    return {};
+  }, z.record(z.unknown())),
 });
 
 const CanonicalSessionLifecycleSchema = z.object({
   version: z.literal(2),
-  session: z.object({
-    kind: z.enum(["worker", "orchestrator"]),
-    state: z.enum([
-      "not_started",
-      "working",
-      "idle",
-      "needs_input",
-      "stuck",
-      "detecting",
-      "done",
-      "terminated",
-    ]),
-    reason: z.enum([
-      "spawn_requested",
-      "agent_acknowledged",
-      "task_in_progress",
-      "pr_created",
-      "pr_closed_waiting_decision",
-      "fixing_ci",
-      "resolving_review_comments",
-      "awaiting_user_input",
-      "awaiting_external_review",
-      "research_complete",
-      "merged_waiting_decision",
-      "manually_killed",
-      "runtime_lost",
-      "agent_process_exited",
-      "probe_failure",
-      "error_in_process",
-    ]),
-    startedAt: TimestampSchema,
-    completedAt: TimestampSchema,
-    terminatedAt: TimestampSchema,
-    lastTransitionAt: z.string(),
-  }),
-  pr: z.object({
-    state: z.enum(["none", "open", "merged", "closed"]),
-    reason: z.enum([
-      "not_created",
-      "in_progress",
-      "ci_failing",
-      "review_pending",
-      "changes_requested",
-      "approved",
-      "merge_ready",
-      "merged",
-      "closed_unmerged",
-    ]),
-    number: z.number().int().nullable(),
-    url: z.string().nullable(),
-    lastObservedAt: TimestampSchema,
-  }),
-  runtime: z.object({
-    state: z.enum(["unknown", "alive", "exited", "missing", "probe_failed"]),
-    reason: z.enum([
-      "spawn_incomplete",
-      "process_running",
-      "process_missing",
-      "tmux_missing",
-      "manual_kill_requested",
-      "probe_error",
-    ]),
-    lastObservedAt: TimestampSchema,
-    handle: RuntimeHandleSchema.nullable(),
-    tmuxName: z.string().nullable(),
-  }),
+  session: z
+    .object({
+      kind: z.enum(["worker", "orchestrator"]),
+      state: z.enum([
+        "not_started",
+        "working",
+        "idle",
+        "needs_input",
+        "stuck",
+        "detecting",
+        "done",
+        "terminated",
+      ]),
+      reason: z.enum([
+        "spawn_requested",
+        "agent_acknowledged",
+        "task_in_progress",
+        "pr_created",
+        "pr_closed_waiting_decision",
+        "fixing_ci",
+        "resolving_review_comments",
+        "awaiting_user_input",
+        "awaiting_external_review",
+        "research_complete",
+        "merged_waiting_decision",
+        "manually_killed",
+        "runtime_lost",
+        "agent_process_exited",
+        "probe_failure",
+        "error_in_process",
+      ]),
+      startedAt: TimestampSchema,
+      completedAt: TimestampSchema,
+      terminatedAt: TimestampSchema,
+      lastTransitionAt: z.string(),
+    })
+    .partial()
+    .optional(),
+  pr: z
+    .object({
+      state: z.enum(["none", "open", "merged", "closed"]),
+      reason: z.enum([
+        "not_created",
+        "in_progress",
+        "ci_failing",
+        "review_pending",
+        "changes_requested",
+        "approved",
+        "merge_ready",
+        "merged",
+        "closed_unmerged",
+      ]),
+      number: z.number().int().nullable(),
+      url: z.string().nullable(),
+      lastObservedAt: TimestampSchema,
+    })
+    .partial()
+    .optional(),
+  runtime: z
+    .object({
+      state: z.enum(["unknown", "alive", "exited", "missing", "probe_failed"]),
+      reason: z.enum([
+        "spawn_incomplete",
+        "process_running",
+        "process_missing",
+        "tmux_missing",
+        "manual_kill_requested",
+        "probe_error",
+      ]),
+      lastObservedAt: TimestampSchema,
+      handle: RuntimeHandleSchema.nullable(),
+      tmuxName: z.string().nullable(),
+    })
+    .partial()
+    .optional(),
 });
+
+type ParsedCanonicalSessionLifecycle = z.infer<typeof CanonicalSessionLifecycleSchema>;
 
 function normalizeTimestamp(value: unknown, fallback: string | null = null): string | null {
   if (typeof value !== "string") return fallback;
@@ -266,7 +282,7 @@ function synthesizeCanonicalLifecycle(
 }
 
 function normalizePayloadLifecycle(
-  payload: CanonicalSessionLifecycle,
+  payload: ParsedCanonicalSessionLifecycle,
   meta: Record<string, string>,
   options: ParseCanonicalLifecycleOptions = {},
 ): CanonicalSessionLifecycle {

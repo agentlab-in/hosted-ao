@@ -123,4 +123,51 @@ describe("parseCanonicalLifecycle", () => {
     expect(parsed.pr.reason).toBe("in_progress");
     expect(parsed.pr.number).toBe(42);
   });
+
+  it("preserves valid partial v2 payload fields while synthesizing missing sections", () => {
+    const parsed = parseCanonicalLifecycle({
+      status: "review_pending",
+      pr: "https://github.com/org/repo/pull/42",
+      stateVersion: "2",
+      statePayload: JSON.stringify({
+        version: 2,
+        session: {
+          kind: "orchestrator",
+          state: "idle",
+          reason: "awaiting_external_review",
+        },
+      }),
+    });
+
+    expect(parsed.session.kind).toBe("orchestrator");
+    expect(parsed.session.state).toBe("idle");
+    expect(parsed.session.reason).toBe("awaiting_external_review");
+    expect(parsed.pr.state).toBe("open");
+    expect(parsed.pr.reason).toBe("in_progress");
+    expect(parsed.pr.number).toBe(42);
+  });
+
+  it("normalizes runtime handles without data instead of discarding the payload", () => {
+    const parsed = parseCanonicalLifecycle({
+      status: "working",
+      stateVersion: "2",
+      statePayload: JSON.stringify({
+        version: 2,
+        runtime: {
+          handle: {
+            id: "rt-1",
+            runtimeName: "tmux",
+          },
+        },
+      }),
+    });
+
+    expect(parsed.runtime.handle).toEqual({
+      id: "rt-1",
+      runtimeName: "tmux",
+      data: {},
+    });
+    expect(parsed.runtime.state).toBe("unknown");
+    expect(parsed.runtime.reason).toBe("spawn_incomplete");
+  });
 });
