@@ -203,6 +203,15 @@ describe("parsePrFromUrl", () => {
     });
   });
 
+  it("parses GitHub pull request URLs with trailing path segments", () => {
+    expect(parsePrFromUrl("https://github.com/foo/bar/pull/123/files")).toEqual({
+      owner: "foo",
+      repo: "bar",
+      number: 123,
+      url: "https://github.com/foo/bar/pull/123/files",
+    });
+  });
+
   it("returns null when the URL has no PR number", () => {
     expect(parsePrFromUrl("https://example.com/foo/bar/pull/not-a-number")).toBeNull();
   });

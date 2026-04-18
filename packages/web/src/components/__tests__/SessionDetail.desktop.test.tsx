@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionDetail } from "../SessionDetail";
+import { buildAgentFixMessage } from "../session-detail-agent-actions";
 import { makePR, makeSession } from "../../__tests__/helpers";
 
 vi.mock("next/navigation", () => ({
@@ -241,6 +242,41 @@ describe("SessionDetail desktop layout", () => {
     });
 
     expect(screen.getByRole("button", { name: "Ask Agent to Fix" })).toBeInTheDocument();
+  });
+
+  it("builds branch links from the PR host for GitHub Enterprise repos", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-ghe",
+          projectId: "my-app",
+          branch: "feat/ghe-detail",
+          pr: makePR({
+            number: 312,
+            url: "https://github.enterprise.local/acme/app/pull/312",
+            owner: "acme",
+            repo: "app",
+            branch: "feat/ghe-detail",
+          }),
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "feat/ghe-detail" })).toHaveAttribute(
+      "href",
+      "https://github.enterprise.local/acme/app/tree/feat/ghe-detail",
+    );
+  });
+
+  it("truncates review-comment messages below the API payload cap", () => {
+    const message = buildAgentFixMessage({
+      url: "https://github.com/acme/app/pull/311#discussion_r2",
+      path: `packages/web/${"deep/".repeat(200)}component.tsx`,
+      body: `### ${"T".repeat(500)}\n<!-- DESCRIPTION START -->${"D".repeat(15_000)}<!-- DESCRIPTION END -->`,
+    });
+
+    expect(message.length).toBeLessThanOrEqual(9_500);
+    expect(message).toContain("Resolve the comment at https://github.com/acme/app/pull/311#discussion_r2");
   });
 
   it("shows terminal-ended placeholder for exited desktop sessions", () => {

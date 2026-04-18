@@ -52,7 +52,15 @@ export function cleanBugbotComment(body: string): { title: string; description: 
 }
 
 export function buildGitHubBranchUrl(pr: DashboardPR): string {
-  return `https://github.com/${pr.owner}/${pr.repo}/tree/${pr.branch}`;
+  let origin = "https://github.com";
+
+  try {
+    origin = new URL(pr.url).origin;
+  } catch {
+    // Fall back to the public GitHub host if the PR URL is missing or invalid.
+  }
+
+  return `${origin}/${pr.owner}/${pr.repo}/tree/${pr.branch}`;
 }
 
 export function activityStateClass(activityLabel: string): string {

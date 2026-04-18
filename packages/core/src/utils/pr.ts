@@ -9,7 +9,7 @@ export function parsePrFromUrl(prUrl: string): ParsedPrUrl | null {
   const pathSegments = parsedUrl?.pathname.split("/").filter(Boolean) ?? [];
 
   const githubStylePullIndex = pathSegments.findIndex((segment) => segment === "pull");
-  if (githubStylePullIndex >= 2 && githubStylePullIndex === pathSegments.length - 2) {
+  if (githubStylePullIndex >= 2 && githubStylePullIndex + 1 < pathSegments.length) {
     const owner = pathSegments[githubStylePullIndex - 2];
     const repo = pathSegments[githubStylePullIndex - 1];
     const prNumber = pathSegments[githubStylePullIndex + 1];

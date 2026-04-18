@@ -226,7 +226,8 @@ export function SessionDetailPRCard({
         {pr.ciChecks.length > 0 ? (
           <>
             <div className="session-detail-pr-sep" />
-            {pr.ciChecks.map((check) => {
+            {pr.ciChecks.map((check, index) => {
+              const key = check.url ?? `${check.name}-${index}`;
               const chip = (
                 <span
                   className={cn(
@@ -252,7 +253,7 @@ export function SessionDetailPRCard({
               );
               return check.url ? (
                 <a
-                  key={check.name}
+                  key={key}
                   href={check.url}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -262,7 +263,7 @@ export function SessionDetailPRCard({
                   {chip}
                 </a>
               ) : (
-                <span key={check.name}>{chip}</span>
+                <span key={key}>{chip}</span>
               );
             })}
           </>
