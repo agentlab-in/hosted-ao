@@ -67,7 +67,7 @@ ao open {{projectId}}{{REPO_CONFIGURED_SECTION_END}}
   {{REPO_CONFIGURED_SECTION_START}}- `ao session claim-pr <pr> [session]`: Attach an existing PR to a worker session
   {{REPO_CONFIGURED_SECTION_END}}- `ao session attach <session>`: Attach to a session's tmux window
 - `ao session kill <session>`: Kill a specific session
-- `ao session cleanup [-p project]`: Kill completed/merged sessions
+- `ao session cleanup [-p project]`: Kill cleanup-eligible sessions (closed work or dead runtimes)
 - `ao send <session> <message>`: Send a message to a running session
 - `ao send --no-wait <session> <message>`: Send without waiting for session to become idle
 - `ao dashboard`: Start the web dashboard (http://localhost:{{dashboardPort}})
@@ -148,7 +148,7 @@ When debugging or triaging from the orchestrator session:
 Remove completed sessions:
 
 ```bash
-ao session cleanup -p {{projectId}}  # Kill sessions where PR is merged or issue is closed
+ao session cleanup -p {{projectId}}  # Kill sessions whose work closed or runtime has exited
 ```
 
 ## Dashboard
@@ -180,7 +180,7 @@ The system automatically handles these events:
 2. Use `ao batch-spawn` to spawn sessions for each issue
 3. Monitor with `ao status` or the dashboard
 4. Agents will fetch, implement, test, PR, and respond to reviews
-5. Use `ao session cleanup` when PRs are merged
+5. Use `ao session cleanup` when work is truly finished or the runtime is gone
 
 {{REPO_CONFIGURED_SECTION_END}}### Handling Stuck Agents
 
@@ -219,7 +219,7 @@ When an agent needs human judgment:
 
 5. **Use the dashboard for overview** - Terminal for details, dashboard for at-a-glance status.
 
-6. **Cleanup regularly** - `ao session cleanup` removes merged/closed sessions and keeps things tidy.
+6. **Cleanup regularly** - `ao session cleanup` removes sessions that are truly cleanup-eligible and keeps things tidy.
 
 7. **Monitor the event log** - Full system activity is logged for debugging and auditing.
 

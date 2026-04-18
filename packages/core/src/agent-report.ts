@@ -16,7 +16,7 @@
  *   6. Default to working
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -29,6 +29,7 @@ import type {
 import { mutateMetadata, readMetadataRaw } from "./metadata.js";
 import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus, parseCanonicalLifecycle } from "./lifecycle-state.js";
 import { parsePrFromUrl } from "./utils/pr.js";
+import { assertValidSessionIdComponent } from "./utils/session-id.js";
 import { validateStatus } from "./utils/validation.js";
 
 /**
@@ -253,12 +254,11 @@ function buildAuditDir(dataDir: string): string {
   return join(dataDir, ".agent-report-audit");
 }
 
-const VALID_AUDIT_SESSION_ID = /^[a-zA-Z0-9_-]+$/;
+const AGENT_REPORT_AUDIT_MAX_BYTES = 256 * 1024;
+const AGENT_REPORT_AUDIT_MAX_ENTRIES = 200;
 
 function validateAuditSessionId(sessionId: SessionId): void {
-  if (!VALID_AUDIT_SESSION_ID.test(sessionId)) {
-    throw new Error(`Invalid session ID: ${sessionId}`);
-  }
+  assertValidSessionIdComponent(sessionId);
 }
 
 function buildAuditFilePath(dataDir: string, sessionId: SessionId): string {
@@ -291,7 +291,33 @@ function appendAgentReportAuditEntry(
 ): void {
   const auditDir = buildAuditDir(dataDir);
   mkdirSync(auditDir, { recursive: true });
-  appendFileSync(buildAuditFilePath(dataDir, sessionId), `${JSON.stringify(entry)}\n`, "utf8");
+  const auditFilePath = buildAuditFilePath(dataDir, sessionId);
+  const serializedEntry = `${JSON.stringify(entry)}\n`;
+  if (existsSync(auditFilePath)) {
+    const current = readFileSync(auditFilePath, "utf8");
+    let entries = current
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .slice(-(AGENT_REPORT_AUDIT_MAX_ENTRIES - 1));
+    entries.push(serializedEntry.trimEnd());
+    while (
+      entries.length > 1 &&
+      Buffer.byteLength(`${entries.join("\n")}\n`, "utf8") > AGENT_REPORT_AUDIT_MAX_BYTES
+    ) {
+      entries = entries.slice(1);
+    }
+    if (entries.length > AGENT_REPORT_AUDIT_MAX_ENTRIES) {
+      entries = entries.slice(-AGENT_REPORT_AUDIT_MAX_ENTRIES);
+    }
+    if (
+      Buffer.byteLength(current, "utf8") + Buffer.byteLength(serializedEntry, "utf8") >=
+      AGENT_REPORT_AUDIT_MAX_BYTES
+    ) {
+      writeFileSync(auditFilePath, `${entries.join("\n")}\n`, "utf8");
+      return;
+    }
+  }
+  appendFileSync(auditFilePath, serializedEntry, "utf8");
 }
 
 export function readAgentReportAuditTrail(

@@ -158,4 +158,43 @@ describe("observability snapshot", () => {
       }
     }
   });
+
+  it("redacts sensitive observability payload fields before persisting them", () => {
+    const observer = createProjectObserver(config, "session-manager");
+
+    observer.recordOperation({
+      metric: "send",
+      operation: "session.send",
+      outcome: "failure",
+      correlationId: "corr-redact",
+      projectId: "my-app",
+      sessionId: "app-1",
+      reason: "Authorization token abc123 failed validation",
+      data: {
+        token: "abc123",
+        prompt: "ship it",
+        nested: {
+          password: "s3cr3t",
+          detail: "safe detail",
+        },
+      },
+      level: "error",
+    });
+
+    const summary = readObservabilitySummary(config);
+    const trace = summary.projects["my-app"]?.recentTraces.find(
+      (entry) => entry.operation === "session.send",
+    );
+
+    expect(trace).toBeDefined();
+    expect(trace?.reason).toContain("Authorization token abc123 failed validation");
+    expect(trace?.data).toEqual({
+      token: "[redacted]",
+      prompt: "[redacted]",
+      nested: {
+        password: "[redacted]",
+        detail: "safe detail",
+      },
+    });
+  });
 });

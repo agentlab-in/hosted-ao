@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -442,6 +442,23 @@ describe("applyAgentReport", () => {
         now: new Date(),
       }),
     ).toThrow(/not found/);
+  });
+
+  it("bounds the on-disk audit trail to recent entries", () => {
+    for (let index = 0; index < 260; index += 1) {
+      applyAgentReport(dataDir, sessionId, {
+        state: "working",
+        note: `entry-${index}-${"x".repeat(1200)}`,
+        now: new Date(`2025-01-01T12:${String(index % 60).padStart(2, "0")}:00.000Z`),
+      });
+    }
+
+    const audit = readAgentReportAuditTrail(dataDir, sessionId);
+    expect(audit.length).toBeLessThanOrEqual(200);
+
+    const auditFilePath = join(dataDir, ".agent-report-audit", `${sessionId}.ndjson`);
+    const rawAudit = readFileSync(auditFilePath, "utf8");
+    expect(Buffer.byteLength(rawAudit, "utf8")).toBeLessThan(300_000);
   });
 });
 

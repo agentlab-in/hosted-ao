@@ -148,6 +148,10 @@ export interface ProjectObserver {
 const TRACE_LIMIT = 80;
 const SESSION_LIMIT = 200;
 const AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024;
+const OBSERVABILITY_ERROR_LOG_MAX_BYTES = 512 * 1024;
+const MAX_REDACTED_DEPTH = 4;
+const MAX_REDACTED_STRING_LENGTH = 256;
+const REDACTED_VALUE = "[redacted]";
 const LEVEL_ORDER: Record<ObservabilityLevel, number> = {
   debug: 10,
   info: 20,
@@ -205,6 +209,67 @@ function getAuditLogPath(config: OrchestratorConfig, component: string): string 
   return join(getObservabilityDir(config), `${sanitizeComponent(component)}-${process.pid}.ndjson`);
 }
 
+function shouldRedactKey(key: string): boolean {
+  return /token|secret|password|cookie|authorization|api[-_]?key|prompt|message|note/i.test(
+    key,
+  );
+}
+
+function sanitizeString(value: string): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  return collapsed.length > MAX_REDACTED_STRING_LENGTH
+    ? `${collapsed.slice(0, MAX_REDACTED_STRING_LENGTH)}…`
+    : collapsed;
+}
+
+function sanitizeUnknown(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return sanitizeString(value);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (depth >= MAX_REDACTED_DEPTH) return "[truncated]";
+  if (Array.isArray(value)) {
+    return value.slice(0, 25).map((entry) => sanitizeUnknown(entry, depth + 1));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).slice(0, 25).map(([key, entry]) => [
+        key,
+        shouldRedactKey(key) ? REDACTED_VALUE : sanitizeUnknown(entry, depth + 1),
+      ]),
+    );
+  }
+  return String(value);
+}
+
+function sanitizeDataRecord(data?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!data) return undefined;
+  return sanitizeUnknown(data) as Record<string, unknown>;
+}
+
+function sanitizeReason(reason?: string): string | undefined {
+  if (!reason) return undefined;
+  return sanitizeString(reason);
+}
+
+function sanitizePath(path?: string): string | undefined {
+  if (!path) return undefined;
+  return sanitizeString(path);
+}
+
+function appendRotatingNdjson(filePath: string, payload: Record<string, unknown>, maxBytes: number): void {
+  const rotatedPath = `${filePath}.1`;
+  if (existsSync(filePath)) {
+    const currentSize = statSync(filePath).size;
+    if (currentSize >= maxBytes) {
+      if (existsSync(rotatedPath)) {
+        unlinkSync(rotatedPath);
+      }
+      renameSync(filePath, rotatedPath);
+    }
+  }
+  appendFileSync(filePath, `${JSON.stringify(payload)}\n`, "utf-8");
+}
+
 function appendAuditLog(
   config: OrchestratorConfig,
   component: string,
@@ -212,17 +277,7 @@ function appendAuditLog(
   level: ObservabilityLevel,
 ): void {
   const filePath = getAuditLogPath(config, component);
-  const rotatedPath = `${filePath}.1`;
-  if (existsSync(filePath)) {
-    const currentSize = statSync(filePath).size;
-    if (currentSize >= AUDIT_LOG_MAX_BYTES) {
-      if (existsSync(rotatedPath)) {
-        unlinkSync(rotatedPath);
-      }
-      renameSync(filePath, rotatedPath);
-    }
-  }
-  appendFileSync(filePath, `${JSON.stringify({ ...payload, level })}\n`, "utf-8");
+  appendRotatingNdjson(filePath, { ...payload, level }, AUDIT_LOG_MAX_BYTES);
 }
 
 function appendObservabilityFailure(
@@ -231,7 +286,7 @@ function appendObservabilityFailure(
 ): void {
   try {
     const filePath = join(getObservabilityDir(config), "observability-errors.ndjson");
-    appendFileSync(filePath, `${JSON.stringify(payload)}\n`, "utf-8");
+    appendRotatingNdjson(filePath, payload, OBSERVABILITY_ERROR_LOG_MAX_BYTES);
   } catch {
     // Best effort only — avoid recursive observability failures.
   }
@@ -402,10 +457,10 @@ export function createProjectObserver(
         correlationId: input.correlationId,
         projectId: input.projectId,
         sessionId: input.sessionId,
-        path: input.path,
-        reason: input.reason,
+        path: sanitizePath(input.path),
+        reason: sanitizeReason(input.reason),
         durationMs: input.durationMs,
-        data: input.data,
+        data: sanitizeDataRecord(input.data),
       };
 
       updateSnapshot(
@@ -424,7 +479,7 @@ export function createProjectObserver(
           } else {
             currentCounter.failure += 1;
             currentCounter.lastFailureAt = timestamp;
-            currentCounter.lastFailureReason = input.reason;
+            currentCounter.lastFailureReason = sanitizeReason(input.reason);
           }
           snapshot.metrics[bucketKey] = currentCounter;
 
@@ -440,7 +495,7 @@ export function createProjectObserver(
               operation,
               outcome: input.outcome,
               updatedAt: timestamp,
-              reason: input.reason,
+              reason: sanitizeReason(input.reason),
             };
 
             const sessionEntries = Object.entries(snapshot.sessions).sort(([, a], [, b]) =>
@@ -461,10 +516,10 @@ export function createProjectObserver(
             correlationId: input.correlationId,
             projectId: input.projectId,
             sessionId: input.sessionId,
-            reason: input.reason,
+            reason: sanitizeReason(input.reason),
             durationMs: input.durationMs,
-            path: input.path,
-            data: input.data,
+            path: sanitizePath(input.path),
+            data: sanitizeDataRecord(input.data),
           },
         },
       );
@@ -482,10 +537,10 @@ export function createProjectObserver(
         correlationId: input.correlationId,
         projectId: input.projectId,
         sessionId: input.sessionId,
-        path: input.path,
+        path: sanitizePath(input.path),
         data: {
-          message: input.message,
-          ...input.data,
+          message: sanitizeString(input.message),
+          ...sanitizeDataRecord(input.data),
         },
       };
 
@@ -521,10 +576,10 @@ export function createProjectObserver(
             correlationId: input.correlationId,
             projectId: input.projectId,
             sessionId: input.sessionId,
-            path: input.path,
+            path: sanitizePath(input.path),
             data: {
-              message: input.message,
-              ...input.data,
+              message: sanitizeString(input.message),
+              ...sanitizeDataRecord(input.data),
             },
           },
         },
@@ -542,8 +597,8 @@ export function createProjectObserver(
             component: normalizedComponent,
             projectId: input.projectId,
             correlationId: input.correlationId,
-            reason: input.reason,
-            details: input.details,
+            reason: sanitizeReason(input.reason),
+            details: sanitizeDataRecord(input.details),
           };
         },
         {
@@ -556,8 +611,8 @@ export function createProjectObserver(
             status: input.status,
             projectId: input.projectId,
             correlationId: input.correlationId,
-            reason: input.reason,
-            details: input.details,
+            reason: sanitizeReason(input.reason),
+            details: sanitizeDataRecord(input.details),
           },
         },
       );
