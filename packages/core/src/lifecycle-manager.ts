@@ -568,8 +568,17 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             if (terminalOutput) {
               await agent.recordActivity(session, terminalOutput);
             }
-          } catch {
-            // Best effort only.
+          } catch (error) {
+            observer?.recordOperation?.({
+              metric: "lifecycle_poll",
+              operation: "activity.record",
+              outcome: "failure",
+              correlationId: createCorrelationId("lifecycle-poll"),
+              projectId: session.projectId,
+              sessionId: session.id,
+              reason: error instanceof Error ? error.message : String(error),
+              level: "warn",
+            });
           }
         }
 
@@ -716,8 +725,17 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           const sessionsDir = getSessionsDir(config.configPath, project.path);
           updateMetadata(sessionsDir, session.id, { pr: detectedPR.url });
         }
-      } catch {
-        // Retry next poll.
+      } catch (error) {
+        observer?.recordOperation?.({
+          metric: "lifecycle_poll",
+          operation: "scm.detect_pr",
+          outcome: "failure",
+          correlationId: createCorrelationId("lifecycle-poll"),
+          projectId: session.projectId,
+          sessionId: session.id,
+          reason: error instanceof Error ? error.message : String(error),
+          level: "warn",
+        });
       }
     }
 
@@ -789,8 +807,17 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             activityEvidence,
           }),
         );
-      } catch {
-        // Keep current status on SCM failure.
+      } catch (error) {
+        observer?.recordOperation?.({
+          metric: "lifecycle_poll",
+          operation: "scm.poll_pr",
+          outcome: "failure",
+          correlationId: createCorrelationId("lifecycle-poll"),
+          projectId: session.projectId,
+          sessionId: session.id,
+          reason: error instanceof Error ? error.message : String(error),
+          level: "warn",
+        });
       }
     }
 

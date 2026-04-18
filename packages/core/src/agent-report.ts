@@ -26,8 +26,8 @@ import type {
   SessionId,
   SessionStatus,
 } from "./types.js";
-import { updateCanonicalLifecycle, updateMetadata, readMetadataRaw } from "./metadata.js";
-import { deriveLegacyStatus } from "./lifecycle-state.js";
+import { mutateMetadata, readMetadataRaw } from "./metadata.js";
+import { buildLifecycleMetadataPatch, cloneLifecycle, deriveLegacyStatus, parseCanonicalLifecycle } from "./lifecycle-state.js";
 import { parsePrFromUrl } from "./utils/pr.js";
 import { validateStatus } from "./utils/validation.js";
 
@@ -402,7 +402,13 @@ export function applyAgentReport(
   let legacyStatus: SessionStatus | null = null;
   let previousLegacyStatus: SessionStatus | null = null;
 
-  const nextLifecycle = updateCanonicalLifecycle(dataDir, sessionId, (current) => {
+  const nextMetadata = mutateMetadata(dataDir, sessionId, (existing) => {
+    const current = cloneLifecycle(
+      parseCanonicalLifecycle(existing, {
+        sessionId,
+        status: validateStatus(existing["status"]),
+      }),
+    );
     previousLegacyStatus = deriveLegacyStatus(current, validateStatus(raw["status"]));
     before = buildAuditSnapshot(current, previousLegacyStatus);
     const validation = validateAgentReportTransition(current, input.state);
@@ -454,36 +460,42 @@ export function applyAgentReport(
       current.session.startedAt = now;
     }
     legacyStatus = deriveLegacyStatus(current, previousLegacyStatus);
-    return current;
+    const next = { ...existing };
+    Object.assign(
+      next,
+      buildLifecycleMetadataPatch(current, previousLegacyStatus),
+      {
+        [AGENT_REPORT_METADATA_KEYS.STATE]: input.state,
+        [AGENT_REPORT_METADATA_KEYS.AT]: now,
+      },
+    );
+    if (trimmedNote) {
+      next[AGENT_REPORT_METADATA_KEYS.NOTE] = trimmedNote;
+    } else {
+      next[AGENT_REPORT_METADATA_KEYS.NOTE] = "";
+    }
+    if (isPRWorkflowReport(input.state)) {
+      if (trimmedPrUrl) {
+        next[AGENT_REPORT_METADATA_KEYS.PR_URL] = trimmedPrUrl;
+      }
+      if (prNumber !== undefined) {
+        next[AGENT_REPORT_METADATA_KEYS.PR_NUMBER] = String(prNumber);
+      }
+      if (prIsDraft !== undefined) {
+        next[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] = prIsDraft ? "true" : "false";
+      }
+    }
+    return next;
   });
 
-  if (!nextLifecycle || !before || !previousState || !nextState || !legacyStatus) {
+  if (!nextMetadata || !before || !previousState || !nextState || !legacyStatus) {
     throw new Error(`Failed to apply agent report for session ${sessionId}`);
   }
 
-  // Persist report metadata alongside the lifecycle patch.
-  const metadataUpdates: Record<string, string> = {
-    [AGENT_REPORT_METADATA_KEYS.STATE]: input.state,
-    [AGENT_REPORT_METADATA_KEYS.AT]: now,
-  };
-  if (trimmedNote) {
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = trimmedNote;
-  } else {
-    // Clear stale notes from previous reports so they don't mislead humans.
-    metadataUpdates[AGENT_REPORT_METADATA_KEYS.NOTE] = "";
-  }
-  if (isPRWorkflowReport(input.state)) {
-    if (trimmedPrUrl) {
-      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_URL] = trimmedPrUrl;
-    }
-    if (prNumber !== undefined) {
-      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_NUMBER] = String(prNumber);
-    }
-    if (prIsDraft !== undefined) {
-      metadataUpdates[AGENT_REPORT_METADATA_KEYS.PR_IS_DRAFT] = prIsDraft ? "true" : "false";
-    }
-  }
-  updateMetadata(dataDir, sessionId, metadataUpdates);
+  const nextLifecycle = parseCanonicalLifecycle(nextMetadata, {
+    sessionId,
+    status: validateStatus(nextMetadata["status"]),
+  });
 
   const after = buildAuditSnapshot(nextLifecycle, legacyStatus);
   const auditEntry: AgentReportAuditEntry = {

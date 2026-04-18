@@ -494,6 +494,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     const duplicatePRAttachments = new Map<string, ActiveSessionRecord[]>();
 
     for (const record of repaired) {
+      if (record.raw["stateVersion"] !== "2" || !record.raw["statePayload"]) {
+        const lifecycle = cloneLifecycle(
+          parseCanonicalLifecycle(record.raw, {
+            sessionId: record.sessionName,
+            status: validateStatus(record.raw["status"]),
+            createdAt: record.raw["createdAt"] ? new Date(record.raw["createdAt"]) : undefined,
+          }),
+        );
+        const canonicalUpdates = lifecycleMetadataUpdates(record.raw, lifecycle);
+        updateMetadataPreservingMtime(
+          sessionsDir,
+          record.sessionName,
+          canonicalUpdates,
+          record.modifiedAt,
+        );
+        record.raw = applyMetadataUpdatesToRaw(record.raw, canonicalUpdates);
+      }
+
       if (isOrchestratorSessionRecord(record.sessionName, record.raw, sessionPrefix)) {
         record.raw = repairSingleSessionMetadataOnRead(sessionsDir, record, sessionPrefix).raw;
         continue;

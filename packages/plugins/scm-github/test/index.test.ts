@@ -428,6 +428,12 @@ describe("scm-github plugin", () => {
       expect(ghMock).not.toHaveBeenCalled();
     });
 
+    it("returns null when project has no repo configured", async () => {
+      const result = await scm.detectPR(makeSession(), { ...project, repo: undefined });
+      expect(result).toBeNull();
+      expect(ghMock).not.toHaveBeenCalled();
+    });
+
     it("returns null on gh CLI error", async () => {
       mockGhError("gh: not found");
       const result = await scm.detectPR(makeSession(), project);

@@ -63,6 +63,21 @@ describe("deriveLegacyStatus", () => {
 });
 
 describe("parseCanonicalLifecycle", () => {
+  it("rehydrates legacy merged sessions with a merged PR state", () => {
+    const parsed = parseCanonicalLifecycle({
+      status: "merged",
+      pr: "https://github.com/org/repo/pull/42",
+      createdAt: "2025-01-01T00:00:00.000Z",
+    });
+
+    expect(parsed.session.state).toBe("idle");
+    expect(parsed.session.reason).toBe("merged_waiting_decision");
+    expect(parsed.pr.state).toBe("merged");
+    expect(parsed.pr.reason).toBe("merged");
+    expect(parsed.pr.number).toBe(42);
+    expect(deriveLegacyStatus(parsed, "merged")).toBe("merged");
+  });
+
   it("preserves explicit null payload fields instead of rehydrating stale flat metadata", () => {
     const lifecycle = createInitialCanonicalLifecycle("worker", new Date("2025-01-01T00:00:00Z"));
     lifecycle.session.state = "working";
@@ -85,5 +100,74 @@ describe("parseCanonicalLifecycle", () => {
     expect(parsed.pr.url).toBeNull();
     expect(parsed.runtime.handle).toBeNull();
     expect(parsed.runtime.tmuxName).toBeNull();
+  });
+
+  it("falls back to synthesized lifecycle when a v2 payload is malformed", () => {
+    const parsed = parseCanonicalLifecycle({
+      status: "review_pending",
+      pr: "https://github.com/org/repo/pull/42",
+      stateVersion: "2",
+      statePayload: JSON.stringify({
+        version: 2,
+        session: {
+          kind: "worker",
+          state: "working",
+          reason: 123,
+        },
+      }),
+    });
+
+    expect(parsed.session.state).toBe("working");
+    expect(parsed.session.reason).toBe("task_in_progress");
+    expect(parsed.pr.state).toBe("open");
+    expect(parsed.pr.reason).toBe("in_progress");
+    expect(parsed.pr.number).toBe(42);
+  });
+
+  it("preserves valid partial v2 payload fields while synthesizing missing sections", () => {
+    const parsed = parseCanonicalLifecycle({
+      status: "review_pending",
+      pr: "https://github.com/org/repo/pull/42",
+      stateVersion: "2",
+      statePayload: JSON.stringify({
+        version: 2,
+        session: {
+          kind: "orchestrator",
+          state: "idle",
+          reason: "awaiting_external_review",
+        },
+      }),
+    });
+
+    expect(parsed.session.kind).toBe("orchestrator");
+    expect(parsed.session.state).toBe("idle");
+    expect(parsed.session.reason).toBe("awaiting_external_review");
+    expect(parsed.pr.state).toBe("open");
+    expect(parsed.pr.reason).toBe("in_progress");
+    expect(parsed.pr.number).toBe(42);
+  });
+
+  it("normalizes runtime handles without data instead of discarding the payload", () => {
+    const parsed = parseCanonicalLifecycle({
+      status: "working",
+      stateVersion: "2",
+      statePayload: JSON.stringify({
+        version: 2,
+        runtime: {
+          handle: {
+            id: "rt-1",
+            runtimeName: "tmux",
+          },
+        },
+      }),
+    });
+
+    expect(parsed.runtime.handle).toEqual({
+      id: "rt-1",
+      runtimeName: "tmux",
+      data: {},
+    });
+    expect(parsed.runtime.state).toBe("unknown");
+    expect(parsed.runtime.reason).toBe("spawn_incomplete");
   });
 });
