@@ -2074,7 +2074,9 @@ describe("shell wrapper content", () => {
 
     it("extracts PR URL from gh pr create output", async () => {
       const content = await getWrapperContent("gh");
-      expect(content).toContain("https://github");
+      expect(content).toContain(
+        "grep -Eo 'https?://[^/]+/[^/]+/[^/]+/pull/[0-9]+'",
+      );
       expect(content).toContain("update_ao_metadata pr");
     });
 
