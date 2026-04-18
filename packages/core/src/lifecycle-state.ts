@@ -10,6 +10,7 @@ import type {
   SessionKind,
   SessionStatus,
 } from "./types.js";
+import { z } from "zod";
 import { parsePrFromUrl } from "./utils/pr.js";
 import { safeJsonParse, validateStatus } from "./utils/validation.js";
 
@@ -19,6 +20,84 @@ interface ParseCanonicalLifecycleOptions {
   runtimeHandle?: RuntimeHandle | null;
   createdAt?: Date;
 }
+
+const TimestampSchema = z.string().nullable();
+
+const RuntimeHandleSchema = z.object({
+  id: z.string(),
+  runtimeName: z.string(),
+  data: z.record(z.unknown()),
+});
+
+const CanonicalSessionLifecycleSchema = z.object({
+  version: z.literal(2),
+  session: z.object({
+    kind: z.enum(["worker", "orchestrator"]),
+    state: z.enum([
+      "not_started",
+      "working",
+      "idle",
+      "needs_input",
+      "stuck",
+      "detecting",
+      "done",
+      "terminated",
+    ]),
+    reason: z.enum([
+      "spawn_requested",
+      "agent_acknowledged",
+      "task_in_progress",
+      "pr_created",
+      "pr_closed_waiting_decision",
+      "fixing_ci",
+      "resolving_review_comments",
+      "awaiting_user_input",
+      "awaiting_external_review",
+      "research_complete",
+      "merged_waiting_decision",
+      "manually_killed",
+      "runtime_lost",
+      "agent_process_exited",
+      "probe_failure",
+      "error_in_process",
+    ]),
+    startedAt: TimestampSchema,
+    completedAt: TimestampSchema,
+    terminatedAt: TimestampSchema,
+    lastTransitionAt: z.string(),
+  }),
+  pr: z.object({
+    state: z.enum(["none", "open", "merged", "closed"]),
+    reason: z.enum([
+      "not_created",
+      "in_progress",
+      "ci_failing",
+      "review_pending",
+      "changes_requested",
+      "approved",
+      "merge_ready",
+      "merged",
+      "closed_unmerged",
+    ]),
+    number: z.number().int().nullable(),
+    url: z.string().nullable(),
+    lastObservedAt: TimestampSchema,
+  }),
+  runtime: z.object({
+    state: z.enum(["unknown", "alive", "exited", "missing", "probe_failed"]),
+    reason: z.enum([
+      "spawn_incomplete",
+      "process_running",
+      "process_missing",
+      "tmux_missing",
+      "manual_kill_requested",
+      "probe_error",
+    ]),
+    lastObservedAt: TimestampSchema,
+    handle: RuntimeHandleSchema.nullable(),
+    tmuxName: z.string().nullable(),
+  }),
+});
 
 function normalizeTimestamp(value: unknown, fallback: string | null = null): string | null {
   if (typeof value !== "string") return fallback;
@@ -98,7 +177,7 @@ function synthesizeSessionState(
   }
 }
 
-function synthesizePRState(meta: Record<string, string>): {
+function synthesizePRState(meta: Record<string, string>, status: SessionStatus): {
   state: CanonicalPRState;
   reason: CanonicalPRReason;
   number: number | null;
@@ -110,8 +189,8 @@ function synthesizePRState(meta: Record<string, string>): {
   }
   const parsed = parsePrFromUrl(prUrl);
   return {
-    state: "open",
-    reason: "in_progress",
+    state: status === "merged" ? "merged" : "open",
+    reason: status === "merged" ? "merged" : "in_progress",
     number: parsed?.number ?? null,
     url: prUrl,
   };
@@ -154,7 +233,7 @@ function synthesizeCanonicalLifecycle(
     normalizeTimestamp(meta["createdAt"], new Date().toISOString()) ??
     new Date().toISOString();
   const sessionState = synthesizeSessionState(status);
-  const pr = synthesizePRState(meta);
+  const pr = synthesizePRState(meta, status);
   const runtime = synthesizeRuntimeState(meta, options.runtimeHandle ?? null);
 
   return {
@@ -289,10 +368,11 @@ export function parseCanonicalLifecycle(
 ): CanonicalSessionLifecycle {
   const parsed =
     meta["statePayload"] && meta["stateVersion"] === "2"
-      ? safeJsonParse<CanonicalSessionLifecycle>(meta["statePayload"])
+      ? safeJsonParse<unknown>(meta["statePayload"])
       : null;
-  if (parsed?.version === 2) {
-    return normalizePayloadLifecycle(parsed, meta, options);
+  const validated = CanonicalSessionLifecycleSchema.safeParse(parsed);
+  if (validated.success) {
+    return normalizePayloadLifecycle(validated.data, meta, options);
   }
   return synthesizeCanonicalLifecycle(meta, options);
 }
@@ -345,6 +425,8 @@ export function deriveLegacyStatus(
       return "idle";
     case "working":
       return "working";
+    default:
+      return previousStatus;
   }
 }
 
