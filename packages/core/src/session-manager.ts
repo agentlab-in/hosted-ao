@@ -46,9 +46,9 @@ import {
   readMetadataRaw,
   readArchivedMetadataRaw,
   updateArchivedMetadata,
-  writeMetadata,
-  updateMetadata,
-  deleteMetadata,
+  writeMetadata as _rawWriteMetadata,
+  updateMetadata as _rawUpdateMetadata,
+  deleteMetadata as _rawDeleteMetadata,
   listMetadata,
   reserveSessionId,
 } from "./metadata.js";
@@ -268,6 +268,44 @@ export interface SessionManagerDeps {
 /** Create a SessionManager instance. */
 export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionManager {
   const { config, registry } = deps;
+
+  // ── Session list cache ─────────────────────────────────────────────
+  // Populated by list(); served by listCached(). 35s TTL so polling
+  // (lifecycle every 30s, UI every 5s) doesn't re-scan the disk.
+  //
+  // Invalidation strategy: every metadata mutation goes through the
+  // updateMetadata/writeMetadata/deleteMetadata wrappers below, which
+  // clear the cache after writing. This covers all in-file mutation
+  // paths (spawn, kill, restore, claimPR, remap, cleanup, send, etc.)
+  // without each call site remembering to invalidate.
+  //
+  // Callers outside this file (e.g. lifecycle-manager which imports
+  // updateMetadata directly from ./metadata) must invoke the exported
+  // invalidateCache() themselves after their own mutations.
+  let _cache: { sessions: Session[]; at: number } | null = null;
+  const CACHE_TTL_MS = 35_000;
+
+  function invalidateCache(): void {
+    _cache = null;
+  }
+
+  // Wrapped metadata mutation APIs. Every caller inside this file uses
+  // these; the raw versions are only reached via the aliased imports.
+  const updateMetadata: typeof _rawUpdateMetadata = (...args) => {
+    const result = _rawUpdateMetadata(...args);
+    invalidateCache();
+    return result;
+  };
+  const writeMetadata: typeof _rawWriteMetadata = (...args) => {
+    const result = _rawWriteMetadata(...args);
+    invalidateCache();
+    return result;
+  };
+  const deleteMetadata: typeof _rawDeleteMetadata = (...args) => {
+    const result = _rawDeleteMetadata(...args);
+    invalidateCache();
+    return result;
+  };
 
   interface LocatedSession {
     raw: Record<string, string>;
@@ -1384,6 +1422,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       updateMetadata(sessionsDir, sessionId, session.metadata);
     }
 
+    invalidateCache();
     return session;
   }
 
@@ -1664,6 +1703,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw err;
     }
 
+    invalidateCache();
     return session;
   }
 
@@ -1729,7 +1769,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     });
 
     const resolved = await Promise.all(tasks);
-    return resolved.filter((session): session is Session => session !== null);
+    const result = resolved.filter((session): session is Session => session !== null);
+    // Populate cache only on full (unfiltered) list calls so listCached always has the complete picture.
+    if (!projectId) {
+      _cache = { sessions: result, at: Date.now() };
+    }
+    return result;
+  }
+
+  async function listCached(projectId?: string): Promise<Session[]> {
+    if (_cache && Date.now() - _cache.at < CACHE_TTL_MS) {
+      return projectId ? _cache.sessions.filter((s) => s.projectId === projectId) : _cache.sessions;
+    }
+    return list(projectId);
   }
 
   async function get(sessionId: SessionId): Promise<Session | null> {
@@ -1852,6 +1904,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     if (didPurgeOpenCodeSession) {
       markArchivedOpenCodeCleanup(sessionsDir, sessionId);
     }
+    invalidateCache();
   }
 
   async function cleanup(
@@ -2695,5 +2748,5 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     return restoredSession;
   }
 
-  return { spawn, spawnOrchestrator, restore, list, get, kill, cleanup, send, claimPR, remap };
+  return { spawn, spawnOrchestrator, restore, list, listCached, get, kill, cleanup, send, claimPR, remap, invalidateCache };
 }

@@ -414,6 +414,8 @@ export function createMockSessionManager(): SessionManager {
     spawnOrchestrator: vi.fn().mockResolvedValue(makeSession({ id: "app-orchestrator", metadata: { role: "orchestrator" } })),
     restore: vi.fn().mockResolvedValue(makeSession()),
     list: vi.fn().mockResolvedValue([]),
+    listCached: vi.fn().mockResolvedValue([]),
+    invalidateCache: vi.fn(),
     get: vi.fn().mockResolvedValue(null),
     kill: vi.fn().mockResolvedValue(undefined),
     cleanup: vi.fn().mockResolvedValue({ killed: [], skipped: [], errors: [] }),

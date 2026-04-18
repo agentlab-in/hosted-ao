@@ -724,6 +724,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           lifecycle.pr.lastObservedAt = nowIso;
           const sessionsDir = getSessionsDir(config.configPath, project.path);
           updateMetadata(sessionsDir, session.id, { pr: detectedPR.url });
+          sessionManager.invalidateCache();
         }
       } catch (error) {
         observer?.recordOperation?.({
@@ -1082,6 +1083,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     );
     const mergedUpdates = { ...updates, ...lifecycleUpdates };
     updateMetadata(sessionsDir, session.id, mergedUpdates);
+    sessionManager.invalidateCache();
 
     const cleaned = Object.fromEntries(
       Object.entries(session.metadata).filter(([key]) => {
