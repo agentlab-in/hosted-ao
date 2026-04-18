@@ -1158,6 +1158,58 @@ describe("check (single session)", () => {
 });
 
 describe("reactions", () => {
+  it("fires report watcher reactions only once per active trigger", async () => {
+    vi.useFakeTimers();
+
+    const notifier = createMockNotifier();
+    const registryWithNotifier = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      notifier,
+    });
+    const staleSession = makeSession({
+      id: "app-1",
+      status: "working",
+      createdAt: new Date("2025-01-01T11:40:00.000Z"),
+      metadata: {
+        createdAt: "2025-01-01T11:40:00.000Z",
+      },
+    });
+
+    config.reactions = {
+      "report-no-acknowledge": { auto: true, action: "notify", priority: "urgent" },
+    };
+    vi.mocked(mockSessionManager.list).mockResolvedValue([staleSession]);
+
+    const lm = createLifecycleManager({
+      config,
+      registry: registryWithNotifier,
+      sessionManager: mockSessionManager,
+    });
+
+    try {
+      vi.setSystemTime(new Date("2025-01-01T12:00:00.000Z"));
+      lm.start(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const reactionNotifications = vi.mocked(notifier.notify).mock.calls.filter((call) => {
+        const event = call[0] as { type?: string; data?: Record<string, unknown> } | undefined;
+        return (
+          event?.type === "reaction.triggered" &&
+          event.data?.["reactionKey"] === "report-no-acknowledge"
+        );
+      });
+
+      expect(reactionNotifications).toHaveLength(1);
+      expect(staleSession.metadata["reportWatcherTriggerCount"]).toBe("2");
+      expect(staleSession.metadata["reportWatcherActiveTrigger"]).toBe("no_acknowledge");
+    } finally {
+      lm.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("triggers send-to-agent reaction on CI failure", async () => {
     config.reactions = {
       "ci-failed": {
