@@ -88,6 +88,34 @@ describe("list", () => {
     expect(repaired!["status"]).toBe("working");
   });
 
+  it("persists canonical lifecycle payloads for legacy session metadata on read", async () => {
+    writeMetadata(sessionsDir, "app-legacy", {
+      worktree: "/tmp/legacy",
+      branch: "feat/legacy",
+      status: "working",
+      project: "my-app",
+      createdAt: "2025-01-01T00:00:00.000Z",
+    });
+
+    const oldTime = new Date("2026-01-02T00:00:00.000Z");
+    utimesSync(join(sessionsDir, "app-legacy"), oldTime, oldTime);
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const sessions = await sm.list("my-app");
+    const legacy = sessions.find((session) => session.id === "app-legacy");
+
+    expect(legacy).toBeDefined();
+    expect(legacy!.lastActivityAt.getTime()).toBe(oldTime.getTime());
+
+    const repaired = readMetadataRaw(sessionsDir, "app-legacy");
+    expect(repaired?.["stateVersion"]).toBe("2");
+    expect(repaired?.["statePayload"]).toBeTruthy();
+
+    const payload = JSON.parse(repaired!["statePayload"]);
+    expect(payload.session.startedAt).toBe("2025-01-01T00:00:00.000Z");
+    expect(payload.session.lastTransitionAt).toBe("2025-01-01T00:00:00.000Z");
+  });
+
   it("filters by project ID", async () => {
     // In hash-based architecture, each project has its own directory
     // so filtering is implicit. This test verifies list(projectId) only

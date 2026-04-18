@@ -43,8 +43,18 @@ interface LifecycleDecision {
  * Create a short hash of evidence string for detecting unchanged evidence.
  * Used to prevent counter reset when the same weak evidence re-presents.
  */
+function normalizeEvidenceForHash(evidence: string): string {
+  return evidence
+    .replace(/\sactivity=[^\s]+/g, "")
+    .replace(/\sat=[^\s]+/g, "")
+    .trim();
+}
+
 export function hashEvidence(evidence: string): string {
-  return createHash("sha256").update(evidence).digest("hex").slice(0, 12);
+  return createHash("sha256")
+    .update(normalizeEvidenceForHash(evidence))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 interface OpenPRDecisionInput {

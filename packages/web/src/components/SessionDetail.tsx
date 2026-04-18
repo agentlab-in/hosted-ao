@@ -72,13 +72,6 @@ function formatTimeCompact(isoDate: string | null): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-function getCiDotBg(pr: DashboardPR): string {
-  if (isPRRateLimited(pr) || isPRUnenriched(pr)) return "var(--color-text-tertiary)";
-  if (pr.ciStatus === "passing") return "var(--color-accent-green)";
-  if (pr.ciStatus === "failing") return "var(--color-accent-red)";
-  return "var(--color-status-attention)";
-}
-
 function getCiShortLabel(pr: DashboardPR): string {
   if (isPRRateLimited(pr) || isPRUnenriched(pr)) return "CI";
   if (pr.ciStatus === "passing") return "CI passing";
@@ -130,6 +123,39 @@ function activityStateClass(activityLabel: string): string {
     return "session-detail-status-pill--error";
   }
   return "session-detail-status-pill--neutral";
+}
+
+function activityToneClass(activityColor: string): string {
+  switch (activityColor) {
+    case "var(--color-status-working)":
+      return "session-detail-tone--working";
+    case "var(--color-status-ready)":
+      return "session-detail-tone--ready";
+    case "var(--color-status-attention)":
+      return "session-detail-tone--attention";
+    case "var(--color-status-error)":
+      return "session-detail-tone--error";
+    default:
+      return "session-detail-tone--muted";
+  }
+}
+
+function mobileStatusPillClass(activityLabel: string): string {
+  const normalized = activityLabel.toLowerCase();
+  if (normalized === "active") return "session-detail__status-pill--active";
+  if (normalized === "ready") return "session-detail__status-pill--ready";
+  if (normalized === "waiting for input") return "session-detail__status-pill--waiting";
+  if (normalized === "blocked" || normalized === "exited") {
+    return "session-detail__status-pill--error";
+  }
+  return "session-detail__status-pill--idle";
+}
+
+function ciToneClass(pr: DashboardPR): string {
+  if (isPRRateLimited(pr) || isPRUnenriched(pr)) return "session-detail-ci-tone--neutral";
+  if (pr.ciStatus === "passing") return "session-detail-ci-tone--pass";
+  if (pr.ciStatus === "failing") return "session-detail-ci-tone--fail";
+  return "session-detail-ci-tone--pending";
 }
 
 function SessionTopStrip({
@@ -199,8 +225,10 @@ function SessionTopStrip({
               )}
             >
               <span
-                className="session-detail-status-pill__dot"
-                style={{ background: activityColor }}
+                className={cn(
+                  "session-detail-status-pill__dot",
+                  activityToneClass(activityColor),
+                )}
               />
               <span className="session-detail-status-pill__label">
                 {activityLabel}
@@ -344,42 +372,36 @@ function _OrchestratorStatusStrip({
     return () => clearInterval(id);
   }, [createdAt]);
 
-  const stats: Array<{ value: number; label: string; color: string; bg: string }> = [
+  const stats: Array<{ value: number; label: string; toneClass: string }> = [
     {
       value: zones.merge,
       label: "merge-ready",
-      color: "var(--color-status-ready)",
-      bg: "color-mix(in srgb, var(--color-status-ready) 10%, transparent)",
+      toneClass: "session-detail-zone-pill--merge",
     },
     {
       value: zones.respond,
       label: "responding",
-      color: "var(--color-status-error)",
-      bg: "color-mix(in srgb, var(--color-status-error) 10%, transparent)",
+      toneClass: "session-detail-zone-pill--respond",
     },
     {
       value: zones.review,
       label: "review",
-      color: "var(--color-accent-orange)",
-      bg: "color-mix(in srgb, var(--color-accent-orange) 10%, transparent)",
+      toneClass: "session-detail-zone-pill--review",
     },
     {
       value: zones.working,
       label: "working",
-      color: "var(--color-accent-blue)",
-      bg: "color-mix(in srgb, var(--color-accent-blue) 10%, transparent)",
+      toneClass: "session-detail-zone-pill--working",
     },
     {
       value: zones.pending,
       label: "pending",
-      color: "var(--color-status-attention)",
-      bg: "color-mix(in srgb, var(--color-status-attention) 10%, transparent)",
+      toneClass: "session-detail-zone-pill--pending",
     },
     {
       value: zones.done,
       label: "done",
-      color: "var(--color-text-tertiary)",
-      bg: "color-mix(in srgb, var(--color-text-tertiary) 14%, transparent)",
+      toneClass: "session-detail-zone-pill--done",
     },
   ].filter((s) => s.value > 0);
 
@@ -414,19 +436,12 @@ function _OrchestratorStatusStrip({
               stats.map((s) => (
                 <div
                   key={s.label}
-                  className="flex items-center gap-1.5 px-2.5 py-1"
-                  style={{ background: s.bg }}
+                  className={cn("session-detail-zone-pill", s.toneClass)}
                 >
-                  <span
-                    className="text-[15px] font-bold leading-none tabular-nums"
-                    style={{ color: s.color }}
-                  >
+                  <span className="session-detail-zone-pill__value">
                     {s.value}
                   </span>
-                  <span
-                    className="text-[10px] font-medium"
-                    style={{ color: s.color, opacity: 0.8 }}
-                  >
+                  <span className="session-detail-zone-pill__label">
                     {s.label}
                   </span>
                 </div>
@@ -479,12 +494,14 @@ export function SessionDetail({
   };
   const headline = getSessionTitle(session);
 
-  const accentColor = "var(--color-accent)";
   const terminalVariant = isOrchestrator ? "orchestrator" : "agent";
 
   const terminalHeight = isOrchestrator
     ? "clamp(400px, 52vh, 620px)"
     : "clamp(380px, 48vh, 560px)";
+  const terminalHeightClass = isOrchestrator
+    ? "session-detail-height--orchestrator"
+    : "session-detail-height--worker";
   const isOpenCodeSession = session.metadata["agent"] === "opencode";
   const opencodeSessionId =
     typeof session.metadata["opencodeSessionId"] === "string" &&
@@ -659,17 +676,26 @@ export function SessionDetail({
                     <div id="session-terminal-section" aria-hidden="true" />
                     <div className="session-detail-section-label">
                       <div
-                        className="session-detail-section-label__bar"
-                        style={{ background: isOrchestrator ? accentColor : activity.color }}
+                        className={cn(
+                          "session-detail-section-label__bar",
+                          isOrchestrator
+                            ? "session-detail-tone--accent"
+                            : activityToneClass(activity.color),
+                        )}
                       />
                       <span className="session-detail-section-label__text">
                         Live Terminal
                       </span>
                     </div>
                     {!showTerminal ? (
-                      <div className="session-detail-terminal-placeholder" style={{ height: terminalHeight }} />
+                      <div
+                        className={cn(
+                          "session-detail-terminal-placeholder",
+                          terminalHeightClass,
+                        )}
+                      />
                     ) : terminalEnded ? (
-                      <div className="terminal-exited-placeholder" style={{ height: terminalHeight }}>
+                      <div className={cn("terminal-exited-placeholder", terminalHeightClass)}>
                         <span className="terminal-exited-placeholder__text">
                           Terminal session has ended
                         </span>
@@ -695,14 +721,6 @@ export function SessionDetail({
     );
   }
 
-  const statusPillBg = activity.color === "var(--color-status-working)"
-    ? "color-mix(in srgb, var(--color-status-working) 12%, transparent)"
-    : activity.color === "var(--color-status-attention)"
-      ? "color-mix(in srgb, var(--color-status-attention) 12%, transparent)"
-      : activity.color === "var(--color-status-error)"
-        ? "color-mix(in srgb, var(--color-status-error) 12%, transparent)"
-        : "color-mix(in srgb, var(--color-accent) 12%, transparent)";
-
   return (
     <div className="session-detail--terminal-first">
       {/* Floating header */}
@@ -712,11 +730,13 @@ export function SessionDetail({
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
         </a>
-        <span className="session-detail__status-dot" style={{ background: activity.color }} />
+        <span className={cn("session-detail__status-dot", activityToneClass(activity.color))} />
         <span className="session-detail__session-id">{session.id}</span>
         <span
-          className="session-detail__status-pill"
-          style={{ background: statusPillBg, color: activity.color }}
+          className={cn(
+            "session-detail__status-pill",
+            mobileStatusPillClass(activity.label),
+          )}
         >
           {activity.label.toLowerCase()}
         </span>
@@ -728,9 +748,9 @@ export function SessionDetail({
       {/* Terminal fills the viewport */}
       <div className={`session-detail__terminal-full${pr ? " session-detail__terminal-full--with-sheet" : ""}`}>
         {!showTerminal ? (
-          <div className="session-detail-terminal-placeholder" style={{ height: "100%" }} />
+          <div className="session-detail-terminal-placeholder session-detail-height--full" />
         ) : terminalEnded ? (
-          <div className="terminal-exited-placeholder" style={{ height: "100%" }}>
+          <div className="terminal-exited-placeholder session-detail-height--full">
             <span className="terminal-exited-placeholder__text">
               Terminal session has ended
             </span>
@@ -764,8 +784,7 @@ export function SessionDetail({
             </a>
             <span className="session-detail__sheet-item">
               <span
-                className="session-detail__sheet-ci-dot"
-                style={{ background: getCiDotBg(pr) }}
+                className={cn("session-detail__sheet-ci-dot", ciToneClass(pr))}
               />
               {getCiShortLabel(pr)}
             </span>

@@ -24,6 +24,17 @@ describe("hashEvidence", () => {
     const hash2 = hashEvidence("evidence B");
     expect(hash1).not.toBe(hash2);
   });
+
+  it("ignores activity labels and timestamps when hashing probe evidence", () => {
+    const active = hashEvidence(
+      "signal_disagreement runtime=alive process=unknown activity_signal=valid via_native activity=active at=2026-04-18T10:00:00.000Z",
+    );
+    const blocked = hashEvidence(
+      "signal_disagreement runtime=alive process=unknown activity_signal=valid via_native activity=blocked at=2026-04-18T10:01:00.000Z",
+    );
+
+    expect(active).toBe(blocked);
+  });
 });
 
 describe("isDetectingTimedOut", () => {

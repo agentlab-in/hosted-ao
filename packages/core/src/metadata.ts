@@ -169,26 +169,50 @@ export function updateMetadata(
   sessionId: SessionId,
   updates: Partial<Record<string, string>>,
 ): void {
+  mutateMetadata(dataDir, sessionId, (existing) => {
+    return applyMetadataUpdates(existing, updates);
+  }, { createIfMissing: true });
+}
+
+function applyMetadataUpdates(
+  existing: Record<string, string>,
+  updates: Partial<Record<string, string>>,
+): Record<string, string> {
+  let next = { ...existing };
+  // Merge updates — remove keys set to empty string
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) continue;
+    if (value === "") {
+      const { [key]: _removed, ...rest } = next;
+      void _removed;
+      next = rest;
+    } else {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
+export function mutateMetadata(
+  dataDir: string,
+  sessionId: SessionId,
+  updater: (existing: Record<string, string>) => Record<string, string>,
+  options: { createIfMissing?: boolean } = {},
+): Record<string, string> | null {
   const path = metadataPath(dataDir, sessionId);
   let existing: Record<string, string> = {};
 
   if (existsSync(path)) {
     existing = parseKeyValueContent(readFileSync(path, "utf-8"));
+  } else if (!options.createIfMissing) {
+    return null;
   }
 
-  // Merge updates — remove keys set to empty string
-  for (const [key, value] of Object.entries(updates)) {
-    if (value === undefined) continue;
-    if (value === "") {
-      const { [key]: _, ...rest } = existing;
-      existing = rest;
-    } else {
-      existing[key] = value;
-    }
-  }
+  const next = updater({ ...existing });
 
   mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, serializeMetadata(existing));
+  atomicWriteFileSync(path, serializeMetadata(next));
+  return next;
 }
 
 export function readCanonicalLifecycle(
