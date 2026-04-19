@@ -52,6 +52,16 @@ function listLiveDashboardOrchestrators(
   );
 }
 
+function listPreferredProjectOrchestrators(
+  sessions: Parameters<typeof listDashboardOrchestrators>[0],
+  projects: Parameters<typeof listDashboardOrchestrators>[1],
+) {
+  const liveOrchestrators = listLiveDashboardOrchestrators(sessions, projects);
+  return liveOrchestrators.length > 0
+    ? liveOrchestrators
+    : listDashboardOrchestrators(sessions, projects);
+}
+
 export async function GET(request: Request) {
   const correlationId = getCorrelationId(request);
   const startedAt = Date.now();
@@ -69,7 +79,7 @@ export async function GET(request: Request) {
     const coreSessions = await sessionManager.listCached(requestedProjectId);
     const visibleSessions = filterProjectSessions(coreSessions, projectFilter, config.projects);
     const orchestrators = requestedProjectId
-      ? listLiveDashboardOrchestrators(visibleSessions, config.projects)
+      ? listPreferredProjectOrchestrators(visibleSessions, config.projects)
       : listDashboardOrchestrators(visibleSessions, config.projects);
     const orchestratorId = requestedProjectId
       ? selectPreferredOrchestratorId(visibleSessions, config.projects)

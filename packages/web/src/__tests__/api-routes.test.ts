@@ -394,7 +394,7 @@ describe("API Routes", () => {
       expect(mockSessionManager.listCached).toHaveBeenCalledWith("my-app");
     });
 
-    it("omits dead orchestrators from project-scoped orchestrator payloads when none are live", async () => {
+    it("keeps dead orchestrators as the fallback project-scoped payload when none are live", async () => {
       const deadLifecycle = createInitialCanonicalLifecycle("orchestrator", new Date("2026-04-19T11:00:00.000Z"));
       deadLifecycle.session.state = "terminated";
       deadLifecycle.session.reason = "runtime_missing";
@@ -423,7 +423,9 @@ describe("API Routes", () => {
       const data = await res.json();
 
       expect(data.orchestratorId).toBeNull();
-      expect(data.orchestrators).toEqual([]);
+      expect(data.orchestrators).toEqual([
+        { id: "my-app-orchestrator-0", projectId: "my-app", projectName: "My App" },
+      ]);
       expect(data.sessions).toEqual([]);
     });
 

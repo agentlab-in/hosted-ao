@@ -6,6 +6,7 @@ import {
   openSync,
   closeSync,
   constants,
+  statSync,
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -24,6 +25,7 @@ const STATE_FILE = join(STATE_DIR, "running.json");
 const STATE_LOCK_FILE = join(STATE_DIR, "running.lock");
 const STARTUP_LOCK_FILE = join(STATE_DIR, "startup.lock");
 const MAX_LOCK_AGE_MS = 30 * 60 * 1000;
+const UNPARSEABLE_LOCK_GRACE_MS = 5_000;
 
 interface LockMetadata {
   pid: number;
@@ -62,8 +64,18 @@ function readLockMetadata(lockFile: string): LockMetadata | null {
 }
 
 function isStaleLockOwner(owner: LockMetadata): boolean {
+  if (isProcessAlive(owner.pid)) return false;
   const acquiredAt = Date.parse(owner.acquiredAt);
   return Number.isFinite(acquiredAt) && Date.now() - acquiredAt > MAX_LOCK_AGE_MS;
+}
+
+function isStaleUnparseableLock(lockFile: string): boolean {
+  try {
+    const mtimeMs = statSync(lockFile).mtimeMs;
+    return Date.now() - mtimeMs > UNPARSEABLE_LOCK_GRACE_MS;
+  } catch {
+    return false;
+  }
 }
 
 /** Try to create the lockfile atomically. Returns a release function on success, null on failure. */
@@ -110,7 +122,8 @@ async function acquireLock(
     if (release) return release;
 
     const owner = readLockMetadata(lockFile);
-    if (owner && (isStaleLockOwner(owner) || !isProcessAlive(owner.pid))) {
+    if ((!owner && isStaleUnparseableLock(lockFile))
+      || (owner && (isStaleLockOwner(owner) || !isProcessAlive(owner.pid)))) {
       try { unlinkSync(lockFile); } catch { /* ignore */ }
       const retryRelease = tryAcquire(lockFile);
       if (retryRelease) return retryRelease;
