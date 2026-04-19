@@ -32,20 +32,30 @@ interface LockMetadata {
   acquiredAt: string;
 }
 
+type ProcessProbeResult = "alive" | "forbidden" | "missing";
+
 function ensureDir(): void {
   mkdirSync(STATE_DIR, { recursive: true });
 }
 
-function isProcessAlive(pid: number): boolean {
+function probeProcess(pid: number): ProcessProbeResult {
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
   } catch (error: unknown) {
     if ((error as { code?: string }).code === "EPERM") {
-      return true;
+      return "forbidden";
     }
-    return false;
+    return "missing";
   }
+}
+
+function isLockOwnerAlive(pid: number): boolean {
+  return probeProcess(pid) !== "missing";
+}
+
+function isRunningProcessAlive(pid: number): boolean {
+  return probeProcess(pid) === "alive";
 }
 
 function readLockMetadata(lockFile: string): LockMetadata | null {
@@ -64,7 +74,7 @@ function readLockMetadata(lockFile: string): LockMetadata | null {
 }
 
 function isStaleLockOwner(owner: LockMetadata): boolean {
-  if (isProcessAlive(owner.pid)) return false;
+  if (isLockOwnerAlive(owner.pid)) return false;
   const acquiredAt = Date.parse(owner.acquiredAt);
   return Number.isFinite(acquiredAt) && Date.now() - acquiredAt > MAX_LOCK_AGE_MS;
 }
@@ -123,7 +133,7 @@ async function acquireLock(
 
     const owner = readLockMetadata(lockFile);
     if ((!owner && isStaleUnparseableLock(lockFile))
-      || (owner && (isStaleLockOwner(owner) || !isProcessAlive(owner.pid)))) {
+      || (owner && (isStaleLockOwner(owner) || !isLockOwnerAlive(owner.pid)))) {
       try { unlinkSync(lockFile); } catch { /* ignore */ }
       const retryRelease = tryAcquire(lockFile);
       if (retryRelease) return retryRelease;
@@ -196,7 +206,7 @@ export async function getRunning(): Promise<RunningState | null> {
     const state = readState();
     if (!state) return null;
 
-    if (!isProcessAlive(state.pid)) {
+    if (!isRunningProcessAlive(state.pid)) {
       // Stale entry — process is dead, clean up
       writeState(null);
       return null;
@@ -231,8 +241,8 @@ export async function acquireStartupLock(timeoutMs = 30000): Promise<() => void>
 export async function waitForExit(pid: number, timeoutMs = 5000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (!isProcessAlive(pid)) return true;
+    if (!isRunningProcessAlive(pid)) return true;
     await sleep(100);
   }
-  return !isProcessAlive(pid);
+  return !isRunningProcessAlive(pid);
 }

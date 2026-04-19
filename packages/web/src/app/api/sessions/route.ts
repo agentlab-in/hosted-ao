@@ -16,50 +16,53 @@ const METADATA_ENRICH_TIMEOUT_MS = 3_000;
 const PR_ENRICH_TIMEOUT_MS = 4_000;
 const PER_PR_ENRICH_TIMEOUT_MS = 1_500;
 
-function selectPreferredOrchestratorId(
+function compareOrchestratorRecency(a: { lastActivityAt?: Date | null; createdAt?: Date | null; id: string }, b: { lastActivityAt?: Date | null; createdAt?: Date | null; id: string }): number {
+  return (
+    (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0) ||
+    (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+function listProjectOrchestratorSessions(
   sessions: Parameters<typeof listDashboardOrchestrators>[0],
   projects: Parameters<typeof listDashboardOrchestrators>[1],
-): string | null {
+): Parameters<typeof listDashboardOrchestrators>[0] {
   const allSessionPrefixes = Object.entries(projects).map(
     ([projectId, project]) => project.sessionPrefix ?? projectId,
   );
 
-  const liveOrchestrators = sessions
+  const projectOrchestrators = sessions
     .filter((session) =>
       isOrchestratorSession(
         session,
         projects[session.projectId]?.sessionPrefix ?? session.projectId,
         allSessionPrefixes,
-      ) && !isTerminalSession(session),
+      ),
     )
-    .sort(
-      (a, b) =>
-        (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0) ||
-        (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) ||
-        a.id.localeCompare(b.id),
-    );
+    .sort(compareOrchestratorRecency);
 
-  return liveOrchestrators[0]?.id ?? null;
+  const liveOrchestrators = projectOrchestrators.filter((session) => !isTerminalSession(session));
+  return liveOrchestrators.length > 0 ? liveOrchestrators : projectOrchestrators;
 }
 
-function listLiveDashboardOrchestrators(
+function selectPreferredOrchestratorId(
   sessions: Parameters<typeof listDashboardOrchestrators>[0],
   projects: Parameters<typeof listDashboardOrchestrators>[1],
-) {
-  return listDashboardOrchestrators(
-    sessions.filter((session) => !isTerminalSession(session)),
-    projects,
-  );
+): string | null {
+  return listProjectOrchestratorSessions(sessions, projects)[0]?.id ?? null;
 }
 
 function listPreferredProjectOrchestrators(
   sessions: Parameters<typeof listDashboardOrchestrators>[0],
   projects: Parameters<typeof listDashboardOrchestrators>[1],
 ) {
-  const liveOrchestrators = listLiveDashboardOrchestrators(sessions, projects);
-  return liveOrchestrators.length > 0
-    ? liveOrchestrators
-    : listDashboardOrchestrators(sessions, projects);
+  const preferredOrchestrators = listProjectOrchestratorSessions(sessions, projects);
+  const liveOrchestrators = preferredOrchestrators.filter((session) => !isTerminalSession(session));
+  return listDashboardOrchestrators(
+    liveOrchestrators.length > 0 ? liveOrchestrators : preferredOrchestrators,
+    projects,
+  );
 }
 
 export async function GET(request: Request) {
