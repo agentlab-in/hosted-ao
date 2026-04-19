@@ -235,11 +235,17 @@ export function DirectTerminal({
         const activeTheme = isDark ? terminalThemes.dark : terminalThemes.light;
 
         // Initialize xterm.js Terminal
+        // NOTE: fontFamily must not contain `var(...)` — xterm's internal char-size
+        // measurement uses canvas ctx.font which cannot resolve CSS custom properties.
+        // Using a plain stack keeps measurement and rendering in the same font.
         const terminal = new Terminal({
           cursorBlink: true,
           fontSize: fontSize,
           fontFamily:
-            'var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
+            '"JetBrains Mono", "SF Mono", Menlo, Monaco, "Courier New", monospace',
+          // xterm v6 default lineHeight (1.0) collides rows with JetBrains Mono's
+          // tall x-height. 1.2 restores visual breathing room between lines.
+          lineHeight: 1.2,
           theme: activeTheme,
           // Light mode needs an explicit contrast floor because agent UIs often emit
           // dim/faint ANSI sequences that become unreadable on a near-white background.
@@ -315,6 +321,24 @@ export function DirectTerminal({
             }
           }
         }, 100);
+
+        // Re-measure when webfonts finish loading. next/font uses font-display:swap,
+        // so document.fonts.ready can resolve before JetBrains Mono actually swaps
+        // in. Without this, xterm's initial cell measurement stays pinned to the
+        // fallback font — producing wide-looking horizontal cells once the real
+        // font swaps. Listening to 'loadingdone' forces a re-fit when the swap
+        // actually completes.
+        const handleFontsLoadingDone = () => {
+          if (!mounted || !fitAddon.current || !terminalInstance.current) return;
+          try {
+            terminalInstance.current.clearTextureAtlas?.();
+            fitAddon.current.fit();
+            resizeTerminalMux(sessionId, terminalInstance.current.cols, terminalInstance.current.rows);
+          } catch {
+            // Ignore fit errors
+          }
+        };
+        document.fonts.addEventListener("loadingdone", handleFontsLoadingDone);
 
         // Grab viewport element for manual follow-output scroll
         const viewport = terminal.element?.querySelector<HTMLElement>(".xterm-viewport") ?? null;
@@ -470,6 +494,7 @@ export function DirectTerminal({
           selectionDisposable.dispose();
           if (safetyTimer) clearTimeout(safetyTimer);
           window.removeEventListener("resize", handleResize);
+          document.fonts.removeEventListener("loadingdone", handleFontsLoadingDone);
           viewport?.removeEventListener("scroll", handleViewportScroll);
           inputDisposable?.dispose();
           inputDisposable = null;
@@ -871,7 +896,7 @@ export function DirectTerminal({
         ) : null}
         <div
           ref={terminalRef}
-          className="w-full p-1.5 flex flex-col flex-1 min-h-0 overflow-hidden"
+          className="w-full flex flex-col flex-1 min-h-0 overflow-hidden"
         />
       </div>
     </div>
