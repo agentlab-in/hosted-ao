@@ -36,7 +36,6 @@ const {
     get: vi.fn(),
     spawn: vi.fn(),
     spawnOrchestrator: vi.fn(),
-    restore: vi.fn(),
     send: vi.fn(),
     claimPR: vi.fn(),
   },
