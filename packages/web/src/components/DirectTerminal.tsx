@@ -27,13 +27,22 @@ const MONO_FONT_FALLBACK =
 
 /**
  * Resolve the app's configured mono font token to a concrete font-family string.
+ *
  * xterm's internal char-size measurement ultimately hits canvas ctx.font, which
- * cannot evaluate `var(...)`. Reading the CSS custom property with
+ * cannot evaluate `var(...)`. Reading `--font-jetbrains-mono` with
  * getComputedStyle gives us the generated next/font family name (e.g.
  * `__JetBrains_Mono_abc123`), which we can safely feed into xterm while still
  * honouring the app's font configuration.
+ *
+ * NOTE: we deliberately read `--font-jetbrains-mono` and NOT `--font-mono`.
+ * `--font-mono` in globals.css is itself a composed stack that contains
+ * `var(--font-jetbrains-mono)` — if we forwarded that to xterm, the raw
+ * `var(...)` token would end up back in canvas ctx.font and reintroduce the
+ * original measurement bug this helper exists to fix.
+ *
+ * Exported for unit testing.
  */
-function resolveMonoFontFamily(): string {
+export function resolveMonoFontFamily(): string {
   if (typeof window === "undefined") return MONO_FONT_FALLBACK;
   try {
     const resolved = getComputedStyle(document.documentElement)
@@ -365,7 +374,16 @@ export function DirectTerminal({
             // Ignore fit errors
           }
         };
-        document.fonts.addEventListener("loadingdone", handleFontsLoadingDone);
+        // Feature-detect `FontFaceSet.addEventListener` — it's missing in
+        // jsdom's `document.fonts` mock and some older runtimes. Without the
+        // guard, init throws a TypeError and the terminal never attaches.
+        const fontsFace =
+          typeof document !== "undefined" ? document.fonts : undefined;
+        const fontsListenerAttached =
+          !!fontsFace && typeof fontsFace.addEventListener === "function";
+        if (fontsListenerAttached) {
+          fontsFace!.addEventListener("loadingdone", handleFontsLoadingDone);
+        }
 
         // Grab viewport element for manual follow-output scroll
         const viewport = terminal.element?.querySelector<HTMLElement>(".xterm-viewport") ?? null;
@@ -521,7 +539,9 @@ export function DirectTerminal({
           selectionDisposable.dispose();
           if (safetyTimer) clearTimeout(safetyTimer);
           window.removeEventListener("resize", handleResize);
-          document.fonts.removeEventListener("loadingdone", handleFontsLoadingDone);
+          if (fontsListenerAttached && fontsFace) {
+            fontsFace.removeEventListener("loadingdone", handleFontsLoadingDone);
+          }
           viewport?.removeEventListener("scroll", handleViewportScroll);
           inputDisposable?.dispose();
           inputDisposable = null;
