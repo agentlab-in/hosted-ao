@@ -387,12 +387,44 @@ describe("API Routes", () => {
 
       expect(data.orchestratorId).toBe("my-app-orchestrator-2");
       expect(data.orchestrators.map((session: { id: string }) => session.id)).toEqual([
-        "my-app-orchestrator-0",
         "my-app-orchestrator-1",
         "my-app-orchestrator-2",
       ]);
       expect(data.sessions).toEqual([]);
       expect(mockSessionManager.listCached).toHaveBeenCalledWith("my-app");
+    });
+
+    it("omits dead orchestrators from project-scoped orchestrator payloads when none are live", async () => {
+      const deadLifecycle = createInitialCanonicalLifecycle("orchestrator", new Date("2026-04-19T11:00:00.000Z"));
+      deadLifecycle.session.state = "terminated";
+      deadLifecycle.session.reason = "runtime_missing";
+      deadLifecycle.session.terminatedAt = "2026-04-19T11:00:00.000Z";
+      deadLifecycle.session.lastTransitionAt = "2026-04-19T11:00:00.000Z";
+      deadLifecycle.runtime.state = "missing";
+      deadLifecycle.runtime.reason = "process_missing";
+      deadLifecycle.runtime.lastObservedAt = "2026-04-19T11:00:00.000Z";
+
+      (mockSessionManager.listCached as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        makeSession({
+          id: "my-app-orchestrator-0",
+          projectId: "my-app",
+          metadata: { role: "orchestrator" },
+          status: "killed",
+          activity: "exited",
+          lastActivityAt: new Date("2026-04-19T11:00:00.000Z"),
+          lifecycle: deadLifecycle,
+        }),
+      ]);
+
+      const res = await sessionsGET(
+        makeRequest("http://localhost:3000/api/sessions?project=my-app&orchestratorOnly=true"),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+
+      expect(data.orchestratorId).toBeNull();
+      expect(data.orchestrators).toEqual([]);
+      expect(data.sessions).toEqual([]);
     });
 
     it("enriches all PRs concurrently, not sequentially", async () => {

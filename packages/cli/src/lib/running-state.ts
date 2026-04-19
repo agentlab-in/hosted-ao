@@ -23,6 +23,7 @@ const STATE_DIR = join(homedir(), ".agent-orchestrator");
 const STATE_FILE = join(STATE_DIR, "running.json");
 const STATE_LOCK_FILE = join(STATE_DIR, "running.lock");
 const STARTUP_LOCK_FILE = join(STATE_DIR, "startup.lock");
+const MAX_LOCK_AGE_MS = 30 * 60 * 1000;
 
 interface LockMetadata {
   pid: number;
@@ -58,6 +59,11 @@ function readLockMetadata(lockFile: string): LockMetadata | null {
   } catch {
     return null;
   }
+}
+
+function isStaleLockOwner(owner: LockMetadata): boolean {
+  const acquiredAt = Date.parse(owner.acquiredAt);
+  return Number.isFinite(acquiredAt) && Date.now() - acquiredAt > MAX_LOCK_AGE_MS;
 }
 
 /** Try to create the lockfile atomically. Returns a release function on success, null on failure. */
@@ -104,14 +110,14 @@ async function acquireLock(
     if (release) return release;
 
     const owner = readLockMetadata(lockFile);
-    if (!owner || !isProcessAlive(owner.pid)) {
+    if (owner && (isStaleLockOwner(owner) || !isProcessAlive(owner.pid))) {
       try { unlinkSync(lockFile); } catch { /* ignore */ }
       const retryRelease = tryAcquire(lockFile);
       if (retryRelease) return retryRelease;
     }
 
     if (Date.now() - start > timeoutMs) {
-      throw new Error(`Could not acquire ${resourceName}`);
+      throw new Error(`Could not acquire ${resourceName} (${lockFile})`);
     }
 
     // Jittered backoff: 30-70ms base, growing with attempts (capped at 200ms)

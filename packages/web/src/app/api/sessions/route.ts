@@ -42,6 +42,16 @@ function selectPreferredOrchestratorId(
   return liveOrchestrators[0]?.id ?? null;
 }
 
+function listLiveDashboardOrchestrators(
+  sessions: Parameters<typeof listDashboardOrchestrators>[0],
+  projects: Parameters<typeof listDashboardOrchestrators>[1],
+) {
+  return listDashboardOrchestrators(
+    sessions.filter((session) => !isTerminalSession(session)),
+    projects,
+  );
+}
+
 export async function GET(request: Request) {
   const correlationId = getCorrelationId(request);
   const startedAt = Date.now();
@@ -58,7 +68,9 @@ export async function GET(request: Request) {
         : undefined;
     const coreSessions = await sessionManager.listCached(requestedProjectId);
     const visibleSessions = filterProjectSessions(coreSessions, projectFilter, config.projects);
-    const orchestrators = listDashboardOrchestrators(visibleSessions, config.projects);
+    const orchestrators = requestedProjectId
+      ? listLiveDashboardOrchestrators(visibleSessions, config.projects)
+      : listDashboardOrchestrators(visibleSessions, config.projects);
     const orchestratorId = requestedProjectId
       ? selectPreferredOrchestratorId(visibleSessions, config.projects)
       : (orchestrators.length === 1 ? (orchestrators[0]?.id ?? null) : null);

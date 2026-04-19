@@ -57,8 +57,10 @@ const { mockPromptSelect, mockPromptConfirm } = vi.hoisted(() => ({
   mockPromptConfirm: vi.fn().mockResolvedValue(true),
 }));
 
-const { mockIsAlreadyRunning, mockUnregister, mockWaitForExit } = vi.hoisted(() => ({
+const { mockAcquireStartupLock, mockIsAlreadyRunning, mockRegister, mockUnregister, mockWaitForExit } = vi.hoisted(() => ({
+  mockAcquireStartupLock: vi.fn().mockResolvedValue(() => {}),
   mockIsAlreadyRunning: vi.fn().mockReturnValue(null),
+  mockRegister: vi.fn(),
   mockUnregister: vi.fn(),
   mockWaitForExit: vi.fn().mockReturnValue(true),
 }));
@@ -142,7 +144,8 @@ vi.mock("../../src/lib/preflight.js", () => ({
 }));
 
 vi.mock("../../src/lib/running-state.js", () => ({
-  register: vi.fn(),
+  acquireStartupLock: (...args: unknown[]) => mockAcquireStartupLock(...args),
+  register: (...args: unknown[]) => mockRegister(...args),
   unregister: (...args: unknown[]) => mockUnregister(...args),
   isAlreadyRunning: (...args: unknown[]) => mockIsAlreadyRunning(...args),
   getRunning: vi.fn().mockReturnValue(null),
@@ -283,8 +286,12 @@ beforeEach(async () => {
   mockPromptSelect.mockReset();
   mockPromptConfirm.mockReset();
   mockPromptConfirm.mockResolvedValue(true);
+  mockAcquireStartupLock.mockReset();
+  mockAcquireStartupLock.mockResolvedValue(() => {});
   mockIsAlreadyRunning.mockReset();
   mockIsAlreadyRunning.mockResolvedValue(null);
+  mockRegister.mockReset();
+  mockRegister.mockResolvedValue(undefined);
   mockUnregister.mockReset();
   mockWaitForExit.mockReset();
   mockWaitForExit.mockResolvedValue(true);
@@ -1319,6 +1326,22 @@ describe("start command — orchestrator session strategy display", () => {
 
     // Should have killed the dashboard
     expect(fakeDashboard.kill).toHaveBeenCalled();
+  });
+
+  it("reports startup lock acquisition failures through the normal CLI error path", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    mockAcquireStartupLock.mockRejectedValueOnce(
+      new Error("Could not acquire startup lock (/tmp/startup.lock)"),
+    );
+
+    await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow("process.exit(1)");
+
+    const errors = vi
+      .mocked(console.error)
+      .mock.calls.map((c) => c.join(" "))
+      .join("\n");
+    expect(errors).toContain("Could not acquire startup lock (/tmp/startup.lock)");
+    expect(mockIsAlreadyRunning).not.toHaveBeenCalled();
   });
 
   it("fails and cleans up dashboard when sm.restore throws on a killed orchestrator", async () => {

@@ -1470,7 +1470,7 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
-  it("demotes worker restore permissionless mode to ask-for-approval on-request", async () => {
+  it("keeps worker restore permissionless mode at ask-for-approval never", async () => {
     const content = jsonl(
       { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
       { threadId: "thread-1" },
@@ -1489,11 +1489,11 @@ describe("getRestoreCommand", () => {
       }),
     );
 
-    expect(cmd).toContain("--ask-for-approval on-request");
+    expect(cmd).toContain("--ask-for-approval never");
     expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
-  it("downgrades auto-edit restore policy to ask-for-approval on-request", async () => {
+  it("keeps auto-edit restore policy at ask-for-approval never", async () => {
     const content = jsonl(
       { type: "session_meta", cwd: "/workspace/test", model: "gpt-4o" },
       { threadId: "thread-1" },
@@ -1512,7 +1512,7 @@ describe("getRestoreCommand", () => {
       }),
     );
 
-    expect(cmd).toContain("--ask-for-approval on-request");
+    expect(cmd).toContain("--ask-for-approval never");
     expect(cmd).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
