@@ -254,7 +254,6 @@ beforeEach(async () => {
   mockSessionManager.restore.mockResolvedValue({ id: "app-orchestrator-restored" });
   mockSessionManager.get.mockReset();
   mockSessionManager.spawnOrchestrator.mockReset();
-  mockSessionManager.restore.mockReset();
   mockSessionManager.kill.mockReset();
   mockExec.mockReset();
   mockExecSilent.mockReset();
