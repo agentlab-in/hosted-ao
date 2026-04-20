@@ -1344,6 +1344,18 @@ describe("start command — orchestrator session strategy display", () => {
     expect(mockIsAlreadyRunning).not.toHaveBeenCalled();
   });
 
+  it("releases the startup lock before exiting on startup failures", async () => {
+    mockConfigRef.current = makeConfig({ "my-app": makeProject() });
+    const releaseStartupLock = vi.fn();
+    mockAcquireStartupLock.mockResolvedValueOnce(releaseStartupLock);
+    mockSessionManager.list.mockResolvedValue([]);
+    mockSessionManager.spawnOrchestrator.mockRejectedValue(new Error("Spawn failed"));
+
+    await expect(program.parseAsync(["node", "test", "start"])).rejects.toThrow("process.exit(1)");
+
+    expect(releaseStartupLock).toHaveBeenCalledTimes(1);
+  });
+
   it("fails and cleans up dashboard when sm.restore throws on a killed orchestrator", async () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
 

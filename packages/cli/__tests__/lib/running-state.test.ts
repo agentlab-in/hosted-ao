@@ -20,7 +20,7 @@ describe("running-state", () => {
     vi.restoreAllMocks();
   });
 
-  it("prunes running.json when the pid probe returns EPERM", async () => {
+  it("keeps running.json when the pid probe returns EPERM", async () => {
     const runningState = await import("../../src/lib/running-state.js");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
       const error = new Error("operation not permitted") as Error & { code?: string };
@@ -39,8 +39,14 @@ describe("running-state", () => {
     const state = await runningState.getRunning();
     const stateFile = join(testHome, ".agent-orchestrator", "running.json");
 
-    expect(state).toBeNull();
-    expect(existsSync(stateFile)).toBe(false);
+    expect(state).toEqual({
+      pid: 424242,
+      configPath: "/tmp/agent-orchestrator.yaml",
+      port: 4321,
+      startedAt: new Date("2026-04-19T00:00:00.000Z").toISOString(),
+      projects: ["my-app"],
+    });
+    expect(existsSync(stateFile)).toBe(true);
     expect(killSpy).toHaveBeenCalledWith(424242, 0);
   });
 

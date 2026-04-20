@@ -1610,6 +1610,7 @@ export function registerStart(program: Command): void {
           } else {
             console.error(chalk.red("\nError:"), String(err));
           }
+          unlockStartup();
           process.exit(1);
         } finally {
           unlockStartup();

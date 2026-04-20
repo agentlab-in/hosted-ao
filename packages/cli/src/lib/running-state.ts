@@ -24,7 +24,6 @@ const STATE_DIR = join(homedir(), ".agent-orchestrator");
 const STATE_FILE = join(STATE_DIR, "running.json");
 const STATE_LOCK_FILE = join(STATE_DIR, "running.lock");
 const STARTUP_LOCK_FILE = join(STATE_DIR, "startup.lock");
-const MAX_LOCK_AGE_MS = 30 * 60 * 1000;
 const UNPARSEABLE_LOCK_GRACE_MS = 5_000;
 
 interface LockMetadata {
@@ -55,7 +54,7 @@ function isLockOwnerAlive(pid: number): boolean {
 }
 
 function isRunningProcessAlive(pid: number): boolean {
-  return probeProcess(pid) === "alive";
+  return probeProcess(pid) !== "missing";
 }
 
 function readLockMetadata(lockFile: string): LockMetadata | null {
@@ -71,12 +70,6 @@ function readLockMetadata(lockFile: string): LockMetadata | null {
   } catch {
     return null;
   }
-}
-
-function isStaleLockOwner(owner: LockMetadata): boolean {
-  if (isLockOwnerAlive(owner.pid)) return false;
-  const acquiredAt = Date.parse(owner.acquiredAt);
-  return Number.isFinite(acquiredAt) && Date.now() - acquiredAt > MAX_LOCK_AGE_MS;
 }
 
 function isStaleUnparseableLock(lockFile: string): boolean {
@@ -133,7 +126,7 @@ async function acquireLock(
 
     const owner = readLockMetadata(lockFile);
     if ((!owner && isStaleUnparseableLock(lockFile))
-      || (owner && (isStaleLockOwner(owner) || !isLockOwnerAlive(owner.pid)))) {
+      || (owner && !isLockOwnerAlive(owner.pid))) {
       try { unlinkSync(lockFile); } catch { /* ignore */ }
       const retryRelease = tryAcquire(lockFile);
       if (retryRelease) return retryRelease;
@@ -235,7 +228,7 @@ export async function acquireStartupLock(timeoutMs = 30000): Promise<() => void>
 }
 
 /**
- * Wait for a process to exit, polling isProcessAlive.
+ * Wait for a process to exit, polling isRunningProcessAlive.
  * Returns true if the process exited, false if timeout reached.
  */
 export async function waitForExit(pid: number, timeoutMs = 5000): Promise<boolean> {
