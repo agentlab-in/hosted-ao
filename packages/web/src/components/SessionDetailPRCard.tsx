@@ -30,6 +30,11 @@ export interface BlockerChip {
   notified?: boolean;
 }
 
+export function hasMergeConflicts(pr: DashboardPR): boolean {
+  const mergeabilityReliable = !isPRUnenriched(pr) && !isPRRateLimited(pr);
+  return mergeabilityReliable && pr.state !== "merged" && !pr.mergeability.noConflicts;
+}
+
 export function buildBlockerChips(
   pr: DashboardPR,
   metadata: Record<string, string>,
@@ -50,9 +55,7 @@ export function buildBlockerChips(
     pr.reviewDecision === "changes_requested" ||
     lifecyclePrReason === "changes_requested" ||
     lifecycleStatus === "changes_requested";
-  const mergeabilityReliable = !isPRUnenriched(pr) && !isPRRateLimited(pr);
-  const hasConflicts =
-    mergeabilityReliable && pr.state !== "merged" && !pr.mergeability.noConflicts;
+  const hasConflicts = hasMergeConflicts(pr);
 
   if (ciIsFailing) {
     const failCount = pr.ciChecks.filter((check) => check.status === "failed").length;
@@ -175,10 +178,7 @@ export function SessionDetailPRCard({
   const allGreen = isPRMergeReady(pr);
   const blockerIssues = buildBlockerChips(pr, metadata, lifecyclePrReason);
   const fileCount = pr.changedFiles ?? 0;
-  const mergeabilityReliable = !isPRUnenriched(pr) && !isPRRateLimited(pr);
-  const hasConflicts =
-    mergeabilityReliable && pr.state !== "merged" && !pr.mergeability.noConflicts;
-  const showConflictActions = hasConflicts && pr.state === "open";
+  const showConflictActions = hasMergeConflicts(pr) && pr.state === "open";
   const compareUrl = showConflictActions ? buildGitHubCompareUrl(pr) : "";
 
   const handleCopyBranch = () => {
