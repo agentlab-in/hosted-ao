@@ -72,6 +72,27 @@ describe("spawn", () => {
     expect(mockRuntime.create).toHaveBeenCalled();
   });
 
+  it("forwards AO_AGENT_GH_TRACE into spawned agent runtime env when configured", async () => {
+    const previousTrace = process.env["AO_AGENT_GH_TRACE"];
+    process.env["AO_AGENT_GH_TRACE"] = "/tmp/agent-gh-trace-test.jsonl";
+
+    try {
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      await sm.spawn({ projectId: "my-app" });
+
+      expect(mockRuntime.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: expect.objectContaining({
+            AO_AGENT_GH_TRACE: "/tmp/agent-gh-trace-test.jsonl",
+          }),
+        }),
+      );
+    } finally {
+      if (previousTrace === undefined) delete process.env["AO_AGENT_GH_TRACE"];
+      else process.env["AO_AGENT_GH_TRACE"] = previousTrace;
+    }
+  });
+
   it("uses issue ID to derive branch name", async () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
 
@@ -1632,6 +1653,28 @@ describe("spawn", () => {
           launchCommand: "mock-agent --start",
         }),
       );
+    });
+
+    it("forwards AO_AGENT_GH_TRACE into orchestrator runtime env when configured", async () => {
+      const previousTrace = process.env["AO_AGENT_GH_TRACE"];
+      process.env["AO_AGENT_GH_TRACE"] = "/tmp/orchestrator-gh-trace-test.jsonl";
+
+      try {
+        const sm = createSessionManager({ config, registry: mockRegistry });
+        await sm.spawnOrchestrator({ projectId: "my-app" });
+
+        expect(mockRuntime.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            environment: expect.objectContaining({
+              AO_AGENT_GH_TRACE: "/tmp/orchestrator-gh-trace-test.jsonl",
+              AO_CALLER_TYPE: "orchestrator",
+            }),
+          }),
+        );
+      } finally {
+        if (previousTrace === undefined) delete process.env["AO_AGENT_GH_TRACE"];
+        else process.env["AO_AGENT_GH_TRACE"] = previousTrace;
+      }
     });
 
     it("does not persist orchestratorSessionReused metadata on newly created sessions", async () => {

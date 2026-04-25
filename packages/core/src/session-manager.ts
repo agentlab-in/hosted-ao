@@ -80,6 +80,11 @@ import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse, validateStatus } from "./utils/validation.js";
 import { isGitBranchNameSafe } from "./utils.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
+import {
+  buildAgentPath,
+  setupPathWrapperWorkspace,
+  PREFERRED_GH_PATH,
+} from "./agent-workspace-hooks.js";
 
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -1304,6 +1309,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         launchCommand,
         environment: {
           ...environment,
+          PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
+          GH_PATH: PREFERRED_GH_PATH,
+          ...(process.env["AO_AGENT_GH_TRACE"] && {
+            AO_AGENT_GH_TRACE: process.env["AO_AGENT_GH_TRACE"],
+          }),
           AO_SESSION: sessionId,
           AO_DATA_DIR: sessionsDir, // Pass sessions directory (not root dataDir)
           AO_SESSION_NAME: sessionId, // User-facing session name
@@ -1581,10 +1591,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
     };
 
-    // Setup agent hooks for automatic metadata updates
+    // Setup agent hooks for automatic metadata updates.
+    // Claude Code uses native PostToolUse hooks for metadata writes — skip
+    // PATH wrappers to avoid two concurrent writers (wrapper + hook) hitting
+    // the same metadata file with no locking.
     try {
       if (plugins.agent.setupWorkspaceHooks) {
         await plugins.agent.setupWorkspaceHooks(workspacePath, { dataDir: sessionsDir });
+      }
+      if (plugins.agent.name !== "claude-code") {
+        await setupPathWrapperWorkspace(workspacePath);
       }
     } catch (err) {
       await cleanupWorktreeAndMetadata();
@@ -1669,6 +1685,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         launchCommand,
         environment: {
           ...environment,
+          PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
+          GH_PATH: PREFERRED_GH_PATH,
+          ...(process.env["AO_AGENT_GH_TRACE"] && {
+            AO_AGENT_GH_TRACE: process.env["AO_AGENT_GH_TRACE"],
+          }),
           AO_SESSION: sessionId,
           AO_DATA_DIR: sessionsDir,
           AO_SESSION_NAME: sessionId,
@@ -2831,6 +2852,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       launchCommand,
       environment: {
         ...environment,
+        PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
+        GH_PATH: PREFERRED_GH_PATH,
+        ...(process.env["AO_AGENT_GH_TRACE"] && {
+          AO_AGENT_GH_TRACE: process.env["AO_AGENT_GH_TRACE"],
+        }),
         AO_SESSION: sessionId,
         AO_DATA_DIR: sessionsDir,
         AO_SESSION_NAME: sessionId,
