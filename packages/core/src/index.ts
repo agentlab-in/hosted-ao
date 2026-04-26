@@ -155,9 +155,7 @@ export {
   getWorkspaceAgentsMdPath,
   writeWorkspaceOpenCodeAgentsMd,
 } from "./opencode-agents-md.js";
-export {
-  writeOpenCodeConfig,
-} from "./opencode-config.js";
+export { writeOpenCodeConfig } from "./opencode-config.js";
 export {
   getOrchestratorSessionId,
   normalizeOrchestratorSessionStrategy,
@@ -249,15 +247,12 @@ export {
   validateAndStoreOrigin,
 } from "./paths.js";
 
-export {
-  normalizeOriginUrl,
-  relativeSubdir,
-  deriveStorageKey,
-} from "./storage-key.js";
+export { normalizeOriginUrl, relativeSubdir, deriveStorageKey } from "./storage-key.js";
 
 // Global config — Option C hybrid architecture (global registry + local behavior)
 export {
   getGlobalConfigPath,
+  isCanonicalGlobalConfigPath,
   loadGlobalConfig,
   saveGlobalConfig,
   loadLocalProjectConfig,
@@ -283,13 +278,11 @@ export type {
   RelinkProjectOptions,
 } from "./global-config.js";
 
-export {
-  loadEffectiveProjectConfig,
-  iterateAllProjects,
-} from "./project-resolver.js";
+export { loadEffectiveProjectConfig, iterateAllProjects } from "./project-resolver.js";
 
 // Config generator — auto-generate config from repo URL
 export {
+  CONFIG_SCHEMA_URL,
   isRepoUrl,
   parseRepoUrl,
   detectScmPlatform,
@@ -297,6 +290,7 @@ export {
   detectProjectInfo,
   generateConfigFromUrl,
   configToYaml,
+  withConfigSchema,
   isRepoAlreadyCloned,
   resolveCloneTarget,
   sanitizeProjectId,
@@ -317,12 +311,7 @@ export type {
   PortfolioSession,
 } from "./types.js";
 
-export {
-  getAoBaseDir,
-  getPortfolioDir,
-  getPreferencesPath,
-  getRegisteredPath,
-} from "./paths.js";
+export { getAoBaseDir, getPortfolioDir, getPreferencesPath, getRegisteredPath } from "./paths.js";
 
 export {
   discoverProjects,
@@ -338,15 +327,9 @@ export {
   refreshProject,
 } from "./portfolio-registry.js";
 
-export {
-  resolveProjectConfig,
-  clearConfigCache,
-} from "./portfolio-projects.js";
+export { resolveProjectConfig, clearConfigCache } from "./portfolio-projects.js";
 
-export {
-  listPortfolioSessions,
-  getPortfolioSessionCounts,
-} from "./portfolio-session-service.js";
+export { listPortfolioSessions, getPortfolioSessionCounts } from "./portfolio-session-service.js";
 
 export {
   resolvePortfolioProject,

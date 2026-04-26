@@ -16,12 +16,7 @@ import { atomicWriteFileSync } from "./atomic-write.js";
 import { detectScmPlatform } from "./config-generator.js";
 import { withFileLockSync } from "./file-lock.js";
 import { ProjectResolveError } from "./types.js";
-import {
-  generateSessionPrefix,
-  getAoBaseDir,
-  getProjectBaseDir,
-  getSessionsDir,
-} from "./paths.js";
+import { generateSessionPrefix, getAoBaseDir, getProjectBaseDir, getSessionsDir } from "./paths.js";
 import { deriveStorageKey, normalizeOriginUrl } from "./storage-key.js";
 
 function globalConfigLockPath(configPath: string): string {
@@ -110,6 +105,11 @@ export function getGlobalConfigPath(): string {
   return join(homedir(), ".agent-orchestrator", "config.yaml");
 }
 
+export function isCanonicalGlobalConfigPath(configPath: string | undefined): boolean {
+  if (!configPath) return false;
+  return resolve(configPath) === resolve(getGlobalConfigPath());
+}
+
 // =============================================================================
 // GLOBAL CONFIG SCHEMA
 // =============================================================================
@@ -134,7 +134,14 @@ const GLOBAL_PROJECT_ENTRY_FIELDS = new Set([
 ]);
 
 const LOCAL_CONFIG_FILENAMES = ["agent-orchestrator.yaml", "agent-orchestrator.yml"] as const;
-const LOCAL_IDENTITY_FIELDS = new Set(["repo", "defaultBranch", "originUrl", "projectId", "path", "storageKey"]);
+const LOCAL_IDENTITY_FIELDS = new Set([
+  "repo",
+  "defaultBranch",
+  "originUrl",
+  "projectId",
+  "path",
+  "storageKey",
+]);
 
 export const GlobalProjectEntrySchema = z.object({
   projectId: z.string().optional(),
@@ -336,7 +343,7 @@ export function saveGlobalConfig(config: GlobalConfig, configPath?: string): voi
  */
 export function loadLocalProjectConfig(projectPath: string): LocalProjectConfig | null {
   const result = loadLocalProjectConfigDetailed(projectPath);
-  return result.kind === "loaded" ? result.config ?? null : null;
+  return result.kind === "loaded" ? (result.config ?? null) : null;
 }
 
 export function loadLocalProjectConfigDetailed(projectPath: string): LocalProjectConfigLoadResult {
@@ -438,7 +445,9 @@ export function repairWrappedLocalProjectConfig(projectId: string, projectPath: 
   const projects = (parsed["projects"] ?? {}) as Record<string, Record<string, unknown>>;
   const project = projects[projectId];
   if (!project || typeof project !== "object") {
-    throw new Error(`Wrapped local config at ${configPath} does not contain project "${projectId}".`);
+    throw new Error(
+      `Wrapped local config at ${configPath} does not contain project "${projectId}".`,
+    );
   }
 
   const {
@@ -533,9 +542,13 @@ function readOriginUrlFromGitConfig(projectPath: string): string | null {
   return null;
 }
 
-function deriveProjectStorageIdentity(projectPath: string, originUrlOverride?: string | null): StorageIdentity {
+function deriveProjectStorageIdentity(
+  projectPath: string,
+  originUrlOverride?: string | null,
+): StorageIdentity {
   const gitRoot = resolveGitRoot(projectPath);
-  const rawOriginUrl = originUrlOverride !== undefined ? originUrlOverride : readOriginUrlFromGitConfig(projectPath);
+  const rawOriginUrl =
+    originUrlOverride !== undefined ? originUrlOverride : readOriginUrlFromGitConfig(projectPath);
   const originUrl = rawOriginUrl === null ? null : normalizeOriginUrl(rawOriginUrl);
   return {
     gitRoot,
@@ -544,7 +557,9 @@ function deriveProjectStorageIdentity(projectPath: string, originUrlOverride?: s
   };
 }
 
-function normalizeRepoIdentity(originUrl: string | null): z.infer<typeof GlobalRepoIdentitySchema> | undefined {
+function normalizeRepoIdentity(
+  originUrl: string | null,
+): z.infer<typeof GlobalRepoIdentitySchema> | undefined {
   if (!originUrl) return undefined;
 
   const normalizedOriginUrl = normalizeOriginUrl(originUrl);
@@ -665,7 +680,9 @@ function ensureProjectStorageIdentity(
   globalConfigPath?: string,
   alreadyLocked = false,
 ): (GlobalProjectEntry & Record<string, unknown>) | null {
-  const entry = globalConfig.projects[projectId] as (GlobalProjectEntry & Record<string, unknown>) | undefined;
+  const entry = globalConfig.projects[projectId] as
+    | (GlobalProjectEntry & Record<string, unknown>)
+    | undefined;
   if (!entry?.path) return null;
 
   if (typeof entry.storageKey === "string") {
@@ -683,7 +700,9 @@ function ensureProjectStorageIdentity(
   const configPath = globalConfigPath ?? getGlobalConfigPath();
   const migrate = () => {
     const fresh = loadGlobalConfig(configPath, { alreadyLocked: true }) ?? globalConfig;
-    const freshEntry = fresh.projects[projectId] as (GlobalProjectEntry & Record<string, unknown>) | undefined;
+    const freshEntry = fresh.projects[projectId] as
+      | (GlobalProjectEntry & Record<string, unknown>)
+      | undefined;
     if (!freshEntry?.path) return;
 
     const freshOldStorageKey =
@@ -758,7 +777,8 @@ export function registerProjectInGlobalConfig(
   optionsOrGlobalConfigPath?: RegisterProjectOptions | string,
   globalConfigPath?: string,
 ): void {
-  const options = typeof optionsOrGlobalConfigPath === "string" ? {} : (optionsOrGlobalConfigPath ?? {});
+  const options =
+    typeof optionsOrGlobalConfigPath === "string" ? {} : (optionsOrGlobalConfigPath ?? {});
   const configPath =
     typeof optionsOrGlobalConfigPath === "string"
       ? optionsOrGlobalConfigPath
@@ -768,7 +788,8 @@ export function registerProjectInGlobalConfig(
   const identity = deriveProjectStorageIdentity(normalizedProjectPath);
 
   withFileLockSync(globalConfigLockPath(configPath), () => {
-    const globalConfig = loadGlobalConfig(configPath, { alreadyLocked: true }) ?? makeEmptyGlobalConfig();
+    const globalConfig =
+      loadGlobalConfig(configPath, { alreadyLocked: true }) ?? makeEmptyGlobalConfig();
 
     const existing = globalConfig.projects[projectId] as
       | (GlobalProjectEntry & Record<string, unknown>)
@@ -872,16 +893,18 @@ export function resolveProjectIdentity(
   projectId: string,
   globalConfig: GlobalConfig,
   globalConfigPath?: string,
-): (Record<string, unknown> & {
-  name: string;
-  path: string;
-  storageKey: string;
-  originUrl?: string;
-  repo?: string;
-  defaultBranch: string;
-  sessionPrefix: string;
-  resolveError?: string;
-}) | null {
+):
+  | (Record<string, unknown> & {
+      name: string;
+      path: string;
+      storageKey: string;
+      originUrl?: string;
+      repo?: string;
+      defaultBranch: string;
+      sessionPrefix: string;
+      resolveError?: string;
+    })
+  | null {
   const entry = globalConfig.projects[projectId] as
     | (GlobalProjectEntry & Record<string, unknown>)
     | undefined;
@@ -967,7 +990,9 @@ export function resolveProjectIdentity(
   }
 
   const resolveError =
-    localConfigResult.kind !== "missing" ? localConfigResult.error ?? "Failed to load local config" : undefined;
+    localConfigResult.kind !== "missing"
+      ? (localConfigResult.error ?? "Failed to load local config")
+      : undefined;
 
   return {
     ...(resolveError ? {} : applyBehaviorDefaults({})),
@@ -985,8 +1010,11 @@ export function relinkProjectInGlobalConfig(
   let result: { oldStorageKey: string; storageKey: string; originUrl: string } | null = null;
 
   withFileLockSync(globalConfigLockPath(configPath), () => {
-    const globalConfig = loadGlobalConfig(configPath, { alreadyLocked: true }) ?? makeEmptyGlobalConfig();
-    const entry = globalConfig.projects[projectId] as (GlobalProjectEntry & Record<string, unknown>) | undefined;
+    const globalConfig =
+      loadGlobalConfig(configPath, { alreadyLocked: true }) ?? makeEmptyGlobalConfig();
+    const entry = globalConfig.projects[projectId] as
+      | (GlobalProjectEntry & Record<string, unknown>)
+      | undefined;
     if (!entry?.path) {
       throw new Error(`Project "${projectId}" is not registered in the global config.`);
     }
@@ -1057,7 +1085,10 @@ export function isOldConfigFormat(raw: unknown): boolean {
   const projects = obj["projects"] as Record<string, unknown>;
   return Object.values(projects).some(
     (entry) =>
-      entry !== null && entry !== undefined && typeof entry === "object" && "path" in (entry as Record<string, unknown>),
+      entry !== null &&
+      entry !== undefined &&
+      typeof entry === "object" &&
+      "path" in (entry as Record<string, unknown>),
   );
 }
 
@@ -1096,7 +1127,8 @@ export function migrateToGlobalConfig(oldConfigPath: string, globalConfigPath?: 
 
   // Preserve global operational settings
   if (typeof parsed["port"] === "number") newGlobal.port = parsed["port"];
-  if (parsed["terminalPort"] !== null && parsed["terminalPort"] !== undefined) newGlobal.terminalPort = parsed["terminalPort"] as number;
+  if (parsed["terminalPort"] !== null && parsed["terminalPort"] !== undefined)
+    newGlobal.terminalPort = parsed["terminalPort"] as number;
   if (parsed["directTerminalPort"] !== null && parsed["directTerminalPort"] !== undefined)
     newGlobal.directTerminalPort = parsed["directTerminalPort"] as number;
   if (parsed["readyThresholdMs"] !== null && parsed["readyThresholdMs"] !== undefined)
@@ -1210,9 +1242,7 @@ function makeEmptyGlobalConfig(): GlobalConfig {
   };
 }
 
-function sanitizeRawGlobalConfig(
-  raw: Record<string, unknown>,
-): RawGlobalConfigSanitization {
+function sanitizeRawGlobalConfig(raw: Record<string, unknown>): RawGlobalConfigSanitization {
   const projects = raw["projects"];
   if (!projects || typeof projects !== "object") {
     return { changed: false, strippedProjects: [] };

@@ -27,6 +27,7 @@ import {
 import { generateSessionPrefix } from "./paths.js";
 import {
   getGlobalConfigPath,
+  isCanonicalGlobalConfigPath,
   loadGlobalConfig,
 } from "./global-config.js";
 import { loadEffectiveProjectConfig } from "./project-resolver.js";
@@ -59,18 +60,14 @@ function inferScmPlugin(project: {
   return "github";
 }
 
-function classifyConfigShape(
-  configPath: string,
-): "wrapped" | "flat-or-nonobject" | "missing" {
+function classifyConfigShape(configPath: string): "wrapped" | "flat-or-nonobject" | "missing" {
   if (!existsSync(configPath)) {
     return "missing";
   }
 
   const raw = readFileSync(configPath, "utf-8");
   const parsed = parseYaml(raw);
-  return parsed &&
-    typeof parsed === "object" &&
-    "projects" in (parsed as Record<string, unknown>)
+  return parsed && typeof parsed === "object" && "projects" in (parsed as Record<string, unknown>)
     ? "wrapped"
     : "flat-or-nonobject";
 }
@@ -82,38 +79,41 @@ function generateLegacyWrappedStorageKey(configPath: string, projectPath: string
   return `${hash}-${basename(projectPath)}`;
 }
 
-function applyWrappedLocalStorageKeys(
-  configPath: string,
-  parsed: unknown,
-): unknown {
+function applyWrappedLocalStorageKeys(configPath: string, parsed: unknown): unknown {
   if (!parsed || typeof parsed !== "object") return parsed;
 
   const parsedObject = parsed as Record<string, unknown>;
-  if (!("projects" in parsedObject) || !parsedObject["projects"] || typeof parsedObject["projects"] !== "object") {
+  if (
+    !("projects" in parsedObject) ||
+    !parsedObject["projects"] ||
+    typeof parsedObject["projects"] !== "object"
+  ) {
     return parsed;
   }
 
   return {
     ...parsedObject,
     projects: Object.fromEntries(
-      Object.entries(parsedObject["projects"] as Record<string, unknown>).map(([projectId, value]) => {
-        if (!value || typeof value !== "object") {
-          return [projectId, value];
-        }
+      Object.entries(parsedObject["projects"] as Record<string, unknown>).map(
+        ([projectId, value]) => {
+          if (!value || typeof value !== "object") {
+            return [projectId, value];
+          }
 
-        const project = value as Record<string, unknown>;
-        if (typeof project["storageKey"] === "string" || typeof project["path"] !== "string") {
-          return [projectId, value];
-        }
+          const project = value as Record<string, unknown>;
+          if (typeof project["storageKey"] === "string" || typeof project["path"] !== "string") {
+            return [projectId, value];
+          }
 
-        return [
-          projectId,
-          {
-            ...project,
-            storageKey: generateLegacyWrappedStorageKey(configPath, project["path"]),
-          },
-        ];
-      }),
+          return [
+            projectId,
+            {
+              ...project,
+              storageKey: generateLegacyWrappedStorageKey(configPath, project["path"]),
+            },
+          ];
+        },
+      ),
     ),
   };
 }
@@ -338,6 +338,7 @@ const LifecycleConfigSchema = z
      */
     mergeCleanupIdleGraceMs: z
       .number()
+      .int()
       .nonnegative()
       .refine((v) => v === 0 || v >= 10_000, {
         message:
@@ -348,17 +349,23 @@ const LifecycleConfigSchema = z
   .default({});
 
 const OrchestratorConfigSchema = z.object({
-  port: z.number().default(3000),
-  terminalPort: z.number().optional(),
-  directTerminalPort: z.number().optional(),
-  readyThresholdMs: z.number().nonnegative().default(300_000),
+  $schema: z.string().optional(),
+  port: z.number().int().default(3000),
+  terminalPort: z.number().int().optional(),
+  directTerminalPort: z.number().int().optional(),
+  readyThresholdMs: z.number().int().nonnegative().default(300_000),
   power: PowerConfigSchema,
   lifecycle: LifecycleConfigSchema,
   defaults: DefaultPluginsSchema.default({}),
   plugins: z.array(InstalledPluginConfigSchema).default([]),
   dashboard: DashboardConfigSchema.optional(),
   projects: z.record(
-    z.string().regex(/^[a-zA-Z0-9_-]+$/, "Project ID must match [a-zA-Z0-9_-]+ (no dots, slashes, or special characters)"),
+    z
+      .string()
+      .regex(
+        /^[a-zA-Z0-9_-]+$/,
+        "Project ID must match [a-zA-Z0-9_-]+ (no dots, slashes, or special characters)",
+      ),
     ProjectConfigSchema,
   ),
   notifiers: z.record(NotifierConfigSchema).default({}),
@@ -409,7 +416,9 @@ function generateTempPluginName(pkg?: string, path?: string): string {
     const packageName = slashParts[slashParts.length - 1] ?? pkg;
 
     // Extract plugin name after ao-plugin-{slot}- prefix, preserving multi-word names like "jira-cloud"
-    const prefixMatch = packageName.match(/^ao-plugin-(?:runtime|agent|workspace|tracker|scm|notifier|terminal)-(.+)$/);
+    const prefixMatch = packageName.match(
+      /^ao-plugin-(?:runtime|agent|workspace|tracker|scm|notifier|terminal)-(.+)$/,
+    );
     if (prefixMatch?.[1]) {
       return prefixMatch[1];
     }
@@ -543,8 +552,7 @@ function mergeExternalPlugins(
       // If the existing plugin is disabled but there's an inline reference, enable it
       const existingPlugin = plugins.find(
         (p) =>
-          (entry.package && p.package === entry.package) ||
-          (entry.path && p.path === entry.path),
+          (entry.package && p.package === entry.package) || (entry.path && p.path === entry.path),
       );
       if (existingPlugin && existingPlugin.enabled === false) {
         existingPlugin.enabled = true;
@@ -926,17 +934,17 @@ export function loadConfig(configPath?: string): LoadedConfig {
   const raw = readFileSync(path, "utf-8");
   const parsed = parseYaml(raw);
   const shape = classifyConfigShape(path);
-  const isCanonicalGlobalConfig = resolve(path) === resolve(getGlobalConfigPath());
+  const isCanonicalGlobalConfig = isCanonicalGlobalConfigPath(path);
   const normalizedParsed =
     !isCanonicalGlobalConfig && shape === "wrapped"
       ? applyWrappedLocalStorageKeys(path, parsed)
       : parsed;
-  const config =
-    isCanonicalGlobalConfig
-      ? buildEffectiveConfigFromGlobalConfigPath(path) ?? validateConfig(normalizedParsed)
-      : shape === "wrapped"
+  const config = isCanonicalGlobalConfig
+    ? (buildEffectiveConfigFromGlobalConfigPath(path) ?? validateConfig(normalizedParsed))
+    : shape === "wrapped"
       ? validateConfig(normalizedParsed)
-      : buildEffectiveConfigFromFlatLocalPath(path, normalizedParsed) ?? validateConfig(normalizedParsed);
+      : (buildEffectiveConfigFromFlatLocalPath(path, normalizedParsed) ??
+        validateConfig(normalizedParsed));
 
   // Set the config path in the config object for hash generation
   config.configPath = path;
@@ -961,17 +969,17 @@ export function loadConfigWithPath(configPath?: string): {
   const raw = readFileSync(path, "utf-8");
   const parsed = parseYaml(raw);
   const shape = classifyConfigShape(path);
-  const isCanonicalGlobalConfig = resolve(path) === resolve(getGlobalConfigPath());
+  const isCanonicalGlobalConfig = isCanonicalGlobalConfigPath(path);
   const normalizedParsed =
     !isCanonicalGlobalConfig && shape === "wrapped"
       ? applyWrappedLocalStorageKeys(path, parsed)
       : parsed;
-  const config =
-    isCanonicalGlobalConfig
-      ? buildEffectiveConfigFromGlobalConfigPath(path) ?? validateConfig(normalizedParsed)
-      : shape === "wrapped"
+  const config = isCanonicalGlobalConfig
+    ? (buildEffectiveConfigFromGlobalConfigPath(path) ?? validateConfig(normalizedParsed))
+    : shape === "wrapped"
       ? validateConfig(normalizedParsed)
-      : buildEffectiveConfigFromFlatLocalPath(path, normalizedParsed) ?? validateConfig(normalizedParsed);
+      : (buildEffectiveConfigFromFlatLocalPath(path, normalizedParsed) ??
+        validateConfig(normalizedParsed));
 
   // Set the config path in the config object for hash generation
   config.configPath = path;
