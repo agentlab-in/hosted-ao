@@ -156,6 +156,9 @@ export {
   writeWorkspaceOpenCodeAgentsMd,
 } from "./opencode-agents-md.js";
 export {
+  writeOpenCodeConfig,
+} from "./opencode-config.js";
+export {
   getOrchestratorSessionId,
   normalizeOrchestratorSessionStrategy,
 } from "./orchestrator-session-strategy.js";
