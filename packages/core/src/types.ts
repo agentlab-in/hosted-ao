@@ -67,7 +67,8 @@ export type CanonicalPRReason =
   | "approved"
   | "merge_ready"
   | "merged"
-  | "closed_unmerged";
+  | "closed_unmerged"
+  | "cleared_on_restore";
 
 export type CanonicalRuntimeState = "unknown" | "alive" | "exited" | "missing" | "probe_failed";
 
@@ -231,19 +232,8 @@ export const TERMINAL_STATUSES: ReadonlySet<SessionStatus> = new Set([
 /** Activity states that indicate the session is no longer running. */
 export const TERMINAL_ACTIVITIES: ReadonlySet<ActivityState> = new Set(["exited"]);
 
-/** Statuses that must never be restored (e.g. already merged). */
-export const NON_RESTORABLE_STATUSES: ReadonlySet<SessionStatus> = new Set(["merged"]);
-
-/** Check whether lifecycle metadata indicates the session's PR is already merged. */
-function hasMergedLifecyclePR(lifecycle: CanonicalSessionLifecycle): boolean {
-  return (
-    (
-      lifecycle as CanonicalSessionLifecycle & {
-        pr?: { state?: string | null } | null;
-      }
-    ).pr?.state === "merged"
-  );
-}
+/** Statuses that must never be restored. */
+export const NON_RESTORABLE_STATUSES: ReadonlySet<SessionStatus> = new Set([]);
 
 /** Check if a session is in a terminal (dead) state. */
 export function isTerminalSession(session: {
@@ -275,8 +265,7 @@ export function isRestorable(session: {
   if (session.lifecycle) {
     return (
       isTerminalSession(session) &&
-      !NON_RESTORABLE_STATUSES.has(session.status) &&
-      !hasMergedLifecyclePR(session.lifecycle)
+      !NON_RESTORABLE_STATUSES.has(session.status)
     );
   }
   return isTerminalSession(session) && !NON_RESTORABLE_STATUSES.has(session.status);
@@ -634,6 +623,8 @@ export interface WorkspaceCreateConfig {
   project: ProjectConfig;
   sessionId: SessionId;
   branch: string;
+  /** Override the base directory for worktrees (e.g. V2 project-scoped dir). */
+  worktreeDir?: string;
 }
 
 export interface WorkspaceInfo {
@@ -1324,7 +1315,6 @@ export interface OrchestratorConfig {
 export interface DegradedProjectEntry {
   projectId: string;
   path: string;
-  storageKey: string;
   resolveError: string;
 }
 
@@ -1428,12 +1418,6 @@ export interface ProjectConfig {
 
   /** Local path to the repo */
   path: string;
-
-  /** Persisted storage hash — stable across directory moves */
-  storageKey?: string;
-
-  /** Canonical git origin URL associated with the storage identity */
-  originUrl?: string;
 
   resolveError?: string;
 
@@ -1656,37 +1640,36 @@ export interface PluginModule<T = unknown> {
 }
 
 // =============================================================================
-// SESSION METADATA (flat file format)
+// SESSION METADATA
 // =============================================================================
 
 /**
- * Session metadata stored as flat key=value files.
- * Matches the existing bash script format for backwards compatibility.
+ * Session metadata stored as JSON files under projects/{projectId}/sessions/.
  *
- * Note: In the new architecture, session files are named with user-facing names
- * (e.g., "int-1") and contain a tmuxName field for the globally unique tmux name
- * (e.g., "a3b4c5d6e7f8-int-1").
+ * Session files are named with user-facing session IDs (e.g., "ao-1.json").
+ * The tmuxName field matches the session ID (e.g., "ao-1") — no hash prefix.
  */
 export interface SessionMetadata {
   worktree: string;
   branch: string;
   status: string;
-  stateVersion?: string;
-  statePayload?: string;
-  tmuxName?: string; // Globally unique tmux session name (includes hash)
+  lifecycle?: CanonicalSessionLifecycle;
+  tmuxName?: string; // Tmux session name (matches session ID, e.g. "ao-1")
   issue?: string;
   pr?: string;
-  prAutoDetect?: "on" | "off";
+  prAutoDetect?: boolean;
   summary?: string;
   project?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
   createdAt?: string;
-  runtimeHandle?: string;
+  runtimeHandle?: RuntimeHandle;
   restoredAt?: string;
   role?: string; // "orchestrator" for orchestrator sessions
-  dashboardPort?: number;
-  terminalWsPort?: number;
-  directTerminalWsPort?: number;
+  dashboard?: {
+    port?: number;
+    terminalWsPort?: number;
+    directTerminalWsPort?: number;
+  };
   opencodeSessionId?: string;
   pinnedSummary?: string; // First quality summary, pinned for display stability
   userPrompt?: string; // Prompt used when spawning without a tracker issue
@@ -1905,8 +1888,6 @@ export interface PortfolioProject {
   configPath: string;                  // Absolute path to agent-orchestrator.yaml
   configProjectKey: string;            // Key in config.projects map
   repoPath: string;                    // Absolute local filesystem path
-  storageKey?: string;                 // Persisted storage hash — stable across directory moves
-  originUrl?: string;                  // Canonical git origin URL associated with the storage identity
   repo?: string;                       // "owner/repo" for SCM
   defaultBranch?: string;
   sessionPrefix: string;

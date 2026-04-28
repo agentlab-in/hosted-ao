@@ -1,14 +1,14 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   detectDefaultBranchFromDir,
+  generateExternalId,
   getGlobalConfigPath,
   loadConfig,
   migrateToGlobalConfig,
   registerProjectInGlobalConfig,
-  StorageKeyCollisionError,
 } from "@aoagents/ao-core";
 import { revalidatePath } from "next/cache";
 import { getAllProjects } from "@/lib/project-name";
@@ -84,17 +84,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const projectId = sanitizeString(body["projectId"]);
-  const name = sanitizeString(body["name"]) ?? projectId;
   const rawPath = sanitizeString(body["path"]);
-  const allowStorageKeyReuse = body["allowStorageKeyReuse"] === true;
-  if (!projectId) {
-    return NextResponse.json({ error: "Project ID is required." }, { status: 400 });
-  }
   if (!rawPath) {
     return NextResponse.json({ error: "Repository path is required." }, { status: 400 });
   }
   const resolvedPath = resolve(expandHomePath(rawPath));
+  const projectId = sanitizeString(body["projectId"]) ?? (basename(resolvedPath) || "project");
+  const name = sanitizeString(body["name"]) ?? (basename(resolvedPath) || projectId);
   if (!isGitRepository(resolvedPath)) {
     return NextResponse.json(
       { error: "Repository path must point to a git repository." },
@@ -104,30 +100,55 @@ export async function POST(request: NextRequest) {
 
   try {
     seedGlobalRegistryFromCurrentConfig();
-    registerProjectInGlobalConfig(
+    const registeredProjectId = registerProjectInGlobalConfig(
       projectId,
       name ?? projectId,
       resolvedPath,
       buildSeedLocalConfig(resolvedPath),
-      allowStorageKeyReuse ? { allowStorageKeyReuse: true } : undefined,
     );
     invalidatePortfolioServicesCache();
-    revalidatePortfolioPaths(projectId);
-    return NextResponse.json({ ok: true, projectId }, { status: 201 });
+    revalidatePortfolioPaths(registeredProjectId);
+    return NextResponse.json({ ok: true, projectId: registeredProjectId }, { status: 201 });
   } catch (err) {
-    if (err instanceof StorageKeyCollisionError) {
+    const message = err instanceof Error ? err.message : "Failed to add project";
+
+    // Detect project collision errors and return a structured 409 so the
+    // AddProjectModal can display the collision UI (open existing / use suggested ID).
+    const pathAlreadyRegistered = message.match(
+      /^Project "([^"]+)" is already registered at/,
+    );
+    const idAlreadyRegistered = message.match(
+      /^Project id "([^"]+)" is already registered for/,
+    );
+
+    if (pathAlreadyRegistered) {
+      const existingProjectId = pathAlreadyRegistered[1];
+      const suggestedProjectId = generateExternalId(resolvedPath);
       return NextResponse.json(
         {
-          error: err.message,
-          existingProjectId: err.existingProjectId,
-          suggestion: "confirm-reuse",
+          error: message,
+          existingProjectId,
+          suggestedProjectId,
+          suggestion: "choose-project-id" as const,
         },
         { status: 409 },
       );
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to add project" },
-      { status: 400 },
-    );
+
+    if (idAlreadyRegistered) {
+      const existingProjectId = idAlreadyRegistered[1];
+      const suggestedProjectId = generateExternalId(resolvedPath);
+      return NextResponse.json(
+        {
+          error: message,
+          existingProjectId,
+          suggestedProjectId,
+          suggestion: "choose-project-id" as const,
+        },
+        { status: 409 },
+      );
+    }
+
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }

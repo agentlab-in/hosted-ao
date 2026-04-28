@@ -1,5 +1,17 @@
 /**
- * Path utilities for storage-key-based directory structure.
+ * Path utilities for the AO storage directory structure.
+ *
+ * V2 layout (projects/{projectId}/):
+ *   getProjectDir(projectId)          → ~/.agent-orchestrator/projects/{projectId}
+ *   getProjectSessionsDir(projectId)  → .../projects/{projectId}/sessions
+ *   getProjectWorktreesDir(projectId) → .../projects/{projectId}/worktrees
+ *   getOrchestratorPath(projectId)    → .../projects/{projectId}/orchestrator.json
+ *   getSessionPath(projectId, sid)    → .../projects/{projectId}/sessions/{sid}.json
+ *
+ * Legacy layout ({storageKey}/):
+ *   getProjectBaseDir(storageKey)     → ~/.agent-orchestrator/{storageKey}
+ *   getSessionsDir(storageKey)        → ~/.agent-orchestrator/{storageKey}/sessions
+ *   ... (deprecated, kept for migration only)
  */
 
 import { createHash } from "node:crypto";
@@ -33,6 +45,8 @@ export function generateConfigHash(configPath: string): string {
 /**
  * Generate project ID from project path (basename of the path).
  * Example: ~/repos/integrator → "integrator"
+ *
+ * @deprecated New project registrations use generateExternalId() from global-config.ts.
  */
 export function generateProjectId(projectPath: string): string {
   return basename(projectPath);
@@ -72,7 +86,66 @@ export function generateSessionPrefix(projectId: string): string {
   return projectId.slice(0, 3).toLowerCase();
 }
 
+// =============================================================================
+// V2 PATH FUNCTIONS (projects/{projectId}/ layout)
+// =============================================================================
+
+/** Maximum allowed length for a project ID. */
+const MAX_PROJECT_ID_LENGTH = 128;
+
+/** Pattern for safe project IDs — alphanumeric, dots, hyphens, underscores only. */
+const SAFE_PROJECT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+/** Validate a projectId is safe for use as a directory name, shell commands, and tmux sessions. */
+function assertSafeProjectId(projectId: string): void {
+  if (
+    !projectId ||
+    projectId === "." ||
+    projectId === ".." ||
+    projectId.length > MAX_PROJECT_ID_LENGTH ||
+    !SAFE_PROJECT_ID_PATTERN.test(projectId)
+  ) {
+    throw new Error(`Unsafe project ID: "${projectId}"`);
+  }
+}
+
+/** Get the project directory by project ID. */
+export function getProjectDir(projectId: string): string {
+  assertSafeProjectId(projectId);
+  return join(getAoBaseDir(), "projects", projectId);
+}
+
+/** Get the sessions directory for a project (workers only). */
+export function getProjectSessionsDir(projectId: string): string {
+  return join(getProjectDir(projectId), "sessions");
+}
+
+/** Get the worktrees directory for a project. */
+export function getProjectWorktreesDir(projectId: string): string {
+  return join(getProjectDir(projectId), "worktrees");
+}
+
+/** Get the feedback reports directory for a project (V2 layout). */
+export function getProjectFeedbackReportsDir(projectId: string): string {
+  return join(getProjectDir(projectId), "feedback-reports");
+}
+
+/** Get the orchestrator metadata file path for a project. */
+export function getOrchestratorPath(projectId: string): string {
+  return join(getProjectDir(projectId), "orchestrator.json");
+}
+
+/** Get the session metadata file path (.json). */
+export function getSessionPath(projectId: string, sessionId: string): string {
+  return join(getProjectSessionsDir(projectId), `${sessionId}.json`);
+}
+
+// =============================================================================
+// LEGACY PATH FUNCTIONS (deprecated — used by migration only)
+// =============================================================================
+
 /**
+ * @deprecated Use getProjectDir(projectId) instead.
  * Get the project base directory for a storage key.
  * Format: ~/.agent-orchestrator/{storageKey}
  */
@@ -90,40 +163,40 @@ export function getObservabilityBaseDir(configPath: string): string {
 }
 
 /**
+ * @deprecated Use getProjectSessionsDir(projectId) instead.
  * Get the sessions directory for a project.
- * Format: ~/.agent-orchestrator/{storageKey}/sessions
  */
 export function getSessionsDir(storageKey: string | undefined): string {
   return join(getProjectBaseDir(storageKey), "sessions");
 }
 
 /**
+ * @deprecated Use getProjectWorktreesDir(projectId) instead.
  * Get the worktrees directory for a project.
- * Format: ~/.agent-orchestrator/{storageKey}/worktrees
  */
 export function getWorktreesDir(storageKey: string | undefined): string {
   return join(getProjectBaseDir(storageKey), "worktrees");
 }
 
 /**
+ * @deprecated Use getProjectFeedbackReportsDir(projectId) instead.
  * Get the feedback reports directory for a project.
- * Format: ~/.agent-orchestrator/{storageKey}/feedback-reports
  */
 export function getFeedbackReportsDir(storageKey: string | undefined): string {
   return join(getProjectBaseDir(storageKey), "feedback-reports");
 }
 
 /**
- * Get the archive directory for a project.
- * Format: ~/.agent-orchestrator/{storageKey}/sessions/archive
+ * @deprecated Legacy archive directory — archive system removed.
+ * Get the archive directory for a project (legacy: nested inside sessions/).
  */
 export function getArchiveDir(storageKey: string | undefined): string {
   return join(getSessionsDir(storageKey), "archive");
 }
 
 /**
+ * @deprecated No longer needed — collision detection by storageKey is removed.
  * Get the .origin file path for a project.
- * This file stores the config path for collision detection.
  */
 export function getOriginFilePath(storageKey: string | undefined): string {
   return join(getProjectBaseDir(storageKey), ".origin");
@@ -139,17 +212,24 @@ export function generateSessionName(prefix: string, num: number): string {
 }
 
 /**
- * Generate tmux session name (globally unique).
+ * @deprecated Session prefixes are globally unique — hash prefix is no longer needed.
+ * Use generateSessionName(prefix, num) instead (same output as the new tmux name).
+ *
+ * Generate tmux session name (legacy format with hash).
  * Format: {storageKey}-{prefix}-{num}
  * Example: "a3b4c5d6e7f8-int-1"
  */
-export function generateTmuxName(storageKey: string | undefined, prefix: string, num: number): string {
+export function generateTmuxName(
+  storageKey: string | undefined,
+  prefix: string,
+  num: number,
+): string {
   return `${requireStorageKey(storageKey)}-${prefix}-${num}`;
 }
 
 /**
- * Parse a tmux session name to extract components.
- * Returns null if the name doesn't match the expected format.
+ * @deprecated Use parseTmuxNameV2 instead.
+ * Parse a legacy tmux session name (with hash prefix).
  */
 export function parseTmuxName(tmuxName: string): {
   hash: string;
@@ -164,6 +244,21 @@ export function parseTmuxName(tmuxName: string): {
     prefix: match[2],
     num: parseInt(match[3], 10),
   };
+}
+
+/**
+ * Parse a V2 tmux session name (no hash prefix, same as session name).
+ * Format: {prefix}-{num} e.g. "ao-84", "my-app-1"
+ * Prefix must match sessionPrefix validation: [a-zA-Z0-9_-]+
+ */
+export function parseTmuxNameV2(tmuxName: string): {
+  prefix: string;
+  num: number;
+} | null {
+  // Greedy match: prefix is everything up to the last -{num}
+  const match = tmuxName.match(/^([a-zA-Z0-9][a-zA-Z0-9_-]*)-(\d+)$/);
+  if (!match) return null;
+  return { prefix: match[1], num: parseInt(match[2], 10) };
 }
 
 /**
@@ -197,13 +292,8 @@ export function getRegisteredPath(): string {
 }
 
 /**
+ * @deprecated No longer needed — storageKey and .origin collision detection are removed.
  * Validate and store the .origin file for a project.
- *
- * When the stored config path differs from the current one (e.g. after
- * migrating from a local config to the global hybrid config), the .origin
- * file is updated to the new path.  A true SHA-256 hash collision on 12 hex
- * chars (1 in 2^48) is astronomically unlikely and not worth blocking a
- * legitimate config migration.
  */
 export function validateAndStoreOrigin(configPath: string, storageKey: string): void {
   const originPath = getOriginFilePath(storageKey);

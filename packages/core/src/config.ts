@@ -10,8 +10,8 @@
  * Everything else has sensible defaults.
  */
 
-import { createHash } from "node:crypto";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve, join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml } from "yaml";
@@ -244,10 +244,6 @@ const ProjectConfigSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, "sessionPrefix must match [a-zA-Z0-9_-]+")
     .optional(),
-  /** Stable storage identity hash — set once at registration, never recomputed. */
-  storageKey: z.string().optional(),
-  /** Canonical git origin URL associated with the storage identity. */
-  originUrl: z.string().optional(),
   /** Per-project resolution failure captured without aborting global load. */
   resolveError: z.string().optional(),
   runtime: z.string().optional(),
@@ -610,9 +606,8 @@ function applyProjectDefaults(config: OrchestratorConfig): OrchestratorConfig {
 /** Validate project uniqueness and session prefix collisions */
 function validateProjectUniqueness(config: OrchestratorConfig): void {
   const projectIds = new Set<string>();
-  const storageKeys = new Map<string, string>();
 
-  for (const [projectId, project] of Object.entries(config.projects)) {
+  for (const [projectId] of Object.entries(config.projects)) {
     if (projectIds.has(projectId)) {
       throw new Error(
         `Duplicate project ID detected: "${projectId}"\n` +
@@ -620,19 +615,6 @@ function validateProjectUniqueness(config: OrchestratorConfig): void {
       );
     }
     projectIds.add(projectId);
-
-    if (!project.storageKey) continue;
-
-    const existingProjectId = storageKeys.get(project.storageKey);
-    if (existingProjectId && existingProjectId !== projectId) {
-      throw new Error(
-        `Duplicate storage key detected: "${project.storageKey}"\n` +
-          `Projects "${existingProjectId}" and "${projectId}" point at the same storage identity.\n\n` +
-          `This usually indicates a registration collision. Re-register or relink one of the projects so each projectId owns a unique storageKey.`,
-      );
-    }
-
-    storageKeys.set(project.storageKey, projectId);
   }
 
   // Check for duplicate session prefixes
@@ -892,7 +874,6 @@ function buildEffectiveConfigFromGlobalConfigPath(configPath: string): LoadedCon
       degradedProjects[projectId] = {
         projectId,
         path: entry.path,
-        storageKey: entry.storageKey ?? "",
         resolveError: error.message,
       };
     }

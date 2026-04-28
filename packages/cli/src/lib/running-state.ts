@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { atomicWriteFileSync } from "@aoagents/ao-core";
 
 export interface RunningState {
   pid: number;
@@ -24,7 +25,17 @@ const STATE_DIR = join(homedir(), ".agent-orchestrator");
 const STATE_FILE = join(STATE_DIR, "running.json");
 const STATE_LOCK_FILE = join(STATE_DIR, "running.lock");
 const STARTUP_LOCK_FILE = join(STATE_DIR, "startup.lock");
+const LAST_STOP_LOCK_FILE = join(STATE_DIR, "last-stop.lock");
+const LAST_STOP_FILE = join(STATE_DIR, "last-stop.json");
 const UNPARSEABLE_LOCK_GRACE_MS = 5_000;
+
+export interface LastStopState {
+  stoppedAt: string;
+  projectId: string;
+  sessionIds: string[];
+  /** Sessions from other projects that were also active at stop time. */
+  otherProjects?: Array<{ projectId: string; sessionIds: string[] }>;
+}
 
 interface LockMetadata {
   pid: number;
@@ -160,7 +171,10 @@ function writeState(state: RunningState | null): void {
   if (state === null) {
     try { unlinkSync(STATE_FILE); } catch { /* file may not exist */ }
   } else {
-    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+    // Atomic temp+rename so a crash mid-write cannot leave torn JSON
+    // that makes `getRunning()` silently return `null` and orphan a
+    // still-alive AO process from later CLI commands.
+    atomicWriteFileSync(STATE_FILE, JSON.stringify(state, null, 2));
   }
 }
 
@@ -184,6 +198,46 @@ export async function unregister(): Promise<void> {
   const release = await acquireLock(STATE_LOCK_FILE, 5000, "running.json lock");
   try {
     writeState(null);
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Remove a single project from the running state's project list.
+ * Used by `ao stop <project>` so that `ao start <project>` can restart
+ * the orchestrator without hitting the "already running" gate.
+ * No-op if the state is missing or the project isn't listed.
+ */
+export async function removeProjectFromRunning(projectId: string): Promise<void> {
+  const release = await acquireLock(STATE_LOCK_FILE, 5000, "running.json lock");
+  try {
+    const state = readState();
+    if (!state) return;
+    const updated = state.projects.filter((p) => p !== projectId);
+    if (updated.length === state.projects.length) return;
+    writeState({ ...state, projects: updated });
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Add a project to the running state's project list (idempotent).
+ * Used when a project's orchestrator is spawned against an already-running
+ * daemon — for example after `ao start <project>` attaches to an existing
+ * parent process whose `projects` list didn't yet include the project.
+ * Without this, subsequent `ao stop` (no args) would leave the new
+ * orchestrator orphaned because it isn't in `running.projects`.
+ * No-op if the state is missing or the project is already listed.
+ */
+export async function addProjectToRunning(projectId: string): Promise<void> {
+  const release = await acquireLock(STATE_LOCK_FILE, 5000, "running.json lock");
+  try {
+    const state = readState();
+    if (!state) return;
+    if (state.projects.includes(projectId)) return;
+    writeState({ ...state, projects: [...state.projects, projectId] });
   } finally {
     release();
   }
@@ -238,4 +292,48 @@ export async function waitForExit(pid: number, timeoutMs = 5000): Promise<boolea
     await sleep(100);
   }
   return !isRunningProcessAlive(pid);
+}
+
+/**
+ * Record which sessions were active when `ao stop` ran.
+ */
+export async function writeLastStop(state: LastStopState): Promise<void> {
+  const release = await acquireLock(LAST_STOP_LOCK_FILE, 5000, "last-stop.json lock");
+  try {
+    // Atomic temp+rename so a crash mid-write cannot leave torn JSON
+    // that makes `readLastStop()` silently return `null` and lose the
+    // restore prompt for sessions the user just stopped.
+    atomicWriteFileSync(LAST_STOP_FILE, JSON.stringify(state, null, 2));
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Read the last-stop state, if any.
+ */
+export async function readLastStop(): Promise<LastStopState | null> {
+  const release = await acquireLock(LAST_STOP_LOCK_FILE, 5000, "last-stop.json lock");
+  try {
+    const raw = readFileSync(LAST_STOP_FILE, "utf-8");
+    const state = JSON.parse(raw) as LastStopState;
+    if (!state || typeof state.stoppedAt !== "string" || !state.projectId || !Array.isArray(state.sessionIds)) return null;
+    return state;
+  } catch {
+    return null;
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Remove the last-stop state file (after restore or skip).
+ */
+export async function clearLastStop(): Promise<void> {
+  const release = await acquireLock(LAST_STOP_LOCK_FILE, 5000, "last-stop.json lock");
+  try {
+    try { unlinkSync(LAST_STOP_FILE); } catch { /* file may not exist */ }
+  } finally {
+    release();
+  }
 }

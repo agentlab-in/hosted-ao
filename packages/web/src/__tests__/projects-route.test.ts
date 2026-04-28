@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
-import { deriveStorageKey, loadGlobalConfig, registerProjectInGlobalConfig } from "@aoagents/ao-core";
+import {
+  generateExternalId,
+  loadGlobalConfig,
+  registerProjectInGlobalConfig,
+} from "@aoagents/ao-core";
 
 const invalidatePortfolioServicesCache = vi.fn();
 
@@ -57,8 +69,8 @@ describe("POST /api/projects", () => {
     mkdirSync(brokenDir, { recursive: true });
     writeFileSync(path.join(brokenDir, "agent-orchestrator.yaml"), "agent: [broken\n");
 
-    registerProjectInGlobalConfig("healthy", "Healthy", healthyDir);
-    registerProjectInGlobalConfig("broken", "Broken", brokenDir);
+    const healthyId = registerProjectInGlobalConfig("healthy", "Healthy", healthyDir);
+    const brokenId = registerProjectInGlobalConfig("broken", "Broken", brokenDir);
 
     const { GET } = await import("@/app/api/projects/route");
     const response = await GET();
@@ -66,10 +78,10 @@ describe("POST /api/projects", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       projects: expect.arrayContaining([
-        expect.objectContaining({ id: "healthy", name: "Healthy" }),
+        expect.objectContaining({ id: healthyId, name: "Healthy" }),
         expect.objectContaining({
-          id: "broken",
-          name: "broken",
+          id: brokenId,
+          name: brokenId,
           resolveError: expect.any(String),
         }),
       ]),
@@ -79,7 +91,7 @@ describe("POST /api/projects", () => {
   it("reads projects from the canonical global config even when AO_CONFIG_PATH points elsewhere", async () => {
     const healthyDir = path.join(tempRoot, "healthy");
     mkdirSync(healthyDir, { recursive: true });
-    registerProjectInGlobalConfig("healthy", "Healthy", healthyDir);
+    const healthyId = registerProjectInGlobalConfig("healthy", "Healthy", healthyDir);
 
     const ambientConfigPath = path.join(tempRoot, "ambient-config.yaml");
     writeFileSync(
@@ -100,11 +112,11 @@ describe("POST /api/projects", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      projects: [expect.objectContaining({ id: "healthy", name: "Healthy" })],
+      projects: [expect.objectContaining({ id: healthyId, name: "Healthy" })],
     });
   });
 
-  it("stores the Phase 1a-derived storage key and invalidates services cache", async () => {
+  it("registers a project and invalidates services cache", async () => {
     const repoDir = path.join(tempRoot, "demo");
     mkdirSync(path.join(repoDir, ".git"), { recursive: true });
     writeFileSync(path.join(repoDir, ".git", "HEAD"), "ref: refs/heads/trunk\n");
@@ -116,23 +128,21 @@ describe("POST /api/projects", () => {
     );
 
     const { POST } = await import("@/app/api/projects/route");
-    const response = await POST(
-      makeRequest({ projectId: "demo", name: "Demo", path: repoDir }),
-    );
+    const response = await POST(makeRequest({ projectId: "demo", name: "Demo", path: repoDir }));
 
     expect(response.status).toBe(201);
+    await expect(response.clone().json()).resolves.toEqual({
+      ok: true,
+      projectId: generateExternalId(realpathSync(repoDir), "git@github.com:acme/demo.git"),
+    });
     expect(invalidatePortfolioServicesCache).toHaveBeenCalledTimes(1);
 
     expect(readFileSync(configPath, "utf-8").length).toBeGreaterThan(0);
     const saved = loadGlobalConfig(configPath);
-    expect(saved?.projects.demo?.storageKey).toBe(
-      deriveStorageKey({
-        originUrl: "https://github.com/acme/demo",
-        gitRoot: repoDir,
-        projectPath: repoDir,
-      }),
-    );
-    expect(saved?.projects.demo?.defaultBranch).toBe("trunk");
+    expect(
+      saved?.projects[generateExternalId(realpathSync(repoDir), "git@github.com:acme/demo.git")]
+        ?.defaultBranch,
+    ).toBe("trunk");
   });
 
   it("migrates the current local config into the global registry before adding a new project", async () => {
@@ -181,7 +191,8 @@ describe("POST /api/projects", () => {
       displayName: "Current",
       sessionPrefix: "current",
     });
-    expect(saved?.projects["added"]).toMatchObject({
+    const addedId = generateExternalId(realpathSync(addedRepoDir), "git@github.com:acme/added.git");
+    expect(saved?.projects[addedId]).toMatchObject({
       path: realpathSync(addedRepoDir),
       displayName: "Added",
       defaultBranch: "master",
@@ -205,7 +216,7 @@ describe("POST /api/projects", () => {
     });
   });
 
-  it("returns 409 with collision metadata when another project owns the storage key", async () => {
+  it("reconnects to the existing project ID when the same path is registered again", async () => {
     const repoDir = path.join(tempRoot, "demo");
     const aliasDir = path.join(tempRoot, "demo-alias");
     mkdirSync(path.join(repoDir, ".git"), { recursive: true });
@@ -216,44 +227,105 @@ describe("POST /api/projects", () => {
     symlinkSync(repoDir, aliasDir);
 
     const { POST } = await import("@/app/api/projects/route");
-    await POST(makeRequest({ projectId: "existing-app", name: "Existing", path: repoDir }));
+    const firstResponse = await POST(
+      makeRequest({ projectId: "existing-app", name: "Existing", path: repoDir }),
+    );
+    const firstBody = (await firstResponse.json()) as { projectId: string };
 
     const response = await POST(
       makeRequest({ projectId: "second-app", name: "Second", path: aliasDir }),
     );
 
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
-      existingProjectId: "existing-app",
-      suggestion: "confirm-reuse",
+      projectId: firstBody.projectId,
     });
   });
 
-  it("registers a project when shared storage reuse is explicitly confirmed", async () => {
-    const repoDir = path.join(tempRoot, "demo");
-    const aliasDir = path.join(tempRoot, "demo-alias");
-    mkdirSync(path.join(repoDir, ".git"), { recursive: true });
+  it("registers same-basename projects with distinct hashed IDs", async () => {
+    const repoA = path.join(tempRoot, "company-a", "agent-orchestrator");
+    const repoB = path.join(tempRoot, "company-b", "agent-orchestrator");
+    mkdirSync(path.join(repoA, ".git"), { recursive: true });
+    mkdirSync(path.join(repoB, ".git"), { recursive: true });
     writeFileSync(
-      path.join(repoDir, ".git", "config"),
-      '[remote "origin"]\n  url = git@github.com:acme/demo.git\n',
+      path.join(repoA, ".git", "config"),
+      '[remote "origin"]\n  url = git@github.com:acme/agent-orchestrator-a.git\n',
     );
-    symlinkSync(repoDir, aliasDir);
+    writeFileSync(
+      path.join(repoB, ".git", "config"),
+      '[remote "origin"]\n  url = git@github.com:acme/agent-orchestrator-b.git\n',
+    );
 
     const { POST } = await import("@/app/api/projects/route");
-    await POST(makeRequest({ projectId: "existing-app", name: "Existing", path: repoDir }));
+    await POST(makeRequest({ projectId: "agent-orchestrator", name: "AO A", path: repoA }));
+
+    const response = await POST(
+      makeRequest({ projectId: "agent-orchestrator", name: "AO B", path: repoB }),
+    );
+
+    const idA = generateExternalId(
+      realpathSync(repoA),
+      "git@github.com:acme/agent-orchestrator-a.git",
+    );
+    const idB = generateExternalId(
+      realpathSync(repoB),
+      "git@github.com:acme/agent-orchestrator-b.git",
+    );
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      projectId: idB,
+    });
+    const saved = loadGlobalConfig(configPath);
+    expect(saved?.projects[idA]).toMatchObject({
+      path: realpathSync(repoA),
+      displayName: "AO A",
+    });
+    expect(saved?.projects[idB]).toMatchObject({
+      path: realpathSync(repoB),
+      displayName: "AO B",
+    });
+  });
+
+  it("ignores suffix allocation flags and returns the hashed project ID", async () => {
+    const repoA = path.join(tempRoot, "company-a", "agent-orchestrator");
+    const repoB = path.join(tempRoot, "company-b", "agent-orchestrator");
+    mkdirSync(path.join(repoA, ".git"), { recursive: true });
+    mkdirSync(path.join(repoB, ".git"), { recursive: true });
+    writeFileSync(
+      path.join(repoA, ".git", "config"),
+      '[remote "origin"]\n  url = git@github.com:acme/agent-orchestrator-a.git\n',
+    );
+    writeFileSync(
+      path.join(repoB, ".git", "config"),
+      '[remote "origin"]\n  url = git@github.com:acme/agent-orchestrator-b.git\n',
+    );
+
+    const { POST } = await import("@/app/api/projects/route");
+    await POST(makeRequest({ projectId: "agent-orchestrator", name: "AO A", path: repoA }));
 
     const response = await POST(
       makeRequest({
-        projectId: "second-app",
-        name: "Second",
-        path: aliasDir,
-        allowStorageKeyReuse: true,
+        projectId: "agent-orchestrator",
+        name: "AO B",
+        path: repoB,
+        useDefaultProjectId: true,
       }),
     );
 
     expect(response.status).toBe(201);
+    const idB = generateExternalId(
+      realpathSync(repoB),
+      "git@github.com:acme/agent-orchestrator-b.git",
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      projectId: idB,
+    });
     const saved = loadGlobalConfig(configPath);
-    expect(saved?.projects["second-app"]?.storageKey).toBe(saved?.projects["existing-app"]?.storageKey);
+    expect(saved?.projects[idB]).toMatchObject({
+      path: realpathSync(repoB),
+      displayName: "AO B",
+      sessionPrefix: "ao-1",
+    });
   });
 });
 

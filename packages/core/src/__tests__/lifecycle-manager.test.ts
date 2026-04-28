@@ -74,7 +74,7 @@ describe("status decision helpers", () => {
         status: "detecting",
         sessionState: "detecting",
         sessionReason: "runtime_lost",
-        detectingAttempts: 2,
+        detecting: expect.objectContaining({ attempts: 2 }),
       }),
     );
   });
@@ -143,9 +143,7 @@ function setupCheck(
     branch: opts.session.branch ?? "main",
     status: opts.session.status,
     project: "my-app",
-    runtimeHandle: opts.session.runtimeHandle
-      ? JSON.stringify(opts.session.runtimeHandle)
-      : undefined,
+    runtimeHandle: opts.session.runtimeHandle ?? undefined,
     ...opts.metaOverrides,
   };
   const persistedStringMetadata = Object.fromEntries(
@@ -221,9 +219,7 @@ function setupPollCheck(
     branch: opts.session.branch ?? "main",
     status: opts.session.status,
     project: "my-app",
-    runtimeHandle: opts.session.runtimeHandle
-      ? JSON.stringify(opts.session.runtimeHandle)
-      : undefined,
+    runtimeHandle: opts.session.runtimeHandle ?? undefined,
     ...opts.metaOverrides,
   };
   const persistedStringMetadata = Object.fromEntries(
@@ -364,13 +360,14 @@ describe("check (single session)", () => {
         role: "orchestrator",
       },
     });
+    const staleHandle = { id: "stale", runtimeName: "mock", data: {} };
     const persistedMetadata = {
       worktree: "/tmp",
       branch: session.branch ?? "main",
       status: session.status,
       project: "my-app",
       pr: "https://github.com/org/repo/pull/42",
-      runtimeHandle: JSON.stringify({ id: "stale", runtimeName: "mock", data: {} }),
+      runtimeHandle: staleHandle,
       tmuxName: "stale-tmux",
       role: "orchestrator",
     };
@@ -379,6 +376,7 @@ describe("check (single session)", () => {
       metadata: {
         ...session.metadata,
         ...persistedMetadata,
+        runtimeHandle: JSON.stringify(staleHandle),
       },
     };
 
@@ -1433,7 +1431,8 @@ describe("check (single session)", () => {
       branch: session.branch ?? "main",
       status: session.status,
       project: "my-app",
-      runtimeHandle: session.runtimeHandle ? JSON.stringify(session.runtimeHandle) : undefined,
+      pr: session.pr?.url,
+      runtimeHandle: session.runtimeHandle ?? undefined,
     });
 
     const lm = createLifecycleManager({
@@ -1462,7 +1461,7 @@ describe("check (single session)", () => {
       branch: "feat/test",
       status: "working",
       project: "my-app",
-      prAutoDetect: "off",
+      prAutoDetect: false,
     });
 
     const realSessionManager = createSessionManager({ config, registry });
@@ -1605,9 +1604,10 @@ describe("check (single session)", () => {
       expect(lm.getStates().get("app-1")).toBe("merged");
       expect(meta?.["status"]).toBe("merged");
       expect(meta?.["pr"]).toBe(pr.url);
-      expect(meta?.["statePayload"]).toContain('"state":"merged"');
-      expect(meta?.["statePayload"]).toContain('"reason":"merged"');
-      expect(meta?.["statePayload"]).not.toContain('"reason":"not_created"');
+      expect(meta?.["lifecycle"]).toContain('"state":"merged"');
+      expect(meta?.["lifecycle"]).toContain('"reason":"merged"');
+      expect(meta?.["lifecycle"]).not.toContain('"reason":"not_created"');
+      expect(mockSessionManager.invalidateCache).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -1643,8 +1643,8 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("idle");
     const meta = readMetadataRaw(env.sessionsDir, "app-1");
     expect(meta?.["status"]).toBe("idle");
-    expect(meta?.["statePayload"]).toContain('"state":"closed"');
-    expect(meta?.["statePayload"]).toContain('"reason":"pr_closed_waiting_decision"');
+    expect(meta?.["lifecycle"]).toContain('"state":"closed"');
+    expect(meta?.["lifecycle"]).toContain('"reason":"pr_closed_waiting_decision"');
     expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "pr.closed" }));
   });
 

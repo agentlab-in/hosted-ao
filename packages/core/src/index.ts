@@ -229,6 +229,15 @@ export type {
 
 // Path utilities — hash-based directory structure
 export {
+  // V2 path functions (projects/{projectId}/ layout)
+  getProjectDir,
+  getProjectSessionsDir,
+  getProjectWorktreesDir,
+  getProjectFeedbackReportsDir,
+  getOrchestratorPath,
+  getSessionPath,
+  parseTmuxNameV2,
+  // Legacy path functions (deprecated — migration only)
   generateConfigHash,
   generateProjectId,
   generateSessionPrefix,
@@ -261,8 +270,7 @@ export {
   getLocalProjectConfigPath,
   repairWrappedLocalProjectConfig,
   registerProjectInGlobalConfig,
-  relinkProjectInGlobalConfig,
-  StorageKeyCollisionError,
+  generateExternalId,
   buildEffectiveProjectConfig,
   resolveProjectIdentity,
   isOldConfigFormat,
@@ -275,7 +283,6 @@ export type {
   LocalProjectConfig,
   LocalProjectConfigLoadResult,
   RegisterProjectOptions,
-  RelinkProjectOptions,
 } from "./global-config.js";
 
 export { loadEffectiveProjectConfig, iterateAllProjects } from "./project-resolver.js";
@@ -322,7 +329,6 @@ export {
   saveRegistered,
   getPortfolio,
   registerProject,
-  relinkProject,
   unregisterProject,
   refreshProject,
 } from "./portfolio-registry.js";
@@ -336,3 +342,19 @@ export {
   resolvePortfolioSession,
   derivePortfolioProjectId,
 } from "./portfolio-routing.js";
+
+// Storage V2 migration — one-time converter from hash-based to projectId-based layout
+export {
+  migrateStorage,
+  rollbackStorage,
+  inventoryHashDirs,
+  convertKeyValueToJson,
+} from "./migration/storage-v2.js";
+export type {
+  MigrationOptions,
+  MigrationResult,
+  RollbackOptions,
+  HashDirEntry,
+} from "./migration/storage-v2.js";
+
+export { atomicWriteFileSync } from "./atomic-write.js";

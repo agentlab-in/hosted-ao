@@ -117,7 +117,11 @@ update_ao_metadata() {
     *) return 0 ;;
   esac
 
-  local metadata_file="\$ao_dir/\$ao_session"
+  # V2 storage uses .json extension; fallback to bare filename for pre-migration layouts
+  local metadata_file="\$ao_dir/\${ao_session}.json"
+  if [[ ! -f "\$metadata_file" ]]; then
+    metadata_file="\$ao_dir/\$ao_session"
+  fi
 
   # Resolve symlinks and verify canonicalized paths are still within trusted roots
   local real_dir real_ao_dir
@@ -135,25 +139,44 @@ update_ao_metadata() {
 
   [[ -f "\$metadata_file" ]] || return 0
 
-  # Validate key — only allow alphanumeric, underscore, hyphen (prevents sed injection)
+  # Validate key — only allow alphanumeric, underscore, hyphen (prevents sed/jq injection)
   [[ "\$key" =~ ^[a-zA-Z0-9_-]+$ ]] || return 0
 
   local temp_file="\${metadata_file}.tmp.\$\$"
 
-  # Strip newlines from value to prevent metadata line injection
+  # Strip newlines from value to prevent injection
   local clean_value="\$(printf '%s' "\$value" | tr -d '\\n')"
 
-  # Escape sed metacharacters in value (& expands to matched text, | breaks delimiter)
-  local escaped_value="\$(printf '%s' "\$clean_value" | sed 's/[&|\\\\]/\\\\&/g')"
+  # Detect JSON vs key=value format
+  local first_char
+  first_char="\$(head -c1 "\$metadata_file" 2>/dev/null)"
 
-  if grep -q "^\${key}=" "\$metadata_file" 2>/dev/null; then
-    sed "s|^\${key}=.*|\${key}=\${escaped_value}|" "\$metadata_file" > "\$temp_file"
+  if [[ "\$first_char" == "{" ]]; then
+    # JSON format
+    if command -v jq &>/dev/null; then
+      jq --arg k "\$key" --arg v "\$clean_value" '.[\$k] = \$v' "\$metadata_file" > "\$temp_file"
+      mv "\$temp_file" "\$metadata_file"
+    else
+      # jq unavailable — use node (hard dep) for safe nested JSON update
+      node -e "
+        const fs = require('fs');
+        const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+        d[process.argv[2]] = process.argv[3];
+        fs.writeFileSync(process.argv[4], JSON.stringify(d, null, 2));
+      " "\$metadata_file" "\$key" "\$clean_value" "\$temp_file"
+      mv "\$temp_file" "\$metadata_file"
+    fi
   else
-    cp "\$metadata_file" "\$temp_file"
-    printf '%s=%s\\n' "\$key" "\$clean_value" >> "\$temp_file"
+    # Key=value format (legacy)
+    local escaped_value="\$(printf '%s' "\$clean_value" | sed 's/[&|\\\\]/\\\\&/g')"
+    if grep -q "^\${key}=" "\$metadata_file" 2>/dev/null; then
+      sed "s|^\${key}=.*|\${key}=\${escaped_value}|" "\$metadata_file" > "\$temp_file"
+    else
+      cp "\$metadata_file" "\$temp_file"
+      printf '%s=%s\\n' "\$key" "\$clean_value" >> "\$temp_file"
+    fi
+    mv "\$temp_file" "\$metadata_file"
   fi
-
-  mv "\$temp_file" "\$metadata_file"
 }
 
 # ── Metadata read ────────────────────────────────────────────────────────────

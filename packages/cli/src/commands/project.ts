@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import type { Command } from "commander";
@@ -7,8 +7,6 @@ import {
   getPortfolioSessionCounts,
   isPortfolioEnabled,
   registerProject,
-  relinkProject,
-  StorageKeyCollisionError,
   unregisterProject,
   loadPreferences,
   savePreferences,
@@ -20,18 +18,19 @@ import {
   formatPortfolioProjectName,
   formatPortfolioProjectStatus,
 } from "../lib/portfolio-display.js";
-import { isHumanCaller } from "../lib/caller-context.js";
 
 function assertPortfolioEnabled(): void {
   if (isPortfolioEnabled()) return;
-  console.error(chalk.red("Portfolio mode is disabled. Unset AO_ENABLE_PORTFOLIO or set it to 1 to use `ao project`."));
+  console.error(
+    chalk.red(
+      "Portfolio mode is disabled. Unset AO_ENABLE_PORTFOLIO or set it to 1 to use `ao project`.",
+    ),
+  );
   process.exit(1);
 }
 
 export function registerProject_cmd(program: Command): void {
-  const project = program
-    .command("project")
-    .description("Manage portfolio projects");
+  const project = program.command("project").description("Manage portfolio projects");
 
   // ao project ls
   project
@@ -43,7 +42,9 @@ export function registerProject_cmd(program: Command): void {
 
       if (portfolio.length === 0) {
         console.log(chalk.dim("No projects in portfolio."));
-        console.log(chalk.dim("Run `ao start` in a project or `ao project add <path>` to register one."));
+        console.log(
+          chalk.dim("Run `ao start` in a project or `ao project add <path>` to register one."),
+        );
         return;
       }
 
@@ -80,7 +81,8 @@ export function registerProject_cmd(program: Command): void {
       "-k, --key <key>",
       "Legacy only: the project key under `projects:` in a wrapped agent-orchestrator.yaml. Omit for flat configs.",
     )
-    .action(async (path: string, opts: { key?: string }) => {
+    .option("--default", "Use the default project ID, adding a numeric suffix if needed")
+    .action(async (path: string, opts: { key?: string; default?: boolean }) => {
       assertPortfolioEnabled();
       const resolvedPath = resolve(path);
       const candidatePaths = [
@@ -113,36 +115,13 @@ export function registerProject_cmd(program: Command): void {
         process.exit(1);
       }
 
-      try {
-        registerProject(resolvedPath, opts.key);
-      } catch (error) {
-        if (error instanceof StorageKeyCollisionError && isHumanCaller()) {
-          console.log(
-            chalk.dim(
-              `This repo slice is already registered as "${error.existingProjectId}". ` +
-                `Use \`ao open ${error.existingProjectId}\` or \`ao project ls\` to work from the existing project.`,
-            ),
-          );
-          return;
-        } else {
-          throw error;
-        }
+      let projectId = opts.key;
+      if (!projectId) {
+        projectId = basename(resolvedPath) || "project";
       }
-      console.log(chalk.green(`Registered project at ${resolvedPath}`));
-    });
 
-  project
-    .command("relink <id>")
-    .description("Recompute and move a project's storage key from its repo origin")
-    .option("--url <new-url>", "Override the repo origin URL used for the new storage key")
-    .option("--force", "Allow relinking even when session history already exists")
-    .action((id: string, opts: { url?: string; force?: boolean }) => {
-      assertPortfolioEnabled();
-      const result = relinkProject(id, { url: opts.url, force: opts.force });
-      console.log(chalk.green(`Relinked "${id}" storage.`));
-      console.log(chalk.dim(`  Old key: ${result.oldStorageKey}`));
-      console.log(chalk.dim(`  New key: ${result.storageKey}`));
-      console.log(chalk.dim(`  Origin:  ${result.originUrl}`));
+      const effectiveId = registerProject(resolvedPath, projectId, basename(resolvedPath) || projectId);
+      console.log(chalk.green(`Registered project "${effectiveId}" at ${resolvedPath}`));
     });
 
   // ao project rm <id>

@@ -1,34 +1,16 @@
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import {
+  generateExternalId,
   loadGlobalConfig,
   migrateToGlobalConfig,
   repairWrappedLocalProjectConfig,
   registerProjectInGlobalConfig,
-  relinkProjectInGlobalConfig,
   resolveProjectIdentity,
-  saveGlobalConfig,
-  StorageKeyCollisionError,
-  type GlobalConfig,
 } from "../global-config.js";
-import { getProjectBaseDir, getSessionsDir } from "../paths.js";
-import { deriveStorageKey } from "../storage-key.js";
-
-function makeGlobalConfig(projects: GlobalConfig["projects"] = {}): GlobalConfig {
-  return {
-    port: 3000,
-    readyThresholdMs: 300_000,
-    defaults: { runtime: "tmux", agent: "claude-code", workspace: "worktree", notifiers: [] },
-    projects,
-    notifiers: {},
-    notificationRouting: {},
-    reactions: {},
-  };
-}
 
 describe("global-config storage identity", () => {
   let tempRoot: string;
@@ -36,7 +18,10 @@ describe("global-config storage identity", () => {
   let originalHome: string | undefined;
 
   beforeEach(() => {
-    tempRoot = join(tmpdir(), `ao-global-config-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    tempRoot = join(
+      tmpdir(),
+      `ao-global-config-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
     mkdirSync(tempRoot, { recursive: true });
     configPath = join(tempRoot, "config.yaml");
     originalHome = process.env["HOME"];
@@ -52,31 +37,31 @@ describe("global-config storage identity", () => {
     const repoPath = join(tempRoot, repoName);
     mkdirSync(join(repoPath, ".git"), { recursive: true });
     const remoteBlock = originUrl ? `\n[remote "origin"]\n  url = ${originUrl}\n` : "\n";
-    writeFileSync(join(repoPath, ".git", "config"), `[core]\n  repositoryformatversion = 0${remoteBlock}`);
+    writeFileSync(
+      join(repoPath, ".git", "config"),
+      `[core]\n  repositoryformatversion = 0${remoteBlock}`,
+    );
     return realpathSync(repoPath);
-  }
-
-  function legacyStorageKey(projectPath: string): string {
-    return createHash("sha256").update(resolve(projectPath)).digest("hex").slice(0, 12);
   }
 
   it("registers identity fields without persisting behavior fields", () => {
     const repoPath = createRepo("demo", "git@github.com:OpenAI/demo.git");
 
-    registerProjectInGlobalConfig("demo", "Demo", repoPath, { agent: "codex", runtime: "tmux" }, configPath);
+    registerProjectInGlobalConfig(
+      "demo",
+      "Demo",
+      repoPath,
+      { agent: "codex", runtime: "tmux" },
+      configPath,
+    );
 
     const config = loadGlobalConfig(configPath);
-    const expectedStorageKey = deriveStorageKey({
-      originUrl: "git@github.com:OpenAI/demo.git",
-      gitRoot: repoPath,
-      projectPath: repoPath,
-    });
+    const projectId = generateExternalId(repoPath, "git@github.com:OpenAI/demo.git");
 
-    expect(config?.projects["demo"]).toMatchObject({
-      projectId: "demo",
+    expect(config?.projects[projectId]).toMatchObject({
+      projectId,
       displayName: "Demo",
       path: repoPath,
-      storageKey: expectedStorageKey,
       defaultBranch: "main",
       sessionPrefix: "demo",
       source: "ao-project-add",
@@ -87,19 +72,8 @@ describe("global-config storage identity", () => {
         originUrl: "https://github.com/OpenAI/demo",
       },
     });
-    expect(config?.projects["demo"]).not.toHaveProperty("agent");
-    expect(config?.projects["demo"]).not.toHaveProperty("runtime");
-  });
-
-  it("detects storage-key collisions for different project ids", () => {
-    const repoPath = createRepo("demo", "https://github.com/OpenAI/demo.git");
-    const clonePath = createRepo("demo-clone", "git@github.com:OpenAI/demo.git");
-
-    registerProjectInGlobalConfig("demo", "Demo", repoPath, undefined, configPath);
-
-    expect(() =>
-      registerProjectInGlobalConfig("demo-clone", "Demo Clone", clonePath, undefined, configPath),
-    ).toThrow(StorageKeyCollisionError);
+    expect(config?.projects[projectId]).not.toHaveProperty("agent");
+    expect(config?.projects[projectId]).not.toHaveProperty("runtime");
   });
 
   it("rejects registration when another project already owns the generated session prefix", () => {
@@ -119,107 +93,117 @@ describe("global-config storage identity", () => {
     registerProjectInGlobalConfig("web", "Web", repoPath, undefined, configPath);
 
     expect(() =>
-      registerProjectInGlobalConfig("web-fixtures", "Web Fixtures", clonePath, undefined, configPath),
+      registerProjectInGlobalConfig(
+        "web-fixtures",
+        "Web Fixtures",
+        clonePath,
+        { sessionPrefix: "web" },
+        configPath,
+      ),
     ).toThrow(/Duplicate session prefix detected: "web"/);
   });
 
-  it("allows an explicit second registration when collision is confirmed", () => {
-    const repoPath = createRepo("demo", "https://github.com/OpenAI/demo.git");
-    const clonePath = createRepo("demo-clone", "git@github.com:OpenAI/demo.git");
+  it("generates deterministic external IDs from path and origin", () => {
+    const repoPath = createRepo(
+      "agent-orchestrator",
+      "https://github.com/OpenAI/agent-orchestrator.git",
+    );
 
-    registerProjectInGlobalConfig("demo", "Demo", repoPath, undefined, configPath);
-    registerProjectInGlobalConfig(
-      "demo-clone",
-      "Demo Clone",
-      clonePath,
+    expect(generateExternalId(repoPath, "https://github.com/OpenAI/agent-orchestrator.git")).toBe(
+      generateExternalId(repoPath, "https://github.com/OpenAI/agent-orchestrator.git"),
+    );
+    expect(generateExternalId(repoPath, null)).toMatch(/^agent-orchestrator_[0-9a-f]{10}$/);
+  });
+
+  it("generates different external IDs for same-basename projects at different paths", () => {
+    const repoA = createRepo(join("company-a", "agent-orchestrator"));
+    const repoB = createRepo(join("company-b", "agent-orchestrator"));
+
+    expect(generateExternalId(repoA)).toMatch(/^agent-orchestrator_[0-9a-f]{10}$/);
+    expect(generateExternalId(repoA)).not.toBe(generateExternalId(repoB));
+  });
+
+  it("sanitizes generated external ID basenames", () => {
+    const repoPath = createRepo(join("company", ".My Project!"));
+
+    expect(generateExternalId(repoPath)).toMatch(/^xmy-project-_[0-9a-f]{10}$/);
+  });
+
+  it("caps generated external ID basenames at 30 characters", () => {
+    const repoPath = createRepo("this-project-name-is-way-too-long-for-readable-storage");
+
+    expect(generateExternalId(repoPath)).toMatch(/^this-project-name-is-way-too-l_[0-9a-f]{10}$/);
+  });
+
+  it("registers same-basename projects with hashed external IDs", () => {
+    const repoA = createRepo(join("company-a", "agent-orchestrator"));
+    const repoB = createRepo(join("company-b", "agent-orchestrator"));
+
+    const idA = registerProjectInGlobalConfig(
+      "agent-orchestrator",
+      "AO A",
+      repoA,
+      { sessionPrefix: "aoa" },
+      configPath,
+    );
+    const idB = registerProjectInGlobalConfig(
+      "agent-orchestrator",
+      "AO B",
+      repoB,
+      { sessionPrefix: "aob" },
+      configPath,
+    );
+
+    expect(idA).toMatch(/^agent-orchestrator_[0-9a-f]{10}$/);
+    expect(idB).toMatch(/^agent-orchestrator_[0-9a-f]{10}$/);
+    expect(idA).not.toBe(idB);
+  });
+
+  it("throws if a generated external ID is already registered for a different path", () => {
+    const repoA = createRepo("collision-source", "https://github.com/OpenAI/collision-source.git");
+    const repoB = createRepo("collision-target", "https://github.com/OpenAI/collision-target.git");
+    const collisionId = generateExternalId(repoA, "https://github.com/OpenAI/collision-source.git");
+    writeFileSync(
+      configPath,
+      [
+        "projects:",
+        `  ${collisionId}:`,
+        `    projectId: ${collisionId}`,
+        `    path: ${repoB}`,
+        "notifiers: {}",
+        "notificationRouting: {}",
+        "reactions: {}",
+        "",
+      ].join("\n"),
+    );
+
+    expect(() =>
+      registerProjectInGlobalConfig("collision-source", "Collision", repoA, undefined, configPath),
+    ).toThrow(/Project ID collision/);
+  });
+
+  it("allocates a suffixed generated session prefix for same-basename projects", () => {
+    const repoA = createRepo(join("company-a", "agent-orchestrator"));
+    const repoB = createRepo(join("company-b", "agent-orchestrator"));
+
+    const idA = registerProjectInGlobalConfig(
+      "agent-orchestrator",
+      "AO A",
+      repoA,
       undefined,
-      { allowStorageKeyReuse: true },
+      configPath,
+    );
+    const idB = registerProjectInGlobalConfig(
+      "agent-orchestrator",
+      "AO B",
+      repoB,
+      undefined,
       configPath,
     );
 
     const config = loadGlobalConfig(configPath);
-    expect(config?.projects["demo-clone"]?.storageKey).toBe(config?.projects["demo"]?.storageKey);
-  });
-
-  it("relinks storage atomically and requires force when sessions exist", () => {
-    const repoPath = createRepo("demo", "https://github.com/OpenAI/demo.git");
-    registerProjectInGlobalConfig("demo", "Demo", repoPath, undefined, configPath);
-
-    const config = loadGlobalConfig(configPath)!;
-    const oldStorageKey = config.projects["demo"]!.storageKey!;
-    const oldBaseDir = getProjectBaseDir(oldStorageKey);
-    mkdirSync(getSessionsDir(oldStorageKey), { recursive: true });
-    writeFileSync(join(getSessionsDir(oldStorageKey), "demo-1.json"), "{}");
-
-    expect(() =>
-      relinkProjectInGlobalConfig("demo", { url: "https://gitlab.com/OpenAI/demo.git" }, configPath),
-    ).toThrow(/--force/);
-
-    const result = relinkProjectInGlobalConfig(
-      "demo",
-      { url: "https://gitlab.com/OpenAI/demo.git", force: true },
-      configPath,
-    );
-
-    expect(result.oldStorageKey).toBe(oldStorageKey);
-    expect(result.storageKey).not.toBe(oldStorageKey);
-    expect(existsSync(oldBaseDir)).toBe(false);
-    expect(existsSync(getProjectBaseDir(result.storageKey))).toBe(true);
-    expect(loadGlobalConfig(configPath)?.projects["demo"]).toMatchObject({
-      storageKey: result.storageKey,
-      repo: {
-        owner: "OpenAI",
-        name: "demo",
-        platform: "gitlab",
-        originUrl: "https://gitlab.com/OpenAI/demo",
-      },
-    });
-  });
-
-  it("migrates legacy entries by deriving a content-addressed key and moving the old storage dir", () => {
-    const repoPath = createRepo("legacy", "git@github.com:OpenAI/legacy.git");
-    const oldStorageKey = legacyStorageKey(repoPath);
-    const oldBaseDir = join(tempRoot, ".agent-orchestrator", `${oldStorageKey}-legacy`);
-    mkdirSync(join(oldBaseDir, "sessions"), { recursive: true });
-    writeFileSync(join(oldBaseDir, "sessions", "legacy-1.json"), "{}");
-
-    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
-    try {
-      saveGlobalConfig(
-        makeGlobalConfig({
-          legacy: {
-            displayName: "Legacy",
-            path: repoPath,
-          },
-        }),
-        configPath,
-      );
-
-      const resolved = resolveProjectIdentity("legacy", loadGlobalConfig(configPath)!, configPath);
-      const expectedStorageKey = deriveStorageKey({
-        originUrl: "git@github.com:OpenAI/legacy.git",
-        gitRoot: repoPath,
-        projectPath: repoPath,
-      });
-
-      expect(resolved?.storageKey).toBe(expectedStorageKey);
-      expect(loadGlobalConfig(configPath)?.projects["legacy"]).toMatchObject({
-        storageKey: expectedStorageKey,
-        repo: {
-          owner: "OpenAI",
-          name: "legacy",
-          platform: "github",
-          originUrl: "https://github.com/OpenAI/legacy",
-        },
-      });
-      expect(existsSync(oldBaseDir)).toBe(false);
-      expect(existsSync(getProjectBaseDir(expectedStorageKey))).toBe(true);
-      expect(consoleInfo).toHaveBeenCalledWith(
-        expect.stringContaining('migrated storage identity for "legacy"'),
-      );
-    } finally {
-      consoleInfo.mockRestore();
-    }
+    expect(config?.projects[idA]?.sessionPrefix).toBe("ao");
+    expect(config?.projects[idB]?.sessionPrefix).toBe("ao-1");
   });
 
   it("strips stale shadow fields from legacy entries and rewrites the config", () => {
@@ -418,8 +402,9 @@ describe("global-config storage identity", () => {
     registerProjectInGlobalConfig("fresh", "Fresh", freshRepoPath, undefined, configPath);
 
     const config = loadGlobalConfig(configPath);
-    expect(config?.projects["fresh"]).toMatchObject({
-      projectId: "fresh",
+    const freshId = generateExternalId(freshRepoPath, "https://github.com/OpenAI/fresh.git");
+    expect(config?.projects[freshId]).toMatchObject({
+      projectId: freshId,
       displayName: "Fresh",
       path: freshRepoPath,
     });
@@ -427,32 +412,18 @@ describe("global-config storage identity", () => {
     expect(config?.projects["legacy"]).not.toHaveProperty("runtime");
   });
 
-  it("uses the synthetic local storage key when no origin can be read", () => {
-    const repoPath = createRepo("local-only");
-    saveGlobalConfig(
-      makeGlobalConfig({
-        local: {
-          displayName: "Local",
-          path: repoPath,
-        },
-      }),
+  it("keeps registry-owned identity fields authoritative over local config overrides", () => {
+    const repoPath = createRepo(
+      "identity-authority",
+      "https://github.com/OpenAI/identity-authority.git",
+    );
+    const projectId = registerProjectInGlobalConfig(
+      "identity-authority",
+      "Identity Authority",
+      repoPath,
+      undefined,
       configPath,
     );
-
-    const resolved = resolveProjectIdentity("local", loadGlobalConfig(configPath)!, configPath);
-    const expectedStorageKey = deriveStorageKey({
-      originUrl: null,
-      gitRoot: repoPath,
-      projectPath: repoPath,
-    });
-
-    expect(resolved?.storageKey).toBe(expectedStorageKey);
-    expect(loadGlobalConfig(configPath)?.projects["local"]?.repo).toBeUndefined();
-  });
-
-  it("keeps registry-owned identity fields authoritative over local config overrides", () => {
-    const repoPath = createRepo("identity-authority", "https://github.com/OpenAI/identity-authority.git");
-    registerProjectInGlobalConfig("identity-authority", "Identity Authority", repoPath, undefined, configPath);
     writeFileSync(
       join(repoPath, "agent-orchestrator.yaml"),
       [
@@ -465,11 +436,7 @@ describe("global-config storage identity", () => {
       ].join("\n"),
     );
 
-    const resolved = resolveProjectIdentity(
-      "identity-authority",
-      loadGlobalConfig(configPath)!,
-      configPath,
-    );
+    const resolved = resolveProjectIdentity(projectId, loadGlobalConfig(configPath)!, configPath);
 
     expect(resolved).toMatchObject({
       repo: "OpenAI/identity-authority",
@@ -519,27 +486,5 @@ describe("global-config storage identity", () => {
       runtime: "tmux",
       postCreate: ["pnpm install"],
     });
-  });
-
-  it("persists wrapped legacy storage keys during migration", () => {
-    const repoPath = createRepo("wrapped-project", "https://github.com/OpenAI/wrapped-project.git");
-    const oldConfigPath = join(repoPath, "agent-orchestrator.yaml");
-    const expectedStorageKey = `${createHash("sha256").update(realpathSync(repoPath)).digest("hex").slice(0, 12)}-wrapped-project`;
-
-    writeFileSync(
-      oldConfigPath,
-      [
-        "projects:",
-        "  wrapped-project:",
-        `    path: ${repoPath}`,
-        "    agent: codex",
-        "",
-      ].join("\n"),
-    );
-
-    migrateToGlobalConfig(oldConfigPath, configPath);
-
-    const migrated = loadGlobalConfig(configPath);
-    expect(migrated?.projects["wrapped-project"]?.storageKey).toBe(expectedStorageKey);
   });
 });
