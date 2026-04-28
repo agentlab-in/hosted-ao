@@ -48,6 +48,7 @@ import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { exec, execSilent, git } from "../lib/shell.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
 import { ensureLifecycleWorker, stopAllLifecycleWorkers } from "../lib/lifecycle-service.js";
+import { startBunTmpJanitor, stopBunTmpJanitor } from "../lib/bun-tmp-janitor.js";
 import {
   findWebDir,
   buildDashboardEnv,
@@ -1636,6 +1637,10 @@ export function registerStart(program: Command): void {
           // Non-TTY callers (scripts/agents) keep the old "AO is already
           // running" message and do NOT mutate config behind the user's back.
           if (running && projectArgIsUrlOrPath && isHumanCaller()) {
+            const requestedProjectArg = projectArg;
+            if (!requestedProjectArg) {
+              throw new Error("Expected project path or URL argument");
+            }
             // Always register against the GLOBAL config — never the cwd's
             // local config. Cross-project visibility lives in the global
             // registry, and addProjectToConfig only routes to global when
@@ -1646,9 +1651,9 @@ export function registerStart(program: Command): void {
               : loadConfig();
 
             let existingId: string | null = null;
-            if (isRepoUrl(projectArg!)) {
+            if (isRepoUrl(requestedProjectArg)) {
               try {
-                const parsed = parseRepoUrl(projectArg!);
+                const parsed = parseRepoUrl(requestedProjectArg);
                 for (const [id, p] of Object.entries(globalCfg.projects)) {
                   if (p.repo === parsed.ownerRepo) {
                     existingId = id;
@@ -1660,7 +1665,7 @@ export function registerStart(program: Command): void {
               }
             } else {
               const resolvedPath = resolve(
-                projectArg!.replace(/^~/, process.env["HOME"] || ""),
+                requestedProjectArg.replace(/^~/, process.env["HOME"] || ""),
               );
               let canonicalTarget: string;
               try {
@@ -1697,14 +1702,14 @@ export function registerStart(program: Command): void {
             let resolvedId: string;
             if (existingId) {
               resolvedId = existingId;
-            } else if (isRepoUrl(projectArg!)) {
+            } else if (isRepoUrl(requestedProjectArg)) {
               // Clone + register inline. We DO NOT call handleUrlStart —
               // that helper writes a legacy wrapped (`projects:`) local
               // config that the new resolver rejects, requiring a repair
               // pass after the fact. Instead, we write a flat local config
               // here so the global registry + repo can be loaded cleanly
               // on the very first read.
-              const parsed = parseRepoUrl(projectArg!);
+              const parsed = parseRepoUrl(requestedProjectArg);
               console.log(
                 chalk.bold.cyan(`\n  Cloning ${parsed.ownerRepo} (${parsed.host})\n`),
               );
@@ -1736,7 +1741,7 @@ export function registerStart(program: Command): void {
                 throw new Error(
                   `Repository "${parsed.ownerRepo}" appears to be empty (no commits or refs).\n` +
                     `  AO needs at least one commit on the default branch to spawn an orchestrator.\n` +
-                    `  Push an initial commit, then re-run \`ao start ${projectArg}\`.`,
+                    `  Push an initial commit, then re-run \`ao start ${requestedProjectArg}\`.`,
                 );
               }
 
@@ -1775,7 +1780,7 @@ export function registerStart(program: Command): void {
               }
             } else {
               const resolvedPath = resolve(
-                projectArg!.replace(/^~/, process.env["HOME"] || ""),
+                requestedProjectArg.replace(/^~/, process.env["HOME"] || ""),
               );
               resolvedId = await addProjectToConfig(globalCfg, resolvedPath);
             }
@@ -2221,6 +2226,25 @@ export function registerStart(program: Command): void {
           });
           unlockStartup();
 
+          // Start the Bun-extracted /tmp/.*.{so,dylib} janitor once per AO
+          // process. Single-instance is enforced by running.json + the
+          // startup lock above, so this call site is reached at most once
+          // per process. The janitor uses an unref'd interval timer, so it
+          // does not keep the event loop alive on its own and dies with the
+          // process on SIGTERM/SIGINT.
+          startBunTmpJanitor({
+            onSweep: ({ removed, freedBytes, errors }) => {
+              if (removed > 0) {
+                console.info(
+                  `[bun-tmp-janitor] reclaimed ${removed} file(s) / ${freedBytes} bytes`,
+                );
+              }
+              if (errors > 0) {
+                console.warn(`[bun-tmp-janitor] sweep had ${errors} error(s)`);
+              }
+            },
+          });
+
           // Install shutdown handlers so Ctrl+C and `ao stop` (which sends
           // SIGTERM) perform a full graceful shutdown: kill sessions, record
           // last-stop state for restore, unregister, then exit.
@@ -2290,11 +2314,22 @@ export function registerStart(program: Command): void {
               } catch {
                 // Best-effort — always exit even if cleanup fails
               }
+              try {
+                // Await any in-flight sweep so shutdown does not exit while
+                // unlink() calls are still mid-flight against the filesystem.
+                await stopBunTmpJanitor();
+              } catch {
+                // Best-effort cleanup.
+              }
               process.exit(exitCode);
             })();
           };
-          process.once("SIGINT", shutdown);
-          process.once("SIGTERM", shutdown);
+          process.once("SIGINT", (sig) => {
+            void shutdown(sig);
+          });
+          process.once("SIGTERM", (sig) => {
+            void shutdown(sig);
+          });
         } catch (err) {
           if (err instanceof Error) {
             console.error(chalk.red("\nError:"), err.message);

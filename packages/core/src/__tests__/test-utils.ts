@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { getProjectSessionsDir, getProjectDir } from "../paths.js";
+import { resetOpenCodeSessionListCache } from "../session-manager.js";
 import { createInitialCanonicalLifecycle, deriveLegacyStatus } from "../lifecycle-state.js";
 import { createActivitySignal } from "../activity-signal.js";
 import type {
@@ -364,6 +365,7 @@ export interface TestContext {
 }
 
 export function setupTestContext(): TestContext {
+  resetOpenCodeSessionListCache();
   const originalPath = process.env.PATH;
   const originalHome = process.env["HOME"];
   const tmpDir = join(tmpdir(), `ao-test-session-mgr-${randomUUID()}`);
