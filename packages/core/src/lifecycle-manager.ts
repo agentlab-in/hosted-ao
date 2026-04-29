@@ -92,6 +92,19 @@ function parseDuration(str: string): number {
   }
 }
 
+/** Reaction keys for conditions that can oscillate (e.g. CI failing→pending→failing).
+ *  Their trackers survive status exit so the escalation budget accumulates
+ *  across oscillations instead of resetting to zero each time.
+ *  Note: "merge-conflicts" is NOT here — statusToEventType never emits
+ *  "merge.conflicts", so the transition handler at line ~1892 can't reach it.
+ *  Merge-conflict tracker lifecycle is managed in maybeDispatchMergeConflicts. */
+const PERSISTENT_REACTION_KEYS = new Set(["ci-failed"]);
+
+/** Number of consecutive CI-passing polls required before the ci-failed tracker
+ *  (including its escalated flag) is cleared, allowing a fresh budget for the
+ *  next real CI failure incident. */
+const CI_PASSING_STABLE_THRESHOLD = 2;
+
 type WorkspaceBranchProbe =
   | { kind: "branch"; branch: string }
   | { kind: "detached" }
@@ -385,6 +398,9 @@ export interface LifecycleManagerDeps {
 interface ReactionTracker {
   attempts: number;
   firstTriggered: Date;
+  /** True after this reaction has escalated. Short-circuits further dispatches
+   *  until the underlying condition resolves and the tracker is explicitly cleared. */
+  escalated?: boolean;
 }
 
 /** Create a LifecycleManager instance. */
@@ -1169,6 +1185,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       reactionTrackers.set(trackerKey, tracker);
     }
 
+    // Already escalated — wait for the condition to resolve before resuming.
+    if (tracker.escalated) {
+      return { reactionType: reactionKey, success: true, action: "escalated", escalated: true };
+    }
+
     // Increment attempts before checking escalation
     tracker.attempts++;
 
@@ -1201,6 +1222,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         data: { reactionKey, attempts: tracker.attempts },
       });
       await notifyHuman(event, reactionConfig.priority ?? "urgent");
+
+      // Mark as escalated — silences further dispatches until the underlying
+      // condition resolves and clearReactionTracker() is called explicitly.
+      tracker.escalated = true;
+
       return {
         reactionType: reactionKey,
         success: true,
@@ -1656,35 +1682,44 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         (reactionConfig.auto !== false || reactionConfig.action === "notify")
       ) {
         try {
-          if (reactionConfig.action === "send-to-agent") {
+          // Build enriched config with dynamic base branch message.
+          // Preserve "warning" priority from old direct-dispatch code unless
+          // the user explicitly set a different priority in their config.
+          const enrichedConfig = {
+            ...reactionConfig,
+            priority: reactionConfig.priority ?? ("warning" as const),
+          };
+          if (reactionConfig.action === "send-to-agent" && !reactionConfig.message) {
             const baseBranch = session.pr.baseBranch ?? "the default branch";
             const behindNote = cachedData.isBehind ? ` is behind ${baseBranch} and` : "";
-            const message =
-              reactionConfig.message ??
-              `Your PR branch${behindNote} has merge conflicts with ${baseBranch}. Rebase your branch on ${baseBranch}, resolve the conflicts, and push. You should not need to call gh for merge status unless you need additional context — this information is current.`;
-            await sessionManager.send(session.id, message);
-          } else {
-            const event = createEvent("merge.conflicts", {
-              sessionId: session.id,
-              projectId: session.projectId,
-              message: `${session.id}: PR has merge conflicts`,
-            });
-            await notifyHuman(event, reactionConfig.priority ?? "warning");
+            enrichedConfig.message = `Your PR branch${behindNote} has merge conflicts with ${baseBranch}. Rebase your branch on ${baseBranch}, resolve the conflicts, and push. You should not need to call gh for merge status unless you need additional context — this information is current.`;
           }
 
-          updateSessionMetadata(session, {
-            lastMergeConflictDispatched: "true",
-          });
+          const result = await executeReaction(
+            session.id,
+            session.projectId,
+            conflictReactionKey,
+            enrichedConfig,
+          );
+          // Only set dedup flag for non-escalated success — escalation hands off
+          // to the human, so we must NOT suppress future agent dispatches if the
+          // condition recurs after the tracker resets.
+          if (result.success && result.action !== "escalated") {
+            updateSessionMetadata(session, {
+              lastMergeConflictDispatched: "true",
+            });
+          }
         } catch {
-          // Send failed — will retry on next poll cycle
+          // Dispatch failed — will retry on next poll cycle
         }
       }
     } else if (lastDispatched === "true") {
-      // Conflicts resolved — clear so we can re-dispatch if they recur
-      clearReactionTracker(session.id, conflictReactionKey);
+      // Conflicts resolved — clear dedup flag and reaction tracker so future
+      // conflicts start a fresh incident with a fresh escalation budget.
       updateSessionMetadata(session, {
         lastMergeConflictDispatched: "",
       });
+      clearReactionTracker(session.id, conflictReactionKey);
     }
   }
 
@@ -1849,6 +1884,28 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       updateSessionMetadata(session, metadataUpdates);
     }
 
+    // CI resolution tracking — reset the ci-failed tracker (including its escalated
+    // flag) once CI has been passing for CI_PASSING_STABLE_THRESHOLD consecutive polls.
+    // This lets the next real CI failure start with a fresh budget.
+    if (session.pr) {
+      const prKey = `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`;
+      const cachedData = prEnrichmentCache.get(prKey);
+      if (cachedData) {
+        if (cachedData.ciStatus === "passing") {
+          const stableCount = Number(session.metadata["ciPassingStableCount"] ?? "0") + 1;
+          if (stableCount >= CI_PASSING_STABLE_THRESHOLD) {
+            clearReactionTracker(session.id, "ci-failed");
+            updateSessionMetadata(session, { ciPassingStableCount: "" });
+          } else {
+            updateSessionMetadata(session, { ciPassingStableCount: String(stableCount) });
+          }
+        } else if (session.metadata["ciPassingStableCount"]) {
+          // pending or failing resets the stability window — only "passing" counts as resolution
+          updateSessionMetadata(session, { ciPassingStableCount: "" });
+        }
+      }
+    }
+
     if (newStatus !== oldStatus) {
       const correlationId = createCorrelationId("lifecycle-transition");
       // State transition detected
@@ -1879,11 +1936,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         allCompleteEmitted = false;
       }
 
-      // Clear reaction trackers for the old status so retries reset on state changes
+      // Clear reaction trackers for the old status so retries reset on state changes.
+      // Persistent keys (ci-failed) are excluded — their trackers survive oscillation
+      // so the escalation budget accumulates across cycles. On escalation, the tracker
+      // is cleared in executeReaction so future incidents get a fresh budget.
       const oldEventType = statusToEventType(undefined, oldStatus);
       if (oldEventType) {
         const oldReactionKey = eventToReactionKey(oldEventType);
-        if (oldReactionKey) {
+        if (oldReactionKey && !PERSISTENT_REACTION_KEYS.has(oldReactionKey)) {
           clearReactionTracker(session.id, oldReactionKey);
         }
       }
