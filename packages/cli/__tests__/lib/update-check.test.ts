@@ -515,7 +515,7 @@ describe("update-check", () => {
       const currentVersion = getCurrentVersion();
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          latestVersion: "0.3.0",
+          latestVersion: "99.0.0",
           checkedAt: now,
           currentVersionAtCheck: currentVersion,
         }),
@@ -524,7 +524,7 @@ describe("update-check", () => {
 
       const info = await checkForUpdate();
       expect(info.isOutdated).toBe(true);
-      expect(info.latestVersion).toBe("0.3.0");
+      expect(info.latestVersion).toBe("99.0.0");
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
