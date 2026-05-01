@@ -497,6 +497,19 @@ export interface Agent {
    */
   getRestoreCommand?(session: Session, project: ProjectConfig): Promise<string | null>;
 
+  /**
+   * Optional: run setup BEFORE the agent process is launched.
+   *
+   * Use this when a plugin needs to observe state that the agent itself will
+   * mutate at startup. Captured *after* the workspace exists but *before*
+   * `runtime.create()` spawns the agent — so the snapshot is taken cleanly,
+   * with no race against the agent's own initialization writes.
+   *
+   * Receives only the workspace path because the full Session object (with
+   * runtime handle, lifecycle, etc.) does not exist yet at this point.
+   */
+  preLaunchSetup?(workspacePath: string): Promise<void>;
+
   /** Optional: run setup after agent is launched (e.g. configure MCP servers) */
   postLaunchSetup?(session: Session): Promise<void>;
 
@@ -532,6 +545,15 @@ export interface Agent {
 export interface AgentLaunchConfig {
   sessionId: SessionId;
   projectConfig: ProjectConfig;
+  /**
+   * Per-session workspace path. Differs from `projectConfig.path` when the
+   * workspace plugin (e.g. worktree mode) creates an isolated checkout per
+   * session. Plugins that need the agent's actual cwd — for cwd-derived
+   * lookups, --work-dir flags, file-based discovery — must use this when
+   * present. Falls back to `projectConfig.path` when undefined (clone-mode
+   * workspaces, or plugins not yet plumbing it through).
+   */
+  workspacePath?: string;
   issueId?: string;
   prompt?: string;
   permissions?: AgentPermissionInput;
