@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createLifecycleManager } from "../lifecycle-manager.js";
+import { recordActivityEvent } from "../activity-events.js";
 import { DEFAULT_BUGBOT_COMMENTS_MESSAGE } from "../config.js";
 import {
   resolvePREnrichmentDecision,
@@ -34,6 +35,10 @@ import {
   type MockPlugins,
 } from "./test-utils.js";
 
+vi.mock("../activity-events.js", () => ({
+  recordActivityEvent: vi.fn(),
+}));
+
 let env: TestEnvironment;
 let plugins: MockPlugins;
 let mockRegistry: PluginRegistry;
@@ -46,6 +51,7 @@ beforeEach(() => {
   mockRegistry = createMockRegistry({ runtime: plugins.runtime, agent: plugins.agent });
   mockSessionManager = createMockSessionManager();
   config = env.config;
+  vi.mocked(recordActivityEvent).mockClear();
 });
 
 afterEach(() => {
@@ -276,6 +282,44 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("working");
     const meta = readMetadataRaw(env.sessionsDir, "app-1");
     expect(meta!["status"]).toBe("working");
+  });
+
+  it("records lifecycle.transition when status changes", async () => {
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "spawning" }),
+    });
+
+    await lm.check("app-1");
+
+    expect(recordActivityEvent).toHaveBeenCalledWith({
+      projectId: "my-app",
+      sessionId: "app-1",
+      source: "lifecycle",
+      kind: "lifecycle.transition",
+      level: "info",
+      summary: "spawning → working",
+      data: { from: "spawning", to: "working" },
+    });
+  });
+
+  it("records activity.transition after observed activity changes", async () => {
+    const session = makeSession({ id: "app-activity", status: "working" });
+    const lm = setupCheck("app-activity", { session });
+
+    await lm.check("app-activity");
+    vi.mocked(recordActivityEvent).mockClear();
+    vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "idle" });
+
+    await lm.check("app-activity");
+
+    expect(recordActivityEvent).toHaveBeenCalledWith({
+      projectId: "my-app",
+      sessionId: "app-activity",
+      source: "lifecycle",
+      kind: "activity.transition",
+      summary: "active → idle",
+      data: { from: "active", to: "idle" },
+    });
   });
 
   it("records split lifecycle observability for transitions", async () => {
@@ -1236,12 +1280,12 @@ describe("check (single session)", () => {
 
     try {
       lm.start(60_000);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-
-      const adoptedCount = [sessionA.branch, sessionB.branch].filter(
-        (branch) => branch === "shared-branch",
-      ).length;
-      expect(adoptedCount).toBe(1);
+      await vi.waitFor(() => {
+        const adoptedCount = [sessionA.branch, sessionB.branch].filter(
+          (branch) => branch === "shared-branch",
+        ).length;
+        expect(adoptedCount).toBe(1);
+      });
       expect(mockSessionManager.list).toHaveBeenCalledTimes(1);
     } finally {
       lm.stop();
