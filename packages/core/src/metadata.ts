@@ -299,7 +299,7 @@ export function updateMetadata(
   }, { createIfMissing: true });
 }
 
-function applyMetadataUpdates(
+export function applyMetadataUpdates(
   existing: Record<string, string>,
   updates: Partial<Record<string, string>>,
 ): Record<string, string> {

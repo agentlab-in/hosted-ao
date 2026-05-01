@@ -547,6 +547,145 @@ describe("restore", () => {
     expect(mockAgent.getLaunchCommand).toHaveBeenCalled();
     const createCall = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(createCall.launchCommand).toBe("mock-agent --start");
+
+    const meta = readMetadataRaw(sessionsDir, "app-1");
+    expect(meta!["restoreFallbackReason"]).toBe("mock-agent.getRestoreCommand returned null");
+  });
+
+  it("does not launch a fresh chat when a native-restore agent cannot build restore command", async () => {
+    const wsPath = join(tmpDir, "ws-app-native-restore-missing");
+    mkdirSync(wsPath, { recursive: true });
+
+    const mockNativeRestoreAgent: Agent = {
+      ...mockAgent,
+      name: "codex",
+      getRestoreCommand: vi.fn().mockResolvedValue(null),
+    };
+
+    const registryWithNativeRestoreAgent: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockNativeRestoreAgent;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "killed",
+      project: "my-app",
+      runtimeHandle: makeHandle("rt-old"),
+    });
+
+    const sm = createSessionManager({ config, registry: registryWithNativeRestoreAgent });
+
+    await expect(sm.restore("app-1")).rejects.toThrow(SessionNotRestorableError);
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+    const meta = readMetadataRaw(sessionsDir, "app-1");
+    expect(meta!["restoreFallbackReason"]).toBe("codex.getRestoreCommand returned null");
+  });
+
+  it("clears restore fallback reason when getRestoreCommand succeeds", async () => {
+    const wsPath = join(tmpDir, "ws-app-restore-clears-fallback");
+    mkdirSync(wsPath, { recursive: true });
+
+    const mockAgentWithRestore: Agent = {
+      ...mockAgent,
+      getRestoreCommand: vi.fn().mockResolvedValue("claude --resume abc123"),
+    };
+
+    const registryWithAgentRestore: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockAgentWithRestore;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "killed",
+      project: "my-app",
+      runtimeHandle: makeHandle("rt-old"),
+      restoreFallbackReason: "previous fallback",
+    });
+
+    const sm = createSessionManager({ config, registry: registryWithAgentRestore });
+    await sm.restore("app-1");
+
+    const meta = readMetadataRaw(sessionsDir, "app-1");
+    expect(meta!["restoreFallbackReason"]).toBeUndefined();
+  });
+
+  it("normalizes agent metadata empty strings in memory like metadata persistence", async () => {
+    const wsPath = join(tmpDir, "ws-app-agent-metadata-normalize");
+    mkdirSync(wsPath, { recursive: true });
+
+    const mockAgentWithMetadata: Agent = {
+      ...mockAgent,
+      getSessionInfo: vi.fn().mockResolvedValue({
+        summary: null,
+        agentSessionId: "native-1",
+        metadata: {
+          codexThreadId: "thread-1",
+          restoreFallbackReason: "",
+        },
+      }),
+    };
+
+    const registryWithAgentMetadata: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return mockRuntime;
+        if (slot === "agent") return mockAgentWithMetadata;
+        if (slot === "workspace") return mockWorkspace;
+        return null;
+      }),
+    };
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "killed",
+      project: "my-app",
+      runtimeHandle: makeHandle("rt-old"),
+      restoreFallbackReason: "previous fallback",
+    });
+
+    const sm = createSessionManager({ config, registry: registryWithAgentMetadata });
+    const restored = await sm.restore("app-1");
+
+    expect(restored.metadata["codexThreadId"]).toBe("thread-1");
+    expect(restored.metadata["restoreFallbackReason"]).toBeUndefined();
+    const meta = readMetadataRaw(sessionsDir, "app-1");
+    expect(meta!["codexThreadId"]).toBe("thread-1");
+    expect(meta!["restoreFallbackReason"]).toBeUndefined();
+  });
+
+  it("clears restore fallback reason when agent has no restore command", async () => {
+    const wsPath = join(tmpDir, "ws-app-no-restore-clears-fallback");
+    mkdirSync(wsPath, { recursive: true });
+
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "killed",
+      project: "my-app",
+      runtimeHandle: makeHandle("rt-old"),
+      restoreFallbackReason: "previous fallback",
+    });
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await sm.restore("app-1");
+
+    const meta = readMetadataRaw(sessionsDir, "app-1");
+    expect(meta!["restoreFallbackReason"]).toBeUndefined();
   });
 
   it("does not inject OPENCODE_CONFIG when restoring OpenCode orchestrators", async () => {

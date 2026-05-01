@@ -1328,6 +1328,20 @@ describe("getRestoreCommand", () => {
     expect(cmd).toContain("thread-abc-123");
   });
 
+  it("uses persisted Codex thread ID without scanning session files", async () => {
+    const session = makeSession({
+      workspacePath: "/workspace/test",
+      metadata: { codexThreadId: "persisted-thread", codexModel: "gpt-5.3-codex" },
+    });
+
+    const cmd = await agent.getRestoreCommand!(session, makeProjectConfig());
+
+    expect(cmd).toContain("'codex' resume");
+    expect(cmd).toContain("--model 'gpt-5.3-codex'");
+    expect(cmd).toContain("persisted-thread");
+    expect(mockReaddir).not.toHaveBeenCalled();
+  });
+
   it("builds native resume command from payload-wrapped Codex session id", async () => {
     const content = jsonl(
       {

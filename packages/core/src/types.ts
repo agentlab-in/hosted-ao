@@ -601,6 +601,8 @@ export interface AgentSessionInfo {
   summaryIsFallback?: boolean;
   /** Agent's internal session ID (for resume) */
   agentSessionId: string | null;
+  /** Agent-owned metadata worth persisting for later restore. */
+  metadata?: Record<string, string>;
   /** Estimated cost so far */
   cost?: CostEstimate;
 }
@@ -1695,6 +1697,10 @@ export interface SessionMetadata {
     directTerminalWsPort?: number;
   };
   opencodeSessionId?: string;
+  claudeSessionUuid?: string;
+  codexThreadId?: string;
+  codexModel?: string;
+  restoreFallbackReason?: string;
   pinnedSummary?: string; // First quality summary, pinned for display stability
   userPrompt?: string; // Prompt used when spawning without a tracker issue
   /**

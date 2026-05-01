@@ -53,6 +53,7 @@ import {
   readMetadataRaw,
   writeMetadata,
   updateMetadata,
+  applyMetadataUpdates,
   mutateMetadata,
   deleteMetadata,
   listMetadata,
@@ -426,6 +427,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       return true;
     }
     return isOrchestratorSessionRecord(sessionId, metadata ?? {}, project.sessionPrefix);
+  }
+
+  function requiresNativeRestore(agentName: string): boolean {
+    return (
+      agentName === "claude-code" ||
+      agentName === "codex" ||
+      agentName === "kimicode" ||
+      agentName === "opencode"
+    );
   }
 
   function applyMetadataUpdatesToRaw(
@@ -972,7 +982,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         data: {},
       };
     }
-    await enrichSessionWithRuntimeState(session, plugins, handleFromMetadata);
+    await enrichSessionWithRuntimeState(session, plugins, handleFromMetadata, sessionsDir);
   }
 
   /**
@@ -985,6 +995,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     session: Session,
     plugins: ReturnType<typeof resolvePlugins>,
     handleFromMetadata: boolean,
+    sessionsDir: string,
   ): Promise<void> {
     // Check runtime liveness first — for all statuses except "spawning".
     // Skip spawning sessions because tmux may not be fully initialized yet,
@@ -1058,13 +1069,26 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }
 
       // Enrich with live agent session info (summary, cost).
+      let info: Awaited<ReturnType<Agent["getSessionInfo"]>>;
       try {
-        const info = await plugins.agent.getSessionInfo(session);
-        if (info) {
-          session.agentInfo = info;
-        }
+        info = await plugins.agent.getSessionInfo(session);
       } catch {
         // Can't get session info — keep existing values
+        info = null;
+      }
+
+      if (info) {
+        session.agentInfo = info;
+        const metadataUpdates = info.metadata ?? {};
+        if (Object.keys(metadataUpdates).length > 0) {
+          try {
+            updateMetadata(sessionsDir, session.id, metadataUpdates);
+            session.metadata = applyMetadataUpdates(session.metadata, metadataUpdates);
+            invalidateCache();
+          } catch {
+            // Persisting agent metadata is best-effort; keep live agent info.
+          }
+        }
       }
     }
   }
@@ -2811,7 +2835,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     //    and isRestorable would reject it.
     const session = metadataToSession(sessionId, raw, projectId, project.sessionPrefix);
     const plugins = resolvePlugins(project, selection.agentName);
-    await enrichSessionWithRuntimeState(session, plugins, true);
+    await enrichSessionWithRuntimeState(session, plugins, true, sessionsDir);
 
     // 3. Validate restorability
     if (!isRestorable(session)) {
@@ -2924,9 +2948,22 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     if (plugins.agent.getRestoreCommand) {
       const restoreCmd = await plugins.agent.getRestoreCommand(session, projectConfigForLaunch);
-      launchCommand = restoreCmd ?? plugins.agent.getLaunchCommand(agentLaunchConfig);
+      if (restoreCmd) {
+        launchCommand = restoreCmd;
+        updateMetadata(sessionsDir, sessionId, { restoreFallbackReason: "" });
+      } else {
+        const reason = `${plugins.agent.name}.getRestoreCommand returned null`;
+        updateMetadata(sessionsDir, sessionId, {
+          restoreFallbackReason: reason,
+        });
+        if (requiresNativeRestore(plugins.agent.name)) {
+          throw new SessionNotRestorableError(sessionId, reason);
+        }
+        launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
+      }
     } else {
       launchCommand = plugins.agent.getLaunchCommand(agentLaunchConfig);
+      updateMetadata(sessionsDir, sessionId, { restoreFallbackReason: "" });
     }
 
     const environment = plugins.agent.getEnvironment(agentLaunchConfig);
