@@ -58,7 +58,10 @@ import {
   findFreePort,
   MAX_PORT_SCAN,
 } from "../lib/web-dir.js";
-import { rebuildDashboardProductionArtifacts } from "../lib/dashboard-rebuild.js";
+import {
+  clearStaleCacheIfNeeded,
+  rebuildDashboardProductionArtifacts,
+} from "../lib/dashboard-rebuild.js";
 import { preflight } from "../lib/preflight.js";
 import {
   register,
@@ -1258,6 +1261,7 @@ async function runStartup(
       await rebuildDashboardProductionArtifacts(webDir);
     } else if (!willUseDevServer) {
       await preflight.checkBuilt(webDir);
+      await clearStaleCacheIfNeeded(webDir);
     }
 
     spinner.start("Starting dashboard");

@@ -16,7 +16,7 @@
     "dev:next": "next dev -p ${PORT:-3000}",
     "dev:direct-terminal": "node scripts/dev-direct-terminal.mjs",
     "prebuild": "rimraf .next dist-server",
-    "build": "next build && tsc -p tsconfig.server.json",
+    "build": "next build && tsc -p tsconfig.server.json && node scripts/stamp-version.js",
     "start": "next start",
     "start:all": "node dist-server/start-all.js",
     "dev:optimized": "rimraf .next dist-server && next build && tsc -p tsconfig.server.json && node dist-server/start-all.js",
