@@ -47,7 +47,7 @@ import {
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { exec, execSilent, git } from "../lib/shell.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
-import { ensureLifecycleWorker, stopAllLifecycleWorkers } from "../lib/lifecycle-service.js";
+import { stopAllLifecycleWorkers, listLifecycleWorkers } from "../lib/lifecycle-service.js";
 import { startBunTmpJanitor, stopBunTmpJanitor } from "../lib/bun-tmp-janitor.js";
 import {
   findWebDir,
@@ -75,6 +75,7 @@ import {
   clearLastStop,
 } from "../lib/running-state.js";
 import { preventIdleSleep } from "../lib/prevent-sleep.js";
+import { startProjectSupervisor, stopProjectSupervisor } from "../lib/project-supervisor.js";
 import { isHumanCaller } from "../lib/caller-context.js";
 import { detectEnvironment } from "../lib/detect-env.js";
 import {
@@ -1237,7 +1238,6 @@ async function runStartup(
   }
 
   const shouldStartLifecycle = opts?.dashboard !== false || opts?.orchestrator !== false;
-  let lifecycleStatus: Awaited<ReturnType<typeof ensureLifecycleWorker>> | null = null;
   let port = config.port ?? DEFAULT_PORT;
   console.log(chalk.bold(`\nStarting orchestrator for ${chalk.cyan(project.name)}\n`));
 
@@ -1283,25 +1283,6 @@ async function runStartup(
     console.log(chalk.dim("  (Dashboard will be ready in a few seconds)\n"));
   }
 
-  if (shouldStartLifecycle) {
-    try {
-      spinner.start("Starting lifecycle worker");
-      lifecycleStatus = await ensureLifecycleWorker(config, projectId);
-      spinner.succeed(
-        lifecycleStatus.started ? "Lifecycle polling started" : "Lifecycle polling already running",
-      );
-    } catch (err) {
-      spinner.fail("Lifecycle worker failed to start");
-      if (dashboardProcess) {
-        dashboardProcess.kill();
-      }
-      throw new Error(
-        `Failed to start lifecycle worker: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
-    }
-  }
-
   let selectedOrchestratorId: string | null = null;
 
   if (opts?.orchestrator !== false) {
@@ -1328,6 +1309,23 @@ async function runStartup(
       }
       throw new Error(
         `Failed to setup orchestrator: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+  }
+
+  if (shouldStartLifecycle) {
+    try {
+      spinner.start("Starting project supervisor");
+      await startProjectSupervisor();
+      spinner.succeed("Lifecycle project supervisor started");
+    } catch (err) {
+      spinner.fail("Project supervisor failed to start");
+      if (dashboardProcess) {
+        dashboardProcess.kill();
+      }
+      throw new Error(
+        `Failed to start project supervisor: ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       );
     }
@@ -1460,9 +1458,14 @@ async function runStartup(
     console.log(chalk.cyan("Dashboard:"), `http://localhost:${port}`);
   }
 
-  if (shouldStartLifecycle && lifecycleStatus) {
-    const lifecycleLabel = lifecycleStatus.started ? "started" : "already running";
-    console.log(chalk.cyan("Lifecycle:"), lifecycleLabel);
+  if (shouldStartLifecycle) {
+    const supervisedProjects = listLifecycleWorkers().sort();
+    const projectSummary =
+      supervisedProjects.length > 0 ? `: ${supervisedProjects.join(", ")}` : "";
+    console.log(
+      chalk.cyan("Lifecycle:"),
+      `supervised (polling ${supervisedProjects.length} project(s)${projectSummary})`,
+    );
   }
 
   if (opts?.orchestrator !== false && selectedOrchestratorId) {
@@ -1849,9 +1852,8 @@ export function registerStart(program: Command): void {
 
             console.log(
               chalk.yellow(
-                `\n⚠ Lifecycle polling for "${resolvedId}" runs inside the long-lived ao start\n` +
-                  `  process, which is currently scoped to: ${running.projects.join(", ")}.\n` +
-                  `  Run \`ao stop && ao start ${resolvedId}\` to enable polling.\n`,
+                `\nℹ Lifecycle polling for "${resolvedId}" will attach within ~60s\n` +
+                  `  because the running ao start process now supervises active global projects.\n`,
               ),
             );
             console.log(chalk.dim(`  Opening dashboard: http://localhost:${running.port}\n`));
@@ -1896,15 +1898,6 @@ export function registerStart(program: Command): void {
               systemPrompt,
             });
 
-            // Deliberately do NOT add the project to `running.projects`.
-            // That field is the single source of truth for "lifecycle polling
-            // is attached", and polling cannot be added to the live daemon
-            // mid-flight — it requires a full daemon restart. Persisting the
-            // project here would make `ao spawn` suppress its
-            // "instance is not polling project X" warning while polling is in
-            // fact missing. The user is told below to restart the daemon for
-            // full polling; until they do, `ao spawn` should keep warning.
-
             console.log(
               chalk.green(`✓ Orchestrator session ready: ${session.id}`),
             );
@@ -1936,18 +1929,11 @@ export function registerStart(program: Command): void {
               );
             }
 
-            // Only warn about missing polling when the parent process is
-            // genuinely not polling this project. After `ao stop <project>`
-            // we deliberately leave the project in `running.projects`
-            // because the parent's in-memory lifecycle worker is still
-            // active — no warning needed in that case.
             if (!running.projects.includes(projectArg)) {
               console.log(
                 chalk.yellow(
-                  `\n⚠ Lifecycle polling for "${projectArg}" is not attached to this ao start\n` +
-                    `  process (it was started before the project was registered).\n` +
-                    `  Activity/PR state won't auto-update until the daemon is fully restarted\n` +
-                    `  (\`ao stop && ao start ${projectArg}\`).\n`,
+                  `\nℹ Lifecycle polling for "${projectArg}" will attach within ~60s\n` +
+                    `  because the running ao start process now supervises active global projects.\n`,
                 ),
               );
             }
@@ -2224,15 +2210,14 @@ export function registerStart(program: Command): void {
           const actualPort = await runStartup(config, projectId, project, opts);
 
           // ── Register in running.json (Step 11) ──
-          // Only record the project this invocation actually polls. Other
-          // configured projects are not covered by this lifecycle loop, and
-          // `ao spawn` relies on this list to decide whether to warn users.
+          // During daemon startup, the project supervisor is the authoritative
+          // writer for lifecycle polling coverage across all active projects.
           await register({
             pid: process.pid,
             configPath: config.configPath,
             port: actualPort,
             startedAt: new Date().toISOString(),
-            projects: [projectId],
+            projects: listLifecycleWorkers(),
           });
           unlockStartup();
 
@@ -2268,6 +2253,7 @@ export function registerStart(program: Command): void {
             const exitCode = signal === "SIGINT" ? 130 : 0;
 
             try {
+              stopProjectSupervisor();
               stopAllLifecycleWorkers();
             } catch {
               // Best-effort — never block shutdown on observability.
@@ -2519,15 +2505,10 @@ export function registerStop(program: Command): void {
           }
           await stopDashboard(running?.port ?? port);
         }
-        // Targeted stop deliberately does NOT remove the project from
-        // `running.json`. The parent `ao start` process keeps an in-memory
-        // lifecycle worker for this project (a child CLI process cannot
-        // reach into the parent's memory to stop it), so `running.projects`
-        // — which is the source of truth for "polling is attached" —
-        // continues to truthfully list this project. Subsequent
-        // `ao start <project>` falls into the attach branch and re-spawns
-        // the orchestrator session; `ao spawn` keeps suppressing its
-        // "not polling project X" warning because polling really is alive.
+        // Targeted stop deliberately does NOT edit `running.json` from this
+        // child CLI process. The long-lived parent supervises lifecycle
+        // workers and will remove the project from `running.projects` after
+        // it observes that the last session became terminal.
 
         if (projectArg) {
           console.log(chalk.bold.green(`\n✓ Stopped sessions for ${project.name}\n`));

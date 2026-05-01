@@ -76,7 +76,7 @@ async function warnIfAONotRunning(projectId: string): Promise<void> {
   if (!running.projects.includes(projectId)) {
     console.log(
       chalk.yellow(
-        `⚠ The running AO instance (pid ${running.pid}) is not polling project "${projectId}". Run \`ao start ${projectId}\` so the new session is tracked.`,
+        `⚠ The running AO instance (pid ${running.pid}) is not polling project "${projectId}" yet. Lifecycle polling will attach within ~60s.`,
       ),
     );
   }
