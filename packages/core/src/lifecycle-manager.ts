@@ -1439,7 +1439,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
   async function maybeDispatchReviewBacklog(
     session: Session,
-    oldStatus: SessionStatus,
+    _oldStatus: SessionStatus,
     newStatus: SessionStatus,
     transitionReaction?: { key: string; result: ReactionResult | null },
   ): Promise<void> {
@@ -1472,11 +1472,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     // (getReviewThreads) consumes API quota on every poll.
     //
     // Exception: bypass throttle when a transition reaction just fired for a
-    // review reaction key. The transitionReaction branch records
-    // lastPendingReviewDispatchHash, which requires the current fingerprint from
-    // the API. If we throttle here, that metadata never gets written and the
-    // next unthrottled poll sees a "new" fingerprint, clears the reaction tracker,
-    // and fires a duplicate dispatch.
+    // review reaction key. The enriched dispatch needs the current fingerprint
+    // from the API so it can fire and record the hash in the same cycle. If we
+    // throttle here, the next unthrottled poll sees a "new" fingerprint, clears
+    // the reaction tracker, and fires a duplicate dispatch.
     const hasRelevantTransition =
       transitionReaction?.key === humanReactionKey ||
       transitionReaction?.key === automatedReactionKey;
@@ -1486,11 +1485,9 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         return;
       }
     }
-    lastReviewBacklogCheckAt.set(session.id, Date.now());
-
     // Single GraphQL call for all review threads (human + bot) + review summaries.
     // Split locally by isBot for separate reaction pipelines.
-    let allThreads: ReviewComment[] | null = null;
+    let allThreads: ReviewComment[];
     let reviewSummaries: ReviewSummary[] = [];
     try {
       if (scm.getReviewThreads) {
@@ -1502,11 +1499,18 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         allThreads = await scm.getPendingComments(session.pr);
       }
     } catch {
-      // Failed to fetch — preserve existing metadata
+      // Failed to fetch — preserve existing metadata.
+      // Don't update the throttle timestamp so the next poll retries immediately
+      // instead of being blocked for 2 minutes with the agent left on a bare notification.
+      return;
     }
 
+    // Only stamp the throttle after a successful SCM fetch. If the fetch failed,
+    // we returned above so the next poll can retry without waiting 2 minutes.
+    lastReviewBacklogCheckAt.set(session.id, Date.now());
+
     // Persist review comments + summaries to metadata for dashboard consumption
-    if (allThreads !== null) {
+    {
       const unresolved = allThreads.filter((c) => !c.isBot);
       const reviewBlob = JSON.stringify({
         unresolvedThreads: unresolved.length,
@@ -1528,12 +1532,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       }
     }
 
-    const pendingComments = allThreads ? allThreads.filter((c) => !c.isBot) : null;
-    const automatedComments = allThreads ? allThreads.filter((c) => c.isBot) : null;
+    const pendingComments = allThreads.filter((c) => !c.isBot);
+    const automatedComments = allThreads.filter((c) => c.isBot);
 
     // --- Pending (human) review comments ---
-    // null = SCM fetch failed; skip processing to preserve existing metadata.
-    if (pendingComments !== null) {
+    {
       const pendingFingerprint = makeFingerprint(pendingComments.map((comment) => comment.id));
       const lastPendingFingerprint = session.metadata["lastPendingReviewFingerprint"] ?? "";
       const lastPendingDispatchHash = session.metadata["lastPendingReviewDispatchHash"] ?? "";
@@ -1557,32 +1560,42 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           lastPendingReviewDispatchHash: "",
           lastPendingReviewDispatchAt: "",
         });
-      } else if (
-        transitionReaction?.key === humanReactionKey &&
-        transitionReaction.result?.success
-      ) {
-        if (lastPendingDispatchHash !== pendingFingerprint) {
-          updateSessionMetadata(session, {
-            lastPendingReviewDispatchHash: pendingFingerprint,
-            lastPendingReviewDispatchAt: new Date().toISOString(),
-          });
-        }
-      } else if (
-        !(oldStatus !== newStatus && newStatus === "changes_requested") &&
-        pendingFingerprint !== lastPendingDispatchHash
-      ) {
+      } else if (pendingFingerprint !== lastPendingDispatchHash) {
         const reactionConfig = getReactionConfigForSession(session, humanReactionKey);
         if (
           reactionConfig &&
           reactionConfig.action &&
           (reactionConfig.auto !== false || reactionConfig.action === "notify")
         ) {
-          const enrichedConfig = {
-            ...reactionConfig,
-            message: formatReviewCommentsMessage(pendingComments, "reviewer", reviewSummaries),
-          };
-          const result = await executeReaction(session, humanReactionKey, enrichedConfig);
-          if (result.success) {
+          const enrichedMessage = formatReviewCommentsMessage(
+            pendingComments,
+            "reviewer",
+            reviewSummaries,
+          );
+
+          // When the transition handler already called executeReaction for this
+          // key, send the enriched payload directly to avoid double-billing the
+          // reaction attempt budget. A project with retries:1 would otherwise
+          // escalate on the very first transition poll.
+          // Only bypass for "send-to-agent" — "notify" actions must go through
+          // executeReaction so they route to notifyHuman instead of the agent.
+          let success = false;
+          if (
+            transitionReaction?.key === humanReactionKey &&
+            reactionConfig.action === "send-to-agent"
+          ) {
+            try {
+              await sessionManager.send(session.id, enrichedMessage);
+              success = true;
+            } catch {
+              // Send failed — will retry on next unthrottled poll
+            }
+          } else {
+            const enrichedConfig = { ...reactionConfig, message: enrichedMessage };
+            const result = await executeReaction(session, humanReactionKey, enrichedConfig);
+            success = result.success;
+          }
+          if (success) {
             updateSessionMetadata(session, {
               lastPendingReviewDispatchHash: pendingFingerprint,
               lastPendingReviewDispatchAt: new Date().toISOString(),
@@ -1593,7 +1606,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     }
 
     // --- Automated (bot) review comments ---
-    if (automatedComments !== null) {
+    {
       const automatedFingerprint = makeFingerprint(automatedComments.map((comment) => comment.id));
       const lastAutomatedFingerprint = session.metadata["lastAutomatedReviewFingerprint"] ?? "";
       const lastAutomatedDispatchHash = session.metadata["lastAutomatedReviewDispatchHash"] ?? "";
@@ -1619,14 +1632,25 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           reactionConfig.action &&
           (reactionConfig.auto !== false || reactionConfig.action === "notify")
         ) {
-          // Always enrich with formatted comment listing so the agent has inline
-          // data and doesn't need to re-fetch via gh api.
-          const enrichedConfig = {
-            ...reactionConfig,
-            message: formatReviewCommentsMessage(automatedComments, "bot"),
-          };
-          const result = await executeReaction(session, automatedReactionKey, enrichedConfig);
-          if (result.success) {
+          const enrichedMessage = formatReviewCommentsMessage(automatedComments, "bot");
+
+          let success = false;
+          if (
+            transitionReaction?.key === automatedReactionKey &&
+            reactionConfig.action === "send-to-agent"
+          ) {
+            try {
+              await sessionManager.send(session.id, enrichedMessage);
+              success = true;
+            } catch {
+              // Send failed — will retry on next unthrottled poll
+            }
+          } else {
+            const enrichedConfig = { ...reactionConfig, message: enrichedMessage };
+            const result = await executeReaction(session, automatedReactionKey, enrichedConfig);
+            success = result.success;
+          }
+          if (success) {
             updateSessionMetadata(session, {
               lastAutomatedReviewDispatchHash: automatedFingerprint,
               lastAutomatedReviewDispatchAt: new Date().toISOString(),

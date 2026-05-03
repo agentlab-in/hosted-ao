@@ -676,7 +676,7 @@ function applyDefaultReactions(config: OrchestratorConfig): OrchestratorConfig {
       auto: true,
       action: "send-to-agent",
       message:
-        "There are review comments on your PR. Details will follow shortly.",
+        "There are new review comments on your PR requesting changes.",
       escalateAfter: "30m",
     },
     "bugbot-comments": {
