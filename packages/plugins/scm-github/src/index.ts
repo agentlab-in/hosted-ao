@@ -486,6 +486,10 @@ function createGitHubSCM(): SCM {
   // ETag-controlled cache for review threads + reviews. Freshness is managed by
   // Guard 3 (checkReviewCommentsETag) — not a TTL timer.
   const reviewThreadsCache = new Map<string, ReviewThreadsResult>();
+  // Instance-level observer captured from enrichSessionsPRBatch calls.
+  // Used by getReviewThreads (which can't accept observer via the SCM interface)
+  // to log non-304 errors that would otherwise be swallowed by lifecycle's catch.
+  let instanceObserver: BatchObserver | undefined;
 
   function prCacheKey(owner: string, repo: string, prKey: string, method: PRCacheMethod): string {
     return `${owner}/${repo}#${prKey}:${method}`;
@@ -1006,7 +1010,7 @@ function createGitHubSCM(): SCM {
       const cacheKey = `${pr.owner}/${pr.repo}#${pr.number}`;
 
       // Guard 3: check if review comments changed via REST ETag
-      const reviewsChanged = await checkReviewCommentsETag(pr.owner, pr.repo, pr.number);
+      const reviewsChanged = await checkReviewCommentsETag(pr.owner, pr.repo, pr.number, instanceObserver);
       if (!reviewsChanged) {
         const cached = reviewThreadsCache.get(cacheKey);
         if (cached) return cached;
@@ -1133,6 +1137,8 @@ function createGitHubSCM(): SCM {
         reviewThreadsCache.set(cacheKey, result);
         return result;
       } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        instanceObserver?.log("warn", `[getReviewThreads] Failed for ${cacheKey}: ${errorMsg}`);
         throw new Error("Failed to fetch review threads", { cause: err });
       }
     },
@@ -1241,6 +1247,7 @@ function createGitHubSCM(): SCM {
       observer?: BatchObserver,
       repos?: string[],
     ): Promise<Map<string, PREnrichmentData>> {
+      if (observer) instanceObserver = observer;
       const batchResult = await enrichSessionsPRBatchImpl(prs, observer, repos);
       return batchResult.enrichment;
     },
