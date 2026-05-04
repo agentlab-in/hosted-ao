@@ -197,13 +197,12 @@ function DashboardInner({
   const showDebugBundleButton =
     !isMobile &&
     (process.env.NODE_ENV === "development" || debugParam === "1" || debugParam === "true");
-  const showSidebar = projects.length >= 1;
   const { showToast } = useToast();
   const [doneExpanded, setDoneExpanded] = useState(false);
   const sessionsRef = useRef(sessions);
 
   sessionsRef.current = sessions;
-  const allProjectsView = projects.length > 1 && showSidebar && projectId === undefined;
+  const allProjectsView = projects.length > 1 && projectId === undefined;
   const currentProjectOrchestrator = useMemo(
     () =>
       projectId
@@ -495,41 +494,39 @@ function DashboardInner({
         <ConnectionBar status={connectionStatus} />
         <div className="dashboard-app-shell">
           <header className="dashboard-app-header">
-            {showSidebar ? (
-              <button
-                type="button"
-                className="dashboard-app-sidebar-toggle"
-                onClick={handleToggleSidebar}
-                aria-label="Toggle sidebar"
-              >
-                {isMobile ? (
-                  <svg
-                    width="16"
-                    height="16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <path d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                ) : (
-                  <svg
-                    width="14"
-                    height="14"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.75"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <path d="M9 3v18" />
-                  </svg>
-                )}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="dashboard-app-sidebar-toggle"
+              onClick={handleToggleSidebar}
+              aria-label="Toggle sidebar"
+            >
+              {isMobile ? (
+                <svg
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              ) : (
+                <svg
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M9 3v18" />
+                </svg>
+              )}
+            </button>
             <div className="dashboard-app-header__brand">
               <span className="dashboard-app-header__brand-dot" aria-hidden="true" />
               <span>Agent Orchestrator</span>
@@ -598,22 +595,20 @@ function DashboardInner({
           <div
             className={`dashboard-shell dashboard-shell--desktop${sidebarCollapsed ? " dashboard-shell--sidebar-collapsed" : ""}`}
           >
-            {showSidebar && (
-              <div
-                className={`sidebar-wrapper${mobileMenuOpen ? " sidebar-wrapper--mobile-open" : ""}`}
-              >
-                <ProjectSidebar
-                  projects={projects}
-                  sessions={sessions}
-                  orchestrators={activeOrchestrators}
-                  activeProjectId={projectId}
-                  activeSessionId={activeSessionId}
-                  collapsed={sidebarCollapsed}
-                  onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
-                  onMobileClose={() => setMobileMenuOpen(false)}
-                />
-              </div>
-            )}
+            <div
+              className={`sidebar-wrapper${mobileMenuOpen ? " sidebar-wrapper--mobile-open" : ""}`}
+            >
+              <ProjectSidebar
+                projects={projects}
+                sessions={sessions}
+                orchestrators={activeOrchestrators}
+                activeProjectId={projectId}
+                activeSessionId={activeSessionId}
+                collapsed={sidebarCollapsed}
+                onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+                onMobileClose={() => setMobileMenuOpen(false)}
+              />
+            </div>
             {mobileMenuOpen && (
               <div className="sidebar-mobile-backdrop" onClick={() => setMobileMenuOpen(false)} />
             )}
