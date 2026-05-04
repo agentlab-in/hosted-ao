@@ -66,7 +66,10 @@ export class SessionBroadcaster {
    * Subscribe to session patches and errors. Returns an unsubscribe function.
    * Sends an immediate snapshot to the new subscriber, then polling updates.
    */
-  subscribe(callback: (sessions: SessionPatch[]) => void, onError?: (error: string) => void): () => void {
+  subscribe(
+    callback: (sessions: SessionPatch[]) => void,
+    onError?: (error: string) => void,
+  ): () => void {
     const wasEmpty = this.subscribers.size === 0;
     this.subscribers.add(callback);
     if (onError) this.errorSubscribers.add(onError);
@@ -134,7 +137,10 @@ export class SessionBroadcaster {
   }
 
   /** One-shot HTTP fetch of the current session list. */
-  private async fetchSnapshot(): Promise<{ sessions: SessionPatch[] | null; error: string | null }> {
+  private async fetchSnapshot(): Promise<{
+    sessions: SessionPatch[] | null;
+    error: string | null;
+  }> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4000);
     try {
@@ -213,12 +219,10 @@ class TerminalManager {
    * If has subscribers but PTY crashed, re-attach.
    */
   open(id: string, projectId?: string, tmuxName?: string): string {
-    // Validate and resolve
     if (!validateSessionId(id)) {
       throw new Error(`Invalid session ID: ${id}`);
     }
 
-    // Use provided tmuxName, or reuse from existing terminal entry, or resolve
     const key = this.terminalKey(id, projectId);
     const existing = this.terminals.get(key);
     const tmuxSessionId =
@@ -251,13 +255,15 @@ class TerminalManager {
     }
 
     // Enable mouse mode
-    const mouseProc = spawn(this.TMUX, ["set-option", "-t", tmuxSessionId, "mouse", "on"]);
+    const exactTmuxTarget = `=${tmuxSessionId}`;
+
+    const mouseProc = spawn(this.TMUX, ["set-option", "-t", exactTmuxTarget, "mouse", "on"]);
     mouseProc.on("error", (err) => {
       console.error(`[MuxServer] Failed to set mouse mode for ${tmuxSessionId}:`, err.message);
     });
 
     // Hide the status bar
-    const statusProc = spawn(this.TMUX, ["set-option", "-t", tmuxSessionId, "status", "off"]);
+    const statusProc = spawn(this.TMUX, ["set-option", "-t", exactTmuxTarget, "status", "off"]);
     statusProc.on("error", (err) => {
       console.error(`[MuxServer] Failed to hide status bar for ${tmuxSessionId}:`, err.message);
     });
@@ -280,7 +286,7 @@ class TerminalManager {
     }
 
     // Spawn PTY
-    const pty = ptySpawn(this.TMUX, ["attach-session", "-t", tmuxSessionId], {
+    const pty = ptySpawn(this.TMUX, ["attach-session", "-t", exactTmuxTarget], {
       name: "xterm-256color",
       cols: 80,
       rows: 24,
@@ -327,7 +333,7 @@ class TerminalManager {
           `[MuxServer] Re-attaching to ${id} (attempt ${terminal.reattachAttempts}/${MAX_REATTACH_ATTEMPTS})`,
         );
         try {
-          this.open(id, projectId);
+          this.open(id, projectId, tmuxSessionId);
           terminal.reattachAttempts = 0; // reset on successful attach
           return; // re-attached — don't notify exit
         } catch (err) {

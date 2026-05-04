@@ -69,6 +69,7 @@ export function useXtermTerminal(
 
   useEffect(() => {
     if (!terminalRef.current) return;
+    setError(null);
 
     // Dynamically import xterm.js to avoid SSR issues
     let mounted = true;
