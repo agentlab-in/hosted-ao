@@ -1,6 +1,6 @@
-# @aoagents/ao-plugin-workspace-worktree
+# @aoagents/ao-plugin-agent-cursor
 
-## 0.4.0
+## 0.1.2
 
 ### Patch Changes
 
@@ -25,10 +25,3 @@
 - Updated dependencies [7072143]
 - Updated dependencies [ed2dcea]
   - @aoagents/ao-core@0.4.0
-
-## 0.2.0
-
-### Patch Changes
-
-- Updated dependencies [3a650b0]
-  - @composio/ao-core@0.2.0
