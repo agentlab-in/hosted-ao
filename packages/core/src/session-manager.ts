@@ -41,6 +41,7 @@ import {
   type Runtime,
   type Agent,
   type Workspace,
+  type WorkspaceCreateConfig,
   type Tracker,
   type SCM,
   type PluginRegistry,
@@ -1521,16 +1522,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       );
     }
 
+    const workspaceConfig = {
+      projectId: orchestratorConfig.projectId,
+      project,
+      sessionId,
+      branch,
+      worktreeDir: getProjectWorktreesDir(orchestratorConfig.projectId),
+    } satisfies WorkspaceCreateConfig;
+
     let workspacePath: string;
+    let adoptedManagedWorkspace = false;
     try {
-      const wsInfo = await plugins.workspace.create({
-        projectId: orchestratorConfig.projectId,
-        project,
-        sessionId,
-        branch,
-        worktreeDir: getProjectWorktreesDir(orchestratorConfig.projectId),
-      });
+      const adoptedInfo = await plugins.workspace.findManagedWorkspace?.(workspaceConfig);
+      const wsInfo = adoptedInfo ?? (await plugins.workspace.create(workspaceConfig));
       workspacePath = wsInfo.path;
+      adoptedManagedWorkspace = adoptedInfo !== undefined && adoptedInfo !== null;
     } catch (err) {
       try {
         deleteMetadata(sessionsDir, sessionId);
@@ -1543,11 +1549,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // Helper: undo worktree + metadata if anything between workspace creation
     // and a fully-written metadata record fails.
     const cleanupWorktreeAndMetadata = async (promptFile?: string): Promise<void> => {
-      try {
-        // plugins.workspace is guaranteed non-null here: we threw above if it was null
-        await plugins.workspace!.destroy(workspacePath);
-      } catch {
-        /* best effort */
+      if (!adoptedManagedWorkspace) {
+        try {
+          // plugins.workspace is guaranteed non-null here: we threw above if it was null
+          await plugins.workspace!.destroy(workspacePath);
+        } catch {
+          /* best effort */
+        }
       }
       try {
         deleteMetadata(sessionsDir, sessionId);

@@ -971,11 +971,31 @@ describe("API Routes", () => {
       const data = await res.json();
       expect(data).toEqual({
         error: expect.stringContaining(
-          'AO found older orchestrator workspaces for "my-app" that are still registered with git.',
+          'AO found an older orchestrator workspace for "my-app" but could not safely reuse it automatically.',
         ),
         code: "orchestrator_workspace_conflict",
-        recovery: "remove-and-readd-project",
+        recovery: "reuse-or-recreate-workspace",
       });
+    });
+
+    it("returns the same recovery message when a matching branch is outside AO-managed worktree directories", async () => {
+      (mockSessionManager.spawnOrchestrator as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error(
+          'Found existing worktree for orchestrator branch "orchestrator/my-app-orchestrator" at "/tmp/manual-worktree", but it is outside AO-managed worktree directories. Reuse it manually or remove it and try again.',
+        ),
+      );
+
+      const req = makeRequest("/api/orchestrators", {
+        method: "POST",
+        body: JSON.stringify({ projectId: "my-app" }),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const res = await orchestratorsPOST(req);
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.recovery).toBe("reuse-or-recreate-workspace");
+      expect(data.error).toContain('AO found an older orchestrator workspace for "my-app"');
     });
   });
 

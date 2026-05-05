@@ -1567,6 +1567,29 @@ describe("spawn", () => {
       expect(session.branch).toBe("orchestrator/app-orchestrator");
     });
 
+    it("adopts an existing managed orchestrator worktree instead of creating a fresh one", async () => {
+      const adoptedPath = join(tmpDir, "legacy-orchestrator-ws");
+      (mockWorkspace.findManagedWorkspace as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        path: adoptedPath,
+        branch: "orchestrator/app-orchestrator",
+        sessionId: "app-orchestrator",
+        projectId: "my-app",
+      });
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      const session = await sm.spawnOrchestrator({ projectId: "my-app" });
+
+      expect(session.workspacePath).toBe(adoptedPath);
+      expect(mockWorkspace.findManagedWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "my-app",
+          sessionId: "app-orchestrator",
+          branch: "orchestrator/app-orchestrator",
+        }),
+      );
+      expect(mockWorkspace.create).not.toHaveBeenCalled();
+    });
+
     it("writes metadata with proper fields", async () => {
       const sm = createSessionManager({ config, registry: mockRegistry });
 
@@ -1729,6 +1752,27 @@ describe("spawn", () => {
       );
 
       expect(mockWorkspace.destroy).toHaveBeenCalledWith(worktreePath);
+      expect(readMetadataRaw(sessionsDir, "app-orchestrator")).toBeNull();
+    });
+
+    it("keeps an adopted worktree in place when runtime creation fails", async () => {
+      const adoptedPath = join(tmpDir, "adopted-orchestrator-ws");
+      (mockWorkspace.findManagedWorkspace as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        path: adoptedPath,
+        branch: "orchestrator/app-orchestrator",
+        sessionId: "app-orchestrator",
+        projectId: "my-app",
+      });
+      (mockRuntime.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error("runtime creation failed"),
+      );
+      const sm = createSessionManager({ config, registry: mockRegistry });
+
+      await expect(sm.spawnOrchestrator({ projectId: "my-app" })).rejects.toThrow(
+        "runtime creation failed",
+      );
+
+      expect(mockWorkspace.destroy).not.toHaveBeenCalled();
       expect(readMetadataRaw(sessionsDir, "app-orchestrator")).toBeNull();
     });
 

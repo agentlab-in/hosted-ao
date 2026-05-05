@@ -173,6 +173,7 @@ export function createMockPlugins(): MockPlugins {
     }),
     destroy: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue([]),
+    findManagedWorkspace: vi.fn().mockResolvedValue(null),
   };
 
   return { runtime, agent, workspace };
