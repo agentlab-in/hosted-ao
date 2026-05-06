@@ -110,6 +110,9 @@ export async function newSession(opts: NewSessionOptions): Promise<void> {
 
   await tmux(...args);
 
+  // Hide the tmux status bar — sessions are embedded in web terminal
+  await tmux("set-option", "-t", opts.name, "status", "off");
+
   // Send the initial command if provided
   if (opts.command) {
     await sendKeys(opts.name, opts.command);
