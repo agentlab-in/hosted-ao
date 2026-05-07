@@ -192,11 +192,31 @@ interface ManagedTerminal {
   buffer: string[];
   bufferBytes: number;
   reattachAttempts: number;
+  /**
+   * Pending grace-period timer that resets reattachAttempts when the
+   * currently-attached PTY survives REATTACH_RESET_GRACE_MS. Tracked so
+   * cleanup paths (last-subscriber unsubscribe, subsequent re-attach) can
+   * clear it and avoid keeping the dead PTY/terminal closure references
+   * reachable for up to 5 s after teardown.
+   */
+  resetTimer?: ReturnType<typeof setTimeout>;
 }
 
 const RING_BUFFER_MAX = 50 * 1024; // 50KB max per terminal
 const WS_BUFFER_HIGH_WATERMARK = 64 * 1024; // 64KB
 const MAX_REATTACH_ATTEMPTS = 3;
+/**
+ * Grace period a freshly-attached PTY must survive before its successful
+ * attach is allowed to reset the re-attach counter. Prevents tight crash
+ * loops (e.g. attaching to a tmux session that no longer exists) from
+ * gaming the MAX_REATTACH_ATTEMPTS cap by resetting the counter to 0
+ * between every failed attempt.
+ *
+ * 5 s is comfortably longer than the ~40 ms a doomed `tmux attach-session`
+ * takes to exit, while still being short enough that a healthy PTY which
+ * crashes hours later gets a fresh retry budget.
+ */
+const REATTACH_RESET_GRACE_MS = 5_000;
 
 /**
  * TerminalManager manages PTY processes independently of WebSocket connections.
@@ -296,6 +316,25 @@ class TerminalManager {
 
     terminal.pty = pty;
 
+    // Schedule a grace-period reset of the re-attach counter. We only
+    // consider an attach "really successful" if the PTY survives long
+    // enough to suggest the underlying tmux session is actually usable.
+    // The closure-captured `pty` reference is compared with terminal.pty
+    // so a stale timer cannot reset the counter for a PTY that has
+    // already exited or been replaced by re-attach. Any previously-
+    // scheduled timer (from a now-replaced PTY) is cleared so we don't
+    // keep its closure references reachable until the timer fires.
+    if (terminal.resetTimer) {
+      clearTimeout(terminal.resetTimer);
+    }
+    terminal.resetTimer = setTimeout(() => {
+      terminal.resetTimer = undefined;
+      if (terminal.pty === pty) {
+        terminal.reattachAttempts = 0;
+      }
+    }, REATTACH_RESET_GRACE_MS);
+    terminal.resetTimer.unref();
+
     // Wire up data events
     pty.onData((data: string) => {
       // Push to all subscribers — isolate each callback so a throw in one
@@ -327,6 +366,12 @@ class TerminalManager {
       // Re-attach if subscribers are still present, up to MAX_REATTACH_ATTEMPTS.
       // The cap prevents an unbounded respawn loop when the PTY crashes immediately
       // after every attach (e.g. resource exhaustion or a broken tmux session).
+      // The counter is reset by a delayed timer in open() once the new PTY has
+      // survived REATTACH_RESET_GRACE_MS — see the comment on that constant.
+      // Resetting here would defeat the cap: when ao stop kills the tmux session
+      // out from under a still-subscribed dashboard, attach-session exits ~40 ms
+      // after spawn and the loop runs at ~80 spawns/sec, exhausting the system
+      // PTY pool in seconds (issue #1639).
       if (terminal.subscribers.size > 0 && terminal.reattachAttempts < MAX_REATTACH_ATTEMPTS) {
         terminal.reattachAttempts += 1;
         console.log(
@@ -334,7 +379,6 @@ class TerminalManager {
         );
         try {
           this.open(id, projectId, tmuxSessionId);
-          terminal.reattachAttempts = 0; // reset on successful attach
           return; // re-attached — don't notify exit
         } catch (err) {
           console.error(`[MuxServer] Failed to re-attach ${id}:`, err);
@@ -402,6 +446,10 @@ class TerminalManager {
       if (onExit) terminal.exitCallbacks.delete(onExit);
       // Kill PTY and clean up when the last subscriber leaves
       if (terminal.subscribers.size === 0) {
+        if (terminal.resetTimer) {
+          clearTimeout(terminal.resetTimer);
+          terminal.resetTimer = undefined;
+        }
         if (terminal.pty) {
           terminal.pty.kill();
           terminal.pty = null;
