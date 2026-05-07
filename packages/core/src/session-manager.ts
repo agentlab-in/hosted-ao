@@ -1299,6 +1299,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment: {
           ...environment,
           ...(opencodeConfigFile ? { OPENCODE_CONFIG: opencodeConfigFile } : {}),
+          ...(project.env ?? {}),
           PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
           GH_PATH: PREFERRED_GH_PATH,
           ...(process.env["AO_AGENT_GH_TRACE"] && {
@@ -1670,6 +1671,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         launchCommand,
         environment: {
           ...environment,
+          ...(project.env ?? {}),
           PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
           GH_PATH: PREFERRED_GH_PATH,
           ...(process.env["AO_AGENT_GH_TRACE"] && {
@@ -2935,6 +2937,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       environment: {
         ...environment,
         ...(opencodeConfigPath ? { OPENCODE_CONFIG: opencodeConfigPath } : {}),
+        ...(project.env ?? {}),
         PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
         GH_PATH: PREFERRED_GH_PATH,
         ...(process.env["AO_AGENT_GH_TRACE"] && {
