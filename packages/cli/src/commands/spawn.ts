@@ -248,17 +248,6 @@ async function spawnSession(
     );
     console.log(`  View:     ${chalk.dim(projectSessionUrl(port, projectId, session.id))}`);
 
-    // Warn if prompt delivery failed (for post-launch agents like Claude Code)
-    const promptDelivered = session.metadata?.promptDelivered;
-    if (promptDelivered === "false") {
-      console.warn(
-        chalk.yellow(
-          `  ⚠ Prompt delivery failed — agent may be idle.\n` +
-            `    Use '${chalk.cyan("ao send " + session.id + ' "message..."')}' to send instructions manually.`,
-        ),
-      );
-    }
-
     // Open terminal tab if requested
     if (openTab) {
       try {

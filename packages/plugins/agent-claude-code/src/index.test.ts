@@ -199,7 +199,6 @@ describe("plugin manifest & exports", () => {
     const agent = create();
     expect(agent.name).toBe("claude-code");
     expect(agent.processName).toBe("claude");
-    expect(agent.promptDelivery).toBe("post-launch");
   });
 
   it("default export is a valid PluginModule", () => {
@@ -244,17 +243,22 @@ describe("getLaunchCommand", () => {
     expect(cmd).toContain("--model 'claude-opus-4-6'");
   });
 
-  it("does not include -p flag (prompt delivered post-launch)", () => {
+  it("includes prompt as positional argument with -- separator (not -p flag)", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "Fix the bug" }));
     expect(cmd).not.toContain("-p");
-    expect(cmd).not.toContain("Fix the bug");
+    expect(cmd).toContain("-- 'Fix the bug'");
   });
 
-  it("combines all options without prompt", () => {
+  it("combines all options with prompt as positional arg after --", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ permissions: "permissionless", model: "opus", prompt: "Hello" }),
     );
-    expect(cmd).toBe("claude --dangerously-skip-permissions --model 'opus'");
+    expect(cmd).toBe("claude --dangerously-skip-permissions --model 'opus' -- 'Hello'");
+  });
+
+  it("handles prompts starting with dashes safely via -- separator", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ prompt: "--investigate this" }));
+    expect(cmd).toContain("-- '--investigate this'");
   });
 
   it("omits --dangerously-skip-permissions when permissions=default", () => {
@@ -268,25 +272,24 @@ describe("getLaunchCommand", () => {
     expect(cmd).not.toContain("-p");
   });
 
-  it("includes --append-system-prompt alongside omitted -p", () => {
+  it("includes --append-system-prompt and prompt as positional arg after --", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ systemPrompt: "You are a helper", prompt: "Do the task" }),
     );
     expect(cmd).toContain("--append-system-prompt");
     expect(cmd).toContain("You are a helper");
-    // -p as a standalone flag (not substring of --append-system-prompt)
     expect(cmd).not.toMatch(/\s-p\s/);
-    expect(cmd).not.toContain("Do the task");
+    expect(cmd).toContain("-- 'Do the task'");
   });
 
-  it("uses systemPromptFile via shell substitution alongside omitted -p", () => {
+  it("uses systemPromptFile via shell substitution with prompt after --", () => {
     const cmd = agent.getLaunchCommand(
       makeLaunchConfig({ systemPromptFile: "/tmp/prompt.md", prompt: "Do the task" }),
     );
     expect(cmd).toContain('--append-system-prompt "$(cat');
     expect(cmd).toContain("/tmp/prompt.md");
     expect(cmd).not.toMatch(/\s-p\s/);
-    expect(cmd).not.toContain("Do the task");
+    expect(cmd).toContain("-- 'Do the task'");
   });
 });
 
@@ -870,14 +873,17 @@ describe("hook setup — relative path (symlink-safe)", () => {
     expect(hookCommand).not.toMatch(/^\//);
   });
 
-  it("postLaunchSetup writes a relative hook command (not absolute)", async () => {
+  it("postLaunchSetup is a no-op (hooks installed pre-launch via setupWorkspaceHooks)", async () => {
+    mockWriteFile.mockClear();
     await agent.postLaunchSetup!(
       makeSession({ workspacePath: "/Users/equinox/.worktrees/integrator/integrator-10" }),
     );
 
-    const hookCommand = getWrittenHookCommand();
-    expect(hookCommand).toBe(".claude/metadata-updater.sh");
-    expect(hookCommand).not.toMatch(/^\//);
+    // No files should be written — hooks are installed before launch
+    const settingsWrites = mockWriteFile.mock.calls.filter(
+      ([path]: unknown[]) => typeof path === "string" && path.endsWith("settings.json"),
+    );
+    expect(settingsWrites).toHaveLength(0);
   });
 
   it("different worktree paths produce identical settings.json content", async () => {

@@ -1098,33 +1098,17 @@ describe("spawn", () => {
     expect(session.branch).not.toBe("main");
   });
 
-  it("sends prompt post-launch when agent.promptDelivery is 'post-launch'", async () => {
-    vi.useFakeTimers();
-    const postLaunchAgent = {
-      ...mockAgent,
-      promptDelivery: "post-launch" as const,
-    };
-    const registryWithPostLaunch: PluginRegistry = {
-      ...mockRegistry,
-      get: vi.fn().mockImplementation((slot: string) => {
-        if (slot === "runtime") return mockRuntime;
-        if (slot === "agent") return postLaunchAgent;
-        if (slot === "workspace") return mockWorkspace;
-        return null;
+  it("passes prompt inline to agent via getLaunchCommand", async () => {
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await sm.spawn({ projectId: "my-app", prompt: "Fix the bug" });
+
+    // Prompt should be passed to getLaunchCommand, not sent via runtime.sendMessage
+    expect(mockAgent.getLaunchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("Fix the bug"),
       }),
-    };
-
-    const sm = createSessionManager({ config, registry: registryWithPostLaunch });
-    const spawnPromise = sm.spawn({ projectId: "my-app", prompt: "Fix the bug" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await spawnPromise;
-
-    // Prompt should be sent via runtime.sendMessage, not included in launch command
-    expect(mockRuntime.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: expect.any(String) }),
-      expect.stringContaining("Fix the bug"),
     );
-    vi.useRealTimers();
+    expect(mockRuntime.sendMessage).not.toHaveBeenCalled();
   });
 
   it("writes worker system prompt to file and passes only explicit task prompt to agent", async () => {
@@ -1156,7 +1140,7 @@ describe("spawn", () => {
     expect(systemPrompt).toContain("Session Lifecycle");
     expect(systemPrompt).toContain("## Project Context");
     expect(systemPrompt).toContain("## Task");
-    expect(systemPrompt).toContain("Work on issue: INT-1343");
+    expect(systemPrompt).toContain("Work on issue #INT-1343");
     expect(systemPrompt).not.toContain("## Additional Instructions");
   });
 
@@ -1227,149 +1211,61 @@ describe("spawn", () => {
     expect(opencodeConfig.instructions[0]).toContain("worker-prompt-app-1.md");
 
     const systemPromptPath = opencodeConfig.instructions[0]!;
-    expect(readFileSync(systemPromptPath, "utf-8")).toContain("Work on issue: INT-1343");
+    expect(readFileSync(systemPromptPath, "utf-8")).toContain("Work on issue #INT-1343");
     expect(readFileSync(systemPromptPath, "utf-8")).not.toContain("## Additional Instructions");
 
     const agentsMdPath = getWorkspaceAgentsMdPath(workspacePath);
     expect(existsSync(agentsMdPath)).toBe(false);
   });
 
-  it("does not send prompt post-launch when agent.promptDelivery is not set", async () => {
+  it("passes generated task prompt to agent for issue-only spawns", async () => {
     const sm = createSessionManager({ config, registry: mockRegistry });
-    await sm.spawn({ projectId: "my-app", prompt: "Fix the bug" });
+    await sm.spawn({ projectId: "my-app", issueId: "INT-1343" });
 
-    // Default agent (no promptDelivery) should NOT trigger sendMessage for prompt
-    expect(mockRuntime.sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("does not send a post-launch message when no task prompt is available", async () => {
-    vi.useFakeTimers();
-    const postLaunchAgent = {
-      ...mockAgent,
-      promptDelivery: "post-launch" as const,
-    };
-    const registryWithPostLaunch: PluginRegistry = {
-      ...mockRegistry,
-      get: vi.fn().mockImplementation((slot: string) => {
-        if (slot === "runtime") return mockRuntime;
-        if (slot === "agent") return postLaunchAgent;
-        if (slot === "workspace") return mockWorkspace;
-        return null;
-      }),
-    };
-
-    const sm = createSessionManager({ config, registry: registryWithPostLaunch });
-    const spawnPromise = sm.spawn({ projectId: "my-app" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    const session = await spawnPromise;
-
-    expect(mockRuntime.sendMessage).not.toHaveBeenCalled();
-    expect(session.metadata.promptDelivered).toBeUndefined();
-    vi.useRealTimers();
-  });
-
-  it("sends a minimal post-launch task for issue-only spawns", async () => {
-    vi.useFakeTimers();
-    const postLaunchAgent = {
-      ...mockAgent,
-      promptDelivery: "post-launch" as const,
-    };
-    const registryWithPostLaunch: PluginRegistry = {
-      ...mockRegistry,
-      get: vi.fn().mockImplementation((slot: string) => {
-        if (slot === "runtime") return mockRuntime;
-        if (slot === "agent") return postLaunchAgent;
-        if (slot === "workspace") return mockWorkspace;
-        return null;
-      }),
-    };
-
-    const sm = createSessionManager({ config, registry: registryWithPostLaunch });
-    const spawnPromise = sm.spawn({ projectId: "my-app", issueId: "INT-1343" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    const session = await spawnPromise;
-
-    expect(mockRuntime.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: expect.any(String) }),
-      "Work on issue: INT-1343",
-    );
-    expect(session.metadata.promptDelivered).toBe("true");
-
-    const callArgs = vi.mocked(postLaunchAgent.getLaunchCommand).mock.calls[0][0];
-    expect(callArgs.prompt).toBe("Work on issue: INT-1343");
+    const callArgs = vi.mocked(mockAgent.getLaunchCommand).mock.calls[0][0];
+    expect(callArgs.prompt).toContain("Work on issue #INT-1343");
     expect(callArgs.systemPromptFile).toContain("worker-prompt-app-1.md");
 
     const systemPrompt = readFileSync(callArgs.systemPromptFile!, "utf-8");
     expect(systemPrompt).toContain("## Task");
-    expect(systemPrompt).toContain("Work on issue: INT-1343");
-    vi.useRealTimers();
+    expect(systemPrompt).toContain("Work on issue #INT-1343");
   });
 
-  it("does not destroy session when post-launch prompt delivery fails", async () => {
-    vi.useFakeTimers();
-    const failingRuntime: Runtime = {
+  it("installs workspace hooks before launching the agent", async () => {
+    const callOrder: string[] = [];
+    const trackingAgent = {
+      ...mockAgent,
+      setupWorkspaceHooks: vi.fn().mockImplementation(() => {
+        callOrder.push("setupWorkspaceHooks");
+        return Promise.resolve();
+      }),
+    };
+    const trackingRuntime: Runtime = {
       ...mockRuntime,
-      sendMessage: vi.fn().mockRejectedValue(new Error("tmux send failed")),
+      create: vi.fn().mockImplementation((...args: Parameters<Runtime["create"]>) => {
+        callOrder.push("runtime.create");
+        return vi.mocked(mockRuntime.create)(...args);
+      }),
     };
-    const postLaunchAgent = {
-      ...mockAgent,
-      promptDelivery: "post-launch" as const,
-    };
-    const registryWithFailingSend: PluginRegistry = {
+    const trackingRegistry: PluginRegistry = {
       ...mockRegistry,
       get: vi.fn().mockImplementation((slot: string) => {
-        if (slot === "runtime") return failingRuntime;
-        if (slot === "agent") return postLaunchAgent;
+        if (slot === "runtime") return trackingRuntime;
+        if (slot === "agent") return trackingAgent;
         if (slot === "workspace") return mockWorkspace;
         return null;
       }),
     };
 
-    const sm = createSessionManager({ config, registry: registryWithFailingSend });
-    const spawnPromise = sm.spawn({ projectId: "my-app", prompt: "Fix the bug" });
-    // With retry logic (3 attempts at 3s, 6s, 9s delays before each attempt), need to advance 18s for all retries
-    await vi.advanceTimersByTimeAsync(18_000);
-    const session = await spawnPromise;
+    const sm = createSessionManager({ config, registry: trackingRegistry });
+    await sm.spawn({ projectId: "my-app", prompt: "Fix the bug" });
 
-    // Session should still be returned successfully despite sendMessage failure
-    expect(session.id).toBe("app-1");
-    expect(session.status).toBe("spawning");
-    // Runtime should NOT have been destroyed
-    expect(failingRuntime.destroy).not.toHaveBeenCalled();
-    // Verify promptDelivered is set to false in metadata
-    expect(session.metadata.promptDelivered).toBe("false");
-    vi.useRealTimers();
-  }, 30_000);
-
-  it("waits before sending post-launch prompt", async () => {
-    vi.useFakeTimers();
-    const postLaunchAgent = {
-      ...mockAgent,
-      promptDelivery: "post-launch" as const,
-    };
-    const registryWithPostLaunch: PluginRegistry = {
-      ...mockRegistry,
-      get: vi.fn().mockImplementation((slot: string) => {
-        if (slot === "runtime") return mockRuntime;
-        if (slot === "agent") return postLaunchAgent;
-        if (slot === "workspace") return mockWorkspace;
-        return null;
-      }),
-    };
-
-    const sm = createSessionManager({ config, registry: registryWithPostLaunch });
-    const spawnPromise = sm.spawn({ projectId: "my-app", prompt: "Fix the bug" });
-
-    // Advance only 2s — not enough, message should not have been sent yet
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(mockRuntime.sendMessage).not.toHaveBeenCalled();
-
-    // Advance the remaining 1s — now the first attempt should fire (3s total = 3000 * 1)
-    await vi.advanceTimersByTimeAsync(1_000);
-    await spawnPromise;
-    expect(mockRuntime.sendMessage).toHaveBeenCalled();
-    vi.useRealTimers();
-  }, 20_000);
+    const hooksIdx = callOrder.indexOf("setupWorkspaceHooks");
+    const createIdx = callOrder.indexOf("runtime.create");
+    expect(hooksIdx).toBeGreaterThanOrEqual(0);
+    expect(createIdx).toBeGreaterThanOrEqual(0);
+    expect(hooksIdx).toBeLessThan(createIdx);
+  });
 
   describe("rollback on failure", () => {
     it("cleans up reserved metadata when workspace creation fails", async () => {
