@@ -135,13 +135,17 @@ async function resolveBaseRef(
 async function isRegisteredWorktree(repoPath: string, worktreePath: string): Promise<boolean> {
   try {
     const output = await git(repoPath, "worktree", "list", "--porcelain");
-    const target = toComparablePath(worktreePath);
+    // Normalize both sides so non-canonical inputs don't false-negative
+    // and let a subsequent rmSync delete a still-registered worktree
+    // (data loss). resolve() collapses trailing-slash / ".." segments;
+    // toComparablePath handles Windows backslashes and drive case.
+    const target = toComparablePath(resolve(worktreePath));
     return output
       .split("\n")
       .some(
         (line) =>
           line.startsWith("worktree ") &&
-          toComparablePath(line.slice("worktree ".length)) === target,
+          toComparablePath(resolve(line.slice("worktree ".length))) === target,
       );
   } catch {
     return false;
@@ -164,6 +168,105 @@ async function clearStaleWorktreePath(repoPath: string, worktreePath: string): P
   }
 
   rmSync(worktreePath, { recursive: true, force: true });
+}
+
+/**
+ * Restore recovery: clear any stale worktree registration and/or stale
+ * directory at `workspacePath` so a subsequent `git worktree add` can
+ * succeed. Both restore branches (re-attach existing branch, create from
+ * base) need this — without it, an `<path> already exists` failure repeats.
+ *
+ * Refuses to rmSync the path if it's still a registered worktree, which
+ * would silently destroy the user's work. The entry-point `worktree prune`
+ * in restore() already ran, so we don't prune again here.
+ */
+async function cleanupStaleWorkspacePath(
+  repoPath: string,
+  workspacePath: string,
+): Promise<void> {
+  // Force-remove any registered worktree at this path. Best-effort — the
+  // path may not be registered, in which case git errors and we fall
+  // through to the dir cleanup.
+  try {
+    await git(repoPath, "worktree", "remove", "--force", workspacePath);
+  } catch {
+    // Best-effort
+  }
+
+  if (existsSync(workspacePath)) {
+    if (await isRegisteredWorktree(repoPath, workspacePath)) {
+      throw new Error(
+        `Worktree path "${workspacePath}" already exists and is still registered with git`,
+      );
+    }
+    // Use removeDirWithRetry for Windows file-handle drain races (matches
+    // destroy()'s fallback). On Unix this is just rmSync.
+    await removeDirWithRetry(workspacePath);
+  }
+}
+
+/**
+ * Restore recovery: re-attach an existing local branch to a worktree at
+ * `workspacePath`. Used when the branch is already present (destroy()
+ * preserves it) but the first `git worktree add <path> <branch>` failed
+ * — typically because `workspacePath` has a stale registry entry, a
+ * stale directory, or both.
+ *
+ * Never uses -b/-B: -b would fail with "branch already exists", and -B
+ * would force-reset the branch to a base ref and silently discard the
+ * session's commits, which is the opposite of restore's intent.
+ */
+async function reattachExistingBranch(
+  repoPath: string,
+  workspacePath: string,
+  branch: string,
+): Promise<void> {
+  await cleanupStaleWorkspacePath(repoPath, workspacePath);
+  await git(repoPath, "worktree", "add", workspacePath, branch);
+}
+
+/**
+ * Restore recovery: create a fresh branch at `workspacePath` from the
+ * appropriate base ref. Used when the local branch is missing — typically
+ * because only `origin/<branch>` exists and we need to materialize the
+ * local ref. Tries the remote ref first, then falls back to the local
+ * default branch.
+ *
+ * Runs the same stale-path cleanup as reattachExistingBranch so this path
+ * also recovers when `workspacePath` has a stale registry entry / dir.
+ */
+async function createBranchFromBase(
+  repoPath: string,
+  workspacePath: string,
+  branch: string,
+  defaultBranch: string,
+  hasOrigin: boolean,
+): Promise<void> {
+  await cleanupStaleWorkspacePath(repoPath, workspacePath);
+
+  const baseRef = await resolveBaseRef(repoPath, defaultBranch, { branch, hasOrigin });
+
+  if (!baseRef.startsWith("origin/")) {
+    // No remote available — create from the local default branch
+    await git(repoPath, "worktree", "add", "-b", branch, workspacePath, baseRef);
+    return;
+  }
+
+  // Branch might not exist locally — try the remote ref first, then fall
+  // back to the local default branch if the remote ref is unavailable.
+  try {
+    await git(repoPath, "worktree", "add", "-b", branch, workspacePath, baseRef);
+  } catch {
+    await git(
+      repoPath,
+      "worktree",
+      "add",
+      "-b",
+      branch,
+      workspacePath,
+      `refs/heads/${defaultBranch}`,
+    );
+  }
 }
 
 interface WorktreeEntry {
@@ -453,34 +556,20 @@ export function create(config?: Record<string, unknown>): Workspace {
         }
       }
 
-      // Try to create worktree on the existing branch
+      // Try to create worktree on the existing branch.
       try {
         await git(repoPath, "worktree", "add", workspacePath, cfg.branch);
       } catch {
-        const baseRef = await resolveBaseRef(repoPath, cfg.project.defaultBranch, {
-          branch: cfg.branch,
-          hasOrigin,
-        });
-
-        if (!baseRef.startsWith("origin/")) {
-          // No remote available — create from the local default branch
-          await git(repoPath, "worktree", "add", "-b", cfg.branch, workspacePath, baseRef);
+        if (await refExists(repoPath, `refs/heads/${cfg.branch}`)) {
+          await reattachExistingBranch(repoPath, workspacePath, cfg.branch);
         } else {
-          // Branch might not exist locally — try the remote ref first, then fall back
-          // to the local default branch if the remote ref is unavailable.
-          try {
-            await git(repoPath, "worktree", "add", "-b", cfg.branch, workspacePath, baseRef);
-          } catch {
-            await git(
-              repoPath,
-              "worktree",
-              "add",
-              "-b",
-              cfg.branch,
-              workspacePath,
-              `refs/heads/${cfg.project.defaultBranch}`,
-            );
-          }
+          await createBranchFromBase(
+            repoPath,
+            workspacePath,
+            cfg.branch,
+            cfg.project.defaultBranch,
+            hasOrigin,
+          );
         }
       }
 
