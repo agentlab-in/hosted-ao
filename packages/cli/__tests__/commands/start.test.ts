@@ -237,6 +237,17 @@ vi.mock("../../src/lib/prompts.js", () => ({
   promptConfirm: (...args: unknown[]) => mockPromptConfirm(...args),
 }));
 
+// Stub the update-channel onboarding so `runStartup` doesn't touch the real
+// global config file under ~/.agent-orchestrator. Without this, a test that
+// reaches runStartup writes `updateChannel` to disk, which makes subsequent
+// tests load that config and report wrong errors (e.g. "No projects
+// configured" instead of the expected "project not found").
+vi.mock("../../src/lib/update-channel-onboarding.js", () => ({
+  maybePromptForUpdateChannel: vi.fn(async () => {}),
+  hasChosenUpdateChannel: vi.fn(() => true),
+  persistUpdateChannel: vi.fn(),
+}));
+
 // Mock node:child_process — start.ts imports spawn for dashboard + browser open
 vi.mock("node:child_process", async (importOriginal) => {
   // eslint-disable-next-line @typescript-eslint/consistent-type-imports

@@ -99,6 +99,7 @@ import { ensureGit, runtimePreflight } from "../lib/startup-preflight.js";
 import { installShutdownHandlers } from "../lib/shutdown.js";
 import { resolveOrCreateProject } from "../lib/resolve-project.js";
 import { pathsEqual } from "../lib/path-equality.js";
+import { maybePromptForUpdateChannel } from "../lib/update-channel-onboarding.js";
 
 import { DEFAULT_PORT } from "../lib/constants.js";
 import { projectSessionUrl } from "../lib/routes.js";
@@ -837,6 +838,11 @@ async function runStartup(
   opts?: { dashboard?: boolean; orchestrator?: boolean; rebuild?: boolean; dev?: boolean },
 ): Promise<number> {
   await runtimePreflight(config);
+
+  // Ask about the auto-update channel once on first `ao start` after this
+  // feature ships. No-op on subsequent runs (idempotent — guarded by the
+  // presence of `updateChannel` in the global config).
+  await maybePromptForUpdateChannel();
 
   const shouldStartLifecycle = opts?.dashboard !== false || opts?.orchestrator !== false;
   let port = config.port ?? DEFAULT_PORT;

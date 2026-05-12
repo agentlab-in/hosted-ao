@@ -1,0 +1,65 @@
+name: Canary
+
+# Nightly canary publishes the current tip of `main` to npm under @nightly.
+# Cron schedule: 23:30 IST = 18:00 UTC, on Fri,Sat,Sun,Mon,Tue
+# (DOW 5,6,0,1,2). Wed/Thu are the bake window — no scheduled publishes.
+# `workflow_dispatch` lets the release captain re-cut a nightly during bake
+# when a fix lands and the Discord cohort should test the patched candidate.
+on:
+  schedule:
+    - cron: "0 18 * * 5,6,0,1,2"
+  workflow_dispatch:
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  canary:
+    name: Publish canary
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: echo "HUSKY=0" >> $GITHUB_ENV
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r build
+
+      # Pre-publish guard: same as release.yml — catches workspace:* deps on
+      # private packages before they'd silently break a published install.
+      - run: node scripts/check-publishable-deps.mjs
+
+      - name: Create snapshot versions
+        run: |
+          # If no changesets exist (e.g. right after a Version Packages merge),
+          # create a minimal one. `changeset version --snapshot` consumes and
+          # deletes it, so no cleanup is needed.
+          if [ -z "$(ls .changeset/*.md 2>/dev/null | grep -vi 'README')" ]; then
+            printf -- '---\n"@aoagents/ao": patch\n---\n\nchore: canary build\n' > .changeset/canary-temp.md
+          fi
+          pnpm changeset version --snapshot nightly
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish canary
+        run: pnpm changeset publish --tag nightly --no-git-tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

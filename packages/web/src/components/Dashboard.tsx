@@ -22,6 +22,7 @@ import type { ProjectInfo } from "@/lib/project-name";
 import { EmptyState } from "./Skeleton";
 import { ToastProvider, useToast } from "./Toast";
 import { ConnectionBar } from "./ConnectionBar";
+import { UpdateBanner } from "./UpdateBanner";
 import { CopyDebugBundleButton } from "./CopyDebugBundleButton";
 import { SidebarContext } from "./workspace/SidebarContext";
 import { projectDashboardPath, projectSessionPath } from "@/lib/routes";
@@ -527,6 +528,7 @@ function DashboardInner({
       value={{ onToggleSidebar: handleToggleSidebar, mobileSidebarOpen: mobileMenuOpen }}
     >
       <>
+        <UpdateBanner />
         <ConnectionBar status={connectionStatus} />
         <div className="dashboard-app-shell">
           <header className="dashboard-app-header">

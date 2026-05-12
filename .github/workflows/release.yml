@@ -1,0 +1,64 @@
+name: Release
+
+# Stable @latest publishes when CI passes on `main` and a Version Packages PR
+# is merged. The changesets/action below opens/updates that PR automatically;
+# merging it runs `changeset publish` and pushes to npm.
+on:
+  workflow_run:
+    # Depends on the workflow named "CI" in .github/workflows/ci.yml — if
+    # you rename that file or change its `name:` field, update this string
+    # too. GitHub matches by name (not filename) and silently no-ops on
+    # mismatch — so a rename here will mean releases never trigger again.
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    environment: release
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: echo "HUSKY=0" >> $GITHUB_ENV
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      # Pre-publish guard: catches the case where a publishable package has a
+      # workspace:* runtime dep on a `private: true` package — pnpm would
+      # rewrite the dep on publish to a version that doesn't exist on npm,
+      # breaking `npm install -g @aoagents/ao`.
+      - run: node scripts/check-publishable-deps.mjs
+      - uses: changesets/action@v1
+        with:
+          publish: pnpm changeset publish
+          version: pnpm changeset version
+          # Creates/updates a PR titled "chore: version packages" when changesets
+          # are pending. Merging that PR publishes to npm under @latest.
+          title: "chore: version packages"
+          commit: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
