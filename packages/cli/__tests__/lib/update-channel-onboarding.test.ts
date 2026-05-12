@@ -105,8 +105,19 @@ describe("update-channel-onboarding", () => {
       expect(mockSaveGlobalConfig).not.toHaveBeenCalled();
     });
 
-    it("prompts and persists the chosen channel on first run", async () => {
+    it("does not prompt when global config does not exist", async () => {
       mockExistsSync.mockReturnValue(false);
+      const prompt = vi.fn().mockResolvedValue("nightly" as const);
+
+      await maybePromptForUpdateChannel({ prompt, isInteractive: () => true });
+
+      expect(prompt).not.toHaveBeenCalled();
+      expect(mockSaveGlobalConfig).not.toHaveBeenCalled();
+    });
+
+    it("prompts and persists the chosen channel when global config exists but updateChannel is unset", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockGlobalConfig.value = {}; // no updateChannel set
       const prompt = vi.fn().mockResolvedValue("nightly" as const);
 
       await maybePromptForUpdateChannel({ prompt, isInteractive: () => true });
@@ -118,7 +129,8 @@ describe("update-channel-onboarding", () => {
     });
 
     it("falls back to 'manual' when the user dismisses the prompt", async () => {
-      mockExistsSync.mockReturnValue(false);
+      mockExistsSync.mockReturnValue(true);
+      mockGlobalConfig.value = {}; // no updateChannel set
       const prompt = vi.fn().mockRejectedValue(new Error("dismissed"));
 
       await maybePromptForUpdateChannel({ prompt, isInteractive: () => true });
@@ -129,7 +141,8 @@ describe("update-channel-onboarding", () => {
     });
 
     it("does not re-prompt the second time it runs after persisting", async () => {
-      mockExistsSync.mockReturnValue(false);
+      mockExistsSync.mockReturnValue(true);
+      mockGlobalConfig.value = {};
       const prompt = vi.fn().mockResolvedValue("stable" as const);
 
       // First call: persists.
@@ -137,7 +150,6 @@ describe("update-channel-onboarding", () => {
       expect(prompt).toHaveBeenCalledTimes(1);
 
       // Simulate the persisted state.
-      mockExistsSync.mockReturnValue(true);
       mockGlobalConfig.value = { updateChannel: "stable" };
 
       await maybePromptForUpdateChannel({ prompt, isInteractive: () => true });
@@ -154,11 +166,10 @@ describe("update-channel-onboarding", () => {
       expect((config as { updateChannel: string }).updateChannel).toBe("nightly");
     });
 
-    it("creates a fresh config when none exists", () => {
+    it("does not write when global config does not exist", () => {
       mockExistsSync.mockReturnValue(false);
       persistUpdateChannel("stable");
-      const [config] = mockSaveGlobalConfig.mock.calls[0]!;
-      expect((config as { updateChannel: string }).updateChannel).toBe("stable");
+      expect(mockSaveGlobalConfig).not.toHaveBeenCalled();
     });
   });
 });

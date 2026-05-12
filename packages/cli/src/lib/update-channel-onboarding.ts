@@ -54,15 +54,20 @@ export function hasChosenUpdateChannel(): boolean {
 
 /**
  * Persist the chosen channel to the global config.
- * Loads existing config (or creates a new one via `createDefaultGlobalConfig`)
- * and writes the field.
+ *
+ * No-op when the global config doesn't exist — autoCreateConfig() handles
+ * bootstrap during first run. When the file exists but can't be parsed,
+ * falls back to a fresh default config.
  */
 export function persistUpdateChannel(channel: UpdateChannel): void {
   const path = getGlobalConfigPath();
-  const existing = existsSync(path) ? loadGlobalConfig(path) : null;
-  const next: GlobalConfig = existing
-    ? { ...existing, updateChannel: channel }
-    : { ...createDefaultGlobalConfig(), updateChannel: channel };
+  // Don't create an empty global config here — autoCreateConfig() handles
+  // bootstrap (with project registration) during first run. Writing an empty
+  // husk poisons the dashboard, which loads the global config and finds
+  // zero projects.
+  if (!existsSync(path)) return;
+  const existing = loadGlobalConfig(path) ?? createDefaultGlobalConfig();
+  const next: GlobalConfig = { ...existing, updateChannel: channel };
   saveGlobalConfig(next, path);
 }
 
@@ -80,6 +85,12 @@ export async function maybePromptForUpdateChannel(deps: PromptDeps = {}): Promis
   const isInteractive = deps.isInteractive ?? isHumanCaller;
   if (!isInteractive()) return;
   if (hasChosenUpdateChannel()) return;
+
+  // No global config yet — skip. autoCreateConfig() handles full bootstrap
+  // (creating the global config and registering the project) during first run.
+  // On the next `ao start` the global config will exist and the prompt fires.
+  // Skipping here avoids writing an empty husk that poisons the dashboard.
+  if (!existsSync(getGlobalConfigPath())) return;
 
   console.log(chalk.bold("\nHow do you want to receive updates?"));
   console.log(
