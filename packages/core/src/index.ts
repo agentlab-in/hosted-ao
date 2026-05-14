@@ -164,10 +164,7 @@ export {
   resetOpenCodeSessionListCache,
 } from "./opencode-shared.js";
 export type { OpenCodeSessionListEntry } from "./opencode-shared.js";
-export {
-  getWorkspaceAgentsMdPath,
-  writeWorkspaceOpenCodeAgentsMd,
-} from "./opencode-agents-md.js";
+export { getWorkspaceAgentsMdPath, writeWorkspaceOpenCodeAgentsMd } from "./opencode-agents-md.js";
 export { writeOpenCodeConfig } from "./opencode-config.js";
 export {
   getOrchestratorSessionId,
@@ -276,6 +273,7 @@ export {
 export {
   isWindows,
   isMac,
+  isLinux,
   getDefaultRuntime,
   getShell,
   killProcessTree,
@@ -411,6 +409,25 @@ export {
   clearWindowsPtyHostRegistry,
   type WindowsPtyHostEntry,
 } from "./windows-pty-registry.js";
+
+export {
+  registerDaemonChild,
+  unregisterDaemonChild,
+  getDaemonChildren,
+  clearDaemonChildrenRegistry,
+  markDaemonShutdownHandlerInstalled,
+  registerChildReaper,
+  spawnManagedDaemonChild,
+  sweepDaemonChildren,
+  classifyAoOrphanCommand,
+  detectAoOrphansFromPsOutput,
+  scanAoOrphans,
+  reapAoOrphans,
+  type DaemonChildEntry,
+  type DaemonChildSweepOptions,
+  type DaemonChildSweepResult,
+  type AoOrphanProcess,
+} from "./daemon-children.js";
 
 // Activity event logging — structured diagnostic event trail
 export { recordActivityEvent, droppedEventCount } from "./activity-events.js";
