@@ -62,6 +62,7 @@ import {
 } from "./metadata.js";
 import {
   buildLifecycleMetadataPatch,
+  clearTerminalMarkersForNonTerminalState,
   cloneLifecycle,
   createInitialCanonicalLifecycle,
   deriveLegacyStatus,
@@ -107,6 +108,7 @@ const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = 10_000;
 // windowsHide:true suppresses the conhost popup that the shell would otherwise flash.
 const EXEC_SHELL_OPTION =
   process.platform === "win32" ? ({ shell: true, windowsHide: true } as const) : ({} as const);
+
 
 function errorIncludesSessionNotFound(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -493,6 +495,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       }),
     );
     updater(lifecycle);
+    clearTerminalMarkersForNonTerminalState(lifecycle);
     return lifecycle;
   }
 
