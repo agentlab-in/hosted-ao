@@ -291,6 +291,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function isAgentProcessNotDefinitelyMissing(
+  agent: Agent,
+  handle: RuntimeHandle,
+): Promise<boolean> {
+  try {
+    return (await agent.isProcessRunning(handle)) !== false;
+  } catch {
+    // Send/restore readiness should only block on a definitive "process missing"
+    // verdict. Probe failures are no verdict, so keep waiting or fall back to
+    // terminal output instead of forcing a restore.
+    return true;
+  }
+}
+
 function isFixedOrchestratorReservationError(err: unknown, sessionId: string): boolean {
   return err instanceof Error && err.message.includes(`Orchestrator session "${sessionId}" already exists`);
 }
@@ -2394,7 +2408,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       while (true) {
         const [runtimeAlive, processRunning, output, foregroundCommand] = await Promise.all([
           runtimePlugin.isAlive(handle).catch(() => true),
-          agentPlugin.isProcessRunning(handle).catch(() => true),
+          isAgentProcessNotDefinitelyMissing(agentPlugin, handle),
           captureOutput(handle),
           handle.runtimeName === "tmux"
             ? getTmuxForegroundCommand(handle.id)
@@ -2441,7 +2455,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       while (true) {
         const [runtimeAlive, processRunning, output, foregroundCommand] = await Promise.all([
           runtimePlugin.isAlive(handle).catch(() => true),
-          agentPlugin.isProcessRunning(handle).catch(() => true),
+          isAgentProcessNotDefinitelyMissing(agentPlugin, handle),
           captureOutput(handle),
           handle.runtimeName === "tmux"
             ? getTmuxForegroundCommand(handle.id)
@@ -2509,14 +2523,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
       let [runtimeAlive, processRunning] = await Promise.all([
         runtimePlugin.isAlive(handle).catch(() => true),
-        agentPlugin.isProcessRunning(handle).catch(() => true),
+        isAgentProcessNotDefinitelyMissing(agentPlugin, handle),
       ]);
 
       if (normalized.status === "spawning" && runtimeAlive) {
         await waitForInteractiveReadiness(normalized, SEND_BOOTSTRAP_READY_TIMEOUT_MS);
         [runtimeAlive, processRunning] = await Promise.all([
           runtimePlugin.isAlive(handle).catch(() => true),
-          agentPlugin.isProcessRunning(handle).catch(() => true),
+          isAgentProcessNotDefinitelyMissing(agentPlugin, handle),
         ]);
       }
 
