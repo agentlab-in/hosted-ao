@@ -39,6 +39,8 @@ import {
   type ProjectConfig as _ProjectConfig,
   type PREnrichmentData,
   type CICheck,
+  type CIFailureSummary,
+  type PRInfo,
   type ReviewComment,
   type ReviewSummary,
   type ProcessProbeResult,
@@ -108,6 +110,12 @@ const PERSISTENT_REACTION_KEYS = new Set(["ci-failed"]);
  *  (including its escalated flag) is cleared, allowing a fresh budget for the
  *  next real CI failure incident. */
 const CI_PASSING_STABLE_THRESHOLD = 2;
+
+type TransitionReaction = {
+  key: string;
+  result: ReactionResult | null;
+  messageEnriched?: boolean;
+};
 
 type WorkspaceBranchProbe =
   | { kind: "branch"; branch: string }
@@ -1644,7 +1652,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     session: Session,
     _oldStatus: SessionStatus,
     newStatus: SessionStatus,
-    transitionReaction?: { key: string; result: ReactionResult | null },
+    transitionReaction?: TransitionReaction,
   ): Promise<void> {
     const project = config.projects[session.projectId];
     if (!project || !session.pr) return;
@@ -1919,11 +1927,40 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return lines.join("\n");
   }
 
-  /**
-   * Format CI check failures into a human-readable message for the agent.
-   * Includes check names, statuses, and links for debugging.
-   */
-  function formatCIFailureMessage(failedChecks: CICheck[]): string {
+  function isFailedCICheck(check: CICheck): boolean {
+    return check.status === "failed" || check.conclusion?.toUpperCase() === "FAILURE";
+  }
+
+  function formatCIFailureSummaryMessage(summary: CIFailureSummary): string {
+    const lines = ["CI is failing on your PR.", ""];
+
+    for (const job of summary.failedJobs) {
+      const failed = job.failedStep ? `${job.name} → ${job.failedStep}` : job.name;
+      lines.push(`Failed: ${failed}`);
+      lines.push(`Failure URL: ${job.runUrl}`);
+
+      if (job.logTail) {
+        const lineCount = job.logTail.split(/\r?\n/).length;
+        const lineLabel = lineCount === 1 ? "line" : "lines";
+        const escapedTail = escapeMarkdownCodeFenceClosers(job.logTail);
+        lines.push("", `Log tail (last ${lineCount} ${lineLabel}):`, "```", escapedTail, "```");
+      }
+
+      lines.push("");
+    }
+
+    lines.push("Fix the issues and push again.");
+    return lines.join("\n");
+  }
+
+  function escapeMarkdownCodeFenceClosers(logTail: string): string {
+    return logTail
+      .split(/\r?\n/)
+      .map((line) => (line.startsWith("```") ? `\u200B${line}` : line))
+      .join("\n");
+  }
+
+  function formatCIFailureChecksFallback(failedChecks: CICheck[]): string {
     const lines = ["CI checks are failing on your PR. Here are the failed checks:", ""];
     for (const check of failedChecks) {
       const status = check.conclusion ?? check.status;
@@ -1934,11 +1971,60 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     return lines.join("\n");
   }
 
+  /**
+   * Format CI failures into a human-readable message for the agent.
+   * Uses SCM-provided failed job/step/log details when available and falls
+   * back to check names/statuses/links for SCM plugins that do not implement it.
+   */
+  async function formatCIFailureMessage(
+    scm: SCM,
+    pr: PRInfo,
+    failedChecks: CICheck[],
+  ): Promise<string> {
+    if (scm.getCIFailureSummary) {
+      try {
+        const summary = await scm.getCIFailureSummary(pr, failedChecks);
+        if (summary?.failedJobs.length) {
+          return formatCIFailureSummaryMessage(summary);
+        }
+      } catch {
+        // Fall back to check names when summary enrichment fails.
+      }
+    }
+
+    return formatCIFailureChecksFallback(failedChecks);
+  }
+
+  async function getFailedCIChecks(
+    scm: SCM,
+    pr: PRInfo,
+    options: { allowFetch: boolean },
+  ): Promise<CICheck[] | null> {
+    const prKey = `${pr.owner}/${pr.repo}#${pr.number}`;
+    const cachedEnrichment = prEnrichmentCache.get(prKey);
+
+    let checks: CICheck[] | undefined = cachedEnrichment?.ciChecks;
+    if (checks === undefined && options.allowFetch) {
+      try {
+        checks = await scm.getCIChecks(pr);
+      } catch {
+        return null;
+      }
+    }
+
+    const failedChecks = checks?.filter(isFailedCICheck) ?? [];
+    return failedChecks.length > 0 ? failedChecks : null;
+  }
+
+  function makeCIFailureFingerprint(failedChecks: CICheck[]): string {
+    return makeFingerprint(failedChecks.map((c) => `${c.name}:${c.status}:${c.conclusion ?? ""}`));
+  }
+
   async function maybeDispatchCIFailureDetails(
     session: Session,
     _oldStatus: SessionStatus,
     newStatus: SessionStatus,
-    transitionReaction?: { key: string; result: ReactionResult | null },
+    transitionReaction?: TransitionReaction,
   ): Promise<void> {
     const project = config.projects[session.projectId];
     if (!project || !session.pr) return;
@@ -1974,32 +2060,10 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       return;
     }
 
-    // Fetch individual CI checks for failure details.
-    // Use batch enrichment data when available to avoid an extra REST call;
-    // fall back to getCIChecks() when the batch didn't run this cycle.
-    const prKey = `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`;
-    const cachedEnrichment = prEnrichmentCache.get(prKey);
+    const failedChecks = await getFailedCIChecks(scm, session.pr, { allowFetch: true });
+    if (!failedChecks) return;
 
-    let checks: CICheck[];
-    if (cachedEnrichment?.ciChecks !== undefined) {
-      checks = cachedEnrichment.ciChecks;
-    } else {
-      try {
-        checks = await scm.getCIChecks(session.pr);
-      } catch {
-        // Failed to fetch checks — skip this cycle
-        return;
-      }
-    }
-
-    const failedChecks = checks.filter(
-      (c) => c.status === "failed" || c.conclusion?.toUpperCase() === "FAILURE",
-    );
-    if (failedChecks.length === 0) return;
-
-    const ciFingerprint = makeFingerprint(
-      failedChecks.map((c) => `${c.name}:${c.status}:${c.conclusion ?? ""}`),
-    );
+    const ciFingerprint = makeCIFailureFingerprint(failedChecks);
     const lastCIFingerprint = session.metadata["lastCIFailureFingerprint"] ?? "";
     const lastCIDispatchHash = session.metadata["lastCIFailureDispatchHash"] ?? "";
 
@@ -2013,12 +2077,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       });
     }
 
-    // If the transition reaction already sent a ci-failed reaction (now enriched
-    // with detailed check info from the batch cache), record the dispatch hash so
-    // subsequent polls don't re-send the same failure details.
+    // If the transition reaction already delivered an enriched agent message,
+    // or handled a non-agent action, record the dispatch hash so subsequent
+    // polls don't re-send the same failure details.
     if (
       transitionReaction?.key === ciReactionKey &&
-      transitionReaction.result?.success
+      transitionReaction.result?.success &&
+      (transitionReaction.messageEnriched === true ||
+        transitionReaction.result.action !== "send-to-agent")
     ) {
       updateSessionMetadata(session, {
         lastCIFailureDispatchHash: ciFingerprint,
@@ -2039,7 +2105,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       reactionConfig.action &&
       (reactionConfig.auto !== false || reactionConfig.action === "notify")
     ) {
-      const detailedMessage = formatCIFailureMessage(failedChecks);
+      const detailedMessage = await formatCIFailureMessage(scm, session.pr, failedChecks);
 
       try {
         if (reactionConfig.action === "send-to-agent") {
@@ -2335,7 +2401,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     }
     const newStatus = assessment.status;
     const lifecycleChanged = session.metadata["lifecycle"] !== JSON.stringify(session.lifecycle);
-    let transitionReaction: { key: string; result: ReactionResult | null } | undefined;
+    let transitionReaction: TransitionReaction | undefined;
 
     const nextLifecycleEvidence = assessment.evidence;
     const nextDetectingAttempts =
@@ -2473,18 +2539,27 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
         if (reactionKey) {
           let reactionConfig = getReactionConfigForSession(session, reactionKey);
+          let messageEnriched = false;
 
-          // Enrich CI failure message with actual check details from batch cache
-          if (reactionKey === "ci-failed" && session.pr && reactionConfig) {
-            const prKey = `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`;
-            const cachedData = prEnrichmentCache.get(prKey);
-            if (cachedData?.ciChecks) {
-              const failedChecks = cachedData.ciChecks.filter((c) => c.status === "failed");
-              if (failedChecks.length > 0) {
+          // Enrich CI failure message with failed job/step/log details when
+          // batch check data is already available. If it is not, the
+          // post-transition CI dispatcher below fetches checks and sends the
+          // composed message without altering lifecycle state transitions.
+          if (
+            reactionKey === "ci-failed" &&
+            session.pr &&
+            reactionConfig?.action === "send-to-agent"
+          ) {
+            const project = config.projects[session.projectId];
+            const scm = project?.scm?.plugin ? registry.get<SCM>("scm", project.scm.plugin) : null;
+            if (scm) {
+              const failedChecks = await getFailedCIChecks(scm, session.pr, { allowFetch: false });
+              if (failedChecks) {
                 reactionConfig = {
                   ...reactionConfig,
-                  message: formatCIFailureMessage(failedChecks),
+                  message: await formatCIFailureMessage(scm, session.pr, failedChecks),
                 };
+                messageEnriched = true;
               }
             }
           }
@@ -2493,7 +2568,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
             // auto: false skips automated agent actions but still allows notifications
             if (reactionConfig.auto !== false || reactionConfig.action === "notify") {
               const reactionResult = await executeReaction(session, reactionKey, reactionConfig);
-              transitionReaction = { key: reactionKey, result: reactionResult };
+              transitionReaction = { key: reactionKey, result: reactionResult, messageEnriched };
               observer.recordOperation({
                 metric: "lifecycle_poll",
                 operation: "lifecycle.transition.reaction",
