@@ -483,7 +483,7 @@ describe("SessionDetail desktop layout", () => {
     expect(routerRefreshMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the desktop orchestrator button on orchestrator session pages", () => {
+  it("hides the desktop orchestrator button on orchestrator session pages", () => {
     render(
       <SessionDetail
         session={makeSession({
@@ -505,8 +505,8 @@ describe("SessionDetail desktop layout", () => {
     );
 
     expect(
-      within(screen.getByRole("banner")).getByRole("link", { name: "Orchestrator" }),
-    ).toHaveAttribute("href", "/projects/my-app/sessions/my-app-orchestrator");
+      within(screen.getByRole("banner")).queryByRole("link", { name: "Orchestrator" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("orchestrator")).toBeInTheDocument();
   });
 
@@ -557,8 +557,8 @@ describe("SessionDetail desktop layout", () => {
     );
 
     expect(
-      within(screen.getByRole("banner")).getByRole("link", { name: "Orchestrator" }),
-    ).toHaveAttribute("href", "/projects/my-app/sessions/my-app-orchestrator");
+      within(screen.getByRole("banner")).queryByRole("link", { name: "Orchestrator" }),
+    ).not.toBeInTheDocument();
   });
 
   it("routes to the project orchestrator after killing a worker session", async () => {
