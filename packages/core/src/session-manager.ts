@@ -538,6 +538,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     expiresAt: number;
   } | null = null;
   const ensureOrchestratorPromises = new Map<string, Promise<Session>>();
+  const relaunchOrchestratorPromises = new Map<string, Promise<Session>>();
 
   function invalidateCache(): void {
     sessionCache = null;
@@ -1815,6 +1816,20 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     const sessionId = getOrchestratorSessionId(project);
+
+    // If a relaunch is mid-flight for this sessionId, wait it out — otherwise
+    // we could return a session that relaunch is about to kill, or race the
+    // relaunch's spawnOrchestrator on the same reservation.
+    const pendingRelaunch = relaunchOrchestratorPromises.get(sessionId);
+    if (pendingRelaunch) {
+      await pendingRelaunch.catch((err) => {
+        console.warn(
+          `[ensureOrchestrator] in-flight relaunch for ${sessionId} failed before ensure proceeded:`,
+          err,
+        );
+      });
+    }
+
     const existing = await get(sessionId);
     if (existing) {
       const orchestratorSessionStrategy = normalizeOrchestratorSessionStrategy(
@@ -1873,6 +1888,61 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       ensureOrchestratorPromises.delete(sessionId);
     });
     ensureOrchestratorPromises.set(sessionId, promise);
+    return promise;
+  }
+
+  async function relaunchOrchestratorInternal(
+    orchestratorConfig: OrchestratorSpawnConfig,
+  ): Promise<Session> {
+    const project = config.projects[orchestratorConfig.projectId];
+    if (!project) {
+      throw new Error(`Unknown project: ${orchestratorConfig.projectId}`);
+    }
+    const sessionId = getOrchestratorSessionId(project);
+    const sessionsDir = getProjectSessionsDir(orchestratorConfig.projectId);
+
+    // If ensureOrchestrator is mid-flight for this sessionId, wait it out.
+    // Otherwise get() would return null (metadata not yet written) and we'd
+    // skip the kill, then race the in-flight spawnOrchestrator on the same
+    // reservation — surfacing "session already exists" instead of replacing.
+    const pendingEnsure = ensureOrchestratorPromises.get(sessionId);
+    if (pendingEnsure) {
+      await pendingEnsure.catch((err) => {
+        console.warn(
+          `[relaunchOrchestrator] in-flight ensure for ${sessionId} failed before relaunch proceeded:`,
+          err,
+        );
+      });
+    }
+
+    const existing = await get(sessionId);
+    if (existing) {
+      const existingAgent = resolveSelectionForSession(
+        project,
+        sessionId,
+        readMetadataRaw(sessionsDir, sessionId) ?? {},
+      ).agentName;
+      await kill(sessionId, { purgeOpenCode: existingAgent === "opencode" });
+      deleteMetadata(sessionsDir, sessionId);
+    }
+    return spawnOrchestrator(orchestratorConfig);
+  }
+
+  async function relaunchOrchestrator(
+    orchestratorConfig: OrchestratorSpawnConfig,
+  ): Promise<Session> {
+    const project = config.projects[orchestratorConfig.projectId];
+    if (!project) {
+      throw new Error(`Unknown project: ${orchestratorConfig.projectId}`);
+    }
+    const sessionId = getOrchestratorSessionId(project);
+    const existingPromise = relaunchOrchestratorPromises.get(sessionId);
+    if (existingPromise) return existingPromise;
+
+    const promise = relaunchOrchestratorInternal(orchestratorConfig).finally(() => {
+      relaunchOrchestratorPromises.delete(sessionId);
+    });
+    relaunchOrchestratorPromises.set(sessionId, promise);
     return promise;
   }
 
@@ -3054,6 +3124,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     spawn,
     spawnOrchestrator,
     ensureOrchestrator,
+    relaunchOrchestrator,
     restore,
     list,
     listCached,
