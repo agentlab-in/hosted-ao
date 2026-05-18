@@ -25,6 +25,9 @@ export type ActivityEventSource =
   | "notifier"
   | "reaction"
   | "report-watcher"
+  | "config"
+  | "plugin-registry"
+  | "migration"
   | "recovery";
 
 export type ActivityEventKind =
@@ -71,6 +74,19 @@ export type ActivityEventKind =
   | "detecting.escalated"
   // Report watcher
   | "report_watcher.triggered"
+  // Config/plugin-registry/storage migration
+  | "config.project_resolve_failed"
+  | "config.project_malformed"
+  | "config.project_invalid"
+  | "config.migrated"
+  | "plugin-registry.load_failed"
+  | "plugin-registry.validation_failed"
+  | "plugin-registry.specifier_failed"
+  | "migration.blocked"
+  | "migration.project_failed"
+  | "migration.rename_failed"
+  | "migration.completed"
+  | "migration.rollback_skipped"
   // Webhook ingress (api source)
   | "api.webhook_unverified"
   | "api.webhook_rejected"
@@ -88,7 +104,8 @@ export type ActivityEventKind =
   | "recovery.action_failed"
   | "metadata.corrupt_detected"
   | "api.agent_report.session_not_found"
-  | "api.agent_report.transition_rejected";
+  | "api.agent_report.transition_rejected"
+  | "api.agent_report.apply_failed";
 
 export type ActivityEventLevel = "debug" | "info" | "warn" | "error";
 
@@ -128,14 +145,12 @@ export function droppedEventCount(): number {
 }
 
 function pruneOldEvents(db: ReturnType<typeof getDb>, cutoff: number): void {
-  db
-    ?.prepare(
-      `DELETE FROM activity_events
+  db?.prepare(
+    `DELETE FROM activity_events
        WHERE rowid IN (
          SELECT rowid FROM activity_events WHERE ts_epoch < ? LIMIT ?
        )`,
-    )
-    .run(cutoff, PRUNE_BATCH_SIZE);
+  ).run(cutoff, PRUNE_BATCH_SIZE);
 }
 
 // Patterns that indicate sensitive field names
@@ -152,7 +167,10 @@ function redactCredentialUrls(input: string): string {
     const proto = result.indexOf("://", offset);
     if (proto === -1) break;
     // Only match http:// or https:// (case-insensitive, matching old /gi flag)
-    if (proto < 4) { offset = proto + 3; continue; }
+    if (proto < 4) {
+      offset = proto + 3;
+      continue;
+    }
     const schemeEnd = result.slice(Math.max(0, proto - 5), proto).toLowerCase();
     if (!schemeEnd.endsWith("http") && !schemeEnd.endsWith("https")) {
       offset = proto + 3;
@@ -163,7 +181,7 @@ function redactCredentialUrls(input: string): string {
     while (cursor < result.length) {
       const ch = result.charCodeAt(cursor);
       // Space/control chars or '/' mean no '@' is coming in userinfo
-      if (ch <= 0x20 || ch === 0x2F) break;
+      if (ch <= 0x20 || ch === 0x2f) break;
       if (ch === 0x40) {
         // '@' found — redact everything between :// and @
         // Lowercase the scheme to match the old /gi regex behavior
@@ -176,7 +194,11 @@ function redactCredentialUrls(input: string): string {
       cursor++;
     }
     // No '@' found — not a credential URL, move past this ://
-    if (cursor >= result.length || result.charCodeAt(cursor) <= 0x20 || result.charCodeAt(cursor) === 0x2F) {
+    if (
+      cursor >= result.length ||
+      result.charCodeAt(cursor) <= 0x20 ||
+      result.charCodeAt(cursor) === 0x2f
+    ) {
       offset = proto + 3;
     }
   }
