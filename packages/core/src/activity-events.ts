@@ -20,6 +20,9 @@ export type ActivityEventSource =
   | "scm"
   | "runtime"
   | "agent"
+  | "tracker"
+  | "workspace"
+  | "notifier"
   | "reaction"
   | "report-watcher";
 
@@ -41,6 +44,20 @@ export type ActivityEventKind =
   | "runtime.probe_failed"
   | "agent.process_probe_failed"
   | "agent.activity_probe_failed"
+  // Plugin-internal failure shapes (issue #1659)
+  | "scm.gh_unavailable"
+  | "scm.batch_enrich_pr_failed"
+  | "scm.ci_summary_failclosed"
+  | "workspace.post_create_failed"
+  | "workspace.branch_collision"
+  | "workspace.destroy_fell_back"
+  | "workspace.corrupt_clone_skipped"
+  | "tracker.dep_missing"
+  | "tracker.api_timeout"
+  | "notifier.auth_failed"
+  | "notifier.unreachable"
+  | "notifier.rate_limited"
+  | "notifier.dep_missing"
   // Reaction lifecycle
   | "reaction.escalated"
   | "reaction.send_to_agent_failed"
