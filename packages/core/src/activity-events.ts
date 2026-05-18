@@ -25,6 +25,7 @@ export type ActivityEventSource =
   | "notifier"
   | "reaction"
   | "report-watcher"
+  | "cli"
   | "config"
   | "plugin-registry"
   | "migration"
