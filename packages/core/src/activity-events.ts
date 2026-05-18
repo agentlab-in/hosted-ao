@@ -71,6 +71,18 @@ export type ActivityEventKind =
   | "detecting.escalated"
   // Report watcher
   | "report_watcher.triggered"
+  // Webhook ingress (api source)
+  | "api.webhook_unverified"
+  | "api.webhook_rejected"
+  | "api.webhook_received"
+  | "api.webhook_failed"
+  // WebSocket terminal mux (ui source — Node-side server only)
+  | "ui.terminal_connected"
+  | "ui.terminal_disconnected"
+  | "ui.terminal_heartbeat_lost"
+  | "ui.terminal_pty_lost"
+  | "ui.terminal_protocol_error"
+  | "ui.session_broadcast_failed"
   // Recovery/forensic instrumentation
   | "recovery.session_failed"
   | "recovery.action_failed"
