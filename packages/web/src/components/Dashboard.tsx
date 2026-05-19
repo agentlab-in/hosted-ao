@@ -24,6 +24,7 @@ import { ToastProvider, useToast } from "./Toast";
 import { ConnectionBar } from "./ConnectionBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { CopyDebugBundleButton } from "./CopyDebugBundleButton";
+import { DashboardNotificationButton } from "./DashboardNotificationButton";
 import { SidebarContext, useSidebarContext } from "./workspace/SidebarContext";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { isOrchestratorSession } from "@aoagents/ao-core/types";
@@ -664,6 +665,7 @@ function DashboardInner({
           <div className="dashboard-app-header__spacer" />
           <div className="dashboard-app-header__actions">
             {showDebugBundleButton ? <CopyDebugBundleButton projectId={projectId} /> : null}
+            <DashboardNotificationButton />
             {!allProjectsView && orchestratorHref ? (
               <Link
                 href={orchestratorHref}
