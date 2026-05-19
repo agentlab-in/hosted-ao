@@ -252,6 +252,30 @@ describe("Claude Code Activity Detection", () => {
         expect((await agent.getActivityState(makeSession()))?.state).toBe("ready");
       });
 
+      it("returns 'blocked' for 'system' api_error (level: error)", async () => {
+        writeJsonl([
+          {
+            type: "system",
+            subtype: "api_error",
+            level: "error",
+            cause: { code: "ConnectionRefused" },
+          },
+        ]);
+        expect((await agent.getActivityState(makeSession()))?.state).toBe("blocked");
+      });
+
+      it("returns 'ready' for non-error 'system' subtypes (compact_boundary)", async () => {
+        writeJsonl([{ type: "system", subtype: "compact_boundary", level: "info" }]);
+        expect((await agent.getActivityState(makeSession()))?.state).toBe("ready");
+      });
+
+      it("requires BOTH api_error subtype AND error level for 'blocked'", async () => {
+        // A future error-level diagnostic that isn't api_error must NOT be
+        // silently classified as blocked.
+        writeJsonl([{ type: "system", subtype: "future_diagnostic", level: "error" }]);
+        expect((await agent.getActivityState(makeSession()))?.state).toBe("ready");
+      });
+
       it("returns 'active' for recent 'file-history-snapshot' (bookkeeping)", async () => {
         writeJsonl([{ type: "file-history-snapshot" }]);
         expect((await agent.getActivityState(makeSession()))?.state).toBe("active");
@@ -276,16 +300,6 @@ describe("Claude Code Activity Detection", () => {
       it("returns 'active' for recent 'tool_use' entry", async () => {
         writeJsonl([{ type: "tool_use" }]);
         expect((await agent.getActivityState(makeSession()))?.state).toBe("active");
-      });
-
-      it("returns 'waiting_input' for 'permission_request'", async () => {
-        writeJsonl([{ type: "permission_request" }]);
-        expect((await agent.getActivityState(makeSession()))?.state).toBe("waiting_input");
-      });
-
-      it("returns 'blocked' for 'error'", async () => {
-        writeJsonl([{ type: "error" }]);
-        expect((await agent.getActivityState(makeSession()))?.state).toBe("blocked");
       });
 
       it("returns 'ready' for recent 'summary' entry", async () => {
@@ -324,13 +338,11 @@ describe("Claude Code Activity Detection", () => {
         expect((await agent.getActivityState(makeSession()))?.state).toBe("idle");
       });
 
-      it("'permission_request' ignores staleness (always waiting_input)", async () => {
-        writeJsonl([{ type: "permission_request" }], 400_000);
-        expect((await agent.getActivityState(makeSession()))?.state).toBe("waiting_input");
-      });
-
-      it("'error' ignores staleness (always blocked)", async () => {
-        writeJsonl([{ type: "error" }], 400_000);
+      it("'system' api_error ignores staleness (always blocked)", async () => {
+        writeJsonl(
+          [{ type: "system", subtype: "api_error", level: "error" }],
+          400_000,
+        );
         expect((await agent.getActivityState(makeSession()))?.state).toBe("blocked");
       });
 
