@@ -14,7 +14,7 @@ import {
   type Session,
 } from "@aoagents/ao-core";
 import { execFile } from "node:child_process";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -45,16 +45,86 @@ export function toClaudeProjectPath(workspacePath: string): string {
   return normalized.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
+/**
+ * Resolve a workspace path through any symlinks BEFORE slugifying so AO's
+ * computed Claude project dir matches what Claude itself writes.
+ *
+ * Without this, if AO records `workspacePath` as a symlink (e.g.
+ * `/Users/me/symlinks/repo`) and Claude resolves it to the target
+ * (`/Users/me/code/repo`) before computing its on-disk slug, the two slugs
+ * diverge — AO looks in an empty `~/.claude/projects/<wrong-slug>/` dir
+ * forever and the session looks permanently `idle`. Falls back to the
+ * literal path on error (dangling symlink, race, etc.).
+ */
+export async function resolveWorkspaceForClaude(workspacePath: string): Promise<string> {
+  try {
+    return await realpath(workspacePath);
+  } catch {
+    return workspacePath;
+  }
+}
+
 // =============================================================================
 // Session file discovery
 // =============================================================================
 
-/** Find the most recently modified .jsonl session file in a directory */
-export async function findLatestSessionFile(projectDir: string): Promise<string | null> {
+/** Module-level dedupe so EACCES/EPERM on a project dir warns ONCE per path
+ *  for the process lifetime, not on every poll cycle. getClaudeActivityState
+ *  is called every few seconds per session — without this, a single denied
+ *  path would flood logs at 60+ lines/minute indefinitely. Bounded by the
+ *  number of unique workspace slugs, which is small. */
+const warnedReaddirPaths = new Set<string>();
+
+/** Reset the warned-paths dedupe set. Exported for testing only. */
+export function resetWarnedReaddirPaths(): void {
+  warnedReaddirPaths.clear();
+}
+
+/** Find Claude's JSONL session file for a project directory.
+ *
+ *  When `preferredUuid` is provided (e.g. from `session.metadata.claudeSessionUuid`
+ *  captured by getSessionInfo), prefer `<projectDir>/<preferredUuid>.jsonl`
+ *  if it exists. This disambiguates the common case of multiple Claude
+ *  sessions running in the same workspace, where newest-mtime would pick
+ *  the WRONG session's JSONL whenever its sibling has just written.
+ *
+ *  Falls back to newest-mtime when no UUID is given or the named file
+ *  doesn't exist yet (e.g. fresh session that hasn't been introspected).
+ *
+ *  ENOENT on the project dir is normal and silent. Other errors
+ *  (EACCES, EPERM, EMFILE, ...) are logged via console.warn — once per
+ *  path for the process lifetime — so a permission-denied or fd-exhausted
+ *  misconfig doesn't silently mask the session as `idle` forever and
+ *  doesn't flood logs on every poll. */
+export async function findLatestSessionFile(
+  projectDir: string,
+  preferredUuid?: string,
+): Promise<string | null> {
+  // Prefer the UUID-named file when we know it — disambiguates multi-session.
+  if (preferredUuid) {
+    const preferred = join(projectDir, `${preferredUuid}.jsonl`);
+    try {
+      await stat(preferred);
+      return preferred;
+    } catch {
+      // Fall through to newest-mtime — the UUID-named file may not exist
+      // yet (session just spawned, hasn't been introspected).
+    }
+  }
+
   let entries: string[];
   try {
     entries = await readdir(projectDir);
-  } catch {
+  } catch (err: unknown) {
+    if (err instanceof Error && "code" in err && err.code !== "ENOENT") {
+      if (!warnedReaddirPaths.has(projectDir)) {
+        warnedReaddirPaths.add(projectDir);
+        const code = (err as NodeJS.ErrnoException).code;
+        console.warn(
+          `[claude-code] failed to read ${projectDir} (${code}): ${err.message}. Session activity will fall back to AO JSONL only. (This warning is shown once per path for the process lifetime.)`,
+        );
+      }
+    }
     return null;
   }
 
@@ -157,9 +227,15 @@ export async function findClaudeProcess(
       if (psOut === PROCESS_PROBE_INDETERMINATE) return PROCESS_PROBE_INDETERMINATE;
 
       const ttySet = new Set(ttys.map((t) => t.replace(/^\/dev\//, "")));
-      // Match "claude" as a word boundary — prevents false positives on
-      // names like "claude-code" or paths that merely contain the substring.
-      const processRe = /(?:^|\/)claude(?:\s|$)/;
+      // Match "claude" plus common variants:
+      //   - bare `claude` / `/usr/local/bin/claude`
+      //   - dot-prefix shim `.claude`
+      //   - file extensions like `claude.exe`, `claude.js`, `claude.cjs`
+      //   - hyphenated names like `claude-code`
+      //   - node-shim cases like `node /path/@anthropic-ai/claude-code/cli.js`
+      //     (matches the path component containing "claude")
+      // Still anchored at `/` or start-of-line so `claudia` etc. don't match.
+      const processRe = /(?:^|\/)(?:\.)?claude(?:[-.][\w-]+)*(?:[\s/]|$)/;
       for (const line of psOut.split("\n")) {
         const cols = line.trimStart().split(/\s+/);
         if (cols.length < 3 || !ttySet.has(cols[1] ?? "")) continue;
@@ -210,25 +286,119 @@ export function classifyTerminalOutput(terminalOutput: string): ActivityState {
   const lines = terminalOutput.trim().split("\n");
   const lastLine = lines[lines.length - 1]?.trim() ?? "";
 
-  // Check the last line FIRST — if the prompt is visible, the agent is idle
-  // regardless of historical output (e.g. "Reading file..." from earlier).
-  // The ❯ is Claude Code's prompt character.
+  // Empty prompt on the last line is unambiguously idle.
   if (/^[❯>$#]\s*$/.test(lastLine)) return "idle";
 
-  // Check the bottom of the buffer for permission prompts BEFORE checking
-  // full-buffer active indicators. Historical "Thinking"/"Reading" text in
-  // the buffer must not override a current permission prompt at the bottom.
+  // Use a wider window (last 12 lines) than the bottom-of-buffer prompt
+  // check above because Claude's spinner+status line, ⎿ tool-result lines,
+  // and api-error text often sit 6-8 lines above the input area + footer.
+  // All multi-line state checks (blocked, active) use this window — full
+  // `terminalOutput` would let scrolled-off error text falsely return
+  // "blocked" forever after a successful retry pushes the error out of
+  // view but not out of scrollback.
+  const wideTail = lines.slice(-12).join("\n");
+
+  // Check for blocked. Claude's persistent UI footer contains
+  // "bypass permissions on (shift+tab to cycle)" on every session — the
+  // tightened waiting_input regex no longer matches it, and the blocked
+  // patterns below are specific to api-error retry text.
+  //
+  // Patterns observed empirically by capturing tmux output during a real
+  // api-blocked retry loop (see PR #1932 description):
+  //   ⎿  Unable to connect to API (ConnectionRefused)
+  //      Retrying in 19s · attempt 7/10
+  if (/Unable to connect to API/i.test(wideTail)) return "blocked";
+  if (/Retrying in \d+s.*attempt \d+\/\d+/i.test(wideTail)) return "blocked";
+
+  // Check the bottom of the buffer for permission prompts. Historical
+  // "Thinking"/"Reading" text earlier in the buffer must not override a
+  // current permission prompt at the bottom.
   const tail = lines.slice(-5).join("\n");
   if (/Do you want to proceed\?/i.test(tail)) return "waiting_input";
   if (/\(Y\)es.*\(N\)o/i.test(tail)) return "waiting_input";
-  if (/bypass.*permissions/i.test(tail)) return "waiting_input";
+  // Match the ACTUAL permission-bypass prompt, NOT the static footer toggle.
+  if (/bypass\s+all\s+future\s+permissions/i.test(tail)) return "waiting_input";
 
-  return "active";
+  // Active: only when an explicit active-work indicator is present. Default
+  // is IDLE — Claude's tmux pane has a persistent input area + footer that
+  // looks identical between "just finished" and "working". Treating
+  // unrecognized output as active caused dormant sessions (ao-160 etc.) to
+  // get an "active" written to AO activity-JSONL every poll cycle, which the
+  // age-decayed fallback then surfaced as ready forever.
+
+  // Strongest active signal: gerund (present-participle) status verb
+  // followed by the trailing ellipsis "…". Claude cycles through many
+  // status words (Germinating, Fluttering, Pondering, Mulling, Crafting,
+  // Thinking, Reasoning, ...) and many spinner glyphs (✻ ✽ · ⠁ ⠈ etc.)
+  // depending on animation frame. The gerund+ellipsis combo is the
+  // consistent signal that survives glyph rotation. Past-tense lines like
+  // "✻ Worked for 11s" or "✻ Crunched for 11s" lack the ellipsis and are
+  // turn-complete summaries — they must NOT match (ao-143 repro).
+  if (/\b\w+ing…/.test(wideTail)) return "active";
+  // NOTE — these patterns look "active-ish" but are NOT, and should never
+  // go back as active indicators:
+  //   - /\bCrunched\s+for\s+\d+s/  — past-tense turn summary (ao-154 repro:
+  //     "✻ Crunched for 22s" was making sessions perpetually "active")
+  //   - /\bWorked\s+for\s+\d+s/    — past-tense turn summary (ao-143 repro)
+  //   - /^\s*⎿\s+/                  — prefixes past tool-results too
+  //   - /esc to interrupt/          — in the persistent UI footer
+  //   - bare /\bWorking\b/          — matches "working on issue #N" in recap
+  // The gerund+ellipsis above catches present-tense forms across all
+  // status words regardless of spinner glyph rotation.
+
+  // Word-based fallbacks for synthetic test inputs and rare cases where
+  // the ellipsis isn't captured. Tight patterns to avoid false-firing on
+  // benign text.
+  if (/\bGerminating/i.test(wideTail)) return "active";
+  if (/\b(?:Thinking|Working)\s*(?:…|\.\.\.)/i.test(wideTail)) return "active";
+  if (/\bReading\s+file/i.test(wideTail)) return "active";
+  if (/\bWriting\s+to\b/i.test(wideTail)) return "active";
+  if (/\bSearching\s+codebase/i.test(wideTail)) return "active";
+  if (/Press\s+up\s+to\s+edit\s+queued/i.test(wideTail)) return "active";
+
+  return "idle";
 }
 
 // =============================================================================
 // Activity-state cascade
 // =============================================================================
+
+/**
+ * Claude writes these types as UI-state snapshots at random times: on session
+ * attach, on permission-mode change, on title regeneration, etc. They are
+ * NOT correlated with whether Claude is actively working — a 6-day-dormant
+ * session will still accumulate dozens of `permission-mode` and `ai-title`
+ * entries just from being inspected.
+ *
+ * When one of these is the literal last JSONL entry, treat it as a "no
+ * signal" — fall through to the AO activity-JSONL pipeline (terminal-
+ * derived signal) rather than letting noise mtime decide the activity.
+ *
+ * Concrete bug this prevents: ao-144 had 73 trailing `permission-mode` +
+ * 73 trailing `ai-title` entries written over 6 dormant days. Without
+ * this skip, dashboard oscillated between `ready` (recent noise mtime)
+ * and `idle` (old noise mtime) instead of staying `idle`.
+ *
+ * Conservative list — only the types that empirically run away. The other
+ * bookkeeping types (file-history-snapshot, attachment, pr-link,
+ * queue-operation, last-prompt) plausibly correlate with real activity
+ * and stay in the explicit ready/idle case.
+ */
+const NOISE_JSONL_TYPES: ReadonlySet<string> = new Set([
+  "permission-mode",
+  "ai-title",
+  "agent-color",
+  "agent-name",
+  "custom-title",
+  // pr-link is also re-snapshot noise — verified on ao-160's JSONL where the
+  // SAME PR (#1911) was written as a `pr-link` entry three times within
+  // minutes (count: 33 pr-link vs 21 user messages in the last 200 lines).
+  // The first emission is real; subsequent re-emissions are state snapshots.
+  // We can't distinguish first vs Nth from the last line alone, so treat
+  // all pr-link as noise. Real PR creation is still observable via the
+  // assistant message and the gh-tracker side.
+  "pr-link",
+]);
 
 /**
  * Determine current activity state for a Claude Code session.
@@ -261,10 +431,16 @@ export async function getClaudeActivityState(
 
   if (!session.workspacePath) return null;
 
-  const projectPath = toClaudeProjectPath(session.workspacePath);
+  const projectPath = toClaudeProjectPath(await resolveWorkspaceForClaude(session.workspacePath));
   const projectDir = join(homedir(), ".claude", "projects", projectPath);
 
-  const sessionFile = await findLatestSessionFile(projectDir);
+  // Prefer the UUID-named file when getSessionInfo has captured one — this
+  // disambiguates multi-session-per-worktree, where newest-mtime would pick
+  // the wrong session's JSONL whenever its sibling has just written.
+  const rawUuid = session.metadata?.["claudeSessionUuid"];
+  const preferredUuid =
+    typeof rawUuid === "string" && rawUuid.trim() ? rawUuid.trim() : undefined;
+  const sessionFile = await findLatestSessionFile(projectDir, preferredUuid);
   let staleNativeState: ActivityDetection | null = null;
   if (sessionFile) {
     const entry = await readLastJsonlEntry(sessionFile);
@@ -275,14 +451,24 @@ export async function getClaudeActivityState(
       // Claude writes this session's first native JSONL entry.
       if (session.createdAt && entry.modifiedAt < session.createdAt) {
         staleNativeState = { state: "idle", timestamp: session.createdAt };
+      } else if (entry.lastType && NOISE_JSONL_TYPES.has(entry.lastType)) {
+        // Last entry is UI-state noise (permission-mode / ai-title / etc.)
+        // that doesn't reflect actual activity. Fall through to the AO
+        // activity-JSONL pipeline for a terminal-derived answer; if that's
+        // also empty, the staleNativeState below returns idle.
+        staleNativeState = { state: "idle", timestamp: session.createdAt };
       } else {
         const ageMs = Date.now() - entry.modifiedAt.getTime();
         const timestamp = entry.modifiedAt;
 
         const activeWindowMs = Math.min(DEFAULT_ACTIVE_WINDOW_MS, threshold);
         switch (entry.lastType) {
+          // In-progress turn markers: very recent → active, older → ready/idle.
+          // Removed `tool_use` and `result` cases that were in the spec but
+          // never actually emitted by Claude (verified by disk survey for
+          // #1927). The `default` branch handles them with the same semantics
+          // if Claude ever introduces them.
           case "user":
-          case "tool_use":
           case "progress":
             if (ageMs <= activeWindowMs) return { state: "active", timestamp };
             return { state: ageMs > threshold ? "idle" : "ready", timestamp };
@@ -301,7 +487,18 @@ export async function getClaudeActivityState(
 
           case "assistant":
           case "summary":
-          case "result":
+            return { state: ageMs > threshold ? "idle" : "ready", timestamp };
+
+          // Bookkeeping types Claude writes AFTER a real event (file edits,
+          // attachment context, queue housekeeping, prompt submit). Map to
+          // ready/idle by age, same as assistant/summary. The pure re-snapshot
+          // types (permission-mode, ai-title, agent-*, custom-title, pr-link)
+          // are filtered out earlier by NOISE_JSONL_TYPES — they get written
+          // continuously without indicating activity.
+          case "file-history-snapshot":
+          case "attachment":
+          case "queue-operation":
+          case "last-prompt":
             return { state: ageMs > threshold ? "idle" : "ready", timestamp };
 
           default:
