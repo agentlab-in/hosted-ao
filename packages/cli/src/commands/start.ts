@@ -878,7 +878,14 @@ async function runStartup(
   config: OrchestratorConfig,
   projectId: string,
   project: ProjectConfig,
-  opts?: { dashboard?: boolean; orchestrator?: boolean; rebuild?: boolean; dev?: boolean },
+  opts?: {
+    dashboard?: boolean;
+    orchestrator?: boolean;
+    rebuild?: boolean;
+    dev?: boolean;
+    /** true = restore without prompting, false = skip restore, undefined = prompt for humans */
+    restore?: boolean;
+  },
 ): Promise<number> {
   await runtimePreflight(config);
 
@@ -1011,11 +1018,14 @@ async function runStartup(
     }
   }
 
-  // Check for sessions from last `ao stop` and offer to restore them
-  if (isHumanCaller()) {
+  // Check for sessions from last `ao stop` and restore/prompt/skip based on caller intent.
+  if (opts?.restore !== false && (opts?.restore === true || isHumanCaller())) {
     try {
       const lastStop = await readLastStop();
-      if (lastStop && lastStop.sessionIds.length > 0) {
+      const totalLastStopSessions =
+        (lastStop?.sessionIds.length ?? 0) +
+        (lastStop?.otherProjects ?? []).reduce((sum, p) => sum + p.sessionIds.length, 0);
+      if (lastStop && totalLastStopSessions > 0) {
         const stoppedAgo = `stopped at ${new Date(lastStop.stoppedAt).toLocaleString()}`;
         const otherProjects = lastStop.otherProjects ?? [];
         const restoreProjectBySessionId = new Map<string, string>();
@@ -1056,7 +1066,8 @@ async function runStartup(
         }
 
         if (allRestoreSessions.length > 0) {
-          const shouldRestore = await promptConfirm("Restore these sessions?", true);
+          const shouldRestore =
+            opts?.restore === true ? true : await promptConfirm("Restore these sessions?", true);
           if (shouldRestore) {
             recordActivityEvent({
               projectId,
@@ -1441,6 +1452,8 @@ export function registerStart(program: Command): void {
     .option("--dev", "Use Next.js dev server with hot reload (for dashboard UI development)")
     .option("--interactive", "Prompt to configure config settings")
     .option("--reap-orphans", "Kill orphaned AO child processes before starting")
+    .option("--restore", "Restore sessions from last ao stop without prompting")
+    .option("--no-restore", "Skip restoring sessions from last ao stop")
     .action(
       async (
         projectArg?: string,
@@ -1451,6 +1464,7 @@ export function registerStart(program: Command): void {
           dev?: boolean;
           interactive?: boolean;
           reapOrphans?: boolean;
+          restore?: boolean;
         },
       ) => {
         recordActivityEvent({
@@ -1847,7 +1861,8 @@ export function registerStop(program: Command): void {
     .description("Stop orchestrator agent and dashboard")
     .option("--purge-session", "Delete mapped OpenCode session when stopping")
     .option("--all", "Stop all running AO instances")
-    .action(async (projectArg?: string, opts: { purgeSession?: boolean; all?: boolean } = {}) => {
+    .option("-y, --yes", "Confirm stopping active sessions without prompting")
+    .action(async (projectArg?: string, opts: { purgeSession?: boolean; all?: boolean; yes?: boolean } = {}) => {
       recordActivityEvent({
         source: "cli",
         kind: "cli.stop_invoked",
@@ -1896,10 +1911,30 @@ export function registerStop(program: Command): void {
             config = loadConfig(globalPath);
           }
         }
-        const { projectId: _projectId, project } = await resolveProject(config, projectArg, "stop");
+        let _projectId: string;
+        let project: ProjectConfig;
+        if (projectArg) {
+          ({ projectId: _projectId, project } = await resolveProject(config, projectArg, "stop"));
+        } else {
+          const projectIds = Object.keys(config.projects);
+          if (projectIds.length === 0) {
+            throw new Error("No projects configured. Add a project to agent-orchestrator.yaml.");
+          }
+          const currentDir = resolve(cwd());
+          const cwdProjectId = findProjectForDirectory(config.projects, currentDir);
+          _projectId =
+            running?.projects.find((id) => config.projects[id]) ??
+            cwdProjectId ??
+            projectIds[0];
+          project = config.projects[_projectId];
+        }
         const port = config.port ?? DEFAULT_PORT;
 
-        console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
+        if (projectArg) {
+          console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
+        } else {
+          console.log(chalk.bold(`\nStopping AO across all projects\n`));
+        }
 
         const sm = await getSessionManager(config);
         try {
@@ -1925,6 +1960,16 @@ export function registerStop(program: Command): void {
           const otherByProject = new Map<string, string[]>();
 
           if (activeSessions.length > 0) {
+            if (!projectArg && opts.yes !== true && isHumanCaller()) {
+              const confirmed = await promptConfirm(
+                `Stop AO and ${activeSessions.length} active session(s)?`,
+                false,
+              );
+              if (!confirmed) {
+                console.log(chalk.yellow("Stop cancelled."));
+                return;
+              }
+            }
             const spinner = ora(`Stopping ${activeSessions.length} active session(s)`).start();
             const purgeOpenCode = opts?.purgeSession === true;
             const warnings: string[] = [];

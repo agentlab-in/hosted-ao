@@ -1810,6 +1810,46 @@ describe("stop command", () => {
     expect(output).toContain("app-orchestrator-3");
   });
 
+  it("does not show the project picker for no-args ao stop across multiple projects", async () => {
+    mockConfigRef.current = makeConfig({
+      "project-1": makeProject({ name: "Project 1", sessionPrefix: "p1" }),
+      "project-2": makeProject({ name: "Project 2", sessionPrefix: "p2" }),
+    });
+    mockSessionManager.list.mockResolvedValue([
+      {
+        id: "p1-1",
+        projectId: "project-1",
+        status: "working",
+        activity: "active",
+        metadata: {},
+        lastActivityAt: new Date(),
+        runtimeHandle: { id: "tmux-1" },
+      },
+      {
+        id: "p2-1",
+        projectId: "project-2",
+        status: "working",
+        activity: "active",
+        metadata: {},
+        lastActivityAt: new Date(),
+        runtimeHandle: { id: "tmux-2" },
+      },
+    ]);
+    mockSessionManager.kill.mockResolvedValue({ cleaned: true, alreadyTerminated: false });
+    mockPromptConfirm.mockResolvedValue(true);
+
+    await program.parseAsync(["node", "test", "stop"]);
+
+    expect(mockPromptSelect).not.toHaveBeenCalledWith(
+      expect.stringContaining("Choose project to stop"),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(mockPromptConfirm).toHaveBeenCalledWith("Stop AO and 2 active session(s)?", false);
+    expect(mockSessionManager.kill).toHaveBeenCalledWith("p1-1", { purgeOpenCode: false });
+    expect(mockSessionManager.kill).toHaveBeenCalledWith("p2-1", { purgeOpenCode: false });
+  });
+
   it("kills the most-recently-active orchestrator when multiple exist", async () => {
     mockConfigRef.current = makeConfig({ "my-app": makeProject() });
     const now = Date.now();
