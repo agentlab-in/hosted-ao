@@ -154,7 +154,7 @@ describe("DirectTerminal render", () => {
     await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
 
     expect(screen.getByText("ao-orchestrator")).toHaveStyle({ color: "var(--color-accent)" });
-    expect(screen.getByText("XDA")).toHaveStyle({ color: "var(--color-accent)" });
+    expect(screen.queryByText("XDA")).toBeNull();
   });
 
   it("keeps restart and fullscreen actions available in chromeless mode", async () => {

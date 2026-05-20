@@ -8551,7 +8551,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
     margin-right: 2px;
   }
 
-  /* Stack: session name on top, status+XDA row below */
+  /* Stack: session name on top, status row below */
   .terminal-chrome-identity {
     flex-direction: column;
     align-items: flex-start;

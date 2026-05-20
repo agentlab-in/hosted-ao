@@ -217,7 +217,7 @@ export function TerminalControls({
     <div className="terminal-chrome-bar flex items-center gap-2 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-elevated)] px-3 py-2">
       {/* Pane label — matches the workspace pane-header style used elsewhere */}
       <span className="terminal-chrome-pane-label">TERMINAL</span>
-      {/* Identity group: session name on top, status+XDA below on mobile */}
+      {/* Identity group: session name on top, status below on mobile */}
       <div className="terminal-chrome-identity">
         <span className="terminal-chrome-session-id font-[var(--font-mono)] text-[11px]" style={{ color: accentColor }}>
           {sessionId}
@@ -228,15 +228,6 @@ export function TerminalControls({
             className={cn("text-[10px] font-medium uppercase tracking-[0.06em]", statusTextColor)}
           >
             {statusText}
-          </span>
-          <span
-            className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]"
-            style={{
-              color: accentColor,
-              background: `color-mix(in srgb, ${accentColor} 12%, transparent)`,
-            }}
-          >
-            XDA
           </span>
         </div>
       </div>
