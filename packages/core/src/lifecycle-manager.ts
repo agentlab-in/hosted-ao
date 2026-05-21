@@ -70,7 +70,7 @@ import {
 import { createCorrelationId, createProjectObserver } from "./observability.js";
 import { resolveNotifierTarget } from "./notifier-resolution.js";
 import { recordNotificationDelivery } from "./notification-observability.js";
-import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
+import { resolveSessionRole } from "./agent-selection.js";
 import {
   DETECTING_MAX_ATTEMPTS,
   createDetectingDecision,
@@ -910,20 +910,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
     const lifecycle = cloneLifecycle(session.lifecycle);
     const nowIso = new Date().toISOString();
-    const allSessionPrefixes = Object.values(config.projects).map((p) => p.sessionPrefix);
-    const sessionRole = resolveSessionRole(
-      session.id,
-      session.metadata,
-      project.sessionPrefix,
-      allSessionPrefixes,
-    );
-    const agentName = resolveAgentSelection({
-      role: sessionRole,
-      project,
-      defaults: config.defaults,
-      persistedAgent: session.metadata["agent"],
-    }).agentName;
-    const agent = registry.get<Agent>("agent", agentName);
+    const agentName = session.metadata["agent"];
+    const agent = agentName ? registry.get<Agent>("agent", agentName) : null;
     const scm = project.scm?.plugin ? registry.get<SCM>("scm", project.scm.plugin) : null;
     let detectedIdleTimestamp: Date | null = null;
     let idleWasBlocked = false;

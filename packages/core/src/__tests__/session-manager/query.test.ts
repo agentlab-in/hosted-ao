@@ -64,6 +64,21 @@ describe("list", () => {
     expect(sessions.map((s) => s.id).sort()).toEqual(["app-1", "app-2"]);
   });
 
+  it("backfills missing legacy agent metadata on read", async () => {
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: "/tmp/w1",
+      branch: "feat/a",
+      status: "working",
+      project: "my-app",
+    });
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const sessions = await sm.list();
+
+    expect(sessions[0]?.metadata["agent"]).toBe("mock-agent");
+    expect(readMetadataRaw(sessionsDir, "app-1")?.["agent"]).toBe("mock-agent");
+  });
+
   it("skips dead-runtime agent metadata discovery when native restore metadata is already persisted", async () => {
     writeMetadata(sessionsDir, "app-1", {
       worktree: config.projects["my-app"]!.path,
@@ -474,6 +489,7 @@ describe("list", () => {
       branch: "a",
       status: "working",
       project: "my-app",
+      agent: "mock-agent",
       runtimeHandle,
       lifecycle,
     });

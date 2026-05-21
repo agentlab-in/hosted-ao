@@ -94,7 +94,7 @@ import {
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
 import { safeJsonParse, validateStatus } from "./utils/validation.js";
 import { isGitBranchNameSafe } from "./utils.js";
-import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
+import { resolveAgentSelection, resolveAgentSelectionForSession } from "./agent-selection.js";
 import {
   buildAgentPath,
   setupPathWrapperWorkspace,
@@ -538,6 +538,21 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     sessionCache = null;
   }
 
+  function repairSessionAgentMetadataOnRead(
+    sessionsDir: string,
+    record: ActiveSessionRecord,
+    project: ProjectConfig,
+  ): ActiveSessionRecord {
+    if (record.raw["agent"]) return record;
+
+    const agent = resolveSelectionForSession(project, record.sessionName, record.raw).agentName;
+    updateMetadataPreservingMtime(sessionsDir, record.sessionName, { agent }, record.modifiedAt);
+    return {
+      ...record,
+      raw: applyMetadataUpdatesToRaw(record.raw, { agent }),
+    };
+  }
+
   function repairSingleSessionMetadataOnRead(
     sessionsDir: string,
     record: ActiveSessionRecord,
@@ -599,7 +614,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   function repairSessionMetadataOnRead(
     sessionsDir: string,
     records: ActiveSessionRecord[],
-    sessionPrefix?: string,
+    project: ProjectConfig,
   ): ActiveSessionRecord[] {
     const repaired = records.map((record) => ({ ...record, raw: { ...record.raw } }));
     const duplicatePRAttachments = new Map<string, ActiveSessionRecord[]>();
@@ -611,7 +626,11 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             sessionId: record.sessionName,
             status: validateStatus(record.raw["status"]),
             createdAt: record.raw["createdAt"] ? new Date(record.raw["createdAt"]) : undefined,
-            sessionKind: isOrchestratorSessionRecord(record.sessionName, record.raw, sessionPrefix)
+            sessionKind: isOrchestratorSessionRecord(
+              record.sessionName,
+              record.raw,
+              project.sessionPrefix,
+            )
               ? "orchestrator"
               : "worker",
           }),
@@ -626,10 +645,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         record.raw = applyMetadataUpdatesToRaw(record.raw, canonicalUpdates);
       }
 
-      if (isOrchestratorSessionRecord(record.sessionName, record.raw, sessionPrefix)) {
-        record.raw = repairSingleSessionMetadataOnRead(sessionsDir, record, sessionPrefix).raw;
+      if (isOrchestratorSessionRecord(record.sessionName, record.raw, project.sessionPrefix)) {
+        record.raw = repairSingleSessionMetadataOnRead(sessionsDir, record, project.sessionPrefix).raw;
+        record.raw = repairSessionAgentMetadataOnRead(sessionsDir, record, project).raw;
         continue;
       }
+
+      record.raw = repairSessionAgentMetadataOnRead(sessionsDir, record, project).raw;
 
       const prUrl = record.raw["pr"];
       if (!prUrl) continue;
@@ -705,7 +727,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       return [{ sessionName, raw, modifiedAt } satisfies ActiveSessionRecord];
     });
 
-    return repairSessionMetadataOnRead(sessionsDir, records, project.sessionPrefix);
+    return repairSessionMetadataOnRead(sessionsDir, records, project);
   }
 
   function sortSessionIdsForReuse(ids: string[]): string[] {
@@ -900,16 +922,12 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     sessionId: string,
     metadata: Record<string, string>,
   ) {
-    return resolveAgentSelection({
-      role: resolveSessionRole(
-        sessionId,
-        metadata,
-        project.sessionPrefix,
-        Object.values(config.projects).map((p) => p.sessionPrefix),
-      ),
+    return resolveAgentSelectionForSession({
+      sessionId,
+      metadata,
       project,
       defaults: config.defaults,
-      persistedAgent: metadata["agent"],
+      allSessionPrefixes: Object.values(config.projects).map((p) => p.sessionPrefix),
     });
   }
 
@@ -947,10 +965,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         modifiedAt = undefined;
       }
 
-      const repaired = repairSingleSessionMetadataOnRead(
+      const repaired = repairSessionAgentMetadataOnRead(
         sessionsDir,
-        { sessionName: sessionId, raw, modifiedAt },
-        project.sessionPrefix,
+        repairSingleSessionMetadataOnRead(
+          sessionsDir,
+          { sessionName: sessionId, raw, modifiedAt },
+          project.sessionPrefix,
+        ),
+        project,
       );
 
       return { raw: repaired.raw, sessionsDir, project, projectId };
@@ -2380,10 +2402,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // If stat fails, timestamps will fall back to current time
       }
 
-      const repaired = repairSingleSessionMetadataOnRead(
+      const repaired = repairSessionAgentMetadataOnRead(
         sessionsDir,
-        { sessionName: sessionId, raw, modifiedAt },
-        project.sessionPrefix,
+        repairSingleSessionMetadataOnRead(
+          sessionsDir,
+          { sessionName: sessionId, raw, modifiedAt },
+          project.sessionPrefix,
+        ),
+        project,
       );
 
       const session = metadataToSession(
@@ -3550,6 +3576,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
     updateMetadata(sessionsDir, sessionId, {
       ...buildLifecycleMetadataPatch(restoredLifecycle),
+      agent: selection.agentName,
       restoredAt: now,
       mergedPendingCleanupSince: "",
     });

@@ -547,7 +547,7 @@ function prepareSessionMetadataEnrichment(
   // Agent summaries (local disk I/O — reads agent JSONL)
   const summaryPromises = coreSessions.map((core, i) => {
     if (dashboardSessions[i].summary) return Promise.resolve();
-    const agentName = projects[i]?.agent ?? config.defaults.agent;
+    const agentName = core.metadata["agent"];
     if (!agentName) return Promise.resolve();
     const agent = registry.get<Agent>("agent", agentName);
     if (!agent) return Promise.resolve();
