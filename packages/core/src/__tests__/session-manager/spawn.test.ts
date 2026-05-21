@@ -1456,6 +1456,17 @@ describe("spawn", () => {
       expect(meta?.["displayName"]).toBe("Add rate limiting to /api/upload");
     });
 
+    it("strips a markdown heading marker from prompt-derived displayName", async () => {
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      await sm.spawn({
+        projectId: "my-app",
+        prompt: "### Add rate limiting to /api/upload\n\nUse a sliding-window counter.",
+      });
+
+      const meta = readMetadataRaw(sessionsDir, "app-1");
+      expect(meta?.["displayName"]).toBe("Add rate limiting to /api/upload");
+    });
+
     it("truncates long displayName values with an ellipsis", async () => {
       const longPrompt =
         "Implement a comprehensive rate-limiter that supports sliding windows, token buckets, and per-route overrides with distributed counters";

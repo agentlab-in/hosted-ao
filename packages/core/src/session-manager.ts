@@ -272,7 +272,7 @@ function deriveDisplayName(input: { issueTitle?: string; prompt?: string }): str
   }
 
   if (input.prompt && input.prompt.trim()) {
-    const line = pickLine(input.prompt);
+    const line = pickLine(input.prompt).replace(/^#{1,6}\s+/, "");
     if (line) return truncate(line);
   }
 
