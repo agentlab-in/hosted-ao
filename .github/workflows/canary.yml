@@ -112,12 +112,29 @@ jobs:
           # deletes it, so no cleanup is needed.
           if [ -z "$(ls .changeset/*.md 2>/dev/null | grep -vi 'README')" ]; then
             node << 'SCRIPT'
-              const cfg = require('./.changeset/config.json');
-              const pkgs = cfg.linked.flat();
+              const fs = require('fs');
+              const pkgs = [];
+
+              const addPackage = (m) => {
+                if (!fs.existsSync(m)) return;
+                const d = JSON.parse(fs.readFileSync(m, 'utf8'));
+                if (!d.private && d.publishConfig?.access === 'public') pkgs.push(d.name);
+              };
+
+              const scanPackages = (dir) => {
+                if (!fs.existsSync(dir)) return;
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                  if (entry.isDirectory()) addPackage(`${dir}/${entry.name}/package.json`);
+                }
+              };
+
+              scanPackages('packages');
+              scanPackages('packages/plugins');
+
               let body = '---\n';
               pkgs.forEach(p => body += '"' + p + '": patch\n');
               body += '---\n\nchore: canary build\n';
-              require('fs').writeFileSync('.changeset/canary-temp.md', body);
+              fs.writeFileSync('.changeset/canary-temp.md', body);
           SCRIPT
           fi
           pnpm changeset version --snapshot nightly
