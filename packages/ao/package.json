@@ -39,7 +39,7 @@
     "url": "https://github.com/ComposioHQ/agent-orchestrator/issues"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.18.3"
   },
   "dependencies": {
     "@aoagents/ao-cli": "workspace:*"

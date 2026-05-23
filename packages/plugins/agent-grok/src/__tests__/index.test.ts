@@ -1,13 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AgentLaunchConfig, RuntimeHandle, Session } from "@aoagents/ao-core";
-import { createRequire } from "node:module";
+import packageJson from "../../package.json" with { type: "json" };
 
-const require = createRequire(import.meta.url);
-const packageJson = require("../../package.json") as {
-  name: string;
-  version: string;
-  description: string;
-};
 const PACKAGE_NAME_PREFIX = "@aoagents/ao-plugin-agent-";
 const pluginName = packageJson.name.startsWith(PACKAGE_NAME_PREFIX)
   ? packageJson.name.slice(PACKAGE_NAME_PREFIX.length)
@@ -144,6 +138,7 @@ beforeEach(() => {
 
 describe("manifest", () => {
   it("has correct Grok manifest", () => {
+    expect(manifest.version).toBe(packageJson.version);
     expect(manifest).toEqual({
       name: pluginName,
       slot: "agent",

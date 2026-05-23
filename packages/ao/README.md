@@ -25,7 +25,7 @@ npm install -g @aoagents/ao
 
 > **Nightly builds** (latest `main`): `npm install -g @aoagents/ao@nightly` — back to stable with `@latest`.
 
-**Prerequisites:** [Node.js 20+](https://nodejs.org), [Git 2.25+](https://git-scm.com), the [`gh` CLI](https://cli.github.com), and at least one coding-agent CLI (e.g. [Claude Code](https://www.anthropic.com/claude-code)).
+**Prerequisites:** [Node.js 20.18.3+](https://nodejs.org), [Git 2.25+](https://git-scm.com), the [`gh` CLI](https://cli.github.com), and at least one coding-agent CLI (e.g. [Claude Code](https://www.anthropic.com/claude-code)).
 
 - **macOS / Linux:** [tmux](https://github.com/tmux/tmux/wiki/Installing) — `brew install tmux` or `sudo apt install tmux`.
 - **Windows:** PowerShell 7+ recommended; tmux is **not** required (AO uses native ConPTY via the `process` runtime).
