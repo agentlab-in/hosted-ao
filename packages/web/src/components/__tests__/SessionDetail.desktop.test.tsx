@@ -19,10 +19,15 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/sessions/worker-desktop",
 }));
 
+const { directTerminalPropsMock } = vi.hoisted(() => ({
+  directTerminalPropsMock: vi.fn(),
+}));
+
 vi.mock("../DirectTerminal", () => ({
-  DirectTerminal: ({ sessionId }: { sessionId: string }) => (
-    <div data-testid="direct-terminal">{sessionId}</div>
-  ),
+  DirectTerminal: (props: { sessionId: string; appearance?: "theme" | "dark" }) => {
+    directTerminalPropsMock(props);
+    return <div data-testid="direct-terminal">{props.sessionId}</div>;
+  },
 }));
 
 function mockDesktopViewport() {
@@ -47,6 +52,7 @@ describe("SessionDetail desktop layout", () => {
     routerPushMock.mockReset();
     routerReplaceMock.mockReset();
     routerRefreshMock.mockReset();
+    directTerminalPropsMock.mockReset();
     window.requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
       callback(0);
       return 1;
@@ -626,5 +632,28 @@ describe("SessionDetail desktop layout", () => {
     });
 
     expect(routerPushMock).toHaveBeenCalledWith("/projects/my-app");
+  });
+
+  it("uses theme-aware terminal appearance on session detail", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-themed-terminal",
+          projectId: "my-app",
+          metadata: {
+            tmuxName: "my-app-worker-themed-terminal",
+          },
+        })}
+        projectOrchestratorId="my-app-orchestrator"
+        projects={[{ id: "my-app", name: "My App", path: "/tmp/my-app" }]}
+      />,
+    );
+
+    expect(directTerminalPropsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "worker-themed-terminal",
+        appearance: "theme",
+      }),
+    );
   });
 });
