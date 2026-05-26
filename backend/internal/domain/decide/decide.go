@@ -212,14 +212,22 @@ func HashEvidence(evidence string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// timestampPatterns strip the time-varying parts of an evidence string before
-// hashing. Order matters: the full datetime form is removed before the bare
-// time-of-day and epoch forms so they don't partially match.
+// timestampPatterns is the list of regexes HashEvidence applies (in order) to
+// delete the time-varying parts of an evidence string before hashing, so the
+// same ambiguous signal restamped with a new clock value hashes equal and the
+// detecting counter keeps climbing instead of resetting every tick.
 //
-// The epoch pattern strips any bare 10-13 digit run (unix seconds/millis). That
-// is broad enough to also clobber a same-width numeric ID if one ever appears in
-// an evidence string; evidence is decider-authored, so today nothing else lands
-// in that range, but keep IDs out of evidence strings to preserve hash fidelity.
+// Order matters: the full datetime form is removed first so its embedded
+// HH:MM:SS isn't half-eaten by the bare time-of-day pattern that follows.
+//
+//   1. full ISO-8601 / RFC3339 datetime — date, a T or space separator,
+//      HH:MM:SS, optional fractional seconds, optional Z or ±HH:MM offset.
+//      e.g. "2026-05-26T12:00:00Z", "2026-05-26 12:00:00.218+05:30"
+//   2. a bare time-of-day, e.g. "12:00:00" or "12:00:00.218"
+//   3. a bare unix epoch — any 10-13 digit run (seconds or millis), e.g.
+//      "1716724800". This is broad enough to also clobber a same-width numeric
+//      ID if one ever appears in evidence; evidence is decider-authored, so keep
+//      IDs out of evidence strings to preserve hash fidelity.
 var timestampPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?`),
 	regexp.MustCompile(`\d{2}:\d{2}:\d{2}(?:\.\d+)?`),
