@@ -92,9 +92,22 @@ func ResolveProbeDecision(in ProbeInput) LifecycleDecision {
 // everything, then requested changes, then the approval/merge states, then a
 // pending review, then a stalled (idle-beyond-threshold) PR, else plain open.
 func ResolveOpenPRDecision(in OpenPRInput) LifecycleDecision {
-	base := func(status domain.SessionStatus, prReason domain.PRReason, ss domain.SessionState, sr domain.SessionReason) LifecycleDecision {
+	// evidence is a stable, timestamp-free summary "<condition> #<num> <url>"
+	// for logs/traceability; it folds in the PR identity inputs (Number/URL).
+	evidence := func(cond string) string {
+		s := cond
+		if in.Number > 0 {
+			s += fmt.Sprintf(" #%d", in.Number)
+		}
+		if in.URL != "" {
+			s += " " + in.URL
+		}
+		return s
+	}
+	base := func(status domain.SessionStatus, cond string, prReason domain.PRReason, ss domain.SessionState, sr domain.SessionReason) LifecycleDecision {
 		return LifecycleDecision{
 			Status:        status,
+			Evidence:      evidence(cond),
 			SessionState:  ss,
 			SessionReason: sr,
 			PRState:       domain.PROpen,
@@ -104,24 +117,24 @@ func ResolveOpenPRDecision(in OpenPRInput) LifecycleDecision {
 
 	switch {
 	case in.CIFailing:
-		return base(domain.StatusCIFailed, domain.PRReasonCIFailing, domain.SessionWorking, domain.ReasonFixingCI)
+		return base(domain.StatusCIFailed, "ci_failing", domain.PRReasonCIFailing, domain.SessionWorking, domain.ReasonFixingCI)
 	case in.ChangesRequested:
-		return base(domain.StatusChangesRequested, domain.PRReasonChangesRequested, domain.SessionWorking, domain.ReasonResolvingReviewComments)
+		return base(domain.StatusChangesRequested, "changes_requested", domain.PRReasonChangesRequested, domain.SessionWorking, domain.ReasonResolvingReviewComments)
 	case in.Mergeable:
 		// Mergeability is the authoritative merge gate, so it already folds in
 		// "approved if review is required". Checking it before Approved means a
 		// PR on a no-required-review repo (mergeable, not formally approved) is
 		// still surfaced as ready-to-merge instead of falling through to PR_OPEN.
-		return base(domain.StatusMergeable, domain.PRReasonMergeReady, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
+		return base(domain.StatusMergeable, "merge_ready", domain.PRReasonMergeReady, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
 	case in.Approved:
-		return base(domain.StatusApproved, domain.PRReasonApproved, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
+		return base(domain.StatusApproved, "approved", domain.PRReasonApproved, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
 	case in.ReviewPending:
-		return base(domain.StatusReviewPending, domain.PRReasonReviewPending, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
+		return base(domain.StatusReviewPending, "review_pending", domain.PRReasonReviewPending, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
 	case in.IdleBeyond:
 		// A PR open but quiet past the stuck threshold needs a human nudge.
-		return base(domain.StatusStuck, domain.PRReasonInProgress, domain.SessionStuck, domain.ReasonAwaitingUserInput)
+		return base(domain.StatusStuck, "idle_beyond", domain.PRReasonInProgress, domain.SessionStuck, domain.ReasonAwaitingUserInput)
 	default:
-		return base(domain.StatusPROpen, domain.PRReasonInProgress, domain.SessionWorking, domain.ReasonPRCreated)
+		return base(domain.StatusPROpen, "pr_open", domain.PRReasonInProgress, domain.SessionWorking, domain.ReasonPRCreated)
 	}
 }
 

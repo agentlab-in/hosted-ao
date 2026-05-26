@@ -245,6 +245,37 @@ func TestResolveOpenPRDecision(t *testing.T) {
 	}
 }
 
+func TestResolveOpenPRDecisionEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		in   OpenPRInput
+		want string
+	}{
+		{
+			name: "condition with PR number and URL",
+			in:   OpenPRInput{CIFailing: true, Number: 123, URL: "https://example.com/pr/123"},
+			want: "ci_failing #123 https://example.com/pr/123",
+		},
+		{
+			name: "condition with number only",
+			in:   OpenPRInput{Approved: true, Mergeable: true, Number: 7},
+			want: "merge_ready #7",
+		},
+		{
+			name: "no identity falls back to the bare condition",
+			in:   OpenPRInput{},
+			want: "pr_open",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ResolveOpenPRDecision(tt.in).Evidence; got != tt.want {
+				t.Errorf("Evidence = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDecidersDeriveConsistently(t *testing.T) {
 	// Every decision a decider produces must be self-consistent: the display
 	// Status it reports must equal what DeriveLegacyStatus produces from the

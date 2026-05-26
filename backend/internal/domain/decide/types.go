@@ -9,6 +9,16 @@ import (
 // LifecycleDecision is the output of every decider: the derived display status
 // plus the canonical sub-state values to persist, the human-readable evidence,
 // and the (possibly updated) detecting memory.
+//
+// Zero-value sub-state fields mean "this decider does not address that
+// sub-state — leave it unchanged", NOT "set it to the empty value". SessionState
+// is always populated, but the probe/detecting/kill paths legitimately leave
+// PRState/PRReason empty: a liveness verdict knows nothing about the PR. When
+// the LCM turns a decision into a LifecyclePatch it must therefore map an empty
+// PRState to a nil patch.PR (left untouched) rather than writing it through —
+// writing PRNone on a routine probe tick would clobber a live PR. Detecting is
+// nil-by-default for the same reason; see LifecyclePatch's three-way
+// Detecting/ClearDetecting semantics.
 type LifecycleDecision struct {
 	Status        domain.SessionStatus
 	Evidence      string
