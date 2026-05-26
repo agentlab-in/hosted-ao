@@ -183,6 +183,13 @@ func TestResolveOpenPRDecision(t *testing.T) {
 			wantState:  domain.SessionIdle,
 		},
 		{
+			name:       "mergeable without formal approval (no required review) -> mergeable",
+			in:         OpenPRInput{Mergeable: true},
+			wantStatus: domain.StatusMergeable,
+			wantPR:     domain.PRReasonMergeReady,
+			wantState:  domain.SessionIdle,
+		},
+		{
 			name:       "approved but not mergeable -> approved",
 			in:         OpenPRInput{Approved: true},
 			wantStatus: domain.StatusApproved,
@@ -238,26 +245,50 @@ func TestResolveOpenPRDecision(t *testing.T) {
 	}
 }
 
-func TestResolveOpenPRDecisionDerivesConsistently(t *testing.T) {
-	// The display Status produced by the ladder must equal what DeriveLegacyStatus
-	// would produce from the same canonical (session, pr) it emits.
-	inputs := []OpenPRInput{
+func TestDecidersDeriveConsistently(t *testing.T) {
+	// Every decision a decider produces must be self-consistent: the display
+	// Status it reports must equal what DeriveLegacyStatus produces from the
+	// canonical (session, pr) sub-states it emits. This locks the deciders and
+	// the display-derivation against drifting apart.
+	//
+	// The ResolveTerminalPRStateDecision none/open default is intentionally
+	// excluded — it is a documented no-op for misuse, not a real verdict.
+	var decisions []LifecycleDecision
+
+	for _, in := range []OpenPRInput{
 		{CIFailing: true},
 		{ChangesRequested: true},
 		{Approved: true, Mergeable: true},
+		{Mergeable: true},
 		{Approved: true},
 		{ReviewPending: true},
 		{IdleBeyond: true},
 		{},
+	} {
+		decisions = append(decisions, ResolveOpenPRDecision(in))
 	}
-	for _, in := range inputs {
-		d := ResolveOpenPRDecision(in)
+
+	decisions = append(decisions,
+		ResolveTerminalPRStateDecision(domain.PRMerged),
+		ResolveTerminalPRStateDecision(domain.PRClosed),
+	)
+
+	for _, in := range []ProbeInput{
+		{KillRequested: true, Now: t0},
+		{Runtime: domain.RuntimeAlive, Process: ProcessAlive, Now: t0},
+		{Runtime: domain.RuntimeMissing, Process: ProcessIndeterminate, Now: t0},
+		{Runtime: domain.RuntimeExited, Process: ProcessDead, Now: t0},
+	} {
+		decisions = append(decisions, ResolveProbeDecision(in))
+	}
+
+	for _, d := range decisions {
 		l := domain.CanonicalSessionLifecycle{
 			Session: domain.SessionSubstate{State: d.SessionState, Reason: d.SessionReason},
 			PR:      domain.PRSubstate{State: d.PRState, Reason: d.PRReason},
 		}
 		if got := domain.DeriveLegacyStatus(l); got != d.Status {
-			t.Errorf("input %+v: decision Status=%q but DeriveLegacyStatus=%q", in, d.Status, got)
+			t.Errorf("decision %+v: Status=%q but DeriveLegacyStatus=%q", d, d.Status, got)
 		}
 	}
 }

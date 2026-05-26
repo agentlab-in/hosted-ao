@@ -166,7 +166,11 @@ func ResolveOpenPRDecision(in OpenPRInput) LifecycleDecision {
 		return base(domain.StatusCIFailed, domain.PRReasonCIFailing, domain.SessionWorking, domain.ReasonFixingCI)
 	case in.ChangesRequested:
 		return base(domain.StatusChangesRequested, domain.PRReasonChangesRequested, domain.SessionWorking, domain.ReasonResolvingReviewComments)
-	case in.Approved && in.Mergeable:
+	case in.Mergeable:
+		// Mergeability is the authoritative merge gate, so it already folds in
+		// "approved if review is required". Checking it before Approved means a
+		// PR on a no-required-review repo (mergeable, not formally approved) is
+		// still surfaced as ready-to-merge instead of falling through to PR_OPEN.
 		return base(domain.StatusMergeable, domain.PRReasonMergeReady, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
 	case in.Approved:
 		return base(domain.StatusApproved, domain.PRReasonApproved, domain.SessionIdle, domain.ReasonAwaitingExternalReview)
@@ -270,6 +274,11 @@ func HashEvidence(evidence string) string {
 // timestampPatterns strip the time-varying parts of an evidence string before
 // hashing. Order matters: the full datetime form is removed before the bare
 // time-of-day and epoch forms so they don't partially match.
+//
+// The epoch pattern strips any bare 10-13 digit run (unix seconds/millis). That
+// is broad enough to also clobber a same-width numeric ID if one ever appears in
+// an evidence string; evidence is decider-authored, so today nothing else lands
+// in that range, but keep IDs out of evidence strings to preserve hash fidelity.
 var timestampPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?`),
 	regexp.MustCompile(`\d{2}:\d{2}:\d{2}(?:\.\d+)?`),
