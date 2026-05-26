@@ -2,8 +2,8 @@
 // lane: the inbound interfaces we implement, the outbound interfaces others
 // implement for us, and the fact DTOs that cross those boundaries.
 //
-// These are the types adil (SCM poller), Tom (persistence), and aditi (API)
-// build against, so they are committed and stabilised before the LCM/SM logic.
+// These are the types the SCM poller, persistence adapter, and API layer build
+// against, so they are committed and stabilised before the LCM/SM logic.
 package ports
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// SCMFacts is produced by adil's SCM poller and handed to ApplySCMObservation.
+// SCMFacts is produced by the SCM poller and handed to ApplySCMObservation.
 //
 // Fetched is the failed-probe guard: when false, the GitHub query timed out or
 // errored and the rest of the struct is meaningless — the LCM must NOT read it
@@ -120,10 +120,12 @@ const (
 )
 
 // SpawnOutcome is what the Session Manager reports to the LCM after a spawn.
+// RuntimeHandle is the same structured handle the Runtime port returns, so no
+// ad-hoc string encoding is needed for later Destroy/SendMessage calls.
 type SpawnOutcome struct {
 	Branch         string
 	WorkspacePath  string
-	RuntimeHandle  string
+	RuntimeHandle  RuntimeHandle
 	AgentSessionID string
 }
 

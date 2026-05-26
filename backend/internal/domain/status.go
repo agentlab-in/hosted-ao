@@ -28,12 +28,17 @@ const (
 // DeriveLegacyStatus is the ONLY producer of the display status. It must stay a
 // pure, total function of the canonical record.
 //
-// Order matters and encodes the core invariant "PR facts dominate session facts
-// once a PR exists":
-//  1. Terminal / hard session states map directly (terminated sub-switches on reason).
-//  2. A merged PR wins.
-//  3. An open PR maps by its reason.
-//  4. Otherwise fall through to the raw session state.
+// Order matters:
+//  1. Terminal / hard session states (done, terminated, needs_input, stuck,
+//     detecting, not_started) map directly — these OUTRANK PR facts.
+//  2. Otherwise a merged PR wins.
+//  3. Otherwise an open PR maps by its reason.
+//  4. Otherwise fall through to the SOFT session state (idle/working).
+//
+// So "PR facts dominate session facts" applies only to the soft states: an idle
+// or working session with an open, CI-failing PR displays as ci_failed — but a
+// session that is stuck or needs_input shows that regardless of PR state, since
+// it needs a human either way.
 func DeriveLegacyStatus(l CanonicalSessionLifecycle) SessionStatus {
 	switch l.Session.State {
 	case SessionDone:

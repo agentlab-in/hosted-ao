@@ -20,10 +20,15 @@ const LifecycleVersion = 1
 // between observations (they are read back by the pure decide core), so they
 // live in the persisted record too.
 type CanonicalSessionLifecycle struct {
-	Version int             `json:"version"`
-	Session SessionSubstate `json:"session"`
-	PR      PRSubstate      `json:"pr"`
-	Runtime RuntimeSubstate `json:"runtime"`
+	// Version is the schema version of this record's shape (LifecycleVersion).
+	Version int `json:"version"`
+	// Revision is a monotonic counter the store bumps on every write. It is used
+	// for optimistic-concurrency checks (LifecyclePatch.ExpectedRevision) and is
+	// distinct from the schema Version above.
+	Revision int             `json:"revision"`
+	Session  SessionSubstate `json:"session"`
+	PR       PRSubstate      `json:"pr"`
+	Runtime  RuntimeSubstate `json:"runtime"`
 
 	// Activity is the last-known agent activity. It arrives on a different
 	// cadence (ApplyActivitySignal) than runtime probes (the reaper), so the

@@ -6,33 +6,41 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// LifecycleStore is Tom's persistence layer, the ONLY disk writer. It owns
+// LifecycleStore is the persistence adapter, the ONLY disk writer. It owns
 // merge-patch, atomic write, file lock, and CDC eventing. The LCM and SM only
 // ever touch state through this narrow interface.
+//
+// List returns persistence records (no derived status); the Session Manager
+// turns those into domain.Session by attaching the derived display status.
 type LifecycleStore interface {
 	Load(ctx context.Context, id domain.SessionID) (domain.CanonicalSessionLifecycle, bool, error)
 	PatchLifecycle(ctx context.Context, id domain.SessionID, patch LifecyclePatch) error
-	List(ctx context.Context, project domain.ProjectID) ([]domain.Session, error)
+	List(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	GetMetadata(ctx context.Context, id domain.SessionID) (map[string]string, error)
 	PatchMetadata(ctx context.Context, id domain.SessionID, kv map[string]string) error
 }
 
 // LifecyclePatch is a sparse merge-patch: a nil field is left untouched, a
-// non-nil field is written. Detecting needs three-way semantics (leave / set /
-// clear-to-nil) which a single pointer can't express, so ClearDetecting handles
-// the clear case explicitly.
+// non-nil field is written.
 //
-// ExpectedVersion supports optimistic concurrency: when non-nil the store must
-// reject the patch if the stored Version differs. (Open for Tom to confirm vs.
-// the LCM owning all serialisation itself.)
+// Detecting needs three-way semantics (leave / set / clear-to-nil):
+//   - ClearDetecting == true  → store clears the detecting memory and IGNORES
+//     the Detecting field (clear wins; setting both is a caller bug).
+//   - ClearDetecting == false, Detecting != nil → set/replace the memory.
+//   - ClearDetecting == false, Detecting == nil  → leave it untouched.
+//
+// ExpectedRevision supports optimistic concurrency: when non-nil the store must
+// reject the patch if the stored Revision (the monotonic write counter, NOT the
+// schema Version) differs. This is the alternative to the LCM owning all
+// per-session serialisation itself.
 type LifecyclePatch struct {
-	Session         *domain.SessionSubstate
-	PR              *domain.PRSubstate
-	Runtime         *domain.RuntimeSubstate
-	Activity        *domain.ActivitySubstate
-	Detecting       *domain.DetectingState
-	ClearDetecting  bool
-	ExpectedVersion *int
+	Session          *domain.SessionSubstate
+	PR               *domain.PRSubstate
+	Runtime          *domain.RuntimeSubstate
+	Activity         *domain.ActivitySubstate
+	Detecting        *domain.DetectingState
+	ClearDetecting   bool
+	ExpectedRevision *int
 }
 
 // Notifier delivers events to the human (desktop/Slack later). Push, never pull.
@@ -92,7 +100,10 @@ type RuntimeHandle struct {
 type Agent interface {
 	GetLaunchCommand(cfg AgentConfig) string
 	GetEnvironment(cfg AgentConfig) map[string]string
-	IsProcessRunning(ctx context.Context, handle RuntimeHandle) (domain.ActivityState, error)
+	// ProbeProcess returns the agent process liveness classification
+	// (alive/dead/indeterminate/failed) — not a boolean and not an activity
+	// state. Activity classification arrives separately via ActivitySignal.
+	ProbeProcess(ctx context.Context, handle RuntimeHandle) (ProcessProbe, error)
 	GetRestoreCommand(agentSessionID string) string
 }
 
