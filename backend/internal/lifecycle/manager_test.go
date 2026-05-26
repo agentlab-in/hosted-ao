@@ -150,6 +150,8 @@ func TestApplyActivitySignal(t *testing.T) {
 		seed         domain.CanonicalSessionLifecycle
 		signal       ports.ActivitySignal
 		wantSession  domain.SessionState
+		wantReason   domain.SessionReason
+		checkReason  bool
 		wantActivity domain.ActivityState
 		wantChanged  bool
 	}{
@@ -170,6 +172,16 @@ func TestApplyActivitySignal(t *testing.T) {
 			wantChanged:  true,
 		},
 		{
+			name:         "valid idle maps to idle with a neutral reason",
+			seed:         lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive),
+			signal:       ports.ActivitySignal{State: ports.SignalValid, Activity: domain.ActivityIdle, Timestamp: t0, Source: domain.SourceHook},
+			wantSession:  domain.SessionIdle,
+			wantReason:   "",
+			checkReason:  true,
+			wantActivity: domain.ActivityIdle,
+			wantChanged:  true,
+		},
+		{
 			name:        "low-confidence signal is dropped (no idleness inferred)",
 			seed:        lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive),
 			signal:      ports.ActivitySignal{State: ports.SignalProbeFailure, Activity: domain.ActivityIdle, Timestamp: t0, Source: domain.SourceHook},
@@ -177,12 +189,12 @@ func TestApplyActivitySignal(t *testing.T) {
 			wantChanged: false,
 		},
 		{
-			name:         "activity does not touch a liveness-owned detecting session",
+			name:         "valid activity resolves a detecting session (proof of life)",
 			seed:         detectingLC(),
 			signal:       ports.ActivitySignal{State: ports.SignalValid, Activity: domain.ActivityActive, Timestamp: t0, Source: domain.SourceHook},
-			wantSession:  domain.SessionDetecting,
+			wantSession:  domain.SessionWorking,
 			wantActivity: domain.ActivityActive,
-			wantChanged:  true, // activity sub-state still updates
+			wantChanged:  true,
 		},
 	}
 
@@ -199,6 +211,9 @@ func TestApplyActivitySignal(t *testing.T) {
 			if l.Session.State != tt.wantSession {
 				t.Errorf("session = %v, want %v", l.Session.State, tt.wantSession)
 			}
+			if tt.checkReason && l.Session.Reason != tt.wantReason {
+				t.Errorf("session reason = %q, want %q", l.Session.Reason, tt.wantReason)
+			}
 			if tt.wantChanged && l.Revision != 1 {
 				t.Errorf("revision = %d, want 1 (expected a write)", l.Revision)
 			}
@@ -208,8 +223,8 @@ func TestApplyActivitySignal(t *testing.T) {
 			if tt.wantChanged && tt.wantActivity != "" && l.Activity.State != tt.wantActivity {
 				t.Errorf("activity = %v, want %v", l.Activity.State, tt.wantActivity)
 			}
-			if tt.name == "activity does not touch a liveness-owned detecting session" && l.Detecting == nil {
-				t.Error("activity must leave detecting memory for the probe pipeline to resolve")
+			if tt.name == "valid activity resolves a detecting session (proof of life)" && l.Detecting != nil {
+				t.Errorf("resolving detecting must clear the quarantine memory, got %+v", l.Detecting)
 			}
 		})
 	}
@@ -266,6 +281,35 @@ func TestApplySCMObservation(t *testing.T) {
 		}
 	})
 
+	t.Run("open-PR review branches map to the PR axis", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			facts      ports.SCMFacts
+			wantReason domain.PRReason
+			wantStatus domain.SessionStatus
+		}{
+			{"changes requested", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewChangesRequested}, domain.PRReasonChangesRequested, domain.StatusChangesRequested},
+			{"approved + mergeable", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewApproved, Mergeability: ports.Mergeability{Mergeable: true}}, domain.PRReasonMergeReady, domain.StatusMergeable},
+			{"review pending", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewPending}, domain.PRReasonReviewPending, domain.StatusReviewPending},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				mgr, store := newManager()
+				store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive))
+				if err := mgr.ApplySCMObservation(context.Background(), sid, c.facts); err != nil {
+					t.Fatalf("apply: %v", err)
+				}
+				l := mustLoad(t, store)
+				if l.PR.State != domain.PROpen || l.PR.Reason != c.wantReason {
+					t.Errorf("pr = %v/%v, want open/%v", l.PR.State, l.PR.Reason, c.wantReason)
+				}
+				if got := domain.DeriveLegacyStatus(l); got != c.wantStatus {
+					t.Errorf("display = %v, want %v", got, c.wantStatus)
+				}
+			})
+		}
+	})
+
 	t.Run("no PR is a no-op in split A", func(t *testing.T) {
 		mgr, store := newManager()
 		store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive))
@@ -311,25 +355,41 @@ func TestOnSpawnCompleted(t *testing.T) {
 }
 
 func TestOnKillRequested(t *testing.T) {
-	mgr, store := newManager()
-	store.seed(sid, detectingLC())
-
-	if err := mgr.OnKillRequested(context.Background(), sid, ports.KillReason{Kind: ports.KillManual, Detail: "user"}); err != nil {
-		t.Fatalf("apply: %v", err)
+	tests := []struct {
+		name        string
+		kind        ports.LifecycleKillReason
+		wantReason  domain.SessionReason
+		wantRuntime domain.RuntimeReason
+		wantDisplay domain.SessionStatus
+	}{
+		{"manual", ports.KillManual, domain.ReasonManuallyKilled, domain.RuntimeReasonManualKillRequested, domain.StatusKilled},
+		{"cleanup", ports.KillCleanup, domain.ReasonAutoCleanup, domain.RuntimeReasonAutoCleanup, domain.StatusCleanup},
+		{"error", ports.KillError, domain.ReasonErrorInProcess, domain.RuntimeReasonProbeError, domain.StatusErrored},
 	}
 
-	l := mustLoad(t, store)
-	if l.Session.State != domain.SessionTerminated || l.Session.Reason != domain.ReasonManuallyKilled {
-		t.Errorf("session = %v/%v, want terminated/manually_killed", l.Session.State, l.Session.Reason)
-	}
-	if l.Runtime.Reason != domain.RuntimeReasonManualKillRequested {
-		t.Errorf("runtime reason = %v, want manual_kill_requested", l.Runtime.Reason)
-	}
-	if l.Detecting != nil {
-		t.Errorf("kill must clear detecting memory, got %+v", l.Detecting)
-	}
-	if got := domain.DeriveLegacyStatus(l); got != domain.StatusKilled {
-		t.Errorf("display = %v, want killed", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, store := newManager()
+			store.seed(sid, detectingLC())
+
+			if err := mgr.OnKillRequested(context.Background(), sid, ports.KillReason{Kind: tt.kind, Detail: "x"}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+
+			l := mustLoad(t, store)
+			if l.Session.State != domain.SessionTerminated || l.Session.Reason != tt.wantReason {
+				t.Errorf("session = %v/%v, want terminated/%v", l.Session.State, l.Session.Reason, tt.wantReason)
+			}
+			if l.Runtime.Reason != tt.wantRuntime {
+				t.Errorf("runtime reason = %v, want %v", l.Runtime.Reason, tt.wantRuntime)
+			}
+			if l.Detecting != nil {
+				t.Errorf("kill must clear detecting memory, got %+v", l.Detecting)
+			}
+			if got := domain.DeriveLegacyStatus(l); got != tt.wantDisplay {
+				t.Errorf("display = %v, want %v", got, tt.wantDisplay)
+			}
+		})
 	}
 }
 

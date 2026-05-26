@@ -121,8 +121,13 @@ func activityToSession(a domain.ActivityState) (domain.SessionState, domain.Sess
 	switch a {
 	case domain.ActivityActive:
 		return domain.SessionWorking, domain.ReasonTaskInProgress, true
-	case domain.ActivityReady, domain.ActivityIdle:
+	case domain.ActivityReady:
+		// ready = the agent finished a unit and is waiting for more work.
 		return domain.SessionIdle, domain.ReasonResearchComplete, true
+	case domain.ActivityIdle:
+		// plain inactivity carries no completion claim, so no specific reason
+		// (research_complete here would read misleadingly in diagnostics).
+		return domain.SessionIdle, "", true
 	case domain.ActivityWaitingInput:
 		return domain.SessionNeedsInput, domain.ReasonAwaitingUserInput, true
 	case domain.ActivityBlocked:
@@ -175,11 +180,19 @@ func shouldWriteSessionRuntime(d decide.LifecycleDecision, cur domain.CanonicalS
 }
 
 // shouldWriteSessionActivity is the mirror rule for ApplyActivitySignal: the
-// activity axis owns working/idle/waiting, but it must not touch the death axis.
-// It writes unless the session is terminal or currently liveness-owned (let the
-// probe pipeline resolve detecting / death-inferred states instead).
+// activity axis owns working/idle/waiting. A valid activity signal is direct
+// proof of life, so it is allowed to RESOLVE a detecting session (pull it out of
+// the liveness quarantine) — but it must not resurrect a terminal session, and
+// it leaves a liveness-escalated stuck state to the probe pipeline (stuck is a
+// deliberate human-facing escalation, not a transient quarantine).
 func shouldWriteSessionActivity(cur domain.CanonicalSessionLifecycle) bool {
-	return !isTerminal(cur.Session.State) && !isLivenessOwned(cur.Session)
+	if isTerminal(cur.Session.State) {
+		return false
+	}
+	if cur.Session.State == domain.SessionDetecting {
+		return true
+	}
+	return !isLivenessOwned(cur.Session)
 }
 
 // ---- explicit-kill mapping (SM's terminal-write authority) ----

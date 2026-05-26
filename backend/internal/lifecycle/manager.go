@@ -181,6 +181,11 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 			d := decide.ResolveTerminalPRStateDecision(f.PRState)
 			var patch ports.LifecyclePatch
 			changed := setPRIfChanged(&patch, cur, d, f)
+			// A merge/close is a milestone that ends the work, so it parks the
+			// session axis (idle / merged_waiting_decision) even over an
+			// activity-owned needs_input/blocked — unlike the open-PR path,
+			// which leaves the session axis to activity. A terminal session is
+			// still never reopened.
 			if !isTerminal(cur.Session.State) {
 				changed = setSessionIfChanged(&patch, cur, d.SessionState, d.SessionReason) || changed
 			}
@@ -195,8 +200,9 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 // ApplyActivitySignal updates the activity axis. Only a valid-confidence signal
 // is authoritative (stale/unavailable/probe_failure != idleness). It refreshes
 // the persisted activity sub-state (the probe decider's RecentActivity input)
-// and maps the classification onto the session axis, subject to the mirror
-// composition rule that keeps activity off the death axis.
+// and maps the classification onto the session axis. A valid signal is proof of
+// life, so it may resolve a detecting session — clearing the quarantine memory
+// so a later probe doesn't resume counting from a stale prior.
 func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
 	return m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
 		if !exists || s.State != ports.SignalValid {
@@ -213,6 +219,13 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 		}
 		if st, rs, ok := activityToSession(s.Activity); ok && shouldWriteSessionActivity(cur) {
 			changed = setSessionIfChanged(&patch, cur, st, rs) || changed
+			// Proof of life that pulls the session out of detecting must also
+			// drop the quarantine memory (detecting memory only exists while
+			// detecting, so this is a no-op otherwise).
+			if cur.Detecting != nil {
+				patch.ClearDetecting = true
+				changed = true
+			}
 		}
 
 		return patch, changed, nil
