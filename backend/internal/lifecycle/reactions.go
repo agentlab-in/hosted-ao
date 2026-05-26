@@ -99,6 +99,10 @@ var defaultReactions = map[reactionKey]reactionConfig{
 		eventType: "reaction.approved-and-green",
 	},
 	reactionAgentStuck: {
+		// §4.2 lists a threshold: 10m here; it is intentionally not gated — entry
+		// into stuck is already debounced upstream by the detecting->stuck
+		// quarantine (DETECTING_MAX_ATTEMPTS/DURATION), so a second timer would be
+		// redundant.
 		action: actionNotify, priority: ports.PriorityUrgent,
 		message:   "Agent is stuck and needs attention.",
 		eventType: "reaction.agent-stuck",
@@ -187,6 +191,15 @@ type reactionTracker struct {
 // the reaction we left, then dispatch the reaction for the one we entered. It
 // fires only on a genuine reaction change, so re-persisting the same state does
 // not re-dispatch. Synchronous by design (see file header).
+//
+// Integration-time caveat: react runs AFTER withLock releases (deliberately, so
+// a busy-waiting send-to-agent never holds the per-session mutex). Under a live
+// daemon with concurrent observers (SCM poller + reaper + activity ingest) the
+// afterLC snapshot can be stale by dispatch time — e.g. a ci-failed send firing
+// after the session already moved to approved. Tests are single-threaded so it
+// is not observable yet; when the daemon lands, give react a per-session
+// ordering (a small react queue) or re-check the triggering state before
+// dispatching.
 func (m *Manager) react(ctx context.Context, id domain.SessionID, tr *transition, rc reactionContext) error {
 	if tr == nil {
 		return nil
@@ -196,23 +209,53 @@ func (m *Manager) react(ctx context.Context, id domain.SessionID, tr *transition
 
 	changed := beforeKey != afterKey
 
-	if hadBefore && (!hasAfter || changed) {
-		// A persistent tracker survives oscillation within an open PR; it only
-		// resets once the incident is over.
-		if !defaultReactions[beforeKey].persistent || incidentOver(tr.afterLC) {
+	switch {
+	case incidentOver(tr.afterLC) || recovered(tr.afterLC):
+		// The PR-pipeline incident has ended — the PR resolved (merged/closed),
+		// the session went terminal, or it reached an approved/green state. Every
+		// tracker for this session is now stale, including a persistent ci-failed
+		// one. This is keyed on the state REACHED, not the one left: the recovery
+		// transition is typically review_pending->approved (beforeKey empty), so
+		// clearing only beforeKey would leak the ci-failed tracker and leave its
+		// escalated=true to silence a future regression. Clear them all.
+		m.clearSessionTrackers(id)
+	case hadBefore && (!hasAfter || changed):
+		// Within an unresolved open PR: a normal tracker resets when its state is
+		// left. A persistent one (ci-failed) is NOT cleared here — it must survive
+		// the ambiguous review_pending limbo (the fail->pending->fail flap, §4.2);
+		// it only resets via the recovery/incident-over branch above.
+		if !defaultReactions[beforeKey].persistent {
 			m.clearTracker(id, beforeKey)
 		}
 	}
+
 	if hasAfter && (!hadBefore || changed) {
 		return m.executeReaction(ctx, id, afterKey, rc)
 	}
 	return nil
 }
 
-// incidentOver reports that a PR-pipeline incident has truly ended, so even a
-// persistent tracker (ci-failed) may reset.
+// incidentOver reports that a PR-pipeline incident has truly ended (PR no longer
+// open, or the session terminal), so all trackers for the session may reset.
 func incidentOver(l domain.CanonicalSessionLifecycle) bool {
 	return l.PR.State != domain.PROpen || isTerminal(l.Session.State)
+}
+
+// recovered reports a genuinely-green open PR: an approved/mergeable state, which
+// unambiguously means CI is no longer failing (the open-PR ladder ranks ci_failing
+// above approved, so an approved display cannot coexist with failing CI). Unlike
+// the ambiguous review_pending state — which may just be CI re-running — reaching
+// this ends a ci-failed incident and re-arms its budget.
+func recovered(l domain.CanonicalSessionLifecycle) bool {
+	if l.PR.State != domain.PROpen {
+		return false
+	}
+	switch l.PR.Reason {
+	case domain.PRReasonApproved, domain.PRReasonMergeReady:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) executeReaction(ctx context.Context, id domain.SessionID, key reactionKey, rc reactionContext) error {
@@ -309,6 +352,19 @@ func (m *Manager) trackerFor(id domain.SessionID, key reactionKey) *reactionTrac
 func (m *Manager) clearTracker(id domain.SessionID, key reactionKey) {
 	m.trackerMu.Lock()
 	delete(m.trackers, trackerKey{id: id, key: key})
+	m.trackerMu.Unlock()
+}
+
+// clearSessionTrackers drops every tracker for a session — used when its
+// incident is over, so no budget (and no stale escalated=true) survives into a
+// later unrelated incident.
+func (m *Manager) clearSessionTrackers(id domain.SessionID) {
+	m.trackerMu.Lock()
+	for k := range m.trackers {
+		if k.id == id {
+			delete(m.trackers, k)
+		}
+	}
 	m.trackerMu.Unlock()
 }
 

@@ -247,6 +247,68 @@ func TestReaction_NonPersistentTrackerClearsOnLeave(t *testing.T) {
 	}
 }
 
+func TestReaction_CIFailedRearmsOnGenuineRecovery(t *testing.T) {
+	m, store, notf, msgr := newReactive()
+	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
+
+	// Drain the ci-failed budget to escalation (silenced thereafter).
+	for i := 0; i < 4; i++ {
+		failCI(t, m)
+		pendingCI(t, m)
+	}
+	if notifyCount(notf, "reaction.escalated") != 1 {
+		t.Fatalf("precondition: want one escalation, got %d", notifyCount(notf, "reaction.escalated"))
+	}
+	sentBefore := len(msgr.sent)
+
+	// A genuine recovery (approved + green) ends the incident and re-arms the
+	// budget; a later regression must re-nudge the agent, not stay silenced.
+	if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+		Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewApproved,
+		Mergeability: ports.Mergeability{Mergeable: true}, PRNumber: 7,
+	}); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	failCI(t, m)
+
+	if len(msgr.sent) != sentBefore+1 {
+		t.Errorf("regression after recovery must re-nudge the agent: sends %d -> %d", sentBefore, len(msgr.sent))
+	}
+}
+
+func TestReaction_IncidentOverClearsAllSessionTrackers(t *testing.T) {
+	m, store, _, _ := newReactive()
+	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
+
+	failCI(t, m) // creates a persistent ci-failed tracker
+	if sessionTrackerCount(m, sid) == 0 {
+		t.Fatalf("precondition: expected a ci-failed tracker")
+	}
+
+	// Merging ends the incident; no tracker (and no stale escalated=true) may
+	// survive for the session.
+	if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+		Fetched: true, PRState: domain.PRMerged, PRNumber: 7,
+	}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if n := sessionTrackerCount(m, sid); n != 0 {
+		t.Errorf("incident over must clear all trackers, %d left", n)
+	}
+}
+
+func sessionTrackerCount(m *Manager, id domain.SessionID) int {
+	m.trackerMu.Lock()
+	defer m.trackerMu.Unlock()
+	c := 0
+	for k := range m.trackers {
+		if k.id == id {
+			c++
+		}
+	}
+	return c
+}
+
 // ---- TickEscalations never writes canonical state ----
 
 func TestTickEscalations_DoesNotPersist(t *testing.T) {
