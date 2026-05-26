@@ -123,6 +123,25 @@ func TestApplyRuntimeObservation_NoRecordIsNoOp(t *testing.T) {
 	}
 }
 
+func TestApplyRuntimeObservation_DoesNotResurrectTerminal(t *testing.T) {
+	mgr, store := newManager()
+	store.seed(sid, lc(domain.SessionTerminated, domain.ReasonManuallyKilled, domain.RuntimeExited))
+
+	// A failed probe would normally route to detecting, but a terminal session
+	// must not be reopened by an observation (only an explicit Restore does).
+	if err := mgr.ApplyRuntimeObservation(context.Background(), sid, ports.RuntimeFacts{RuntimeState: ports.RuntimeProbeFailed, ProcessState: ports.ProcessProbeAlive, ObservedAt: t0}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	l := mustLoad(t, store)
+	if l.Session.State != domain.SessionTerminated || l.Session.Reason != domain.ReasonManuallyKilled {
+		t.Errorf("session = %v/%v, want terminated/manually_killed (no resurrection)", l.Session.State, l.Session.Reason)
+	}
+	if l.Detecting != nil {
+		t.Errorf("terminal session must not gain detecting memory, got %+v", l.Detecting)
+	}
+}
+
 // ---- ApplyActivitySignal ----
 
 func TestApplyActivitySignal(t *testing.T) {
@@ -311,6 +330,27 @@ func TestOnKillRequested(t *testing.T) {
 	}
 	if got := domain.DeriveLegacyStatus(l); got != domain.StatusKilled {
 		t.Errorf("display = %v, want killed", got)
+	}
+}
+
+func TestOnSpawnCompleted_UnseededErrors(t *testing.T) {
+	mgr, store := newManager()
+	err := mgr.OnSpawnCompleted(context.Background(), sid, ports.SpawnOutcome{Branch: "x"})
+	if err == nil {
+		t.Error("OnSpawnCompleted for an unseeded session must error, not fabricate a record")
+	}
+	if _, ok, _ := store.Load(context.Background(), sid); ok {
+		t.Error("no record should have been created")
+	}
+}
+
+func TestOnKillRequested_UnseededIsNoOp(t *testing.T) {
+	mgr, store := newManager()
+	if err := mgr.OnKillRequested(context.Background(), sid, ports.KillReason{Kind: ports.KillManual}); err != nil {
+		t.Fatalf("kill of unknown session should be a benign no-op, got %v", err)
+	}
+	if _, ok, _ := store.Load(context.Background(), sid); ok {
+		t.Error("killing an unknown session must not fabricate a terminal record")
 	}
 }
 

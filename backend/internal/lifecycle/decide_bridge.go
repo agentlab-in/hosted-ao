@@ -71,8 +71,12 @@ func runtimeSubstateFromFacts(f ports.RuntimeFacts) domain.RuntimeSubstate {
 		return domain.RuntimeSubstate{State: domain.RuntimeExited, Reason: domain.RuntimeReasonTmuxMissing}
 	case ports.RuntimeProbeFailed:
 		return domain.RuntimeSubstate{State: domain.RuntimeProbeFailed, Reason: domain.RuntimeReasonProbeError}
-	default:
-		return domain.RuntimeSubstate{State: domain.RuntimeUnknown, Reason: domain.RuntimeReasonProbeError}
+	case ports.RuntimeProbeIndeterminate:
+		// Probe ran but couldn't tell — distinct from a probe error, so no
+		// probe_error reason; the ambiguity is carried by RuntimeUnknown alone.
+		return domain.RuntimeSubstate{State: domain.RuntimeUnknown}
+	default: // unset
+		return domain.RuntimeSubstate{State: domain.RuntimeUnknown}
 	}
 }
 
@@ -158,8 +162,14 @@ func isLivenessOwned(s domain.SessionSubstate) bool {
 // (e.g. detecting -> working); it must NOT clobber an activity-owned
 // needs_input/blocked/idle the activity axis is responsible for.
 func shouldWriteSessionRuntime(d decide.LifecycleDecision, cur domain.CanonicalSessionLifecycle) bool {
+	if isTerminal(cur.Session.State) {
+		// A terminal session is only reopened by an explicit Restore — never by
+		// an observation. Even a death-axis verdict (e.g. detecting) must not
+		// resurrect it; the runtime axis is still patched separately.
+		return false
+	}
 	if d.SessionState == domain.SessionWorking {
-		return !isTerminal(cur.Session.State) && isLivenessOwned(cur.Session)
+		return isLivenessOwned(cur.Session)
 	}
 	return true
 }

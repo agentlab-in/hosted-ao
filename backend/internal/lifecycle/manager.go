@@ -11,6 +11,7 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -54,25 +55,43 @@ func New(store ports.LifecycleStore, notifier ports.Notifier, messenger ports.Ag
 
 // keyedMutex hands out one lock per session id so the load->decide->persist
 // read-modify-write is serial within a session but parallel across sessions.
+//
+// Entries are reference-counted and evicted when the last holder releases, so
+// the map stays bounded to sessions with in-flight operations rather than
+// growing unbounded over the lifetime of a long-running daemon.
 type keyedMutex struct {
 	mu    sync.Mutex
-	locks map[domain.SessionID]*sync.Mutex
+	locks map[domain.SessionID]*lockEntry
+}
+
+type lockEntry struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func (k *keyedMutex) lock(id domain.SessionID) func() {
 	k.mu.Lock()
 	if k.locks == nil {
-		k.locks = make(map[domain.SessionID]*sync.Mutex)
+		k.locks = make(map[domain.SessionID]*lockEntry)
 	}
-	m, ok := k.locks[id]
+	e, ok := k.locks[id]
 	if !ok {
-		m = &sync.Mutex{}
-		k.locks[id] = m
+		e = &lockEntry{}
+		k.locks[id] = e
 	}
+	e.refs++
 	k.mu.Unlock()
 
-	m.Lock()
-	return m.Unlock
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		k.mu.Lock()
+		e.refs--
+		if e.refs == 0 {
+			delete(k.locks, id)
+		}
+		k.mu.Unlock()
+	}
 }
 
 func (m *Manager) withLock(id domain.SessionID, fn func() error) error {
@@ -127,10 +146,15 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 			patch.Runtime = &rt
 			changed = true
 		}
-		if shouldWriteSessionRuntime(d, cur) {
-			changed = setSessionIfChanged(&patch, cur, d.SessionState, d.SessionReason) || changed
+		// A terminal session is reopened only by an explicit Restore: an
+		// observation may refresh the runtime axis above but must touch neither
+		// the session axis nor the detecting memory.
+		if !isTerminal(cur.Session.State) {
+			if shouldWriteSessionRuntime(d, cur) {
+				changed = setSessionIfChanged(&patch, cur, d.SessionState, d.SessionReason) || changed
+			}
+			changed = setDetecting(&patch, cur, d.Detecting) || changed
 		}
-		changed = setDetecting(&patch, cur, d.Detecting) || changed
 
 		return patch, changed, nil
 	})
@@ -203,9 +227,15 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 // (display: spawning) — the agent "acknowledges" via the first activity signal.
 func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o ports.SpawnOutcome) error {
 	return m.withLock(id, func() error {
-		cur, _, err := m.store.Load(ctx, id)
+		cur, exists, err := m.store.Load(ctx, id)
 		if err != nil {
 			return err
+		}
+		if !exists {
+			// The SM seeds the initial lifecycle before spawning; a completion
+			// for an unseeded session is a contract violation, not a stray
+			// observation, so surface it rather than fabricating a record.
+			return fmt.Errorf("lifecycle: OnSpawnCompleted for unseeded session %q", id)
 		}
 		rt := domain.RuntimeSubstate{State: domain.RuntimeAlive, Reason: domain.RuntimeReasonProcessRunning}
 		if cur.Runtime != rt {
@@ -228,6 +258,13 @@ func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o p
 // in-flight detecting memory.
 func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r ports.KillReason) error {
 	return m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
+		if !exists {
+			// Killing an unknown/already-gone session is a benign race; no-op
+			// rather than fabricating a terminal record for a session we never
+			// knew about.
+			return ports.LifecyclePatch{}, false, nil
+		}
+
 		var patch ports.LifecyclePatch
 		changed := false
 
