@@ -1,0 +1,123 @@
+package ports
+
+import (
+	"context"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+// LifecycleStore is Tom's persistence layer, the ONLY disk writer. It owns
+// merge-patch, atomic write, file lock, and CDC eventing. The LCM and SM only
+// ever touch state through this narrow interface.
+type LifecycleStore interface {
+	Load(ctx context.Context, id domain.SessionID) (domain.CanonicalSessionLifecycle, bool, error)
+	PatchLifecycle(ctx context.Context, id domain.SessionID, patch LifecyclePatch) error
+	List(ctx context.Context, project domain.ProjectID) ([]domain.Session, error)
+	GetMetadata(ctx context.Context, id domain.SessionID) (map[string]string, error)
+	PatchMetadata(ctx context.Context, id domain.SessionID, kv map[string]string) error
+}
+
+// LifecyclePatch is a sparse merge-patch: a nil field is left untouched, a
+// non-nil field is written. Detecting needs three-way semantics (leave / set /
+// clear-to-nil) which a single pointer can't express, so ClearDetecting handles
+// the clear case explicitly.
+//
+// ExpectedVersion supports optimistic concurrency: when non-nil the store must
+// reject the patch if the stored Version differs. (Open for Tom to confirm vs.
+// the LCM owning all serialisation itself.)
+type LifecyclePatch struct {
+	Session         *domain.SessionSubstate
+	PR              *domain.PRSubstate
+	Runtime         *domain.RuntimeSubstate
+	Activity        *domain.ActivitySubstate
+	Detecting       *domain.DetectingState
+	ClearDetecting  bool
+	ExpectedVersion *int
+}
+
+// Notifier delivers events to the human (desktop/Slack later). Push, never pull.
+type Notifier interface {
+	Notify(ctx context.Context, event OrchestratorEvent) error
+}
+
+type EventPriority string
+
+const (
+	PriorityUrgent  EventPriority = "urgent"
+	PriorityAction  EventPriority = "action"
+	PriorityWarning EventPriority = "warning"
+	PriorityInfo    EventPriority = "info"
+)
+
+type OrchestratorEvent struct {
+	Type      string
+	Priority  EventPriority
+	SessionID domain.SessionID
+	ProjectID domain.ProjectID
+	Message   string
+	Data      map[string]any
+}
+
+// AgentMessenger injects a message into a running agent. The implementation
+// busy-detects (waits for the agent to be idle/ready) and verifies delivery,
+// which is why activity-detection accuracy matters.
+type AgentMessenger interface {
+	Send(ctx context.Context, id domain.SessionID, message string) error
+}
+
+// The runtime/agent/workspace plugin ports are co-owned with the coding-agents
+// lane; the method sets below are the minimum the Session Manager spawn/kill
+// pipelines call. They will be fleshed out alongside the tmux/claude-code impls.
+
+type Runtime interface {
+	Create(ctx context.Context, cfg RuntimeConfig) (RuntimeHandle, error)
+	Destroy(ctx context.Context, handle RuntimeHandle) error
+	SendMessage(ctx context.Context, handle RuntimeHandle, message string) error
+	GetOutput(ctx context.Context, handle RuntimeHandle, lines int) (string, error)
+	IsAlive(ctx context.Context, handle RuntimeHandle) (bool, error)
+}
+
+type RuntimeConfig struct {
+	SessionID     domain.SessionID
+	WorkspacePath string
+	LaunchCommand string
+	Env           map[string]string
+}
+
+type RuntimeHandle struct {
+	ID          string
+	RuntimeName string
+}
+
+type Agent interface {
+	GetLaunchCommand(cfg AgentConfig) string
+	GetEnvironment(cfg AgentConfig) map[string]string
+	IsProcessRunning(ctx context.Context, handle RuntimeHandle) (domain.ActivityState, error)
+	GetRestoreCommand(agentSessionID string) string
+}
+
+type AgentConfig struct {
+	SessionID     domain.SessionID
+	WorkspacePath string
+	Prompt        string
+}
+
+type Workspace interface {
+	Create(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)
+	Destroy(ctx context.Context, info WorkspaceInfo) error
+	List(ctx context.Context, project domain.ProjectID) ([]WorkspaceInfo, error)
+	Restore(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)
+}
+
+type WorkspaceConfig struct {
+	ProjectID domain.ProjectID
+	SessionID domain.SessionID
+	Branch    string
+}
+
+type WorkspaceInfo struct {
+	Path      string
+	Branch    string
+	SessionID domain.SessionID
+	ProjectID domain.ProjectID
+}
