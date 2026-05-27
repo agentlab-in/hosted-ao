@@ -90,6 +90,7 @@ type PRState string
 
 const (
 	PRNone   PRState = "none"
+	PRDraft  PRState = "draft"
 	PROpen   PRState = "open"
 	PRMerged PRState = "merged"
 	PRClosed PRState = "closed"

@@ -196,9 +196,9 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 }
 
 // ApplySCMObservation maps PR facts onto the PR axis. A failed fetch is dropped
-// (failed probe != "no PR"). An open PR writes only the PR sub-state — the
-// session axis stays owned by activity, and DeriveLegacyStatus surfaces the PR
-// reason for display. A terminal PR (merged/closed) also parks the session.
+// (failed probe != "no PR"). An open or draft PR writes only the PR sub-state —
+// the session axis stays owned by activity, and DeriveLegacyStatus surfaces the
+// PR reason for display. A terminal PR (merged/closed) also parks the session.
 func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, f ports.SCMFacts) error {
 	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
 		if !exists || !f.Fetched {
@@ -206,6 +206,14 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 		}
 
 		switch f.PRState {
+		case domain.PRDraft:
+			in := openPRInput(f)
+			in.Draft = true
+			d := decide.ResolveOpenPRDecision(in)
+			var patch ports.LifecyclePatch
+			changed := setPRIfChanged(&patch, cur, d, f)
+			return patch, changed, nil
+
 		case domain.PROpen:
 			d := decide.ResolveOpenPRDecision(openPRInput(f))
 			var patch ports.LifecyclePatch
