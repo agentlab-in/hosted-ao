@@ -12,12 +12,30 @@ import (
 //
 // List returns persistence records (no derived status); the Session Manager
 // turns those into domain.Session by attaching the derived display status.
+//
+// Seed and Get are the two record-with-identity methods the Session Manager
+// needs that the LCM does not: Load returns lifecycle only (all the decider
+// needs), so the SM read-model and explicit-create path would otherwise have no
+// way to write or read a record's identity (ID/ProjectID/IssueID/Kind/CreatedAt)
+// by id. (Co-owned with Tom's persistence layer — added here to close that gap.)
 type LifecycleStore interface {
 	Load(ctx context.Context, id domain.SessionID) (domain.CanonicalSessionLifecycle, bool, error)
 	PatchLifecycle(ctx context.Context, id domain.SessionID, patch LifecyclePatch) error
 	List(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	GetMetadata(ctx context.Context, id domain.SessionID) (map[string]string, error)
 	PatchMetadata(ctx context.Context, id domain.SessionID, kv map[string]string) error
+
+	// Seed creates a new record with its identity and initial lifecycle. It is
+	// the SM's explicit-create path (the LCM only ever patches existing records);
+	// OnSpawnCompleted requires a seeded record, so Spawn calls this first. It
+	// must reject a seed for an id that already exists rather than overwrite —
+	// re-seeding an existing session (e.g. Restore) goes through PatchLifecycle.
+	Seed(ctx context.Context, rec domain.SessionRecord) error
+
+	// Get returns a single full record (with identity) by id. Load is
+	// lifecycle-only, so the SM uses this to build the read-model and to
+	// reconstruct teardown handles for Kill/Restore on one id.
+	Get(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
 // LifecyclePatch is a sparse merge-patch: a nil field is left untouched, a

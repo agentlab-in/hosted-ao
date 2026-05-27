@@ -90,6 +90,30 @@ func (s *fakeStore) PatchLifecycle(_ context.Context, id domain.SessionID, p por
 	return nil
 }
 
+func (s *fakeStore) Seed(_ context.Context, rec domain.SessionRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[rec.ID]; ok {
+		return fmt.Errorf("seed: session %s already exists", rec.ID)
+	}
+	if rec.Lifecycle.Version == 0 {
+		rec.Lifecycle.Version = domain.LifecycleVersion
+	}
+	r := rec
+	s.records[rec.ID] = &r
+	return nil
+}
+
+func (s *fakeStore) Get(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[id]
+	if !ok {
+		return domain.SessionRecord{}, false, nil
+	}
+	return *rec, true, nil
+}
+
 func (s *fakeStore) List(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
