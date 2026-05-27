@@ -22,9 +22,8 @@ const LifecycleVersion = 1
 type CanonicalSessionLifecycle struct {
 	// Version is the schema version of this record's shape (LifecycleVersion).
 	Version int `json:"version"`
-	// Revision is a monotonic counter the store bumps on every write. It is used
-	// for optimistic-concurrency checks (LifecyclePatch.ExpectedRevision) and is
-	// distinct from the schema Version above.
+	// Revision is a monotonic counter the LCM bumps on every full-row Upsert and
+	// is distinct from the schema Version above.
 	Revision int             `json:"revision"`
 	Session  SessionSubstate `json:"session"`
 	PR       PRSubstate      `json:"pr"`

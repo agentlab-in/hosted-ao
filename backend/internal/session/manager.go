@@ -1,11 +1,10 @@
 // Package session implements ports.SessionManager: the explicit-mutation half
 // of the lane. The SM is impure plumbing — it drives the Runtime/Agent/Workspace
-// plugins to create and tear down sessions, seeds the initial lifecycle record,
-// and routes mutation outcomes to the LCM (OnSpawnCompleted / OnKillRequested).
+// plugins to create and tear down sessions, and routes mutation commands and
+// outcomes to the LCM (OnSpawnInitiated / OnSpawnCompleted / OnKillRequested).
 //
-// It NEVER derives or observes lifecycle state: observed transitions are the
-// LCM's job. The SM's only canonical writes are the explicit ones — seeding a
-// new record on Spawn and re-seeding (reopening) on Restore — and it is the
+// It NEVER writes sessions directly: observed transitions and explicit
+// canonical mutations are the LCM's job under the Writer contract. The SM is the
 // single producer of the derived display status, attached on read in List/Get
 // and never persisted.
 package session
@@ -96,8 +95,8 @@ func New(d Deps) *Manager {
 
 // ---- Spawn ----
 
-// Spawn runs the create pipeline in spec order: workspace -> runtime -> seed ->
-// report to the LCM. The record is seeded LATE (after the runtime is up), so a
+// Spawn runs the create pipeline in spec order: workspace -> runtime -> route
+// seed command to the LCM -> report completion to the LCM. The record is seeded LATE (after the runtime is up), so a
 // failure before the seed leaves no record for Cleanup to reclaim — hence each
 // step eagerly rolls back the steps that already succeeded.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, error) {
@@ -124,10 +123,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.Session{}, fmt.Errorf("spawn %s: runtime create: %w", id, err)
 	}
 
-	if err := m.store.Seed(ctx, seedRecord(id, cfg, m.clock())); err != nil {
+	if err := m.lcm.OnSpawnInitiated(ctx, seedRecord(id, cfg, m.clock())); err != nil {
 		m.rollbackRuntime(ctx, handle)
 		m.rollbackWorkspace(ctx, ws)
-		return domain.Session{}, fmt.Errorf("spawn %s: seed: %w", id, err)
+		return domain.Session{}, fmt.Errorf("spawn %s: on spawn initiated: %w", id, err)
 	}
 
 	outcome := ports.SpawnOutcome{Branch: ws.Branch, WorkspacePath: ws.Path, RuntimeHandle: handle}
@@ -245,7 +244,7 @@ func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string)
 // fallible I/O (workspace restore + runtime create) runs first so a failure
 // touches no canonical state and never destroys the worktree (it may hold the
 // agent's prior work). Only once the runtime is up do we reopen the lifecycle:
-// resetting a terminal session is an explicit mutation (the SM's authority; the
+// resetting a terminal session is an explicit mutation routed to the LCM (the
 // LCM's observe path would never resurrect a terminal session), and the PR axis
 // is cleared. OnSpawnCompleted then flips the runtime to alive.
 func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Session, error) {
@@ -298,13 +297,14 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	// Past this point the runtime is live: a failure must tear it back down (but
 	// never the workspace, which holds the agent's prior work) so we don't strand
 	// a process while parking the session in a terminal lifecycle.
-	reopen := ports.LifecyclePatch{
-		Session: &domain.SessionSubstate{State: domain.SessionNotStarted, Reason: domain.ReasonSpawnRequested},
-		PR:      &domain.PRSubstate{State: domain.PRNone, Reason: domain.PRReasonClearedOnRestore},
-	}
-	if err := m.store.PatchLifecycle(ctx, id, reopen); err != nil {
+	reopen := rec
+	reopen.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionNotStarted, Reason: domain.ReasonSpawnRequested}
+	reopen.Lifecycle.PR = domain.PRSubstate{State: domain.PRNone, Reason: domain.PRReasonClearedOnRestore}
+	reopen.Lifecycle.Runtime = domain.RuntimeSubstate{State: domain.RuntimeUnknown, Reason: domain.RuntimeReasonSpawnIncomplete}
+	reopen.Lifecycle.Detecting = nil
+	if err := m.lcm.OnSpawnInitiated(ctx, reopen); err != nil {
 		m.rollbackRuntime(ctx, handle)
-		return domain.Session{}, fmt.Errorf("restore %s: reopen: %w", id, err)
+		return domain.Session{}, fmt.Errorf("restore %s: on spawn initiated: %w", id, err)
 	}
 
 	outcome := ports.SpawnOutcome{

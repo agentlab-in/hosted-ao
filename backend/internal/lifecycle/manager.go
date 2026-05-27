@@ -1,12 +1,12 @@
 // Package lifecycle implements ports.LifecycleManager: the synchronous
 // observe->decide->persist reducer. Every Apply*/On* entrypoint runs the same
-// pipeline under a per-session lock — load canonical, run the matching pure
-// decider, diff the result into a sparse merge-patch, persist. The LCM never
+// pipeline under a per-session lock — load the full canonical record, run the
+// matching pure decider, diff into a full-row Upsert, persist. The LCM never
 // polls and never writes the display status (that is derived on read).
 //
 // After a transition is persisted, the Apply* paths fire the mapped reaction
 // (the ACT layer: reaction table + escalation engine) via the react() chokepoint
-// in reactions.go. The Session Manager lands in a later split.
+// in reactions.go.
 package lifecycle
 
 import (
@@ -111,16 +111,16 @@ func (m *Manager) withLock(id domain.SessionID, fn func() error) error {
 }
 
 // transition is what a persisted write produced: the canonical before and after
-// the patch. The ACT layer (react) derives the reaction from these. It is nil
-// when the pipeline made no write.
+// the full-row upsert. The ACT layer (react) derives the reaction from these. It
+// is nil when the pipeline made no write.
 type transition struct {
 	beforeLC domain.CanonicalSessionLifecycle
 	afterLC  domain.CanonicalSessionLifecycle
 }
 
-// mutate runs the shared pipeline: load -> build patch -> persist (only if the
-// patch changed something). decideFn returns the diffed patch and whether it
-// touches anything; a false "changed" is a clean no-op (no write, no revision
+// mutate runs the shared pipeline: load full row -> build next canonical ->
+// Upsert full row (only if changed). decideFn returns the full next lifecycle
+// and whether it changed anything; false is a clean no-op (no write, no revision
 // bump), which is how failed-probe / unknown-fact inputs are dropped.
 //
 // On a write it returns the transition (before/after canonical) so the caller —
@@ -128,32 +128,37 @@ type transition struct {
 func (m *Manager) mutate(
 	ctx context.Context,
 	id domain.SessionID,
-	decideFn func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error),
+	decideFn func(cur domain.CanonicalSessionLifecycle, exists bool) (domain.CanonicalSessionLifecycle, bool, error),
 ) (*transition, error) {
 	var tr *transition
 	err := m.withLock(id, func() error {
-		cur, exists, err := m.store.Load(ctx, id)
+		rec, exists, err := m.store.Get(ctx, id)
 		if err != nil {
 			return err
 		}
-		patch, changed, err := decideFn(cur, exists)
+		cur := rec.Lifecycle
+		next, changed, err := decideFn(cur, exists)
 		if err != nil {
 			return err
 		}
 		if !changed {
 			return nil
 		}
-		if err := m.store.PatchLifecycle(ctx, id, patch); err != nil {
+		rec.Lifecycle = m.prepareLifecycleWrite(cur, next)
+		rec.UpdatedAt = m.clock()
+		if err := m.store.Upsert(ctx, rec); err != nil {
 			return err
 		}
-		after, _, err := m.store.Load(ctx, id)
-		if err != nil {
-			return err
-		}
-		tr = &transition{beforeLC: cur, afterLC: after}
+		tr = &transition{beforeLC: cur, afterLC: rec.Lifecycle}
 		return nil
 	})
 	return tr, err
+}
+
+func (m *Manager) prepareLifecycleWrite(cur, next domain.CanonicalSessionLifecycle) domain.CanonicalSessionLifecycle {
+	next.Version = domain.LifecycleVersion
+	next.Revision = cur.Revision + 1
+	return next
 }
 
 // ---- OBSERVE entrypoints ----
@@ -163,18 +168,18 @@ func (m *Manager) mutate(
 // non-detecting verdict clears any stale detecting memory (#3) so the next
 // probe doesn't read a phantom prior.
 func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.SessionID, f ports.RuntimeFacts) error {
-	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
+	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (domain.CanonicalSessionLifecycle, bool, error) {
 		if !exists {
-			return ports.LifecyclePatch{}, false, nil // nothing seeded; ignore stray probe
+			return cur, false, nil // nothing seeded; ignore stray probe
 		}
 
 		d := decide.ResolveProbeDecision(runtimeFactsToProbeInput(f, cur, m.recentActivityWindow))
 
-		var patch ports.LifecyclePatch
+		next := cur
 		changed := false
 
 		if rt := runtimeSubstateFromFacts(f); cur.Runtime != rt {
-			patch.Runtime = &rt
+			next.Runtime = rt
 			changed = true
 		}
 		// A terminal session is reopened only by an explicit Restore: an
@@ -182,12 +187,12 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		// the session axis nor the detecting memory.
 		if !isTerminal(cur.Session.State) {
 			if shouldWriteSessionRuntime(d, cur) {
-				changed = setSessionIfChanged(&patch, cur, d.SessionState, d.SessionReason) || changed
+				changed = setSessionIfChanged(&next, d.SessionState, d.SessionReason) || changed
 			}
-			changed = setDetecting(&patch, cur, d.Detecting) || changed
+			changed = setDetecting(&next, d.Detecting) || changed
 		}
 
-		return patch, changed, nil
+		return next, changed, nil
 	})
 	if err != nil {
 		return err
@@ -200,34 +205,34 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 // the session axis stays owned by activity, and DeriveLegacyStatus surfaces the
 // PR reason for display. A terminal PR (merged/closed) also parks the session.
 func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, f ports.SCMFacts) error {
-	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
+	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (domain.CanonicalSessionLifecycle, bool, error) {
 		if !exists || !f.Fetched {
-			return ports.LifecyclePatch{}, false, nil
+			return cur, false, nil
 		}
 
 		switch f.PRState {
 		case domain.PRDraft, domain.PROpen:
 			d := decide.ResolveOpenPRDecision(openPRInput(f))
-			var patch ports.LifecyclePatch
-			changed := setPRIfChanged(&patch, cur, d, f)
-			return patch, changed, nil
+			next := cur
+			changed := setPRIfChanged(&next, d, f)
+			return next, changed, nil
 
 		case domain.PRMerged, domain.PRClosed:
 			d := decide.ResolveTerminalPRStateDecision(f.PRState)
-			var patch ports.LifecyclePatch
-			changed := setPRIfChanged(&patch, cur, d, f)
+			next := cur
+			changed := setPRIfChanged(&next, d, f)
 			// A merge/close is a milestone that ends the work, so it parks the
 			// session axis (idle / merged_waiting_decision) even over an
 			// activity-owned needs_input/blocked — unlike the open-PR path,
 			// which leaves the session axis to activity. A terminal session is
 			// still never reopened.
 			if !isTerminal(cur.Session.State) {
-				changed = setSessionIfChanged(&patch, cur, d.SessionState, d.SessionReason) || changed
+				changed = setSessionIfChanged(&next, d.SessionState, d.SessionReason) || changed
 			}
-			return patch, changed, nil
+			return next, changed, nil
 
 		default: // none / unset: no PR-driven transition in split A
-			return ports.LifecyclePatch{}, false, nil
+			return cur, false, nil
 		}
 	})
 	if err != nil {
@@ -243,31 +248,31 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 // life, so it may resolve a detecting session — clearing the quarantine memory
 // so a later probe doesn't resume counting from a stale prior.
 func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
-	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
+	tr, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (domain.CanonicalSessionLifecycle, bool, error) {
 		if !exists || s.State != ports.SignalValid {
-			return ports.LifecyclePatch{}, false, nil
+			return cur, false, nil
 		}
 
-		var patch ports.LifecyclePatch
+		next := cur
 		changed := false
 
 		act := domain.ActivitySubstate{State: s.Activity, LastActivityAt: nowOr(s.Timestamp), Source: s.Source}
 		if !sameActivity(cur.Activity, act) {
-			patch.Activity = &act
+			next.Activity = act
 			changed = true
 		}
 		if st, rs, ok := activityToSession(s.Activity); ok && shouldWriteSessionActivity(cur) {
-			changed = setSessionIfChanged(&patch, cur, st, rs) || changed
+			changed = setSessionIfChanged(&next, st, rs) || changed
 			// Proof of life that pulls the session out of detecting must also
 			// drop the quarantine memory (detecting memory only exists while
 			// detecting, so this is a no-op otherwise).
 			if cur.Detecting != nil {
-				patch.ClearDetecting = true
+				next.Detecting = nil
 				changed = true
 			}
 		}
 
-		return patch, changed, nil
+		return next, changed, nil
 	})
 	if err != nil {
 		return err
@@ -275,7 +280,24 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	return m.react(ctx, id, tr, reactionContext{})
 }
 
-// ---- mutation outcomes reported by the Session Manager ----
+// ---- mutation commands/outcomes reported by the Session Manager ----
+
+// OnSpawnInitiated seeds or reopens the full session record for a spawn-like
+// mutation. It is the Session Manager's create/reopen command under the Writer
+// contract: the SM builds the identity + initial canonical row, but only the LCM
+// writes it.
+func (m *Manager) OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord) error {
+	return m.withLock(rec.ID, func() error {
+		cur := rec.Lifecycle
+		rec.Lifecycle = m.prepareLifecycleWrite(cur, cur)
+		now := m.clock()
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = now
+		}
+		rec.UpdatedAt = now
+		return m.store.Upsert(ctx, rec)
+	})
+}
 
 // OnSpawnCompleted records that a spawn finished: the runtime is up and the
 // handles are known. Per the agreed rule it flips the runtime axis to alive and
@@ -283,7 +305,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 // (display: spawning) — the agent "acknowledges" via the first activity signal.
 func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o ports.SpawnOutcome) error {
 	return m.withLock(id, func() error {
-		cur, exists, err := m.store.Load(ctx, id)
+		rec, exists, err := m.store.Get(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -294,8 +316,13 @@ func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o p
 			return fmt.Errorf("lifecycle: OnSpawnCompleted for unseeded session %q", id)
 		}
 		rt := domain.RuntimeSubstate{State: domain.RuntimeAlive, Reason: domain.RuntimeReasonProcessRunning}
-		if cur.Runtime != rt {
-			if err := m.store.PatchLifecycle(ctx, id, ports.LifecyclePatch{Runtime: &rt}); err != nil {
+		if rec.Lifecycle.Runtime != rt {
+			cur := rec.Lifecycle
+			next := cur
+			next.Runtime = rt
+			rec.Lifecycle = m.prepareLifecycleWrite(cur, next)
+			rec.UpdatedAt = m.clock()
+			if err := m.store.Upsert(ctx, rec); err != nil {
 				return err
 			}
 		}
@@ -315,30 +342,30 @@ func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o p
 func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r ports.KillReason) error {
 	// An explicit user kill is a human action, not an inferred event, so it
 	// fires no reaction — the transition is discarded.
-	_, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (ports.LifecyclePatch, bool, error) {
+	_, err := m.mutate(ctx, id, func(cur domain.CanonicalSessionLifecycle, exists bool) (domain.CanonicalSessionLifecycle, bool, error) {
 		if !exists {
 			// Killing an unknown/already-gone session is a benign race; no-op
 			// rather than fabricating a terminal record for a session we never
 			// knew about.
-			return ports.LifecyclePatch{}, false, nil
+			return cur, false, nil
 		}
 
-		var patch ports.LifecyclePatch
+		next := cur
 		changed := false
 
 		if sess := killSession(r.Kind); cur.Session != sess {
-			patch.Session = &sess
+			next.Session = sess
 			changed = true
 		}
 		if rt := killRuntime(r.Kind); cur.Runtime != rt {
-			patch.Runtime = &rt
+			next.Runtime = rt
 			changed = true
 		}
 		if cur.Detecting != nil {
-			patch.ClearDetecting = true
+			next.Detecting = nil
 			changed = true
 		}
-		return patch, changed, nil
+		return next, changed, nil
 	})
 	if err != nil {
 		return err
@@ -350,47 +377,48 @@ func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r po
 	return nil
 }
 
-// ---- patch helpers (diff -> sparse merge-patch) ----
+// ---- diff helpers ----
 
-// setSessionIfChanged sets patch.Session only when the decided sub-state
-// differs from current; an empty decided state means "decider does not address
-// the session axis" and is left untouched.
-func setSessionIfChanged(patch *ports.LifecyclePatch, cur domain.CanonicalSessionLifecycle, st domain.SessionState, rs domain.SessionReason) bool {
+// setSessionIfChanged sets next.Session only when the decided sub-state differs
+// from the current next value; an empty decided state means "decider does not
+// address the session axis" and is left untouched.
+func setSessionIfChanged(next *domain.CanonicalSessionLifecycle, st domain.SessionState, rs domain.SessionReason) bool {
 	if st == "" {
 		return false
 	}
 	want := domain.SessionSubstate{State: st, Reason: rs}
-	if cur.Session == want {
+	if next.Session == want {
 		return false
 	}
-	patch.Session = &want
+	next.Session = want
 	return true
 }
 
 // setPRIfChanged folds the decided PR sub-state plus the fact-borne PR identity
-// (number/url) into the patch when it differs from current.
-func setPRIfChanged(patch *ports.LifecyclePatch, cur domain.CanonicalSessionLifecycle, d decide.LifecycleDecision, f ports.SCMFacts) bool {
+// (number/url) into next when it differs from the current next value.
+func setPRIfChanged(next *domain.CanonicalSessionLifecycle, d decide.LifecycleDecision, f ports.SCMFacts) bool {
 	want := domain.PRSubstate{State: d.PRState, Reason: d.PRReason, Number: f.PRNumber, URL: f.PRURL}
-	if cur.PR == want {
+	if next.PR == want {
 		return false
 	}
-	patch.PR = &want
+	next.PR = want
 	return true
 }
 
-// setDetecting implements the three-way detecting semantics: set/replace when
-// the decision carries memory, clear (#3) when it doesn't but canonical still
-// holds stale memory, else leave untouched.
-func setDetecting(patch *ports.LifecyclePatch, cur domain.CanonicalSessionLifecycle, d *domain.DetectingState) bool {
+// setDetecting implements the detecting semantics on the full canonical row:
+// set/replace when the decision carries memory, clear (#3) when it doesn't but
+// canonical still holds stale memory, else leave untouched.
+func setDetecting(next *domain.CanonicalSessionLifecycle, d *domain.DetectingState) bool {
 	if d != nil {
-		if cur.Detecting != nil && *cur.Detecting == *d {
+		if next.Detecting != nil && *next.Detecting == *d {
 			return false
 		}
-		patch.Detecting = d
+		dc := *d
+		next.Detecting = &dc
 		return true
 	}
-	if cur.Detecting != nil {
-		patch.ClearDetecting = true
+	if next.Detecting != nil {
+		next.Detecting = nil
 		return true
 	}
 	return false

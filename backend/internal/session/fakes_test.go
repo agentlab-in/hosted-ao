@@ -42,7 +42,7 @@ func (c *callLog) indexOf(name string) int {
 	return -1
 }
 
-// ---- fakeStore: in-memory LifecycleStore with faithful merge-patch + Seed/Get ----
+// ---- fakeStore: in-memory LifecycleStore with full-row Upsert + Get ----
 
 type fakeStore struct {
 	mu       sync.Mutex
@@ -59,12 +59,9 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func (s *fakeStore) Seed(_ context.Context, rec domain.SessionRecord) error {
+func (s *fakeStore) Upsert(_ context.Context, rec domain.SessionRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.records[rec.ID]; ok {
-		return fmt.Errorf("seed: session %s already exists", rec.ID)
-	}
 	if rec.Lifecycle.Version == 0 {
 		rec.Lifecycle.Version = domain.LifecycleVersion
 	}
@@ -91,47 +88,6 @@ func (s *fakeStore) Load(_ context.Context, id domain.SessionID) (domain.Canonic
 		return domain.CanonicalSessionLifecycle{}, false, nil
 	}
 	return rec.Lifecycle, true, nil
-}
-
-func (s *fakeStore) PatchLifecycle(_ context.Context, id domain.SessionID, p ports.LifecyclePatch) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	rec, ok := s.records[id]
-	if !ok {
-		rec = &domain.SessionRecord{ID: id, Lifecycle: domain.CanonicalSessionLifecycle{Version: domain.LifecycleVersion}}
-		s.records[id] = rec
-	}
-	l := &rec.Lifecycle
-
-	if p.ExpectedRevision != nil && *p.ExpectedRevision != l.Revision {
-		return fmt.Errorf("revision mismatch for %s: have %d, expected %d", id, l.Revision, *p.ExpectedRevision)
-	}
-
-	if p.Session != nil {
-		l.Session = *p.Session
-	}
-	if p.PR != nil {
-		l.PR = *p.PR
-	}
-	if p.Runtime != nil {
-		l.Runtime = *p.Runtime
-	}
-	if p.Activity != nil {
-		l.Activity = *p.Activity
-	}
-	switch {
-	case p.ClearDetecting:
-		l.Detecting = nil
-	case p.Detecting != nil:
-		d := *p.Detecting
-		l.Detecting = &d
-	}
-
-	l.Version = domain.LifecycleVersion
-	l.Revision++
-	rec.UpdatedAt = time.Now()
-	return nil
 }
 
 func (s *fakeStore) List(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
@@ -326,6 +282,11 @@ type recordingLCM struct {
 }
 
 var _ ports.LifecycleManager = (*recordingLCM)(nil)
+
+func (l *recordingLCM) OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord) error {
+	l.log.add("OnSpawnInitiated")
+	return l.inner.OnSpawnInitiated(ctx, rec)
+}
 
 func (l *recordingLCM) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o ports.SpawnOutcome) error {
 	l.log.add("OnSpawnCompleted")

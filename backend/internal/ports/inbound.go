@@ -9,7 +9,7 @@ import (
 
 // LifecycleManager is the inbound contract we implement. Every Apply* method
 // runs the same synchronous pipeline: load canonical -> pure decide -> diff ->
-// persist (merge-patch) -> if the status transitioned, fire reactions. The LCM
+// persist (full-row Upsert) -> if the status transitioned, fire reactions. The LCM
 // never polls; observers (SCM poller, reaper, activity ingest) call in.
 //
 // Concurrency: the LCM serialises per session, so concurrent Apply* calls for
@@ -20,7 +20,8 @@ type LifecycleManager interface {
 	ApplyRuntimeObservation(ctx context.Context, id domain.SessionID, f RuntimeFacts) error
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ActivitySignal) error
 
-	// Mutation outcomes reported by the Session Manager.
+	// Mutation commands/outcomes reported by the Session Manager.
+	OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord) error
 	OnSpawnCompleted(ctx context.Context, id domain.SessionID, o SpawnOutcome) error
 	OnKillRequested(ctx context.Context, id domain.SessionID, r KillReason) error
 
@@ -30,8 +31,8 @@ type LifecycleManager interface {
 }
 
 // SessionManager is the inbound contract called by the API layer and CLI. It
-// owns explicit mutations (spawn/kill/restore/cleanup) and never derives or
-// writes observed state directly — it routes outcomes to the LCM.
+// owns explicit mutations (spawn/kill/restore/cleanup) and never writes
+// sessions directly — it routes mutation commands/outcomes to the LCM.
 type SessionManager interface {
 	Spawn(ctx context.Context, cfg SpawnConfig) (domain.Session, error)
 	Kill(ctx context.Context, id domain.SessionID, opts KillOptions) (KillResult, error)
