@@ -66,6 +66,22 @@ func TestDeriveLegacyStatus(t *testing.T) {
 			want: StatusDraft,
 		},
 		{
+			name: "open PR bot comments display as changes_requested",
+			in: CanonicalSessionLifecycle{
+				Session: SessionSubstate{State: SessionWorking},
+				PR:      PRSubstate{State: PROpen, Reason: PRReasonBotComments},
+			},
+			want: StatusChangesRequested,
+		},
+		{
+			name: "open PR merge conflicts display as plain open",
+			in: CanonicalSessionLifecycle{
+				Session: SessionSubstate{State: SessionWorking},
+				PR:      PRSubstate{State: PROpen, Reason: PRReasonMergeConflicts},
+			},
+			want: StatusPROpen,
+		},
+		{
 			name: "open PR approved",
 			in: CanonicalSessionLifecycle{
 				Session: SessionSubstate{State: SessionWorking},

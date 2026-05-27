@@ -104,6 +104,8 @@ const (
 	PRReasonCIFailing        PRReason = "ci_failing"
 	PRReasonReviewPending    PRReason = "review_pending"
 	PRReasonChangesRequested PRReason = "changes_requested"
+	PRReasonBotComments      PRReason = "bot_comments"
+	PRReasonMergeConflicts   PRReason = "merge_conflicts"
 	PRReasonApproved         PRReason = "approved"
 	PRReasonMergeReady       PRReason = "merge_ready"
 	PRReasonMerged           PRReason = "merged"

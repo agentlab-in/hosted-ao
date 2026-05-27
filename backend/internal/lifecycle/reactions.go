@@ -135,12 +135,20 @@ var defaultReactions = map[reactionKey]reactionConfig{
 // current state has no reaction.
 //
 // A closed PR derives to the idle display status, so it is detected from the PR
-// axis directly before falling through to the status mapping. bugbot-comments
-// and merge-conflicts have no producer in the split-A decide core yet, so they
-// are dormant: configured but unreachable until DECIDE surfaces them.
+// axis directly before falling through to the status mapping. Bot review
+// comments and merge conflicts are represented as PR reasons so the ACT layer
+// can distinguish them from human-requested changes and plain open PRs.
 func reactionEventFor(l domain.CanonicalSessionLifecycle) (reactionKey, bool) {
 	if l.PR.State == domain.PRClosed {
 		return reactionPRClosed, true
+	}
+	if isActivePRState(l.PR.State) {
+		switch l.PR.Reason {
+		case domain.PRReasonBotComments:
+			return reactionBugbotComments, true
+		case domain.PRReasonMergeConflicts:
+			return reactionMergeConflicts, true
+		}
 	}
 	switch domain.DeriveLegacyStatus(l) {
 	case domain.StatusCIFailed:
