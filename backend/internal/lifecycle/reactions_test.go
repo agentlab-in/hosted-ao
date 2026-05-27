@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// failingMessenger always fails delivery, counting attempts — used to assert a
+// send failure does not consume escalation budget.
+type failingMessenger struct{ attempts int }
+
+func (f *failingMessenger) Send(_ context.Context, _ domain.SessionID, _ string) error {
+	f.attempts++
+	return fmt.Errorf("messenger unavailable")
+}
 
 // newReactive wires a Manager with handles on the recording fakes so reaction
 // tests can assert what was sent/notified. clock is pinned to t0 for
@@ -224,11 +234,67 @@ func TestReaction_DurationEscalationFiresOnTick(t *testing.T) {
 		t.Error("must not escalate before escalateAfter elapses")
 	}
 
-	if err := m.TickEscalations(ctx(), t0.Add(31*time.Minute)); err != nil {
+	// Inclusive boundary: escalate at exactly escalateAfter (30m), not only past it.
+	if err := m.TickEscalations(ctx(), t0.Add(30*time.Minute)); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
 	if notifyCount(notf, "reaction.escalated") != 1 {
-		t.Errorf("want one duration escalation, got events %+v", notf.events)
+		t.Errorf("want one duration escalation at exactly 30m, got events %+v", notf.events)
+	}
+}
+
+func TestReaction_KillClearsEscalationTrackers(t *testing.T) {
+	m, store, notf, _ := newReactive()
+	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
+
+	// changes-requested creates a duration-based tracker.
+	if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+		Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewChangesRequested, PRNumber: 7,
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if sessionTrackerCount(m, sid) == 0 {
+		t.Fatalf("precondition: expected a tracker")
+	}
+
+	if err := m.OnKillRequested(ctx(), sid, ports.KillReason{Kind: ports.KillManual}); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	if n := sessionTrackerCount(m, sid); n != 0 {
+		t.Errorf("kill must clear trackers, %d left", n)
+	}
+	// A later duration tick must not escalate a dead session.
+	if err := m.TickEscalations(ctx(), t0.Add(time.Hour)); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if c := notifyCount(notf, "reaction.escalated"); c != 0 {
+		t.Errorf("killed session must not escalate, got %d", c)
+	}
+}
+
+func TestReaction_SendFailureDoesNotBurnBudget(t *testing.T) {
+	store := newFakeStore()
+	notf := &recordingNotifier{}
+	fm := &failingMessenger{}
+	m := New(store, notf, fm)
+	m.clock = func() time.Time { return t0 }
+	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
+
+	tail := "fail"
+	failing := ports.SCMFacts{Fetched: true, PRState: domain.PROpen, CISummary: ports.CIFailing, PRNumber: 7, CIFailureLogTail: &tail}
+	pending := ports.SCMFacts{Fetched: true, PRState: domain.PROpen, CISummary: ports.CIPending, ReviewDecision: ports.ReviewPending, PRNumber: 7}
+
+	// ci-failed has retries 2; with every delivery failing, the budget is rolled
+	// back each time, so even 5 failures never escalate.
+	for i := 0; i < 5; i++ {
+		_ = m.ApplySCMObservation(ctx(), sid, failing) // returns the delivery error
+		_ = m.ApplySCMObservation(ctx(), sid, pending)
+	}
+	if fm.attempts < 5 {
+		t.Errorf("expected at least 5 send attempts, got %d", fm.attempts)
+	}
+	if c := notifyCount(notf, "reaction.escalated"); c != 0 {
+		t.Errorf("undelivered messages must not escalate, got %d", c)
 	}
 }
 

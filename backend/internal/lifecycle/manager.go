@@ -340,7 +340,14 @@ func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r po
 		}
 		return patch, changed, nil
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// A kill is terminal but bypasses react()'s incident-over cleanup (it fires
+	// no reaction). Drop any escalation trackers here so a later duration-based
+	// TickEscalations can't emit reaction.escalated for a dead session.
+	m.clearSessionTrackers(id)
+	return nil
 }
 
 // ---- patch helpers (diff -> sparse merge-patch) ----

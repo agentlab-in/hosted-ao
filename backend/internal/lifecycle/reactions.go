@@ -291,7 +291,8 @@ func (m *Manager) sendToAgent(ctx context.Context, id domain.SessionID, key reac
 		return nil // silenced until the condition clears the tracker
 	}
 	now := m.clock()
-	if tk.firstAttemptAt.IsZero() {
+	freshFirst := tk.firstAttemptAt.IsZero()
+	if freshFirst {
 		tk.firstAttemptAt = now
 	}
 	tk.attempts++
@@ -302,16 +303,30 @@ func (m *Manager) sendToAgent(ctx context.Context, id domain.SessionID, key reac
 	}
 	m.trackerMu.Unlock()
 
-	// A delivery failure does not consume escalation budget beyond this attempt:
-	// the next relevant transition simply tries again (distillation §4.3).
-	return m.messenger.Send(ctx, id, composeMessage(cfg, rc))
+	if err := m.messenger.Send(ctx, id, composeMessage(cfg, rc)); err != nil {
+		// A delivery failure must not consume escalation budget: roll this
+		// attempt back so the next relevant transition retries from the same
+		// point rather than marching toward escalation on undelivered messages
+		// (distillation §4.3).
+		m.trackerMu.Lock()
+		tk.attempts--
+		if freshFirst {
+			tk.firstAttemptAt = time.Time{}
+		}
+		m.trackerMu.Unlock()
+		return err
+	}
+	return nil
 }
 
+// shouldEscalate uses inclusive boundaries: escalate once the numeric cap is
+// exceeded or once exactly escalateAfter has elapsed (don't wait for the next
+// tick to cross a strict threshold).
 func shouldEscalate(tk *reactionTracker, cfg reactionConfig, now time.Time) bool {
 	if cfg.retries > 0 && tk.attempts > cfg.retries {
 		return true
 	}
-	if cfg.escalateAfter > 0 && !tk.firstAttemptAt.IsZero() && now.Sub(tk.firstAttemptAt) > cfg.escalateAfter {
+	if cfg.escalateAfter > 0 && !tk.firstAttemptAt.IsZero() && now.Sub(tk.firstAttemptAt) >= cfg.escalateAfter {
 		return true
 	}
 	return false
@@ -385,7 +400,7 @@ func (m *Manager) TickEscalations(ctx context.Context, now time.Time) error {
 			continue
 		}
 		cfg := defaultReactions[k.key]
-		if cfg.escalateAfter > 0 && !tk.firstAttemptAt.IsZero() && now.Sub(tk.firstAttemptAt) > cfg.escalateAfter {
+		if cfg.escalateAfter > 0 && !tk.firstAttemptAt.IsZero() && now.Sub(tk.firstAttemptAt) >= cfg.escalateAfter {
 			tk.escalated = true
 			fire = append(fire, due{id: k.id, key: k.key})
 		}
