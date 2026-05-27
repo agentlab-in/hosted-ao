@@ -263,6 +263,38 @@ func TestApplySCMObservation(t *testing.T) {
 		}
 	})
 
+	t.Run("draft PR writes draft or ci_failed without review states", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			facts      ports.SCMFacts
+			wantReason domain.PRReason
+			wantStatus domain.SessionStatus
+		}{
+			{"draft with failing CI", ports.SCMFacts{Fetched: true, PRState: domain.PRDraft, CISummary: ports.CIFailing}, domain.PRReasonCIFailing, domain.StatusCIFailed},
+			{"draft ignores review and merge facts", ports.SCMFacts{Fetched: true, PRState: domain.PRDraft, ReviewDecision: ports.ReviewApproved, Mergeability: ports.Mergeability{Mergeable: true}}, domain.PRReasonInProgress, domain.StatusDraft},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				mgr, store := newManager()
+				wantSession := domain.SessionSubstate{State: domain.SessionWorking, Reason: domain.ReasonTaskInProgress}
+				store.seed(sid, lc(wantSession.State, wantSession.Reason, domain.RuntimeAlive))
+				if err := mgr.ApplySCMObservation(context.Background(), sid, c.facts); err != nil {
+					t.Fatalf("apply: %v", err)
+				}
+				l := mustLoad(t, store)
+				if l.PR.State != domain.PRDraft || l.PR.Reason != c.wantReason {
+					t.Errorf("pr = %v/%v, want draft/%v", l.PR.State, l.PR.Reason, c.wantReason)
+				}
+				if l.Session != wantSession {
+					t.Errorf("session = %+v, want untouched %+v", l.Session, wantSession)
+				}
+				if got := domain.DeriveLegacyStatus(l); got != c.wantStatus {
+					t.Errorf("display = %v, want %v", got, c.wantStatus)
+				}
+			})
+		}
+	})
+
 	t.Run("merged PR parks the session and displays merged", func(t *testing.T) {
 		mgr, store := newManager()
 		seed := lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive)
@@ -295,7 +327,8 @@ func TestApplySCMObservation(t *testing.T) {
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
 				mgr, store := newManager()
-				store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive))
+				wantSession := domain.SessionSubstate{State: domain.SessionWorking, Reason: domain.ReasonTaskInProgress}
+				store.seed(sid, lc(wantSession.State, wantSession.Reason, domain.RuntimeAlive))
 				if err := mgr.ApplySCMObservation(context.Background(), sid, c.facts); err != nil {
 					t.Fatalf("apply: %v", err)
 				}

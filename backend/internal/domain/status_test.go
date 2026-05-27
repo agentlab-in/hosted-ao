@@ -50,6 +50,22 @@ func TestDeriveLegacyStatus(t *testing.T) {
 			want: StatusCIFailed,
 		},
 		{
+			name: "draft PR with failing CI maps to ci_failed",
+			in: CanonicalSessionLifecycle{
+				Session: SessionSubstate{State: SessionWorking},
+				PR:      PRSubstate{State: PRDraft, Reason: PRReasonCIFailing},
+			},
+			want: StatusCIFailed,
+		},
+		{
+			name: "draft PR ignores review and merge reasons",
+			in: CanonicalSessionLifecycle{
+				Session: SessionSubstate{State: SessionWorking},
+				PR:      PRSubstate{State: PRDraft, Reason: PRReasonMergeReady},
+			},
+			want: StatusDraft,
+		},
+		{
 			name: "open PR approved",
 			in: CanonicalSessionLifecycle{
 				Session: SessionSubstate{State: SessionWorking},

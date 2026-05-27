@@ -52,8 +52,9 @@ const (
 	ProcessIndeterminate ProcessLiveness = "indeterminate"
 )
 
-// OpenPRInput drives the PR pipeline ladder for an open PR.
+// OpenPRInput drives the PR pipeline ladder for an open or draft PR.
 type OpenPRInput struct {
+	Draft            bool
 	CIFailing        bool
 	ChangesRequested bool
 	Approved         bool
