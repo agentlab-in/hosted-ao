@@ -121,6 +121,38 @@ func TestSpawn_RuntimeCreateFailure_RollsBack(t *testing.T) {
 	}
 }
 
+func TestSpawn_OnSpawnCompletedFailure_RoutesOrphanToErrored(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	h.lcm.onSpawnErr = errors.New("lcm boom")
+
+	_, err := h.sm.Spawn(ctx, spawnCfg())
+	if err == nil {
+		t.Fatal("spawn: want error, got nil")
+	}
+
+	// Runtime + workspace are torn down on the failure path.
+	if len(h.runtime.destroyed) != 1 {
+		t.Errorf("runtime.destroyed = %d, want 1", len(h.runtime.destroyed))
+	}
+	if len(h.workspace.destroyed) != 1 {
+		t.Errorf("workspace.destroyed = %d, want 1", len(h.workspace.destroyed))
+	}
+	// The record was already seeded and the store has no delete, so the orphan is
+	// routed to a terminal errored state (via OnKillRequested(KillError)) rather
+	// than stranded forever as "spawning".
+	rec, ok, _ := h.store.Get(ctx, "sess-1")
+	if !ok {
+		t.Fatal("seeded record vanished; expected it parked as errored")
+	}
+	if got := rec.Lifecycle.Session; got.State != domain.SessionTerminated || got.Reason != domain.ReasonErrorInProcess {
+		t.Errorf("session substate = %+v, want terminated/error_in_process", got)
+	}
+	if status := domain.DeriveLegacyStatus(rec.Lifecycle); status != domain.StatusErrored {
+		t.Errorf("status = %q, want errored", status)
+	}
+}
+
 func TestKill_OrderingAndTerminalState(t *testing.T) {
 	h := newHarness("sess-1")
 	ctx := context.Background()
@@ -323,6 +355,38 @@ func TestRestore_MissingAgentSessionID_Errors(t *testing.T) {
 	rec, _, _ := h.store.Get(ctx, "sess-1")
 	if rec.Lifecycle.Session.State != domain.SessionTerminated {
 		t.Errorf("session state = %q, want terminated (unchanged)", rec.Lifecycle.Session.State)
+	}
+}
+
+func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	if _, err := h.sm.Spawn(ctx, spawnCfg()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if _, err := h.sm.Kill(ctx, "sess-1", ports.KillOptions{Reason: ports.KillManual}); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	if err := h.store.PatchMetadata(ctx, "sess-1", map[string]string{lifecycle.MetaAgentSessionID: "agent-xyz"}); err != nil {
+		t.Fatalf("patch metadata: %v", err)
+	}
+
+	// Fail the post-create LCM call; capture teardown counts just before restore.
+	h.lcm.onSpawnErr = errors.New("lcm boom")
+	destroyedBefore := len(h.runtime.destroyed)
+	wsDestroyedBefore := len(h.workspace.destroyed)
+
+	if _, err := h.sm.Restore(ctx, "sess-1"); err == nil {
+		t.Fatal("restore: want error, got nil")
+	}
+
+	// The runtime created during restore is torn back down so no process is
+	// stranded; the workspace is left intact (it holds the agent's prior work).
+	if len(h.runtime.destroyed) != destroyedBefore+1 {
+		t.Errorf("runtime.destroyed grew by %d, want 1 (restore rollback)", len(h.runtime.destroyed)-destroyedBefore)
+	}
+	if len(h.workspace.destroyed) != wsDestroyedBefore {
+		t.Errorf("workspace was destroyed on restore rollback; it must be preserved")
 	}
 }
 

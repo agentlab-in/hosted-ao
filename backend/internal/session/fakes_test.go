@@ -319,12 +319,19 @@ func (noopNotifier) Notify(_ context.Context, _ ports.OrchestratorEvent) error {
 type recordingLCM struct {
 	log   *callLog
 	inner ports.LifecycleManager
+
+	// onSpawnErr, when set, makes OnSpawnCompleted fail (without touching the
+	// inner manager) so tests can exercise the SM's post-spawn failure paths.
+	onSpawnErr error
 }
 
 var _ ports.LifecycleManager = (*recordingLCM)(nil)
 
 func (l *recordingLCM) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o ports.SpawnOutcome) error {
 	l.log.add("OnSpawnCompleted")
+	if l.onSpawnErr != nil {
+		return l.onSpawnErr
+	}
 	return l.inner.OnSpawnCompleted(ctx, id, o)
 }
 
@@ -358,6 +365,7 @@ type harness struct {
 	agent     *fakeAgent
 	workspace *fakeWorkspace
 	messenger *recordingMessenger
+	lcm       *recordingLCM
 	log       *callLog
 }
 
@@ -384,7 +392,7 @@ func newHarness(id domain.SessionID) *harness {
 		NewID:     func(ports.SpawnConfig) domain.SessionID { return id },
 	})
 
-	return &harness{sm: sm, store: store, runtime: rt, agent: ag, workspace: ws, messenger: msg, log: log}
+	return &harness{sm: sm, store: store, runtime: rt, agent: ag, workspace: ws, messenger: msg, lcm: lcm, log: log}
 }
 
 func cloneMap(in map[string]string) map[string]string {
