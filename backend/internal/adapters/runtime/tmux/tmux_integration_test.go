@@ -69,3 +69,44 @@ func TestRuntimeIntegration(t *testing.T) {
 		t.Fatal("alive after destroy = true, want false")
 	}
 }
+
+func TestRuntimeIntegrationUsesExactTargets(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+
+	r := New(Options{Timeout: 5 * time.Second})
+	ctx := context.Background()
+	longID := "ao_exact_target_long"
+	prefixID := "ao_exact_target"
+	_ = r.Destroy(ctx, ports.RuntimeHandle{ID: longID, RuntimeName: runtimeName})
+	_ = r.Destroy(ctx, ports.RuntimeHandle{ID: prefixID, RuntimeName: runtimeName})
+
+	h, err := r.Create(ctx, ports.RuntimeConfig{
+		SessionID:     "ao_exact_target_long",
+		WorkspacePath: t.TempDir(),
+		LaunchCommand: "cat",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer r.Destroy(ctx, h)
+
+	alive, err := r.IsAlive(ctx, ports.RuntimeHandle{ID: prefixID, RuntimeName: runtimeName})
+	if err != nil {
+		t.Fatalf("IsAlive prefix: %v", err)
+	}
+	if alive {
+		t.Fatal("prefix handle reported alive; tmux target matching is not exact")
+	}
+	if err := r.Destroy(ctx, ports.RuntimeHandle{ID: prefixID, RuntimeName: runtimeName}); err != nil {
+		t.Fatalf("Destroy prefix: %v", err)
+	}
+	alive, err = r.IsAlive(ctx, h)
+	if err != nil {
+		t.Fatalf("IsAlive long after prefix destroy: %v", err)
+	}
+	if !alive {
+		t.Fatal("destroying prefix handle killed longer session")
+	}
+}

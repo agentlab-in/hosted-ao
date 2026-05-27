@@ -16,11 +16,20 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := newSessionArgs("sess-1", "/tmp/ws", "/bin/zsh", "echo hi"), []string{"new-session", "-d", "-s", "sess-1", "-c", "/tmp/ws", "/bin/zsh", "-lc", "echo hi"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("newSessionArgs = %#v, want %#v", got, want)
 	}
-	if got, want := setStatusOffArgs("sess-1"), []string{"set-option", "-t", "sess-1", "status", "off"}; !reflect.DeepEqual(got, want) {
+	if got, want := setStatusOffArgs("sess-1"), []string{"set-option", "-t", "=sess-1:", "status", "off"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("setStatusOffArgs = %#v, want %#v", got, want)
 	}
-	if got, want := capturePaneArgs("sess-1", 42), []string{"capture-pane", "-p", "-t", "sess-1", "-S", "-42"}; !reflect.DeepEqual(got, want) {
+	if got, want := capturePaneArgs("sess-1", 42), []string{"capture-pane", "-p", "-t", "=sess-1:0.0", "-S", "-42"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capturePaneArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestExactTargets(t *testing.T) {
+	if got, want := exactSessionTarget("abc"), "=abc:"; got != want {
+		t.Fatalf("exactSessionTarget = %q, want %q", got, want)
+	}
+	if got, want := exactPaneTarget("abc"), "=abc:0.0"; got != want {
+		t.Fatalf("exactPaneTarget = %q, want %q", got, want)
 	}
 }
 
@@ -125,7 +134,7 @@ func TestSendMessageUsesBufferForMultilineInput(t *testing.T) {
 	if fr.calls[0].args[0] != "load-buffer" {
 		t.Fatalf("first command = %#v, want load-buffer", fr.calls[0].args)
 	}
-	if got := fr.calls[1].args; !reflect.DeepEqual(got[:4], []string{"paste-buffer", "-d", "-t", "sess-1"}) {
+	if got := fr.calls[1].args; !reflect.DeepEqual(got[:4], []string{"paste-buffer", "-d", "-t", "=sess-1:0.0"}) {
 		t.Fatalf("paste args = %#v", got)
 	}
 	if got, want := fr.calls[2].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {

@@ -160,7 +160,7 @@ func (r *Runtime) AttachCommand(handle ports.RuntimeHandle) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]string{r.binary}, "attach", "-t", id), nil
+	return append([]string{r.binary}, "attach", "-t", exactSessionTarget(id)), nil
 }
 
 func (r *Runtime) sendViaBuffer(ctx context.Context, id, message string) error {

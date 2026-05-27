@@ -15,27 +15,27 @@ func newSessionArgs(id, workspacePath, shellPath, script string) []string {
 }
 
 func setStatusOffArgs(id string) []string {
-	return []string{"set-option", "-t", id, "status", "off"}
+	return []string{"set-option", "-t", exactSessionTarget(id), "status", "off"}
 }
 
 func hasSessionArgs(id string) []string {
-	return []string{"has-session", "-t", id}
+	return []string{"has-session", "-t", exactSessionTarget(id)}
 }
 
 func killSessionArgs(id string) []string {
-	return []string{"kill-session", "-t", id}
+	return []string{"kill-session", "-t", exactSessionTarget(id)}
 }
 
 func capturePaneArgs(id string, lines int) []string {
-	return []string{"capture-pane", "-p", "-t", id, "-S", fmt.Sprintf("-%d", lines)}
+	return []string{"capture-pane", "-p", "-t", exactPaneTarget(id), "-S", fmt.Sprintf("-%d", lines)}
 }
 
 func sendLiteralArgs(id, message string) []string {
-	return []string{"send-keys", "-t", id, "-l", message}
+	return []string{"send-keys", "-t", exactPaneTarget(id), "-l", message}
 }
 
 func sendEnterArgs(id string) []string {
-	return []string{"send-keys", "-t", id, "C-m"}
+	return []string{"send-keys", "-t", exactPaneTarget(id), "C-m"}
 }
 
 func loadBufferArgs(bufferName, path string) []string {
@@ -43,7 +43,15 @@ func loadBufferArgs(bufferName, path string) []string {
 }
 
 func pasteBufferArgs(id, bufferName string) []string {
-	return []string{"paste-buffer", "-d", "-t", id, "-b", bufferName}
+	return []string{"paste-buffer", "-d", "-t", exactPaneTarget(id), "-b", bufferName}
+}
+
+func exactSessionTarget(id string) string {
+	return "=" + id + ":"
+}
+
+func exactPaneTarget(id string) string {
+	return "=" + id + ":0.0"
 }
 
 func wrapLaunchCommand(cfg ports.RuntimeConfig, shellPath string) string {
