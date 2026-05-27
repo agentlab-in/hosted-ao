@@ -43,12 +43,14 @@ type SessionManager interface {
 }
 
 type SpawnConfig struct {
-	ProjectID    domain.ProjectID
-	IssueID      domain.IssueID
-	Kind         domain.SessionKind
-	Branch       string
-	Prompt       string
-	AgentRules   string
+	ProjectID  domain.ProjectID
+	IssueID    domain.IssueID
+	Kind       domain.SessionKind
+	Branch     string
+	Prompt     string
+	AgentRules string
+	// OpenTerminal is reserved for a later lane (open a terminal tab on spawn).
+	// Spawn does NOT honor it yet — setting it has no effect.
 	OpenTerminal bool
 }
 

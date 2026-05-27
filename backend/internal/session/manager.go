@@ -27,6 +27,16 @@ import (
 // ErrNotFound is returned by Get/Restore when no record exists for the id.
 var ErrNotFound = errors.New("session: not found")
 
+// ErrNotRestorable is returned by Restore when the session is not torn down.
+// Restoring a live session would spin up a second runtime/workspace for the same
+// id, duplicating the agent and risking data loss.
+var ErrNotRestorable = errors.New("session: not restorable (not terminal)")
+
+// ErrIncompleteTeardownMetadata is returned when a record's teardown handles are
+// missing (empty workspace path or runtime handle), so calling a real adapter's
+// Destroy could act on empty args — an unsafe delete. The teardown is skipped.
+var ErrIncompleteTeardownMetadata = errors.New("session: incomplete teardown metadata")
+
 // Env vars a spawned process reads to learn who it is (distillation §5.4).
 const (
 	EnvSessionID = "AO_SESSION_ID"
@@ -167,13 +177,25 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID, opts ports.Kill
 		return ports.KillResult{ID: id}, fmt.Errorf("kill %s: metadata: %w", id, err)
 	}
 
+	// Validate the teardown handles BEFORE recording intent or touching an
+	// adapter: a corrupted/partially-seeded record with empty handles must never
+	// reach Destroy (empty path / handle could be an unsafe delete).
+	rtHandle := runtimeHandle(meta)
+	wsInfo := workspaceInfo(rec, meta)
+	if !validRuntimeHandle(rtHandle) {
+		return ports.KillResult{ID: id}, fmt.Errorf("kill %s: %w: runtime handle", id, ErrIncompleteTeardownMetadata)
+	}
+	if !validWorkspaceInfo(wsInfo) {
+		return ports.KillResult{ID: id}, fmt.Errorf("kill %s: %w: workspace path", id, ErrIncompleteTeardownMetadata)
+	}
+
 	if err := m.lcm.OnKillRequested(ctx, id, ports.KillReason{Kind: opts.Reason, Detail: opts.Detail}); err != nil {
 		return ports.KillResult{ID: id}, fmt.Errorf("kill %s: on kill requested: %w", id, err)
 	}
-	if err := m.runtime.Destroy(ctx, runtimeHandle(meta)); err != nil {
+	if err := m.runtime.Destroy(ctx, rtHandle); err != nil {
 		return ports.KillResult{ID: id}, fmt.Errorf("kill %s: runtime destroy: %w", id, err)
 	}
-	if err := m.workspace.Destroy(ctx, workspaceInfo(rec, meta)); err != nil {
+	if err := m.workspace.Destroy(ctx, wsInfo); err != nil {
 		return ports.KillResult{ID: id, WorkspaceFreed: false}, fmt.Errorf("kill %s: workspace destroy: %w", id, err)
 	}
 	return ports.KillResult{ID: id, WorkspaceFreed: true}, nil
@@ -233,6 +255,11 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	}
 	if !ok {
 		return domain.Session{}, fmt.Errorf("restore %s: %w", id, ErrNotFound)
+	}
+	// Only a torn-down session may be restored. Reopening a live one would spawn a
+	// duplicate runtime/workspace for the same id and reset its lifecycle.
+	if !isTerminalSession(rec.Lifecycle.Session.State) {
+		return domain.Session{}, fmt.Errorf("restore %s: %w", id, ErrNotRestorable)
 	}
 	meta, err := m.store.GetMetadata(ctx, id)
 	if err != nil {
@@ -313,8 +340,17 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (ports.
 		if err != nil {
 			return res, fmt.Errorf("cleanup %s: metadata %s: %w", project, rec.ID, err)
 		}
-		_ = m.runtime.Destroy(ctx, runtimeHandle(meta)) // best effort; usually already gone
-		if err := m.workspace.Destroy(ctx, workspaceInfo(rec, meta)); err != nil {
+		wsInfo := workspaceInfo(rec, meta)
+		if !validWorkspaceInfo(wsInfo) {
+			// No workspace path to reclaim — skip rather than hand empty args to a
+			// real adapter's Destroy (an unsafe delete).
+			res.Skipped = append(res.Skipped, rec.ID)
+			continue
+		}
+		if rtHandle := runtimeHandle(meta); validRuntimeHandle(rtHandle) {
+			_ = m.runtime.Destroy(ctx, rtHandle) // best effort; usually already gone
+		}
+		if err := m.workspace.Destroy(ctx, wsInfo); err != nil {
 			res.Skipped = append(res.Skipped, rec.ID)
 			continue
 		}
@@ -393,6 +429,19 @@ func workspaceInfo(rec domain.SessionRecord, meta map[string]string) ports.Works
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}
+}
+
+// validRuntimeHandle reports whether the handle identifies a runtime to destroy.
+// An adapter needs the handle id to target the right process; an empty handle
+// would be ambiguous, so we refuse to call Destroy with one.
+func validRuntimeHandle(h ports.RuntimeHandle) bool {
+	return h.ID != ""
+}
+
+// validWorkspaceInfo reports whether there is a concrete path to reclaim. An
+// empty path handed to a worktree-remove could resolve to an unsafe target.
+func validWorkspaceInfo(w ports.WorkspaceInfo) bool {
+	return w.Path != ""
 }
 
 func defaultNewID(cfg ports.SpawnConfig) domain.SessionID {

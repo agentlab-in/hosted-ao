@@ -53,7 +53,6 @@ const (
 //     or the session terminal). Only ci-failed is persistent, so a flapping
 //     CI (fail→pending→fail) keeps draining one shared retry budget.
 type reactionConfig struct {
-	auto          bool
 	action        actionKind
 	message       string
 	priority      ports.EventPriority
@@ -69,32 +68,34 @@ type reactionConfig struct {
 // but no default row uses it.
 var defaultReactions = map[reactionKey]reactionConfig{
 	reactionCIFailed: {
-		auto: true, action: actionSendToAgent, persistent: true, retries: 2,
+		action: actionSendToAgent, persistent: true, retries: 2,
 		message:   "CI is failing on your PR. Review the failing output below and push a fix.",
 		eventType: "reaction.ci-failed", priority: ports.PriorityAction,
 	},
 	reactionChangesRequested: {
-		auto: true, action: actionSendToAgent, escalateAfter: 30 * time.Minute,
+		action: actionSendToAgent, escalateAfter: 30 * time.Minute,
 		message:   "A reviewer requested changes on your PR. Address the comments and push.",
 		eventType: "reaction.changes-requested", priority: ports.PriorityAction,
 	},
 	reactionBugbotComments: {
-		auto: true, action: actionSendToAgent, escalateAfter: 30 * time.Minute,
+		action: actionSendToAgent, escalateAfter: 30 * time.Minute,
 		message:   "An automated reviewer left comments on your PR. Address them and push.",
 		eventType: "reaction.bugbot-comments", priority: ports.PriorityAction,
 	},
 	reactionMergeConflicts: {
-		auto: true, action: actionSendToAgent, escalateAfter: 15 * time.Minute,
+		action: actionSendToAgent, escalateAfter: 15 * time.Minute,
 		message:   "Your PR has merge conflicts. Rebase onto the base branch and resolve them.",
 		eventType: "reaction.merge-conflicts", priority: ports.PriorityAction,
 	},
 	reactionAgentIdle: {
-		auto: true, action: actionSendToAgent, retries: 2, escalateAfter: 15 * time.Minute,
+		action: actionSendToAgent, retries: 2, escalateAfter: 15 * time.Minute,
 		message:   "You appear idle. Continue the task or explain what is blocking you.",
 		eventType: "reaction.agent-idle", priority: ports.PriorityWarning,
 	},
 	reactionApprovedAndGreen: {
-		auto: false, action: actionNotify, priority: ports.PriorityAction,
+		// notify-only: a green, approved PR is the human-decision path — the human
+		// decides to merge (no auto-merge by default).
+		action: actionNotify, priority: ports.PriorityAction,
 		message:   "PR is approved and green — ready to merge.",
 		eventType: "reaction.approved-and-green",
 	},
