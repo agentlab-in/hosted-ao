@@ -239,6 +239,15 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 		return domain.Session{}, fmt.Errorf("restore %s: metadata: %w", id, err)
 	}
 
+	// Resume is only possible with the agent's captured session id. Without it,
+	// GetRestoreCommand would produce an ambiguous "resume nothing" launch, and
+	// we have no stored prompt to fall back to a fresh launch — so fail early,
+	// before any I/O.
+	agentSessionID := meta[lifecycle.MetaAgentSessionID]
+	if agentSessionID == "" {
+		return domain.Session{}, fmt.Errorf("restore %s: missing agent session id (cannot resume)", id)
+	}
+
 	ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 		ProjectID: rec.ProjectID,
 		SessionID: id,
@@ -252,18 +261,22 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     id,
 		WorkspacePath: ws.Path,
-		LaunchCommand: m.agent.GetRestoreCommand(meta[lifecycle.MetaAgentSessionID]),
+		LaunchCommand: m.agent.GetRestoreCommand(agentSessionID),
 		Env:           spawnEnv(m.agent.GetEnvironment(agentCfg), id, rec.ProjectID, rec.IssueID),
 	})
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("restore %s: runtime create: %w", id, err)
 	}
 
+	// Past this point the runtime is live: a failure must tear it back down (but
+	// never the workspace, which holds the agent's prior work) so we don't strand
+	// a process while parking the session in a terminal lifecycle.
 	reopen := ports.LifecyclePatch{
 		Session: &domain.SessionSubstate{State: domain.SessionNotStarted, Reason: domain.ReasonSpawnRequested},
 		PR:      &domain.PRSubstate{State: domain.PRNone, Reason: domain.PRReasonClearedOnRestore},
 	}
 	if err := m.store.PatchLifecycle(ctx, id, reopen); err != nil {
+		m.rollbackRuntime(ctx, handle)
 		return domain.Session{}, fmt.Errorf("restore %s: reopen: %w", id, err)
 	}
 
@@ -271,9 +284,10 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 		Branch:         ws.Branch,
 		WorkspacePath:  ws.Path,
 		RuntimeHandle:  handle,
-		AgentSessionID: meta[lifecycle.MetaAgentSessionID],
+		AgentSessionID: agentSessionID,
 	}
 	if err := m.lcm.OnSpawnCompleted(ctx, id, outcome); err != nil {
+		m.rollbackRuntime(ctx, handle)
 		return domain.Session{}, fmt.Errorf("restore %s: on spawn completed: %w", id, err)
 	}
 	return m.Get(ctx, id)

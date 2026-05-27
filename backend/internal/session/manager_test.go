@@ -296,6 +296,36 @@ func TestRestore_RelaunchesWithResumeCommand(t *testing.T) {
 	}
 }
 
+func TestRestore_MissingAgentSessionID_Errors(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	if _, err := h.sm.Spawn(ctx, spawnCfg()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if _, err := h.sm.Kill(ctx, "sess-1", ports.KillOptions{Reason: ports.KillManual}); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	// No agent session id was ever captured (spawn leaves it empty) — resume is
+	// impossible, so Restore must fail early without touching workspace/runtime.
+	beforeRestores := len(h.workspace.restoredID)
+	beforeCreated := len(h.runtime.created)
+
+	if _, err := h.sm.Restore(ctx, "sess-1"); err == nil {
+		t.Fatal("restore: want error for missing agent session id, got nil")
+	}
+	if len(h.workspace.restoredID) != beforeRestores {
+		t.Error("workspace was touched despite a doomed restore")
+	}
+	if len(h.runtime.created) != beforeCreated {
+		t.Error("runtime was created despite a doomed restore")
+	}
+	// The session stays terminal — a failed restore does not reopen it.
+	rec, _, _ := h.store.Get(ctx, "sess-1")
+	if rec.Lifecycle.Session.State != domain.SessionTerminated {
+		t.Errorf("session state = %q, want terminated (unchanged)", rec.Lifecycle.Session.State)
+	}
+}
+
 func TestCleanup_SkipsUncommittedWork(t *testing.T) {
 	h := newHarness("unused")
 	ctx := context.Background()
