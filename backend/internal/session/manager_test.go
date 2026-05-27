@@ -212,6 +212,83 @@ func TestKill_WorktreeRemoveRefusalSurfaced(t *testing.T) {
 	}
 }
 
+func TestKill_IncompleteMetadata_RefusesTeardown(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	// A record with no teardown metadata (empty runtime handle + workspace path),
+	// e.g. a partially-seeded or corrupted record.
+	if err := h.store.Seed(ctx, domain.SessionRecord{
+		ID: "sess-1", ProjectID: testProject,
+		Lifecycle: lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.PRNone, ""),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if _, err := h.sm.Kill(ctx, "sess-1", ports.KillOptions{Reason: ports.KillManual}); !errors.Is(err, ErrIncompleteTeardownMetadata) {
+		t.Fatalf("kill: err = %v, want ErrIncompleteTeardownMetadata", err)
+	}
+	// Nothing destroyed with empty args, and no intent recorded.
+	if len(h.runtime.destroyed) != 0 || len(h.workspace.destroyed) != 0 {
+		t.Errorf("teardown ran despite incomplete metadata: rt=%v ws=%v", h.runtime.destroyed, h.workspace.destroyed)
+	}
+	if h.log.indexOf("OnKillRequested") != -1 {
+		t.Error("kill intent recorded despite incomplete metadata")
+	}
+}
+
+func TestCleanup_IncompleteMetadata_Skipped(t *testing.T) {
+	h := newHarness("unused")
+	ctx := context.Background()
+	// Terminal session but no workspace path persisted — must be skipped, never
+	// handed to Destroy with an empty path.
+	if err := h.store.Seed(ctx, domain.SessionRecord{
+		ID: "orphan-1", ProjectID: testProject,
+		Lifecycle: lc(domain.SessionTerminated, domain.ReasonManuallyKilled, domain.PRNone, ""),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	res, err := h.sm.Cleanup(ctx, testProject)
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if !equalIDSet(res.Skipped, []domain.SessionID{"orphan-1"}) {
+		t.Errorf("skipped = %v, want [orphan-1]", res.Skipped)
+	}
+	if len(res.Cleaned) != 0 {
+		t.Errorf("cleaned = %v, want none", res.Cleaned)
+	}
+	if len(h.workspace.destroyed) != 0 {
+		t.Errorf("workspace.destroyed = %v, want none (empty path must not reach Destroy)", h.workspace.destroyed)
+	}
+}
+
+func TestRestore_LiveSession_Rejected(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	if _, err := h.sm.Spawn(ctx, spawnCfg()); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	// The session is live (never torn down). Capture an agent id so the only thing
+	// blocking restore is the non-terminal lifecycle, not missing metadata.
+	if err := h.store.PatchMetadata(ctx, "sess-1", map[string]string{lifecycle.MetaAgentSessionID: "agent-xyz"}); err != nil {
+		t.Fatalf("patch metadata: %v", err)
+	}
+	createdBefore := len(h.runtime.created)
+	restoresBefore := len(h.workspace.restoredID)
+
+	if _, err := h.sm.Restore(ctx, "sess-1"); !errors.Is(err, ErrNotRestorable) {
+		t.Fatalf("restore: err = %v, want ErrNotRestorable", err)
+	}
+	// No second runtime/workspace spun up for the still-live session.
+	if len(h.runtime.created) != createdBefore {
+		t.Error("runtime created for a live-session restore")
+	}
+	if len(h.workspace.restoredID) != restoresBefore {
+		t.Error("workspace restored for a live-session restore")
+	}
+}
+
 func TestListAndGet_DeriveStatus(t *testing.T) {
 	cases := []struct {
 		name string
