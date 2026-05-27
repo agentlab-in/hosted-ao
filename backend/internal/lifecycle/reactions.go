@@ -237,18 +237,23 @@ func (m *Manager) react(ctx context.Context, id domain.SessionID, tr *transition
 }
 
 // incidentOver reports that a PR-pipeline incident has truly ended (PR no longer
-// open, or the session terminal), so all trackers for the session may reset.
+// active, or the session terminal), so all trackers for the session may reset.
 func incidentOver(l domain.CanonicalSessionLifecycle) bool {
-	return l.PR.State != domain.PROpen || isTerminal(l.Session.State)
+	return !isActivePRState(l.PR.State) || isTerminal(l.Session.State)
+}
+
+func isActivePRState(s domain.PRState) bool {
+	return s == domain.PROpen || s == domain.PRDraft
 }
 
 // recovered reports a genuinely-green open PR: an approved/mergeable state, which
 // unambiguously means CI is no longer failing (the open-PR ladder ranks ci_failing
 // above approved, so an approved display cannot coexist with failing CI). Unlike
 // the ambiguous review_pending state — which may just be CI re-running — reaching
-// this ends a ci-failed incident and re-arms its budget.
+// this ends a ci-failed incident and re-arms its budget. Draft PRs are active,
+// but not recoverable via review/merge state.
 func recovered(l domain.CanonicalSessionLifecycle) bool {
-	if l.PR.State != domain.PROpen {
+	if !isActivePRState(l.PR.State) || l.PR.State == domain.PRDraft {
 		return false
 	}
 	switch l.PR.Reason {

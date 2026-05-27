@@ -211,6 +211,32 @@ func TestReaction_CIFailedNumericEscalation(t *testing.T) {
 	}
 }
 
+func TestReaction_DraftPRDoesNotEndCIFailedIncident(t *testing.T) {
+	m, store, _, _ := newReactive()
+	seed := lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive)
+	seed.PR = domain.PRSubstate{State: domain.PRDraft, Reason: domain.PRReasonInProgress, Number: 7}
+	store.seed(sid, seed)
+
+	tail := "fail"
+	if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+		Fetched: true, PRState: domain.PRDraft, CISummary: ports.CIFailing, PRNumber: 7, CIFailureLogTail: &tail,
+	}); err != nil {
+		t.Fatalf("draft fail: %v", err)
+	}
+	if sessionTrackerCount(m, sid) == 0 {
+		t.Fatalf("precondition: expected a ci-failed tracker")
+	}
+
+	if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+		Fetched: true, PRState: domain.PRDraft, CISummary: ports.CIPending, PRNumber: 7,
+	}); err != nil {
+		t.Fatalf("draft pending: %v", err)
+	}
+	if n := sessionTrackerCount(m, sid); n == 0 {
+		t.Errorf("draft PR is still active; ci-failed tracker should survive, got %d", n)
+	}
+}
+
 func TestReaction_DurationEscalationFiresOnTick(t *testing.T) {
 	m, store, notf, msgr := newReactive()
 	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
