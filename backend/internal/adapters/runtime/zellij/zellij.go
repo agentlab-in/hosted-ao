@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -81,7 +82,11 @@ func New(opts Options) *Runtime {
 		shellPath = os.Getenv("SHELL")
 	}
 	if shellPath == "" {
-		shellPath = "/bin/sh"
+		if runtime.GOOS == "windows" {
+			shellPath = "powershell.exe"
+		} else {
+			shellPath = "/bin/sh"
+		}
 	}
 	chunkSize := opts.ChunkSize
 	if chunkSize <= 0 {
@@ -189,9 +194,12 @@ func (r *Runtime) AttachCommand(handle ports.RuntimeHandle) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{r.binary}, r.baseArgs()...)
+	args := append([]string{}, r.baseArgs()...)
 	args = append(args, attachArgs(id)...)
-	return args, nil
+	if r.socketDir == "" {
+		return append([]string{r.binary}, args...), nil
+	}
+	return attachCommandWithEnv(r.binary, r.socketDir, args...), nil
 }
 
 func (r *Runtime) ensureSupportedVersion(ctx context.Context) error {
@@ -232,14 +240,15 @@ func (r *Runtime) findAgentPane(ctx context.Context, id string) (string, error) 
 	var lastErr error
 	for {
 		out, err := r.run(ctx, listPanesArgs(id)...)
-		if err != nil {
-			return "", fmt.Errorf("zellij runtime: list panes %s: %w", id, err)
-		}
-		paneID, err := agentPaneID(out)
 		if err == nil {
-			return paneID, nil
+			paneID, parseErr := agentPaneID(out)
+			if parseErr == nil {
+				return paneID, nil
+			}
+			lastErr = parseErr
+		} else {
+			lastErr = err
 		}
-		lastErr = err
 		if time.Now().After(deadline) {
 			return "", fmt.Errorf("zellij runtime: list panes %s: %w", id, lastErr)
 		}
@@ -279,6 +288,26 @@ func (r *Runtime) env() []string {
 	}
 	return []string{"ZELLIJ_SOCKET_DIR=" + r.socketDir}
 }
+
+func attachCommandWithEnv(binary, socketDir string, args ...string) []string {
+	if socketDir == "" {
+		return append([]string{binary}, args...)
+	}
+	if runtime.GOOS == "windows" {
+		command := strings.Builder{}
+		command.WriteString("$env:ZELLIJ_SOCKET_DIR = ")
+		command.WriteString(psQuote(socketDir))
+		command.WriteString("; & ")
+		command.WriteString(psQuote(binary))
+		for _, arg := range args {
+			command.WriteByte(' ')
+			command.WriteString(psQuote(arg))
+		}
+		return []string{"powershell.exe", "-NoLogo", "-NoProfile", "-Command", command.String()}
+	}
+	return append([]string{"env", "ZELLIJ_SOCKET_DIR=" + socketDir, binary}, args...)
+}
+
 
 func zellijSessionName(id domain.SessionID) (string, error) {
 	raw := string(id)

@@ -68,15 +68,46 @@ func terminalPaneID(id int) string {
 }
 
 func buildLayout(cfg ports.RuntimeConfig, shellPath string) string {
+	spec := shellLaunchSpecFor(shellPath)
+	shellCommand := shellLaunchCommand(cfg, shellPath, spec)
+	return layoutString(cfg.WorkspacePath, shellPath, spec.args, shellCommand)
+}
+
+type shellLaunchSpec struct {
+	args []string
+}
+
+func shellLaunchSpecFor(shellPath string) shellLaunchSpec {
+	base := strings.ToLower(filepathBase(shellPath))
+	if strings.Contains(base, "cmd") {
+		return shellLaunchSpec{args: []string{"/D", "/S", "/K"}}
+	}
+	if strings.Contains(base, "powershell") || strings.Contains(base, "pwsh") {
+		return shellLaunchSpec{args: []string{"-NoLogo", "-NoProfile", "-NoExit", "-Command"}}
+	}
+	return shellLaunchSpec{args: []string{"-lc"}}
+}
+
+func layoutString(workspacePath, shellPath string, shellArgs []string, shellCommand string) string {
 	return "layout {\n" +
-		"  cwd " + kdlQuote(cfg.WorkspacePath) + "\n" +
+		"  cwd " + kdlQuote(workspacePath) + "\n" +
 		"  pane command=" + kdlQuote(shellPath) + " name=" + kdlQuote(agentPaneName) + " {\n" +
-		"    args " + kdlQuote("-lc") + " " + kdlQuote(wrapLaunchCommand(cfg, shellPath)) + "\n" +
+		"    args " + kdlJoin(shellArgs) + " " + kdlQuote(shellCommand) + "\n" +
 		"  }\n" +
 		"}\n"
 }
 
-func wrapLaunchCommand(cfg ports.RuntimeConfig, shellPath string) string {
+func shellLaunchCommand(cfg ports.RuntimeConfig, shellPath string, spec shellLaunchSpec) string {
+	if len(spec.args) > 0 && spec.args[0] == "-NoLogo" {
+		return wrapLaunchCommandPowerShell(cfg, shellPath)
+	}
+	if len(spec.args) > 0 && spec.args[0] == "/D" {
+		return wrapLaunchCommandCmd(cfg)
+	}
+	return wrapLaunchCommandUnix(cfg, shellPath)
+}
+
+func wrapLaunchCommandUnix(cfg ports.RuntimeConfig, shellPath string) string {
 	path := cfg.Env["PATH"]
 	if path == "" {
 		path = getenv("PATH")
@@ -105,6 +136,58 @@ func wrapLaunchCommand(cfg ports.RuntimeConfig, shellPath string) string {
 	return b.String()
 }
 
+func wrapLaunchCommandPowerShell(cfg ports.RuntimeConfig, shellPath string) string {
+	path := cfg.Env["PATH"]
+	if path == "" {
+		path = getenv("PATH")
+	}
+
+	var b strings.Builder
+	for _, key := range sortedKeys(cfg.Env) {
+		if key == "PATH" {
+			continue
+		}
+		b.WriteString("$env:")
+		b.WriteString(key)
+		b.WriteString(" = ")
+		b.WriteString(psQuote(cfg.Env[key]))
+		b.WriteString("; ")
+	}
+	if path != "" {
+		b.WriteString("$env:PATH = ")
+		b.WriteString(psQuote(path))
+		b.WriteString("; ")
+	}
+	b.WriteString(cfg.LaunchCommand)
+	return b.String()
+}
+
+func wrapLaunchCommandCmd(cfg ports.RuntimeConfig) string {
+	path := cfg.Env["PATH"]
+	if path == "" {
+		path = getenv("PATH")
+	}
+
+	var b strings.Builder
+	for _, key := range sortedKeys(cfg.Env) {
+		if key == "PATH" {
+			continue
+		}
+		b.WriteString("set \"")
+		b.WriteString(key)
+		b.WriteString("=")
+		b.WriteString(cmdQuote(cfg.Env[key]))
+		b.WriteString("\" && ")
+	}
+	if path != "" {
+		b.WriteString("set \"PATH=")
+		b.WriteString(cmdQuote(path))
+		b.WriteString("\" && ")
+	}
+	b.WriteString(cfg.LaunchCommand)
+	return b.String()
+}
+
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -118,6 +201,33 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func cmdQuote(s string) string {
+	return strings.ReplaceAll(s, "\"", "\"\"")
+}
+
 func kdlQuote(s string) string {
 	return strconv.Quote(s)
+}
+
+func kdlJoin(args []string) string {
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, kdlQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func filepathBase(path string) string {
+	if path == "" {
+		return ""
+	}
+	i := strings.LastIndexAny(path, `/\`)
+	if i < 0 {
+		return path
+	}
+	return path[i+1:]
 }

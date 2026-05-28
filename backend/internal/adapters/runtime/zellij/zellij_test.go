@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,11 @@ import (
 func TestNewDefaultsToPortableShell(t *testing.T) {
 	t.Setenv("SHELL", "")
 	r := New(Options{})
-	if got, want := r.shell, "/bin/sh"; got != want {
+	want := "/bin/sh"
+	if runtime.GOOS == "windows" {
+		want = "powershell.exe"
+	}
+	if got := r.shell; got != want {
 		t.Fatalf("default shell = %q, want %q", got, want)
 	}
 }
@@ -121,6 +126,56 @@ func TestBuildLayoutExportsEnvAndKeepsPaneAlive(t *testing.T) {
 	}
 }
 
+func TestBuildLayoutUsesPowerShellLaunchOnWindowsShells(t *testing.T) {
+	oldGetenv := getenv
+	getenv = func(key string) string {
+		if key == "PATH" {
+			return `C:\custom\bin`
+		}
+		return ""
+	}
+	defer func() { getenv = oldGetenv }()
+
+	got := buildLayout(ports.RuntimeConfig{WorkspacePath: `C:\ws`, LaunchCommand: "Write-Host ready", Env: map[string]string{
+		"AO_SESSION_ID": "sess-1",
+	}}, `C:\Program Files\PowerShell\7\pwsh.exe`)
+
+	for _, want := range []string{
+		`pane command="C:\\Program Files\\PowerShell\\7\\pwsh.exe" name="agent"`,
+		`args "-NoLogo" "-NoProfile" "-NoExit" "-Command"`,
+		"$env:AO_SESSION_ID = 'sess-1';",
+		"$env:PATH = ",
+		"Write-Host ready",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("powershell layout missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestBuildLayoutUsesCmdLaunchOnCmdShells(t *testing.T) {
+	oldGetenv := getenv
+	getenv = func(key string) string {
+		return ""
+	}
+	defer func() { getenv = oldGetenv }()
+
+	got := buildLayout(ports.RuntimeConfig{WorkspacePath: `C:\ws`, LaunchCommand: "echo ready", Env: map[string]string{
+		"AO_SESSION_ID": "sess-1",
+	}}, `C:\Windows\System32\cmd.exe`)
+
+	for _, want := range []string{
+		`pane command="C:\\Windows\\System32\\cmd.exe" name="agent"`,
+		`args "/D" "/S" "/K"`,
+		`AO_SESSION_ID=sess-1`,
+		"echo ready",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cmd layout missing %q in %q", want, got)
+		}
+	}
+}
+
 func TestCreateStartsSessionAndDiscoversPane(t *testing.T) {
 	fr := &fakeRunner{outputs: [][]byte{[]byte("zellij 0.44.3"), nil, []byte(`[{"id":0,"is_plugin":true,"title":"zellij:tab-bar"},{"id":3,"is_plugin":false,"title":"agent"}]`)}}
 	r := New(Options{Binary: "zellij-test", Timeout: time.Second, Shell: "/bin/zsh", SocketDir: "/tmp/zj", ConfigDir: "/tmp/cfg"})
@@ -152,6 +207,43 @@ func TestCreateStartsSessionAndDiscoversPane(t *testing.T) {
 	}
 	if got, want := fr.calls[0].env, []string{"ZELLIJ_SOCKET_DIR=/tmp/zj"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("env = %#v, want %#v", got, want)
+	}
+}
+
+func TestAttachCommandUsesSocketDir(t *testing.T) {
+	r := New(Options{SocketDir: "/tmp/zj"})
+	args, err := r.AttachCommand(ports.RuntimeHandle{ID: "sess-1/terminal_0", RuntimeName: runtimeName})
+	if err != nil {
+		t.Fatalf("AttachCommand: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		if len(args) < 4 || args[0] != "powershell.exe" {
+			t.Fatalf("attach command = %#v, want powershell wrapper", args)
+		}
+		if !strings.Contains(strings.Join(args, " "), "ZELLIJ_SOCKET_DIR") {
+			t.Fatalf("attach command missing socket dir env: %#v", args)
+		}
+		return
+	}
+	if got, want := args[:3], []string{"env", "ZELLIJ_SOCKET_DIR=/tmp/zj", r.binary}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("attach prefix = %#v, want %#v", got, want)
+	}
+}
+
+func TestFindAgentPaneRetriesTransientErrors(t *testing.T) {
+	fr := &fakeRunner{outputs: [][]byte{[]byte("boom"), []byte(`[{"id":0,"is_plugin":false,"title":"agent"}]`)}}
+	r := New(Options{Timeout: time.Second})
+	r.runner = fr
+
+	got, err := r.findAgentPane(context.Background(), "sess-1")
+	if err != nil {
+		t.Fatalf("findAgentPane: %v", err)
+	}
+	if got != "terminal_0" {
+		t.Fatalf("findAgentPane = %q, want terminal_0", got)
+	}
+	if len(fr.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(fr.calls))
 	}
 }
 
