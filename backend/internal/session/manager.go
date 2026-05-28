@@ -101,6 +101,11 @@ func New(d Deps) *Manager {
 // step eagerly rolls back the steps that already succeeded.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, error) {
 	id := m.newID(cfg)
+	if _, ok, err := m.store.Get(ctx, id); err != nil {
+		return domain.Session{}, fmt.Errorf("spawn %s: check existing: %w", id, err)
+	} else if ok {
+		return domain.Session{}, fmt.Errorf("spawn %s: already exists", id)
+	}
 
 	ws, err := m.workspace.Create(ctx, ports.WorkspaceConfig{
 		ProjectID: cfg.ProjectID,
@@ -315,6 +320,9 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	}
 	if err := m.lcm.OnSpawnCompleted(ctx, id, outcome); err != nil {
 		m.rollbackRuntime(ctx, handle)
+		if revertErr := m.lcm.OnSpawnInitiated(ctx, rec); revertErr != nil {
+			return domain.Session{}, fmt.Errorf("restore %s: revert after spawn completed failure: %w (original error: %v)", id, revertErr, err)
+		}
 		return domain.Session{}, fmt.Errorf("restore %s: on spawn completed: %w", id, err)
 	}
 	return m.Get(ctx, id)

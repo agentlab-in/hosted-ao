@@ -121,6 +121,32 @@ func TestSpawn_RuntimeCreateFailure_RollsBack(t *testing.T) {
 	}
 }
 
+func TestSpawn_ExistingSessionIDRejectedBeforeWork(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	if err := h.store.Upsert(ctx, domain.SessionRecord{
+		ID:        "sess-1",
+		ProjectID: testProject,
+		Lifecycle: lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.PRNone, ""),
+	}); err != nil {
+		t.Fatalf("seed existing row: %v", err)
+	}
+
+	_, err := h.sm.Spawn(ctx, spawnCfg())
+	if err == nil {
+		t.Fatal("spawn: want error for existing session id, got nil")
+	}
+	if len(h.workspace.created) != 0 {
+		t.Error("workspace should not be created when session id already exists")
+	}
+	if len(h.runtime.created) != 0 {
+		t.Error("runtime should not be created when session id already exists")
+	}
+	if h.log.indexOf("OnSpawnInitiated") != -1 || h.log.indexOf("OnSpawnCompleted") != -1 {
+		t.Error("LCM should not be called when session id already exists")
+	}
+}
+
 func TestSpawn_OnSpawnCompletedFailure_RoutesOrphanToErrored(t *testing.T) {
 	h := newHarness("sess-1")
 	ctx := context.Background()
@@ -455,6 +481,11 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 
 	if _, err := h.sm.Restore(ctx, "sess-1"); err == nil {
 		t.Fatal("restore: want error, got nil")
+	}
+
+	rec, _, _ := h.store.Get(ctx, "sess-1")
+	if got := rec.Lifecycle.Session; got.State != domain.SessionTerminated || got.Reason != domain.ReasonManuallyKilled {
+		t.Fatalf("restore failure should restore terminal lifecycle, got %+v", got)
 	}
 
 	// The runtime created during restore is torn back down so no process is
