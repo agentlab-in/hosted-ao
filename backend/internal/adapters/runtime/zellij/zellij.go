@@ -308,7 +308,6 @@ func attachCommandWithEnv(binary, socketDir string, args ...string) []string {
 	return append([]string{"env", "ZELLIJ_SOCKET_DIR=" + socketDir, binary}, args...)
 }
 
-
 func zellijSessionName(id domain.SessionID) (string, error) {
 	raw := string(id)
 	if raw == "" {
