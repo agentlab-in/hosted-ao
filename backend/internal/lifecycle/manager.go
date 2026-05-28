@@ -289,7 +289,12 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 func (m *Manager) OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord) error {
 	return m.withLock(rec.ID, func() error {
 		cur := rec.Lifecycle
-		rec.Lifecycle = m.prepareLifecycleWrite(cur, cur)
+		if current, ok, err := m.store.Get(ctx, rec.ID); err != nil {
+			return err
+		} else if ok {
+			cur = current.Lifecycle
+		}
+		rec.Lifecycle = m.prepareLifecycleWrite(cur, rec.Lifecycle)
 		now := m.clock()
 		if rec.CreatedAt.IsZero() {
 			rec.CreatedAt = now

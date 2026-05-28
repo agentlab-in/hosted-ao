@@ -476,6 +476,7 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 
 	// Fail the post-create LCM call; capture teardown counts just before restore.
 	h.lcm.onSpawnErr = errors.New("lcm boom")
+	before, _, _ := h.store.Get(ctx, "sess-1")
 	destroyedBefore := len(h.runtime.destroyed)
 	wsDestroyedBefore := len(h.workspace.destroyed)
 
@@ -486,6 +487,9 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 	rec, _, _ := h.store.Get(ctx, "sess-1")
 	if got := rec.Lifecycle.Session; got.State != domain.SessionTerminated || got.Reason != domain.ReasonManuallyKilled {
 		t.Fatalf("restore failure should restore terminal lifecycle, got %+v", got)
+	}
+	if rec.Lifecycle.Revision != before.Lifecycle.Revision+2 {
+		t.Fatalf("restore failure should advance revision twice, got %d want %d", rec.Lifecycle.Revision, before.Lifecycle.Revision+2)
 	}
 
 	// The runtime created during restore is torn back down so no process is
