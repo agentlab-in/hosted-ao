@@ -271,6 +271,8 @@ func TestApplySCMObservation(t *testing.T) {
 			wantStatus domain.SessionStatus
 		}{
 			{"draft with failing CI", ports.SCMFacts{Fetched: true, PRState: domain.PRDraft, CISummary: ports.CIFailing}, domain.PRReasonCIFailing, domain.StatusCIFailed},
+			{"draft via bool with open state", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, Draft: true}, domain.PRReasonInProgress, domain.StatusDraft},
+			{"draft via bool with failing CI", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, Draft: true, CISummary: ports.CIFailing}, domain.PRReasonCIFailing, domain.StatusCIFailed},
 			{"draft ignores review and merge facts", ports.SCMFacts{Fetched: true, PRState: domain.PRDraft, ReviewDecision: ports.ReviewApproved, Mergeability: ports.Mergeability{Mergeable: true}}, domain.PRReasonInProgress, domain.StatusDraft},
 		}
 		for _, c := range cases {
@@ -321,6 +323,9 @@ func TestApplySCMObservation(t *testing.T) {
 			wantStatus domain.SessionStatus
 		}{
 			{"changes requested", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewChangesRequested}, domain.PRReasonChangesRequested, domain.StatusChangesRequested},
+			{"pending human comments", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, PendingComments: []ports.ReviewComment{{Author: "human", Body: "fix"}}}, domain.PRReasonChangesRequested, domain.StatusChangesRequested},
+			{"pending bot comments", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, PendingComments: []ports.ReviewComment{{Author: "bot", Body: "fix", IsBot: true}}}, domain.PRReasonBotComments, domain.StatusChangesRequested},
+			{"merge conflicts", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, Mergeability: ports.Mergeability{CIPassing: true, Approved: true, NoConflicts: false, Blockers: []string{"merge conflicts"}}}, domain.PRReasonMergeConflicts, domain.StatusPROpen},
 			{"approved + mergeable", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewApproved, Mergeability: ports.Mergeability{Mergeable: true}}, domain.PRReasonMergeReady, domain.StatusMergeable},
 			{"review pending", ports.SCMFacts{Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewPending}, domain.PRReasonReviewPending, domain.StatusReviewPending},
 		}

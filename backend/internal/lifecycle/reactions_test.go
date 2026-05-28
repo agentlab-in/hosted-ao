@@ -78,6 +78,63 @@ func TestReaction_CIFailedSendsToAgentWithLogTail(t *testing.T) {
 	}
 }
 
+func TestReaction_BotAndHumanCommentsRouteSeparately(t *testing.T) {
+	tests := []struct {
+		name        string
+		comments    []ports.ReviewComment
+		wantMessage string
+	}{
+		{
+			name:        "bot comments -> bugbot-comments",
+			comments:    []ports.ReviewComment{{Author: "bugbot", Body: "fix", IsBot: true}},
+			wantMessage: "automated reviewer",
+		},
+		{
+			name:        "human comments -> changes-requested",
+			comments:    []ports.ReviewComment{{Author: "reviewer", Body: "fix"}},
+			wantMessage: "reviewer requested changes",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, store, _, msgr := newReactive()
+			store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
+
+			if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+				Fetched: true, PRState: domain.PROpen, PendingComments: tt.comments, PRNumber: 7,
+			}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+
+			if len(msgr.sent) != 1 {
+				t.Fatalf("want one send, got %d", len(msgr.sent))
+			}
+			if !strings.Contains(msgr.sent[0].Message, tt.wantMessage) {
+				t.Errorf("message %q does not contain %q", msgr.sent[0].Message, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestReaction_MergeConflictsSendsToAgent(t *testing.T) {
+	m, store, _, msgr := newReactive()
+	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))
+
+	if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+		Fetched: true, PRState: domain.PROpen, PRNumber: 7,
+		Mergeability: ports.Mergeability{CIPassing: true, Approved: true, NoConflicts: false, Blockers: []string{"merge conflicts"}},
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	if len(msgr.sent) != 1 {
+		t.Fatalf("want one send, got %d", len(msgr.sent))
+	}
+	if !strings.Contains(msgr.sent[0].Message, "merge conflicts") {
+		t.Errorf("message = %q, want merge conflict nudge", msgr.sent[0].Message)
+	}
+}
+
 func TestReaction_ApprovedAndGreenNotifiesNeverAutoMerges(t *testing.T) {
 	m, store, notf, msgr := newReactive()
 	store.seed(sid, lcOpenPR(domain.PRReasonReviewPending))

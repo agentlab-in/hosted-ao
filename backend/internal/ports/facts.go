@@ -24,6 +24,7 @@ type SCMFacts struct {
 	Fetched          bool
 	ObservedAt       time.Time
 	PRState          domain.PRState
+	Draft            bool
 	PRNumber         int
 	PRURL            string
 	CISummary        CISummary

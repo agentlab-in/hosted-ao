@@ -127,6 +127,10 @@ func ResolveOpenPRDecision(in OpenPRInput) LifecycleDecision {
 		return base(domain.StatusDraft, "draft", domain.PRReasonInProgress, domain.SessionWorking, domain.ReasonPRCreated)
 	case in.ChangesRequested:
 		return base(domain.StatusChangesRequested, "changes_requested", domain.PRReasonChangesRequested, domain.SessionWorking, domain.ReasonResolvingReviewComments)
+	case in.BotComments:
+		return base(domain.StatusChangesRequested, "bot_comments", domain.PRReasonBotComments, domain.SessionWorking, domain.ReasonResolvingReviewComments)
+	case in.MergeConflicts:
+		return base(domain.StatusPROpen, "merge_conflicts", domain.PRReasonMergeConflicts, domain.SessionWorking, domain.ReasonPRCreated)
 	case in.Mergeable:
 		// Mergeability is the authoritative merge gate, so it already folds in
 		// "approved if review is required". Checking it before Approved means a

@@ -206,15 +206,7 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 		}
 
 		switch f.PRState {
-		case domain.PRDraft:
-			in := openPRInput(f)
-			in.Draft = true
-			d := decide.ResolveOpenPRDecision(in)
-			var patch ports.LifecyclePatch
-			changed := setPRIfChanged(&patch, cur, d, f)
-			return patch, changed, nil
-
-		case domain.PROpen:
+		case domain.PRDraft, domain.PROpen:
 			d := decide.ResolveOpenPRDecision(openPRInput(f))
 			var patch ports.LifecyclePatch
 			changed := setPRIfChanged(&patch, cur, d, f)

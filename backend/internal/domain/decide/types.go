@@ -57,6 +57,8 @@ type OpenPRInput struct {
 	Draft            bool
 	CIFailing        bool
 	ChangesRequested bool
+	BotComments      bool
+	MergeConflicts   bool
 	Approved         bool
 	Mergeable        bool
 	ReviewPending    bool

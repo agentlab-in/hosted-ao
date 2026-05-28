@@ -99,7 +99,7 @@ func openPRStatus(r PRReason) SessionStatus {
 	switch r {
 	case PRReasonCIFailing:
 		return StatusCIFailed
-	case PRReasonChangesRequested:
+	case PRReasonChangesRequested, PRReasonBotComments:
 		return StatusChangesRequested
 	case PRReasonApproved:
 		return StatusApproved
