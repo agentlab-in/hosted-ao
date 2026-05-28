@@ -134,7 +134,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.Session{}, fmt.Errorf("spawn %s: on spawn initiated: %w", id, err)
 	}
 
-	outcome := ports.SpawnOutcome{Branch: ws.Branch, WorkspacePath: ws.Path, RuntimeHandle: handle}
+	// Prompt is persisted via OnSpawnCompleted -> spawnMetadata so a later Restore
+	// can fall back to a fresh launch if the agent's native session id was never
+	// captured (the capture path is a separate hook that may never have run).
+	outcome := ports.SpawnOutcome{Branch: ws.Branch, WorkspacePath: ws.Path, RuntimeHandle: handle, Prompt: agentCfg.Prompt}
 	if err := m.lcm.OnSpawnCompleted(ctx, id, outcome); err != nil {
 		// The record is seeded but the runtime/workspace are about to be torn
 		// down. The store has no delete, so route the orphan to a terminal
@@ -270,13 +273,15 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 		return domain.Session{}, fmt.Errorf("restore %s: metadata: %w", id, err)
 	}
 
-	// Resume is only possible with the agent's captured session id. Without it,
-	// GetRestoreCommand would produce an ambiguous "resume nothing" launch, and
-	// we have no stored prompt to fall back to a fresh launch — so fail early,
-	// before any I/O.
+	// Resume is only possible with the agent's captured session id; without it we
+	// fall back to a fresh launch using the seeded prompt persisted at spawn time
+	// (the agent's id-capture path is a separate hook that may never have run, so
+	// "no id" is the common case rather than an error). If neither is available
+	// there is nothing to relaunch from — fail early, before any I/O.
 	agentSessionID := meta[lifecycle.MetaAgentSessionID]
-	if agentSessionID == "" {
-		return domain.Session{}, fmt.Errorf("restore %s: missing agent session id (cannot resume)", id)
+	seededPrompt := meta[lifecycle.MetaPrompt]
+	if agentSessionID == "" && seededPrompt == "" {
+		return domain.Session{}, fmt.Errorf("restore %s: no agent session id or seeded prompt (cannot resume or relaunch)", id)
 	}
 
 	ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
@@ -288,11 +293,15 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 		return domain.Session{}, fmt.Errorf("restore %s: workspace restore: %w", id, err)
 	}
 
-	agentCfg := ports.AgentConfig{SessionID: id, WorkspacePath: ws.Path}
+	agentCfg := ports.AgentConfig{SessionID: id, WorkspacePath: ws.Path, Prompt: seededPrompt}
+	launchCommand := m.agent.GetRestoreCommand(agentSessionID)
+	if agentSessionID == "" {
+		launchCommand = m.agent.GetLaunchCommand(agentCfg)
+	}
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     id,
 		WorkspacePath: ws.Path,
-		LaunchCommand: m.agent.GetRestoreCommand(agentSessionID),
+		LaunchCommand: launchCommand,
 		Env:           spawnEnv(m.agent.GetEnvironment(agentCfg), id, rec.ProjectID, rec.IssueID),
 	})
 	if err != nil {
@@ -317,6 +326,7 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 		WorkspacePath:  ws.Path,
 		RuntimeHandle:  handle,
 		AgentSessionID: agentSessionID,
+		Prompt:         seededPrompt,
 	}
 	if err := m.lcm.OnSpawnCompleted(ctx, id, outcome); err != nil {
 		m.rollbackRuntime(ctx, handle)

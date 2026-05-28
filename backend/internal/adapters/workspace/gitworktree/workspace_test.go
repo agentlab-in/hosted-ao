@@ -27,7 +27,10 @@ func TestCommandArgs(t *testing.T) {
 		{"rev parse", revParseVerifyArgs(repo, "origin/main"), []string{"-C", repo, "rev-parse", "--verify", "--quiet", "origin/main"}},
 		{"add existing", chooseWorktreeAddArgs(repo, path, branch, "", true), []string{"-C", repo, "worktree", "add", path, branch}},
 		{"add new", chooseWorktreeAddArgs(repo, path, branch, "origin/main", false), []string{"-C", repo, "worktree", "add", "-b", branch, path, "origin/main"}},
-		{"remove", worktreeRemoveForceArgs(repo, path), []string{"-C", repo, "worktree", "remove", "--force", path}},
+		// No --force: a dirty worktree must cause `git worktree remove` to fail so
+		// the post-prune safety check surfaces the refusal instead of deleting
+		// uncommitted agent work (review item RA).
+		{"remove", worktreeRemoveArgs(repo, path), []string{"-C", repo, "worktree", "remove", path}},
 		{"prune", worktreePruneArgs(repo), []string{"-C", repo, "worktree", "prune"}},
 		{"list", worktreeListPorcelainArgs(repo), []string{"-C", repo, "worktree", "list", "--porcelain"}},
 	}
@@ -126,6 +129,57 @@ func TestManagedPathSafety(t *testing.T) {
 	}
 }
 
+// TestValidateConfigRejectsPathEscapingIDs covers review item RB: filepath.Join
+// in managedPath cleans `..` segments before validateManagedPath sees them, so a
+// session id of "../other" would stay inside managedRoot while jumping projects.
+// validateConfig must reject these at the source — before any path is composed.
+func TestValidateConfigRejectsPathEscapingIDs(t *testing.T) {
+	root := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": root}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	cases := []struct {
+		name string
+		cfg  ports.WorkspaceConfig
+	}{
+		{"session contains slash escapes project root", ports.WorkspaceConfig{ProjectID: "proj", SessionID: "../other", Branch: "main"}},
+		{"session is .. is rejected", ports.WorkspaceConfig{ProjectID: "proj", SessionID: "..", Branch: "main"}},
+		{"session is . is rejected", ports.WorkspaceConfig{ProjectID: "proj", SessionID: ".", Branch: "main"}},
+		{"session contains backslash is rejected", ports.WorkspaceConfig{ProjectID: "proj", SessionID: `evil\sess`, Branch: "main"}},
+		{"project contains slash escapes managed root", ports.WorkspaceConfig{ProjectID: "../proj", SessionID: "sess", Branch: "main"}},
+		{"project is .. is rejected", ports.WorkspaceConfig{ProjectID: "..", SessionID: "sess", Branch: "main"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create rejects it directly through validateConfig.
+			if _, err := ws.Create(context.Background(), tc.cfg); !errors.Is(err, ErrUnsafePath) {
+				t.Fatalf("Create err = %v, want ErrUnsafePath", err)
+			}
+			// Restore also goes through validateConfig, so the same guarantee holds.
+			if _, err := ws.Restore(context.Background(), tc.cfg); !errors.Is(err, ErrUnsafePath) {
+				t.Fatalf("Restore err = %v, want ErrUnsafePath", err)
+			}
+		})
+	}
+}
+
+// TestValidateConfigAcceptsBenignIDs is a positive guard so the rejection rule
+// above does not creep into normal session/project naming. Hyphens, underscores,
+// dots inside (e.g. "foo.bar"), and digits all stay allowed.
+func TestValidateConfigAcceptsBenignIDs(t *testing.T) {
+	cases := []ports.WorkspaceConfig{
+		{ProjectID: "proj-1", SessionID: "sess_2", Branch: "main"},
+		{ProjectID: "foo.bar", SessionID: "abc-42", Branch: "main"},
+		{ProjectID: "p", SessionID: "..hidden", Branch: "main"}, // leading dots != ".."
+	}
+	for i, cfg := range cases {
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("case %d %+v: unexpected error: %v", i, cfg, err)
+		}
+	}
+}
+
 func TestRestoreRefusesNonEmptyUnregisteredPath(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -157,10 +211,12 @@ func TestDestroyRefusesStillRegisteredPathAndPreservesDirectory(t *testing.T) {
 	if err := mkdirFile(path, "keep.txt"); err != nil {
 		t.Fatalf("seed path: %v", err)
 	}
+	var removeArgs []string
 	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case strings.Contains(joined, "worktree remove"):
+			removeArgs = append([]string{}, args...)
 			return []byte("locked"), errors.New("remove failed")
 		case strings.Contains(joined, "worktree prune"):
 			return nil, nil
@@ -176,6 +232,14 @@ func TestDestroyRefusesStillRegisteredPathAndPreservesDirectory(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(path, "keep.txt")); statErr != nil {
 		t.Fatalf("expected directory to be preserved: %v", statErr)
+	}
+	// Belt-and-braces: --force must NEVER be passed to `git worktree remove` from
+	// Destroy. If it ever is, dirty worktrees would be deleted instead of routed
+	// to Skipped by the Session Manager's Cleanup (review item RA).
+	for _, a := range removeArgs {
+		if a == "--force" || a == "-f" {
+			t.Fatalf("git worktree remove was called with %q; --force must never be passed", a)
+		}
 	}
 }
 

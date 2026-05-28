@@ -22,12 +22,17 @@ import (
 )
 
 // Metadata keys OnSpawnCompleted records for the spawned session's handles.
+//
+// MetaPrompt is the assembled launch prompt, persisted so a Restore that finds
+// no captured agent session id can still fall back to a fresh launch with the
+// same prompt rather than failing.
 const (
 	MetaBranch          = "branch"
 	MetaWorkspacePath   = "workspacePath"
 	MetaRuntimeHandleID = "runtimeHandleId"
 	MetaRuntimeName     = "runtimeName"
 	MetaAgentSessionID  = "agentSessionId"
+	MetaPrompt          = "prompt"
 )
 
 // Manager is the LCM. The Apply* pipeline persists a transition and then fires
@@ -114,9 +119,15 @@ func (m *Manager) withLock(id domain.SessionID, fn func() error) error {
 // transition is what a persisted write produced: the canonical before and after
 // the full-row upsert. The ACT layer (react) derives the reaction from these. It
 // is nil when the pipeline made no write.
+//
+// projectID is captured so reaction events fired downstream (Notifier.Notify in
+// executeReaction and escalate) can populate OrchestratorEvent.ProjectID — the
+// human-facing event router groups events by project. Empty when the record has
+// no ProjectID (e.g. test-only seeded records that omit identity).
 type transition struct {
-	beforeLC domain.CanonicalSessionLifecycle
-	afterLC  domain.CanonicalSessionLifecycle
+	beforeLC  domain.CanonicalSessionLifecycle
+	afterLC   domain.CanonicalSessionLifecycle
+	projectID domain.ProjectID
 }
 
 // mutate runs the shared pipeline: load full row -> build next canonical ->
@@ -150,7 +161,10 @@ func (m *Manager) mutate(
 		if err := m.store.Upsert(ctx, rec, classifyEventType(cur, rec.Lifecycle, false)); err != nil {
 			return err
 		}
-		tr = &transition{beforeLC: cur, afterLC: rec.Lifecycle}
+		// ProjectID is captured straight from the record we already loaded at the
+		// top of this closure — identity is set once at OnSpawnInitiated and never
+		// mutated, so no second store roundtrip is needed for reaction events.
+		tr = &transition{beforeLC: cur, afterLC: rec.Lifecycle, projectID: rec.ProjectID}
 		return nil
 	})
 	return tr, err
@@ -483,6 +497,9 @@ func spawnMetadata(o ports.SpawnOutcome) map[string]string {
 	}
 	if o.AgentSessionID != "" {
 		meta[MetaAgentSessionID] = o.AgentSessionID
+	}
+	if o.Prompt != "" {
+		meta[MetaPrompt] = o.Prompt
 	}
 	return meta
 }

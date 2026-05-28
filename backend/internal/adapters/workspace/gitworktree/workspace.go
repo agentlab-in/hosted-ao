@@ -119,7 +119,7 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 	if err != nil {
 		return err
 	}
-	_, removeErr := w.run(ctx, w.binary, worktreeRemoveForceArgs(repo, path)...)
+	_, removeErr := w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 		return fmt.Errorf("gitworktree: worktree prune: %w", err)
 	}
@@ -304,11 +304,32 @@ func validateConfig(cfg ports.WorkspaceConfig) error {
 	if cfg.ProjectID == "" {
 		return errors.New("gitworktree: project id is required")
 	}
+	if err := validatePathComponent("project id", string(cfg.ProjectID)); err != nil {
+		return err
+	}
 	if cfg.SessionID == "" {
 		return errors.New("gitworktree: session id is required")
 	}
+	if err := validatePathComponent("session id", string(cfg.SessionID)); err != nil {
+		return err
+	}
 	if cfg.Branch == "" {
 		return errors.New("gitworktree: branch is required")
+	}
+	return nil
+}
+
+// validatePathComponent rejects id values that could escape the managed root
+// once joined into a path. filepath.Join cleans `..` before validateManagedPath
+// runs, so a session id of "../other" would otherwise resolve back inside
+// managedRoot while breaking per-project isolation. Reject any path separator
+// or the special `.`/`..` components at the source.
+func validatePathComponent(name, value string) error {
+	if strings.ContainsAny(value, `/\`) {
+		return fmt.Errorf("%w: %s %q must not contain path separators", ErrUnsafePath, name, value)
+	}
+	if value == "." || value == ".." {
+		return fmt.Errorf("%w: %s %q must not be a path-traversal component", ErrUnsafePath, name, value)
 	}
 	return nil
 }
