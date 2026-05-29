@@ -152,14 +152,20 @@ func (r *Reaper) Tick(ctx context.Context) error {
 	return nil
 }
 
-// probeOne handles a single session's probe + fact-report. It is intentionally
-// silent on the alive case: a probe that confirms the steady "alive" state is
-// not a fact worth re-reporting (the runtime axis is already alive, so the LCM
-// would diff to a no-op anyway). Dead and probe-failure ARE reported.
+// probeOne handles a single session's probe + fact-report. Every probe result —
+// alive, dead, or failed — is reported as a fact to the LCM. The reaper does
+// not optimize away the "alive" case, because a session in Detecting (whose
+// runtime axis is NOT alive) is included in the running set and needs the
+// alive probe to recover; the reaper has no business deciding what counts as
+// a no-op. The LCM's ApplyRuntimeObservation diffs against canonical and
+// only Upserts on actual change, so steady-state alive is already cheap.
 func (r *Reaper) probeOne(ctx context.Context, sess domain.SessionRecord, now time.Time) {
 	handle, ok := handleFromRecord(sess)
 	if !ok {
-		r.logger.Debug("reaper: session has no runtime handle metadata, skipping",
+		// A session in the running-set without a handle is an anomaly worth
+		// surfacing (OnSpawnCompleted should have set both keys). Warn rather
+		// than Debug so it doesn't hide behind a noisy log level.
+		r.logger.Warn("reaper: session has no runtime handle metadata, skipping",
 			"session", sess.ID)
 		return
 	}
@@ -183,11 +189,8 @@ func (r *Reaper) probeOne(ctx context.Context, sess domain.SessionRecord, now ti
 		r.logger.Debug("reaper: probe error reported as failed fact",
 			"session", sess.ID, "runtime", handle.RuntimeName, "err", probeErr)
 	case alive:
-		// Steady-state alive carries no new information — skip the call so we
-		// don't churn the LCM with no-op load/diff/persist work on every tick.
-		// Recovery from detecting via probe still flows through this path
-		// whenever the probe is NOT alive (failure or death).
-		return
+		facts.RuntimeState = ports.RuntimeProbeAlive
+		facts.ProcessState = ports.ProcessProbeAlive
 	default:
 		facts.RuntimeState = ports.RuntimeProbeDead
 		facts.ProcessState = ports.ProcessProbeDead

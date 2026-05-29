@@ -121,7 +121,25 @@ func aliveSessionWith(id domain.SessionID, runtimeName, handleID string) domain.
 	return domain.SessionRecord{
 		ID: id,
 		Lifecycle: domain.CanonicalSessionLifecycle{
+			Session: domain.SessionSubstate{State: domain.SessionWorking, Reason: domain.ReasonTaskInProgress},
 			Runtime: domain.RuntimeSubstate{State: domain.RuntimeAlive, Reason: domain.RuntimeReasonProcessRunning},
+		},
+		Metadata: map[string]string{
+			lifecycle.MetaRuntimeHandleID: handleID,
+			lifecycle.MetaRuntimeName:     runtimeName,
+		},
+	}
+}
+
+// detectingSessionWith returns a session in the Detecting quarantine, the
+// shape `Manager.RunningSessions` MUST include so a probe-alive can recover it
+// (otherwise the reaper traps every session that hiccups once in detecting).
+func detectingSessionWith(id domain.SessionID, runtimeName, handleID string) domain.SessionRecord {
+	return domain.SessionRecord{
+		ID: id,
+		Lifecycle: domain.CanonicalSessionLifecycle{
+			Session: domain.SessionSubstate{State: domain.SessionDetecting, Reason: domain.ReasonProbeFailure},
+			Runtime: domain.RuntimeSubstate{State: domain.RuntimeProbeFailed, Reason: domain.RuntimeReasonProbeError},
 		},
 		Metadata: map[string]string{
 			lifecycle.MetaRuntimeHandleID: handleID,
@@ -149,12 +167,41 @@ func TestReaper_Tick(t *testing.T) {
 		wantProbe map[string][]string // runtime name -> handle IDs probed, in order
 	}{
 		{
-			name:     "alive session: no death applied, but tick still fires",
+			// "No death applied" per the spec: the LCM does not receive a
+			// death-causing fact. It still receives the alive fact, because
+			// the reaper reports what it probed and the LCM is the one that
+			// diffs against canonical (a no-op when runtime is already alive,
+			// a recovery when the session was in Detecting).
+			name:     "alive session: alive fact reported, no death applied, tick still fires",
 			sessions: []domain.SessionRecord{aliveSessionWith("s1", "tmux", "h1")},
 			runtimes: []runtimeProbes{{name: "tmux", results: map[string]aliveResult{"h1": {alive: true}}}},
 			wantCalls: []call{
 				{Kind: "TickEscalations", Now: now},
 				{Kind: "RunningSessions"},
+				{
+					Kind:    "ApplyRuntimeObservation",
+					Session: "s1",
+					Facts:   ports.RuntimeFacts{ObservedAt: now, RuntimeState: ports.RuntimeProbeAlive, ProcessState: ports.ProcessProbeAlive},
+				},
+			},
+			wantProbe: map[string][]string{"tmux": {"h1"}},
+		},
+		{
+			// Recovery path: a session in Detecting+probe_failed must be in
+			// the poll set so an alive probe can flow through and recover it.
+			// If the reaper filtered to runtime-axis-alive only, this session
+			// would be trapped in Detecting forever.
+			name:     "detecting session: alive probe reported so LCM can recover from quarantine",
+			sessions: []domain.SessionRecord{detectingSessionWith("s1", "tmux", "h1")},
+			runtimes: []runtimeProbes{{name: "tmux", results: map[string]aliveResult{"h1": {alive: true}}}},
+			wantCalls: []call{
+				{Kind: "TickEscalations", Now: now},
+				{Kind: "RunningSessions"},
+				{
+					Kind:    "ApplyRuntimeObservation",
+					Session: "s1",
+					Facts:   ports.RuntimeFacts{ObservedAt: now, RuntimeState: ports.RuntimeProbeAlive, ProcessState: ports.ProcessProbeAlive},
+				},
 			},
 			wantProbe: map[string][]string{"tmux": {"h1"}},
 		},
@@ -205,6 +252,11 @@ func TestReaper_Tick(t *testing.T) {
 					Kind:    "ApplyRuntimeObservation",
 					Session: "s1",
 					Facts:   ports.RuntimeFacts{ObservedAt: now, RuntimeState: ports.RuntimeProbeDead, ProcessState: ports.ProcessProbeDead},
+				},
+				{
+					Kind:    "ApplyRuntimeObservation",
+					Session: "s2",
+					Facts:   ports.RuntimeFacts{ObservedAt: now, RuntimeState: ports.RuntimeProbeAlive, ProcessState: ports.ProcessProbeAlive},
 				},
 			},
 			wantProbe: map[string][]string{"tmux": {"ht"}, "zellij": {"hz"}},
