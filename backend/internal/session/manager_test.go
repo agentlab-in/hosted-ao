@@ -473,6 +473,7 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 	if err := h.store.PatchMetadata(ctx, "sess-1", map[string]string{lifecycle.MetaAgentSessionID: "agent-xyz"}); err != nil {
 		t.Fatalf("patch metadata: %v", err)
 	}
+	beforeMeta, _ := h.store.GetMetadata(ctx, "sess-1")
 
 	// Fail the post-create LCM call; capture teardown counts just before restore.
 	h.lcm.onSpawnErr = errors.New("lcm boom")
@@ -490,6 +491,10 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 	}
 	if rec.Lifecycle.Revision != before.Lifecycle.Revision+2 {
 		t.Fatalf("restore failure should advance revision twice, got %d want %d", rec.Lifecycle.Revision, before.Lifecycle.Revision+2)
+	}
+	afterMeta, _ := h.store.GetMetadata(ctx, "sess-1")
+	if !equalStringMap(afterMeta, beforeMeta) {
+		t.Fatalf("restore failure should restore metadata, got %+v want %+v", afterMeta, beforeMeta)
 	}
 
 	// The runtime created during restore is torn back down so no process is
@@ -566,6 +571,18 @@ func equalStrings(a, b []string) bool {
 	}
 	for i := range a {
 		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
 			return false
 		}
 	}

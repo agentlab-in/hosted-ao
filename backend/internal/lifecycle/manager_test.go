@@ -392,6 +392,25 @@ func TestOnSpawnCompleted(t *testing.T) {
 	}
 }
 
+func TestOnSpawnInitiated_ActiveSessionRejected(t *testing.T) {
+	mgr, store := newManager()
+	store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive))
+
+	err := mgr.OnSpawnInitiated(context.Background(), domain.SessionRecord{
+		ID:        sid,
+		ProjectID: domain.ProjectID("proj"),
+		Lifecycle: lc(domain.SessionNotStarted, domain.ReasonSpawnRequested, domain.RuntimeUnknown),
+	})
+	if err == nil {
+		t.Fatal("OnSpawnInitiated should reject a non-terminal row on top of an active session")
+	}
+
+	got := mustLoad(t, store)
+	if got.Session.State != domain.SessionWorking || got.Revision != 0 {
+		t.Fatalf("active row should be unchanged, got %+v", got)
+	}
+}
+
 func TestOnKillRequested(t *testing.T) {
 	tests := []struct {
 		name        string

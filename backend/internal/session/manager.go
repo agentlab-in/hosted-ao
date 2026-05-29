@@ -320,8 +320,14 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	}
 	if err := m.lcm.OnSpawnCompleted(ctx, id, outcome); err != nil {
 		m.rollbackRuntime(ctx, handle)
+		// Re-upsert the original record to undo the reopen.
 		if revertErr := m.lcm.OnSpawnInitiated(ctx, rec); revertErr != nil {
 			return domain.Session{}, fmt.Errorf("restore %s: revert after spawn completed failure: %w (original error: %v)", id, revertErr, err)
+		}
+		if len(rec.Metadata) > 0 {
+			if revertErr := m.store.PatchMetadata(ctx, id, rec.Metadata); revertErr != nil {
+				return domain.Session{}, fmt.Errorf("restore %s: revert metadata after spawn completed failure: %w (original error: %v)", id, revertErr, err)
+			}
 		}
 		return domain.Session{}, fmt.Errorf("restore %s: on spawn completed: %w", id, err)
 	}

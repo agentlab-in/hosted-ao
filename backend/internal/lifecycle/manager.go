@@ -292,7 +292,11 @@ func (m *Manager) OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord
 		if current, ok, err := m.store.Get(ctx, rec.ID); err != nil {
 			return err
 		} else if ok {
-			cur = current.Lifecycle
+			currentLC := current.Lifecycle
+			if !isTerminal(currentLC.Session.State) && !isTerminal(rec.Lifecycle.Session.State) {
+				return fmt.Errorf("lifecycle: OnSpawnInitiated for active session %q", rec.ID)
+			}
+			cur = currentLC
 		}
 		rec.Lifecycle = m.prepareLifecycleWrite(cur, rec.Lifecycle)
 		now := m.clock()
