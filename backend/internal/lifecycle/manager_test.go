@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -522,6 +523,78 @@ func TestPerSessionSerialization(t *testing.T) {
 	// change; with correct serialisation all n land without a lost update.
 	if l := mustLoad(t, store); l.Revision != n {
 		t.Errorf("revision = %d, want %d (lost update under concurrency)", l.Revision, n)
+	}
+}
+
+// ---- RunningSessions (reaper poll-set) ----
+
+func TestRunningSessions_NoListerWired_ReturnsEmpty(t *testing.T) {
+	m, _ := newManager()
+	got, err := m.RunningSessions(context.Background())
+	if err != nil {
+		t.Fatalf("RunningSessions: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice when no lister wired, got %d records", len(got))
+	}
+}
+
+func TestRunningSessions_ListerErrorPropagates(t *testing.T) {
+	m, _ := newManager()
+	wantErr := errors.New("boom")
+	m.WithSessionLister(func(_ context.Context) ([]domain.SessionRecord, error) {
+		return nil, wantErr
+	})
+	_, err := m.RunningSessions(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected lister error to propagate, got %v", err)
+	}
+}
+
+// TestRunningSessions_FilterIncludesProbableExcludesTerminal locks in the
+// reaper poll-set predicate. The bug we are guarding against is filtering to
+// "runtime.State == RuntimeAlive": detecting sessions (RuntimeMissing /
+// RuntimeProbeFailed) would be silently parked, breaking the probe-driven
+// recovery path proved by manager_test.go:59 and the dead+dead -> killed path
+// proved by manager_test.go:79.
+func TestRunningSessions_FilterIncludesProbableExcludesTerminal(t *testing.T) {
+	m, _ := newManager()
+	records := []domain.SessionRecord{
+		{ID: "working-alive", Lifecycle: lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive)},
+		{ID: "detecting-probefailed", Lifecycle: lc(domain.SessionDetecting, domain.ReasonProbeFailure, domain.RuntimeProbeFailed)},
+		{ID: "detecting-missing", Lifecycle: lc(domain.SessionDetecting, domain.ReasonRuntimeLost, domain.RuntimeMissing)},
+		{ID: "idle-alive", Lifecycle: lc(domain.SessionIdle, domain.ReasonResearchComplete, domain.RuntimeAlive)},
+		{ID: "needs-input-alive", Lifecycle: lc(domain.SessionNeedsInput, domain.ReasonAwaitingUserInput, domain.RuntimeAlive)},
+		{ID: "not-started", Lifecycle: lc(domain.SessionNotStarted, domain.ReasonSpawnRequested, domain.RuntimeUnknown)},
+		{ID: "terminated", Lifecycle: lc(domain.SessionTerminated, domain.ReasonManuallyKilled, domain.RuntimeExited)},
+		{ID: "done", Lifecycle: lc(domain.SessionDone, domain.ReasonPRMerged, domain.RuntimeExited)},
+	}
+	m.WithSessionLister(func(_ context.Context) ([]domain.SessionRecord, error) {
+		return records, nil
+	})
+
+	got, err := m.RunningSessions(context.Background())
+	if err != nil {
+		t.Fatalf("RunningSessions: %v", err)
+	}
+	gotIDs := map[domain.SessionID]bool{}
+	for _, r := range got {
+		gotIDs[r.ID] = true
+	}
+	wantIncluded := []domain.SessionID{
+		"working-alive", "detecting-probefailed", "detecting-missing",
+		"idle-alive", "needs-input-alive", "not-started",
+	}
+	for _, id := range wantIncluded {
+		if !gotIDs[id] {
+			t.Errorf("expected %q in poll set, missing", id)
+		}
+	}
+	wantExcluded := []domain.SessionID{"terminated", "done"}
+	for _, id := range wantExcluded {
+		if gotIDs[id] {
+			t.Errorf("expected %q NOT in poll set, found", id)
+		}
 	}
 }
 

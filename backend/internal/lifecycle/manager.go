@@ -52,6 +52,14 @@ type Manager struct {
 	trackers  map[trackerKey]*reactionTracker
 	trackerMu sync.Mutex
 	clock     func() time.Time
+
+	// sessionLister returns every session known to persistence so RunningSessions
+	// can filter by runtime axis without coupling the LCM to a cross-project
+	// store API the Tom-store does not yet expose. The daemon (lane #10) injects
+	// the production lister via WithSessionLister; until then, the call returns
+	// no sessions so a reaper attached to an unwired Manager is a clean no-op
+	// rather than a panic.
+	sessionLister func(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
 var _ ports.LifecycleManager = (*Manager)(nil)
@@ -65,6 +73,16 @@ func New(store ports.LifecycleStore, notifier ports.Notifier, messenger ports.Ag
 		trackers:             map[trackerKey]*reactionTracker{},
 		clock:                time.Now,
 	}
+}
+
+// WithSessionLister injects the function the LCM uses to enumerate all
+// persisted sessions for RunningSessions. The daemon wires this against the
+// store at startup; it must be called BEFORE any reaper attached to this
+// Manager starts running, since concurrent calls would race the bare-field
+// read in RunningSessions. Calling it more than once replaces the previous
+// lister.
+func (m *Manager) WithSessionLister(fn func(ctx context.Context) ([]domain.SessionRecord, error)) {
+	m.sessionLister = fn
 }
 
 // ---- per-session serialisation ----
@@ -407,6 +425,47 @@ func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r po
 	// TickEscalations can't emit reaction.escalated for a dead session.
 	m.clearSessionTrackers(id)
 	return nil
+}
+
+// ---- read-snapshot helpers ----
+
+// RunningSessions returns a snapshot of every persisted session worth probing
+// in the next reaper tick. "Worth probing" is wider than "runtime axis alive":
+// it includes sessions in the Detecting quarantine, because a fresh probe is
+// the only fact that can recover them (back to working) or escalate them
+// (terminal killed). Filtering to runtime-axis-alive would silently park every
+// Detecting session — a single failed probe would never get a second chance
+// and recovery via runtime probe would be unreachable.
+//
+// The predicate is "not a final session state". Terminal session states (done,
+// terminated) are excluded because Restore is the only path back; observations
+// must not reopen them (#1 invariant). Sessions in earlier states — not_started,
+// working, idle, needs_input, stuck, detecting — are all included. Those that
+// lack runtime handle metadata (e.g. not_started before OnSpawnCompleted) are
+// returned and harmlessly skipped by the reaper's per-session handle guard.
+//
+// The call only reads and copies, so it does not break the single-writer
+// invariant; concurrent Apply* calls may move sessions in or out of the probe
+// set between snapshots, which is correct — the next tick re-reads.
+//
+// When no lister has been wired (e.g. tests construct a bare Manager), the
+// method returns nil so a goroutine attached to such a Manager degrades to a
+// no-op rather than panicking.
+func (m *Manager) RunningSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	if m.sessionLister == nil {
+		return nil, nil
+	}
+	all, err := m.sessionLister(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.SessionRecord, 0, len(all))
+	for _, rec := range all {
+		if !isTerminal(rec.Lifecycle.Session.State) {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 
 // ---- diff helpers ----

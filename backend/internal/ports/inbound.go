@@ -28,6 +28,14 @@ type LifecycleManager interface {
 	// Reaper heartbeat that drives duration-based escalation (a non-polling
 	// LCM can't wake itself to fire a "30m elapsed" escalation).
 	TickEscalations(ctx context.Context, now time.Time) error
+
+	// RunningSessions returns a snapshot of every session whose runtime axis is
+	// alive. The reaper calls it once per tick to decide whom to probe. It is a
+	// read snapshot — the slice and its elements are safe for the caller to
+	// iterate without holding any LCM lock — and does not violate the
+	// single-writer invariant (the reaper never writes; it reports facts back
+	// through ApplyRuntimeObservation).
+	RunningSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
 // SessionManager is the inbound contract called by the API layer and CLI. It

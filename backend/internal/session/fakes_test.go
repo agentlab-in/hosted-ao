@@ -328,6 +328,10 @@ func (l *recordingLCM) TickEscalations(ctx context.Context, now time.Time) error
 	return l.inner.TickEscalations(ctx, now)
 }
 
+func (l *recordingLCM) RunningSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	return l.inner.RunningSessions(ctx)
+}
+
 // ---- harness: wires the SM against the fakes + the real LCM ----
 
 type harness struct {
