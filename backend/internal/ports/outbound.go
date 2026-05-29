@@ -11,15 +11,16 @@ import (
 // Writer contract: the Lifecycle Manager (LCM) is the sole logical writer of
 // sessions. Controllers, the Session Manager, observers, and other goroutines
 // must route mutations to the LCM; no other goroutine writes sessions directly.
-// The LCM serializes mutations and calls Upsert with the full SessionRecord.
-// This full-row insert-or-update replaces the older sparse merge-patch model and
-// is safe only under the single-writer LCM invariant.
+// The LCM serializes mutations and calls Upsert with the full SessionRecord and
+// the classified event_type. The storage layer owns Revision++ and performs the
+// full-row insert-or-update; the older sparse merge-patch model is gone.
 //
 // List/Get return persistence records (no derived status); the Session Manager
 // hydrates them into domain.Session by attaching DeriveLegacyStatus on read.
 type LifecycleStore interface {
-	// Upsert inserts or replaces the full session row. Only the LCM may call it.
-	Upsert(ctx context.Context, rec domain.SessionRecord) error
+	// Upsert inserts or replaces the full session row and bumps Revision inside
+	// the storage layer. Only the LCM may call it.
+	Upsert(ctx context.Context, rec domain.SessionRecord, eventType EventType) error
 	Load(ctx context.Context, id domain.SessionID) (domain.CanonicalSessionLifecycle, bool, error)
 	List(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	GetMetadata(ctx context.Context, id domain.SessionID) (map[string]string, error)
@@ -30,6 +31,21 @@ type LifecycleStore interface {
 	// teardown handles for Kill/Restore on one id.
 	Get(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
+
+// EventType is the schema-level event label attached to each Upsert.
+type EventType string
+
+const (
+	EventSessionCreated          EventType = "session_created"
+	EventSessionTerminated       EventType = "session_terminated"
+	EventSessionStateChanged     EventType = "session_state_changed"
+	EventSessionPRUpdated        EventType = "session_pr_updated"
+	EventSessionRuntimeUpdated   EventType = "session_runtime_updated"
+	EventSessionAttentionUpdated EventType = "session_attention_updated"
+	EventSessionActivityUpdated  EventType = "session_activity_updated"
+	EventSessionDisplayUpdated   EventType = "session_display_updated"
+	EventSessionUpdated          EventType = "session_updated"
+)
 
 // Notifier delivers events to the human (desktop/Slack later). Push, never pull.
 type Notifier interface {

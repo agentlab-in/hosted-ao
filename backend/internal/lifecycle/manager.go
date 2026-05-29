@@ -1,8 +1,9 @@
 // Package lifecycle implements ports.LifecycleManager: the synchronous
 // observe->decide->persist reducer. Every Apply*/On* entrypoint runs the same
 // pipeline under a per-session lock — load the full canonical record, run the
-// matching pure decider, diff into a full-row Upsert, persist. The LCM never
-// polls and never writes the display status (that is derived on read).
+// matching pure decider, classify the resulting change, and persist the full
+// row through the store. The store owns Revision++; the LCM never polls and
+// never writes the display status (that is derived on read).
 //
 // After a transition is persisted, the Apply* paths fire the mapped reaction
 // (the ACT layer: reaction table + escalation engine) via the react() chokepoint
@@ -120,8 +121,8 @@ type transition struct {
 
 // mutate runs the shared pipeline: load full row -> build next canonical ->
 // Upsert full row (only if changed). decideFn returns the full next lifecycle
-// and whether it changed anything; false is a clean no-op (no write, no revision
-// bump), which is how failed-probe / unknown-fact inputs are dropped.
+// and whether it changed anything; false is a clean no-op (no write), which is
+// how failed-probe / unknown-fact inputs are dropped.
 //
 // On a write it returns the transition (before/after canonical) so the caller —
 // which still holds the originating facts — can fire the mapped reaction.
@@ -144,9 +145,9 @@ func (m *Manager) mutate(
 		if !changed {
 			return nil
 		}
-		rec.Lifecycle = m.prepareLifecycleWrite(cur, next)
+		rec.Lifecycle = m.prepareLifecycleWrite(next)
 		rec.UpdatedAt = m.clock()
-		if err := m.store.Upsert(ctx, rec); err != nil {
+		if err := m.store.Upsert(ctx, rec, classifyEventType(cur, rec.Lifecycle, false)); err != nil {
 			return err
 		}
 		tr = &transition{beforeLC: cur, afterLC: rec.Lifecycle}
@@ -155,9 +156,8 @@ func (m *Manager) mutate(
 	return tr, err
 }
 
-func (m *Manager) prepareLifecycleWrite(cur, next domain.CanonicalSessionLifecycle) domain.CanonicalSessionLifecycle {
+func (m *Manager) prepareLifecycleWrite(next domain.CanonicalSessionLifecycle) domain.CanonicalSessionLifecycle {
 	next.Version = domain.LifecycleVersion
-	next.Revision = cur.Revision + 1
 	return next
 }
 
@@ -285,10 +285,13 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 // OnSpawnInitiated seeds or reopens the full session record for a spawn-like
 // mutation. It is the Session Manager's create/reopen command under the Writer
 // contract: the SM builds the identity + initial canonical row, but only the LCM
-// writes it.
+// writes it. Fresh rows emit session_created; reopening a terminal row reuses
+// the current row as the before-image and lets the classifier emit the schema
+// event for the reopen.
 func (m *Manager) OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord) error {
 	return m.withLock(rec.ID, func() error {
 		cur := rec.Lifecycle
+		isInsert := true
 		if current, ok, err := m.store.Get(ctx, rec.ID); err != nil {
 			return err
 		} else if ok {
@@ -297,14 +300,20 @@ func (m *Manager) OnSpawnInitiated(ctx context.Context, rec domain.SessionRecord
 				return fmt.Errorf("lifecycle: OnSpawnInitiated for active session %q", rec.ID)
 			}
 			cur = currentLC
+			isInsert = false
 		}
-		rec.Lifecycle = m.prepareLifecycleWrite(cur, rec.Lifecycle)
+		rec.Lifecycle = m.prepareLifecycleWrite(rec.Lifecycle)
+		if isInsert {
+			rec.Lifecycle.Revision = 0
+		} else {
+			rec.Lifecycle.Revision = cur.Revision
+		}
 		now := m.clock()
 		if rec.CreatedAt.IsZero() {
 			rec.CreatedAt = now
 		}
 		rec.UpdatedAt = now
-		return m.store.Upsert(ctx, rec)
+		return m.store.Upsert(ctx, rec, classifyEventType(cur, rec.Lifecycle, isInsert))
 	})
 }
 
@@ -329,9 +338,9 @@ func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o p
 			cur := rec.Lifecycle
 			next := cur
 			next.Runtime = rt
-			rec.Lifecycle = m.prepareLifecycleWrite(cur, next)
+			rec.Lifecycle = m.prepareLifecycleWrite(next)
 			rec.UpdatedAt = m.clock()
-			if err := m.store.Upsert(ctx, rec); err != nil {
+			if err := m.store.Upsert(ctx, rec, classifyEventType(cur, rec.Lifecycle, false)); err != nil {
 				return err
 			}
 		}
@@ -431,6 +440,25 @@ func setDetecting(next *domain.CanonicalSessionLifecycle, d *domain.DetectingSta
 		return true
 	}
 	return false
+}
+
+func classifyEventType(before, after domain.CanonicalSessionLifecycle, isInsert bool) ports.EventType {
+	switch {
+	case isInsert:
+		return ports.EventSessionCreated
+	case before.Session.State != after.Session.State && after.Session.State == domain.SessionTerminated:
+		return ports.EventSessionTerminated
+	case before.Session != after.Session:
+		return ports.EventSessionStateChanged
+	case before.PR != after.PR:
+		return ports.EventSessionPRUpdated
+	case before.Runtime != after.Runtime:
+		return ports.EventSessionRuntimeUpdated
+	case before.Activity != after.Activity:
+		return ports.EventSessionActivityUpdated
+	default:
+		return ports.EventSessionUpdated
+	}
 }
 
 // sameActivity compares activity sub-states with time-aware equality (== on

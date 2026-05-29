@@ -483,13 +483,16 @@ func TestFakeStoreUpsertFullRow(t *testing.T) {
 	}
 	rec.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionIdle, Reason: domain.ReasonResearchComplete}
 	rec.Lifecycle.Runtime = domain.RuntimeSubstate{State: domain.RuntimeExited}
-	if err := store.Upsert(context.Background(), rec); err != nil {
+	if err := store.Upsert(context.Background(), rec, ports.EventSessionStateChanged); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	got, _, _ := store.Get(context.Background(), sid)
 	if got.Lifecycle.Session.State != domain.SessionIdle || got.Lifecycle.Runtime.State != domain.RuntimeExited {
 		t.Fatalf("upsert should replace the full canonical row, got %+v", got.Lifecycle)
+	}
+	if got.Lifecycle.Revision != 1 {
+		t.Fatalf("upsert should bump revision inside the store, got %d want 1", got.Lifecycle.Revision)
 	}
 }
 

@@ -128,7 +128,7 @@ func TestSpawn_ExistingSessionIDRejectedBeforeWork(t *testing.T) {
 		ID:        "sess-1",
 		ProjectID: testProject,
 		Lifecycle: lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.PRNone, ""),
-	}); err != nil {
+	}, ports.EventSessionCreated); err != nil {
 		t.Fatalf("seed existing row: %v", err)
 	}
 
@@ -246,7 +246,7 @@ func TestKill_IncompleteMetadata_RefusesTeardown(t *testing.T) {
 	if err := h.store.Upsert(ctx, domain.SessionRecord{
 		ID: "sess-1", ProjectID: testProject,
 		Lifecycle: lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.PRNone, ""),
-	}); err != nil {
+	}, ports.EventSessionCreated); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestCleanup_IncompleteMetadata_Skipped(t *testing.T) {
 	if err := h.store.Upsert(ctx, domain.SessionRecord{
 		ID: "orphan-1", ProjectID: testProject,
 		Lifecycle: lc(domain.SessionTerminated, domain.ReasonManuallyKilled, domain.PRNone, ""),
-	}); err != nil {
+	}, ports.EventSessionCreated); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestListAndGet_DeriveStatus(t *testing.T) {
 	h := newHarness("unused")
 	ctx := context.Background()
 	for _, c := range cases {
-		if err := h.store.Upsert(ctx, domain.SessionRecord{ID: domain.SessionID(c.name), ProjectID: testProject, Lifecycle: c.lc}); err != nil {
+		if err := h.store.Upsert(ctx, domain.SessionRecord{ID: domain.SessionID(c.name), ProjectID: testProject, Lifecycle: c.lc}, ports.EventSessionCreated); err != nil {
 			t.Fatalf("upsert %s: %v", c.name, err)
 		}
 	}
@@ -517,7 +517,7 @@ func TestCleanup_SkipsUncommittedWork(t *testing.T) {
 	if err := h.store.Upsert(ctx, domain.SessionRecord{
 		ID: "live-1", ProjectID: testProject,
 		Lifecycle: lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.PRNone, ""),
-	}); err != nil {
+	}, ports.EventSessionCreated); err != nil {
 		t.Fatalf("upsert live: %v", err)
 	}
 	// dirty-1's worktree still holds uncommitted work — Destroy refuses it.
@@ -557,7 +557,7 @@ func seedTerminal(t *testing.T, h *harness, id domain.SessionID, wsPath string) 
 	if err := h.store.Upsert(ctx, domain.SessionRecord{
 		ID: id, ProjectID: testProject,
 		Lifecycle: lc(domain.SessionTerminated, domain.ReasonManuallyKilled, domain.PRNone, ""),
-	}); err != nil {
+	}, ports.EventSessionCreated); err != nil {
 		t.Fatalf("upsert %s: %v", id, err)
 	}
 	if err := h.store.PatchMetadata(ctx, id, map[string]string{lifecycle.MetaWorkspacePath: wsPath}); err != nil {

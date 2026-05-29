@@ -59,14 +59,18 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func (s *fakeStore) Upsert(_ context.Context, rec domain.SessionRecord) error {
+func (s *fakeStore) Upsert(_ context.Context, rec domain.SessionRecord, _ ports.EventType) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.records[rec.ID]; ok {
-		if rec.Lifecycle.Revision != existing.Lifecycle.Revision+1 {
-			return fmt.Errorf("revision mismatch for %s: have %d, want %d", rec.ID, rec.Lifecycle.Revision, existing.Lifecycle.Revision+1)
+		if rec.Lifecycle.Revision != existing.Lifecycle.Revision {
+			return fmt.Errorf("revision mismatch for %s: have %d, want %d", rec.ID, rec.Lifecycle.Revision, existing.Lifecycle.Revision)
 		}
-	} else if rec.Lifecycle.Revision == 0 {
+		rec.Lifecycle.Revision = existing.Lifecycle.Revision + 1
+	} else {
+		if rec.Lifecycle.Revision != 0 {
+			return fmt.Errorf("revision mismatch for insert %s: have %d, want 0", rec.ID, rec.Lifecycle.Revision)
+		}
 		rec.Lifecycle.Revision = 1
 	}
 	if rec.Lifecycle.Version == 0 {

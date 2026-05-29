@@ -320,7 +320,8 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	}
 	if err := m.lcm.OnSpawnCompleted(ctx, id, outcome); err != nil {
 		m.rollbackRuntime(ctx, handle)
-		// Re-upsert the original record to undo the reopen.
+		// Re-upsert the original record to undo the reopen; the store will
+		// assign the next revision.
 		if revertErr := m.lcm.OnSpawnInitiated(ctx, rec); revertErr != nil {
 			return domain.Session{}, fmt.Errorf("restore %s: revert after spawn completed failure: %w (original error: %v)", id, revertErr, err)
 		}
