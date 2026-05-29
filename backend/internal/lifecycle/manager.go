@@ -52,6 +52,14 @@ type Manager struct {
 	trackers  map[trackerKey]*reactionTracker
 	trackerMu sync.Mutex
 	clock     func() time.Time
+
+	// sessionLister returns every session known to persistence so RunningSessions
+	// can filter by runtime axis without coupling the LCM to a cross-project
+	// store API the Tom-store does not yet expose. The daemon (lane #10) injects
+	// the production lister via WithSessionLister; until then, the call returns
+	// no sessions so a reaper attached to an unwired Manager is a clean no-op
+	// rather than a panic.
+	sessionLister func(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
 var _ ports.LifecycleManager = (*Manager)(nil)
@@ -65,6 +73,13 @@ func New(store ports.LifecycleStore, notifier ports.Notifier, messenger ports.Ag
 		trackers:             map[trackerKey]*reactionTracker{},
 		clock:                time.Now,
 	}
+}
+
+// WithSessionLister injects the function the LCM uses to enumerate all
+// persisted sessions for RunningSessions. The daemon wires this against the
+// store at startup. Calling it more than once replaces the previous lister.
+func (m *Manager) WithSessionLister(fn func(ctx context.Context) ([]domain.SessionRecord, error)) {
+	m.sessionLister = fn
 }
 
 // ---- per-session serialisation ----
@@ -407,6 +422,35 @@ func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r po
 	// TickEscalations can't emit reaction.escalated for a dead session.
 	m.clearSessionTrackers(id)
 	return nil
+}
+
+// ---- read-snapshot helpers ----
+
+// RunningSessions returns a snapshot of every persisted session whose runtime
+// axis is alive. It exists so the reaper (OBSERVE) can decide whom to probe
+// without taking on a LifecycleStore dependency or knowing the LCM's internal
+// state. Because the call only reads and copies, it does not break the
+// single-writer invariant; concurrent Apply* calls may move sessions in or out
+// of "alive" between snapshots, which is correct — the next tick re-reads.
+//
+// When no lister has been wired (e.g. tests construct a bare Manager), the
+// method returns an empty slice so a goroutine attached to such a Manager
+// degrades to a no-op rather than panicking.
+func (m *Manager) RunningSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	if m.sessionLister == nil {
+		return nil, nil
+	}
+	all, err := m.sessionLister(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.SessionRecord, 0, len(all))
+	for _, rec := range all {
+		if rec.Lifecycle.Runtime.State == domain.RuntimeAlive {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 
 // ---- diff helpers ----
