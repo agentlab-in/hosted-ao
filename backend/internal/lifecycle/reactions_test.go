@@ -446,6 +446,123 @@ func TestReaction_IncidentOverClearsAllSessionTrackers(t *testing.T) {
 	}
 }
 
+// ---- ProjectID propagation (review R11) ----
+
+// TestReaction_ProjectIDOnNotifyAndEscalateEvents asserts that both Notify call
+// sites in reactions.go (executeReaction's notify and escalate) carry the
+// record's ProjectID. The human-facing event router groups by project, so a
+// missing id would land events in the wrong bucket.
+func TestReaction_ProjectIDOnNotifyAndEscalateEvents(t *testing.T) {
+	const proj domain.ProjectID = "acme"
+
+	t.Run("notify path -> ProjectID populated", func(t *testing.T) {
+		m, store, notf, _ := newReactive()
+		// Seed via Upsert (not the lifecycle-only seed helper) so the record carries
+		// the ProjectID that mutate's transition then propagates to react.
+		if err := store.Upsert(ctx(), domain.SessionRecord{
+			ID: sid, ProjectID: proj, Lifecycle: lcOpenPR(domain.PRReasonReviewPending),
+		}, ports.EventSessionCreated); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+
+		// approved-and-green is a notify reaction; it fires once via executeReaction.
+		err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+			Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewApproved,
+			Mergeability: ports.Mergeability{Mergeable: true}, PRNumber: 7,
+		})
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+
+		notf.mu.Lock()
+		defer notf.mu.Unlock()
+		var got *ports.OrchestratorEvent
+		for i := range notf.events {
+			if notf.events[i].Type == "reaction.approved-and-green" {
+				got = &notf.events[i]
+				break
+			}
+		}
+		if got == nil {
+			t.Fatalf("expected approved-and-green notify, got events: %+v", notf.events)
+		}
+		if got.ProjectID != proj {
+			t.Errorf("notify ProjectID = %q, want %q", got.ProjectID, proj)
+		}
+		if got.SessionID != sid {
+			t.Errorf("notify SessionID = %q, want %q", got.SessionID, sid)
+		}
+	})
+
+	t.Run("escalate path -> ProjectID populated (numeric cap)", func(t *testing.T) {
+		m, store, notf, _ := newReactive()
+		if err := store.Upsert(ctx(), domain.SessionRecord{
+			ID: sid, ProjectID: proj, Lifecycle: lcOpenPR(domain.PRReasonReviewPending),
+		}, ports.EventSessionCreated); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+
+		// Drain the ci-failed budget to numeric escalation (sendToAgent -> escalate).
+		for i := 0; i < 4; i++ {
+			failCI(t, m)
+			pendingCI(t, m)
+		}
+
+		notf.mu.Lock()
+		defer notf.mu.Unlock()
+		var got *ports.OrchestratorEvent
+		for i := range notf.events {
+			if notf.events[i].Type == "reaction.escalated" {
+				got = &notf.events[i]
+				break
+			}
+		}
+		if got == nil {
+			t.Fatalf("expected reaction.escalated event, got events: %+v", notf.events)
+		}
+		if got.ProjectID != proj {
+			t.Errorf("escalate ProjectID = %q, want %q", got.ProjectID, proj)
+		}
+	})
+
+	t.Run("escalate path -> ProjectID populated (TickEscalations duration)", func(t *testing.T) {
+		m, store, notf, _ := newReactive()
+		if err := store.Upsert(ctx(), domain.SessionRecord{
+			ID: sid, ProjectID: proj, Lifecycle: lcOpenPR(domain.PRReasonReviewPending),
+		}, ports.EventSessionCreated); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+
+		// changes-requested creates a duration-based tracker on the first send;
+		// TickEscalations fires escalate from a path with no transition on hand,
+		// so the tracker's captured ProjectID is what must surface on the event.
+		if err := m.ApplySCMObservation(ctx(), sid, ports.SCMFacts{
+			Fetched: true, PRState: domain.PROpen, ReviewDecision: ports.ReviewChangesRequested, PRNumber: 7,
+		}); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if err := m.TickEscalations(ctx(), t0.Add(30*time.Minute)); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+
+		notf.mu.Lock()
+		defer notf.mu.Unlock()
+		var got *ports.OrchestratorEvent
+		for i := range notf.events {
+			if notf.events[i].Type == "reaction.escalated" {
+				got = &notf.events[i]
+				break
+			}
+		}
+		if got == nil {
+			t.Fatalf("expected duration-escalated event, got events: %+v", notf.events)
+		}
+		if got.ProjectID != proj {
+			t.Errorf("tick-escalate ProjectID = %q, want %q", got.ProjectID, proj)
+		}
+	})
+}
+
 func sessionTrackerCount(m *Manager, id domain.SessionID) int {
 	m.trackerMu.Lock()
 	defer m.trackerMu.Unlock()

@@ -82,13 +82,16 @@ func TestSpawn_HappyPath(t *testing.T) {
 		}
 	}
 
-	// Handles persisted to metadata for later teardown/restore.
+	// Handles persisted to metadata for later teardown/restore. The prompt is
+	// persisted too so a later Restore that finds no captured agent session id
+	// can still fall back to a fresh launch using the same prompt.
 	meta, _ := h.store.GetMetadata(ctx, "sess-1")
 	for k, want := range map[string]string{
 		lifecycle.MetaBranch:          "feat/42",
 		lifecycle.MetaWorkspacePath:   "/tmp/ws/sess-1",
 		lifecycle.MetaRuntimeHandleID: "rt-sess-1",
 		lifecycle.MetaRuntimeName:     "tmux",
+		lifecycle.MetaPrompt:          "do the thing\n\nbe careful",
 	} {
 		if meta[k] != want {
 			t.Errorf("meta[%q] = %q, want %q", k, meta[k], want)
@@ -431,7 +434,7 @@ func TestRestore_RelaunchesWithResumeCommand(t *testing.T) {
 	}
 }
 
-func TestRestore_MissingAgentSessionID_Errors(t *testing.T) {
+func TestRestore_NoAgentSessionID_FreshLaunchFallback(t *testing.T) {
 	h := newHarness("sess-1")
 	ctx := context.Background()
 	if _, err := h.sm.Spawn(ctx, spawnCfg()); err != nil {
@@ -440,13 +443,45 @@ func TestRestore_MissingAgentSessionID_Errors(t *testing.T) {
 	if _, err := h.sm.Kill(ctx, "sess-1", ports.KillOptions{Reason: ports.KillManual}); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
-	// No agent session id was ever captured (spawn leaves it empty) — resume is
-	// impossible, so Restore must fail early without touching workspace/runtime.
+	// No agent session id was ever captured (the capture hook is a separate
+	// path that may never have run), but Spawn persisted the prompt, so Restore
+	// must fall back to a fresh launch instead of failing.
+	createdBefore := len(h.runtime.created)
+
+	sess, err := h.sm.Restore(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if sess.Status != domain.StatusSpawning {
+		t.Errorf("status = %q, want spawning", sess.Status)
+	}
+	if len(h.runtime.created) != createdBefore+1 {
+		t.Fatalf("runtime.created grew by %d, want 1 (fresh-launch fallback)", len(h.runtime.created)-createdBefore)
+	}
+	// Fresh launch uses GetLaunchCommand (returns "claude" in the fake) — not
+	// the resume command, which would have read "claude --resume <id>".
+	if got := h.runtime.created[createdBefore].LaunchCommand; got != "claude" {
+		t.Errorf("restore launch command = %q, want fresh-launch %q", got, "claude")
+	}
+}
+
+func TestRestore_NoIDAndNoPrompt_Errors(t *testing.T) {
+	h := newHarness("sess-1")
+	ctx := context.Background()
+	// Seed a terminal record directly without any metadata — no agent session id,
+	// no prompt. Restore has nothing to resume and nothing to relaunch from, so
+	// it must fail early without touching workspace/runtime.
+	if err := h.store.Upsert(ctx, domain.SessionRecord{
+		ID: "sess-1", ProjectID: testProject,
+		Lifecycle: lc(domain.SessionTerminated, domain.ReasonManuallyKilled, domain.PRNone, ""),
+	}, ports.EventSessionCreated); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
 	beforeRestores := len(h.workspace.restoredID)
 	beforeCreated := len(h.runtime.created)
 
 	if _, err := h.sm.Restore(ctx, "sess-1"); err == nil {
-		t.Fatal("restore: want error for missing agent session id, got nil")
+		t.Fatal("restore: want error for missing agent session id and prompt, got nil")
 	}
 	if len(h.workspace.restoredID) != beforeRestores {
 		t.Error("workspace was touched despite a doomed restore")
