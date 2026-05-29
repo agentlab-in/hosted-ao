@@ -392,6 +392,25 @@ func TestOnSpawnCompleted(t *testing.T) {
 	}
 }
 
+func TestOnSpawnInitiated_ActiveSessionRejected(t *testing.T) {
+	mgr, store := newManager()
+	store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive))
+
+	err := mgr.OnSpawnInitiated(context.Background(), domain.SessionRecord{
+		ID:        sid,
+		ProjectID: domain.ProjectID("proj"),
+		Lifecycle: lc(domain.SessionNotStarted, domain.ReasonSpawnRequested, domain.RuntimeUnknown),
+	})
+	if err == nil {
+		t.Fatal("OnSpawnInitiated should reject a non-terminal row on top of an active session")
+	}
+
+	got := mustLoad(t, store)
+	if got.Session.State != domain.SessionWorking || got.Revision != 0 {
+		t.Fatalf("active row should be unchanged, got %+v", got)
+	}
+}
+
 func TestOnKillRequested(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -454,18 +473,26 @@ func TestOnKillRequested_UnseededIsNoOp(t *testing.T) {
 
 // ---- fake store contract ----
 
-func TestFakeStoreExpectedRevision(t *testing.T) {
+func TestFakeStoreUpsertFullRow(t *testing.T) {
 	store := newFakeStore()
-	store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive)) // revision 0
-	rt := domain.RuntimeSubstate{State: domain.RuntimeExited}
+	store.seed(sid, lc(domain.SessionWorking, domain.ReasonTaskInProgress, domain.RuntimeAlive))
 
-	bad := 99
-	if err := store.PatchLifecycle(context.Background(), sid, ports.LifecyclePatch{Runtime: &rt, ExpectedRevision: &bad}); err == nil {
-		t.Error("stale ExpectedRevision must be rejected")
+	rec, ok, err := store.Get(context.Background(), sid)
+	if err != nil || !ok {
+		t.Fatalf("seeded record missing: ok=%v err=%v", ok, err)
 	}
-	good := 0
-	if err := store.PatchLifecycle(context.Background(), sid, ports.LifecyclePatch{Runtime: &rt, ExpectedRevision: &good}); err != nil {
-		t.Errorf("matching ExpectedRevision must succeed, got %v", err)
+	rec.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionIdle, Reason: domain.ReasonResearchComplete}
+	rec.Lifecycle.Runtime = domain.RuntimeSubstate{State: domain.RuntimeExited}
+	if err := store.Upsert(context.Background(), rec, ports.EventSessionStateChanged); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	got, _, _ := store.Get(context.Background(), sid)
+	if got.Lifecycle.Session.State != domain.SessionIdle || got.Lifecycle.Runtime.State != domain.RuntimeExited {
+		t.Fatalf("upsert should replace the full canonical row, got %+v", got.Lifecycle)
+	}
+	if got.Lifecycle.Revision != 1 {
+		t.Fatalf("upsert should bump revision inside the store, got %d want 1", got.Lifecycle.Revision)
 	}
 }
 
