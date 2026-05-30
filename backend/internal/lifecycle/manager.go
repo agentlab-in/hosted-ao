@@ -53,6 +53,11 @@ type Manager struct {
 	trackerMu sync.Mutex
 	clock     func() time.Time
 
+	// reactionStore, when wired via WithReactionStore, makes the trackers map a
+	// write-through cache over durable rows so a restart does not re-fire an
+	// already-escalated human page. nil keeps the in-memory-only default.
+	reactionStore ReactionStore
+
 	// sessionLister returns every session known to persistence so RunningSessions
 	// can filter by runtime axis without coupling the LCM to a cross-project
 	// store API the Tom-store does not yet expose. The daemon (lane #10) injects
@@ -423,7 +428,7 @@ func (m *Manager) OnKillRequested(ctx context.Context, id domain.SessionID, r po
 	// A kill is terminal but bypasses react()'s incident-over cleanup (it fires
 	// no reaction). Drop any escalation trackers here so a later duration-based
 	// TickEscalations can't emit reaction.escalated for a dead session.
-	m.clearSessionTrackers(id)
+	m.clearSessionTrackers(ctx, id)
 	return nil
 }
 

@@ -233,14 +233,14 @@ func (m *Manager) react(ctx context.Context, id domain.SessionID, tr *transition
 		// transition is typically review_pending->approved (beforeKey empty), so
 		// clearing only beforeKey would leak the ci-failed tracker and leave its
 		// escalated=true to silence a future regression. Clear them all.
-		m.clearSessionTrackers(id)
+		m.clearSessionTrackers(ctx, id)
 	case hadBefore && (!hasAfter || changed):
 		// Within an unresolved open PR: a normal tracker resets when its state is
 		// left. A persistent one (ci-failed) is NOT cleared here — it must survive
 		// the ambiguous review_pending limbo (the fail->pending->fail flap, §4.2);
 		// it only resets via the recovery/incident-over branch above.
 		if !defaultReactions[beforeKey].persistent {
-			m.clearTracker(id, beforeKey)
+			m.clearTracker(ctx, id, beforeKey)
 		}
 	}
 
@@ -324,12 +324,20 @@ func (m *Manager) sendToAgent(ctx context.Context, id domain.SessionID, projectI
 		tk.firstAttemptAt = now
 	}
 	tk.attempts++
-	if shouldEscalate(tk, cfg, now) {
+	escalateNow := shouldEscalate(tk, cfg, now)
+	if escalateNow {
 		tk.escalated = true
-		m.trackerMu.Unlock()
-		return m.escalate(ctx, id, tk.projectID, key)
 	}
+	snap := *tk
 	m.trackerMu.Unlock()
+
+	// Write through the new budget (incl. escalated) before dispatching, so a
+	// crash between persist and notify re-fires at most the same page on restart.
+	m.persistTracker(ctx, id, key, snap)
+
+	if escalateNow {
+		return m.escalate(ctx, id, snap.projectID, key)
+	}
 
 	if err := m.messenger.Send(ctx, id, composeMessage(cfg, rc)); err != nil {
 		// A delivery failure must not consume escalation budget: roll this
@@ -341,7 +349,9 @@ func (m *Manager) sendToAgent(ctx context.Context, id domain.SessionID, projectI
 		if freshFirst {
 			tk.firstAttemptAt = time.Time{}
 		}
+		rolled := *tk
 		m.trackerMu.Unlock()
+		m.persistTracker(ctx, id, key, rolled)
 		return err
 	}
 	return nil
@@ -393,16 +403,17 @@ func (m *Manager) trackerFor(id domain.SessionID, key reactionKey) *reactionTrac
 	return tk
 }
 
-func (m *Manager) clearTracker(id domain.SessionID, key reactionKey) {
+func (m *Manager) clearTracker(ctx context.Context, id domain.SessionID, key reactionKey) {
 	m.trackerMu.Lock()
 	delete(m.trackers, trackerKey{id: id, key: key})
 	m.trackerMu.Unlock()
+	m.deletePersistedTracker(ctx, id, key)
 }
 
 // clearSessionTrackers drops every tracker for a session — used when its
 // incident is over, so no budget (and no stale escalated=true) survives into a
 // later unrelated incident.
-func (m *Manager) clearSessionTrackers(id domain.SessionID) {
+func (m *Manager) clearSessionTrackers(ctx context.Context, id domain.SessionID) {
 	m.trackerMu.Lock()
 	for k := range m.trackers {
 		if k.id == id {
@@ -410,6 +421,7 @@ func (m *Manager) clearSessionTrackers(id domain.SessionID) {
 		}
 	}
 	m.trackerMu.Unlock()
+	m.deletePersistedSessionTrackers(ctx, id)
 }
 
 // TickEscalations fires the duration-based escalations the synchronous LCM
@@ -421,6 +433,7 @@ func (m *Manager) TickEscalations(ctx context.Context, now time.Time) error {
 		id        domain.SessionID
 		projectID domain.ProjectID
 		key       reactionKey
+		snap      reactionTracker
 	}
 	var fire []due
 
@@ -432,12 +445,13 @@ func (m *Manager) TickEscalations(ctx context.Context, now time.Time) error {
 		cfg := defaultReactions[k.key]
 		if cfg.escalateAfter > 0 && !tk.firstAttemptAt.IsZero() && now.Sub(tk.firstAttemptAt) >= cfg.escalateAfter {
 			tk.escalated = true
-			fire = append(fire, due{id: k.id, projectID: tk.projectID, key: k.key})
+			fire = append(fire, due{id: k.id, projectID: tk.projectID, key: k.key, snap: *tk})
 		}
 	}
 	m.trackerMu.Unlock()
 
 	for _, d := range fire {
+		m.persistTracker(ctx, d.id, d.key, d.snap)
 		if err := m.escalate(ctx, d.id, d.projectID, d.key); err != nil {
 			return err
 		}
