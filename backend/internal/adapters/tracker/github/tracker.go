@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -21,13 +20,15 @@ const (
 	defaultBaseURL   = "https://api.github.com"
 	defaultUserAgent = "ao-agent-orchestrator/tracker-github"
 
+	// Status labels used by humans (and other tooling) on GitHub Issues.
+	// Get's reverse mapping recognizes them so an externally-labeled issue
+	// reports as in_progress / review. The adapter does NOT write these
+	// labels in v1 — see issue #40 for the write-side work.
 	labelInProgress = "in-progress"
 	labelInReview   = "in-review"
 
-	stateOpenGH    = "open"
-	stateClosedGH  = "closed"
-	reasonComplete = "completed"
-	reasonNotPlan  = "not_planned"
+	stateClosedGH = "closed"
+	reasonNotPlan = "not_planned"
 )
 
 // Sentinel errors. Adapter-level callers should match on these via
@@ -36,9 +37,7 @@ const (
 var (
 	ErrNotFound      = errors.New("github tracker: issue not found")
 	ErrRateLimited   = errors.New("github tracker: rate limited")
-	ErrEmptyBody     = errors.New("github tracker: comment body is empty")
 	ErrWrongProvider = errors.New("github tracker: id is not a github tracker id")
-	ErrUnknownState  = errors.New("github tracker: unknown normalized state")
 	ErrBadID         = errors.New("github tracker: malformed native id")
 )
 
@@ -213,107 +212,6 @@ func mapStateFromGitHub(state, reason string, labels []string) domain.Normalized
 	default:
 		return domain.IssueOpen
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Comment
-// ---------------------------------------------------------------------------
-
-func (t *Tracker) Comment(ctx context.Context, id domain.TrackerID, body string) error {
-	if strings.TrimSpace(body) == "" {
-		return ErrEmptyBody
-	}
-	owner, repo, number, err := t.parseID(id)
-	if err != nil {
-		return err
-	}
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number)
-	_, err = t.do(ctx, http.MethodPost, path, map[string]string{"body": body})
-	return err
-}
-
-// ---------------------------------------------------------------------------
-// Transition
-// ---------------------------------------------------------------------------
-
-// transitionPlan is the per-target-state list of mutations to apply. Every
-// transition issues exactly one PATCH on the issue, optionally adds one
-// status label, and removes any other status labels the issue may carry.
-type transitionPlan struct {
-	patch       map[string]any
-	addLabel    string // "" means none
-	removeLabel []string
-}
-
-func planForState(state domain.NormalizedIssueState) (transitionPlan, error) {
-	switch state {
-	case domain.IssueOpen:
-		return transitionPlan{
-			patch:       map[string]any{"state": stateOpenGH},
-			removeLabel: []string{labelInProgress, labelInReview},
-		}, nil
-	case domain.IssueInProgress:
-		return transitionPlan{
-			patch:       map[string]any{"state": stateOpenGH},
-			addLabel:    labelInProgress,
-			removeLabel: []string{labelInReview},
-		}, nil
-	case domain.IssueInReview:
-		return transitionPlan{
-			patch:       map[string]any{"state": stateOpenGH},
-			addLabel:    labelInReview,
-			removeLabel: []string{labelInProgress},
-		}, nil
-	case domain.IssueDone:
-		return transitionPlan{
-			patch:       map[string]any{"state": stateClosedGH, "state_reason": reasonComplete},
-			removeLabel: []string{labelInProgress, labelInReview},
-		}, nil
-	case domain.IssueCancelled:
-		return transitionPlan{
-			patch:       map[string]any{"state": stateClosedGH, "state_reason": reasonNotPlan},
-			removeLabel: []string{labelInProgress, labelInReview},
-		}, nil
-	default:
-		return transitionPlan{}, fmt.Errorf("%w: %q", ErrUnknownState, state)
-	}
-}
-
-func (t *Tracker) Transition(ctx context.Context, id domain.TrackerID, state domain.NormalizedIssueState) error {
-	plan, err := planForState(state)
-	if err != nil {
-		return err
-	}
-	owner, repo, number, err := t.parseID(id)
-	if err != nil {
-		return err
-	}
-	issuePath := fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number)
-
-	// 1. Patch state (+ state_reason for closed transitions).
-	if _, err := t.do(ctx, http.MethodPatch, issuePath, plan.patch); err != nil {
-		return err
-	}
-	// 2. Add the target status label (no-op when target is open/done/cancelled).
-	if plan.addLabel != "" {
-		body := map[string][]string{"labels": {plan.addLabel}}
-		if _, err := t.do(ctx, http.MethodPost, issuePath+"/labels", body); err != nil {
-			return err
-		}
-	}
-	// 3. Remove the other status labels. 404 from GitHub means "label is not
-	//    on this issue", which is the success state we want — swallow it so
-	//    the operation is idempotent.
-	for _, label := range plan.removeLabel {
-		labelPath := issuePath + "/labels/" + url.PathEscape(label)
-		if _, err := t.do(ctx, http.MethodDelete, labelPath, nil); err != nil {
-			if errors.Is(err, ErrNotFound) {
-				continue
-			}
-			return err
-		}
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------------------
