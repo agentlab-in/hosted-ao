@@ -23,8 +23,8 @@ type LifecycleStore interface {
 	Upsert(ctx context.Context, rec domain.SessionRecord, eventType EventType) error
 	Load(ctx context.Context, id domain.SessionID) (domain.CanonicalSessionLifecycle, bool, error)
 	List(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
-	GetMetadata(ctx context.Context, id domain.SessionID) (map[string]string, error)
-	PatchMetadata(ctx context.Context, id domain.SessionID, kv map[string]string) error
+	GetMetadata(ctx context.Context, id domain.SessionID) (domain.SessionMetadata, error)
+	PatchMetadata(ctx context.Context, id domain.SessionID, meta domain.SessionMetadata) error
 
 	// Get returns a single full record (with identity) by id. Load is
 	// lifecycle-only, so readers use this to build the read-model and reconstruct

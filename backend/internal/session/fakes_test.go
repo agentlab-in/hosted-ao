@@ -47,7 +47,7 @@ func (c *callLog) indexOf(name string) int {
 type fakeStore struct {
 	mu       sync.Mutex
 	records  map[domain.SessionID]*domain.SessionRecord
-	metadata map[domain.SessionID]map[string]string
+	metadata map[domain.SessionID]domain.SessionMetadata
 }
 
 var _ ports.LifecycleStore = (*fakeStore)(nil)
@@ -55,7 +55,7 @@ var _ ports.LifecycleStore = (*fakeStore)(nil)
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		records:  map[domain.SessionID]*domain.SessionRecord{},
-		metadata: map[domain.SessionID]map[string]string{},
+		metadata: map[domain.SessionID]domain.SessionMetadata{},
 	}
 }
 
@@ -113,30 +113,47 @@ func (s *fakeStore) List(_ context.Context, project domain.ProjectID) ([]domain.
 	return out, nil
 }
 
-func (s *fakeStore) GetMetadata(_ context.Context, id domain.SessionID) (map[string]string, error) {
+func (s *fakeStore) GetMetadata(_ context.Context, id domain.SessionID) (domain.SessionMetadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return cloneMap(s.metadata[id]), nil
+	return s.metadata[id], nil
 }
 
-func (s *fakeStore) PatchMetadata(_ context.Context, id domain.SessionID, kv map[string]string) error {
+func (s *fakeStore) PatchMetadata(_ context.Context, id domain.SessionID, meta domain.SessionMetadata) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.metadata[id] == nil {
-		s.metadata[id] = map[string]string{}
-	}
-	for k, v := range kv {
-		s.metadata[id][k] = v
-	}
+	s.metadata[id] = mergeSessionMetadata(s.metadata[id], meta)
 	return nil
+}
+
+// mergeSessionMetadata applies meta onto dst with the store's "empty = leave
+// unchanged" semantics, so partial patches do not clobber earlier values.
+func mergeSessionMetadata(dst, meta domain.SessionMetadata) domain.SessionMetadata {
+	if meta.Branch != "" {
+		dst.Branch = meta.Branch
+	}
+	if meta.WorkspacePath != "" {
+		dst.WorkspacePath = meta.WorkspacePath
+	}
+	if meta.RuntimeHandleID != "" {
+		dst.RuntimeHandleID = meta.RuntimeHandleID
+	}
+	if meta.RuntimeName != "" {
+		dst.RuntimeName = meta.RuntimeName
+	}
+	if meta.AgentSessionID != "" {
+		dst.AgentSessionID = meta.AgentSessionID
+	}
+	if meta.Prompt != "" {
+		dst.Prompt = meta.Prompt
+	}
+	return dst
 }
 
 // withMetadata attaches the separately-stored metadata to a record copy (a real
 // store would return them together). Caller holds s.mu.
 func (s *fakeStore) withMetadata(rec domain.SessionRecord) domain.SessionRecord {
-	if md := s.metadata[rec.ID]; len(md) > 0 {
-		rec.Metadata = cloneMap(md)
-	}
+	rec.Metadata = s.metadata[rec.ID]
 	return rec
 }
 

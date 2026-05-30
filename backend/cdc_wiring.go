@@ -125,7 +125,6 @@ func (s snapshotSource) Snapshot(ctx context.Context) ([]cdc.Event, int64, error
 	events := make([]cdc.Event, 0, len(recs))
 	for _, r := range recs {
 		r.Lifecycle.Version = domain.LifecycleVersion
-		r.Metadata = nil
 		blob, err := json.Marshal(r)
 		if err != nil {
 			return nil, 0, fmt.Errorf("marshal snapshot %s: %w", r.ID, err)

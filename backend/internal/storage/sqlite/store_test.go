@@ -156,7 +156,7 @@ func TestGetListRoundTrip(t *testing.T) {
 	if got.ID != "a" || got.Lifecycle.Revision != 1 || got.IssueID != "issue-1" {
 		t.Fatalf("unexpected record: %+v", got)
 	}
-	if got.Metadata != nil {
+	if !got.Metadata.IsZero() {
 		t.Fatalf("Get must not reconstruct metadata, got %v", got.Metadata)
 	}
 
@@ -176,10 +176,11 @@ func TestMetadataSideChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.PatchMetadata(ctx, "s1", map[string]string{"branch": "feat/x", "prompt": "do it"}); err != nil {
+	if err := s.PatchMetadata(ctx, "s1", domain.SessionMetadata{Branch: "feat/x", Prompt: "do it"}); err != nil {
 		t.Fatalf("patch: %v", err)
 	}
-	if err := s.PatchMetadata(ctx, "s1", map[string]string{"branch": "feat/y"}); err != nil {
+	// A partial patch (only Branch) must not clobber the earlier Prompt.
+	if err := s.PatchMetadata(ctx, "s1", domain.SessionMetadata{Branch: "feat/y"}); err != nil {
 		t.Fatalf("patch overwrite: %v", err)
 	}
 
@@ -187,8 +188,8 @@ func TestMetadataSideChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m["branch"] != "feat/y" || m["prompt"] != "do it" {
-		t.Fatalf("metadata = %v", m)
+	if m.Branch != "feat/y" || m.Prompt != "do it" {
+		t.Fatalf("metadata = %+v", m)
 	}
 	// Metadata writes must not bump revision (off the canonical path).
 	lc, _, _ := s.Load(ctx, "s1")
@@ -239,7 +240,7 @@ func TestLoadGetMissing(t *testing.T) {
 	if _, ok, err := s.Get(ctx, "nope"); ok || err != nil {
 		t.Fatalf("Get missing: ok=%v err=%v", ok, err)
 	}
-	if m, err := s.GetMetadata(ctx, "nope"); err != nil || m != nil {
+	if m, err := s.GetMetadata(ctx, "nope"); err != nil || !m.IsZero() {
 		t.Fatalf("GetMetadata missing: m=%v err=%v", m, err)
 	}
 }

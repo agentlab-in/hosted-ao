@@ -388,7 +388,7 @@ func TestOnSpawnCompleted(t *testing.T) {
 		t.Errorf("display = %v, want spawning", got)
 	}
 	meta, _ := store.GetMetadata(context.Background(), sid)
-	if meta[MetaBranch] != "feat/x" || meta[MetaAgentSessionID] != "agent-1" || meta[MetaRuntimeName] != "tmux" {
+	if meta.Branch != "feat/x" || meta.AgentSessionID != "agent-1" || meta.RuntimeName != "tmux" {
 		t.Errorf("metadata not recorded: %+v", meta)
 	}
 }

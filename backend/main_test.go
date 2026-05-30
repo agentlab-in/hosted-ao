@@ -127,7 +127,7 @@ func TestSnapshotSourceRebuildsState(t *testing.T) {
 		if rec.Lifecycle.Revision != 1 {
 			t.Errorf("payload revision = %d, want 1", rec.Lifecycle.Revision)
 		}
-		if rec.Metadata != nil {
+		if !rec.Metadata.IsZero() {
 			t.Errorf("snapshot payload must exclude metadata, got %v", rec.Metadata)
 		}
 	}

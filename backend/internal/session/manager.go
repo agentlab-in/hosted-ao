@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -278,8 +277,8 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	// (the agent's id-capture path is a separate hook that may never have run, so
 	// "no id" is the common case rather than an error). If neither is available
 	// there is nothing to relaunch from — fail early, before any I/O.
-	agentSessionID := meta[lifecycle.MetaAgentSessionID]
-	seededPrompt := meta[lifecycle.MetaPrompt]
+	agentSessionID := meta.AgentSessionID
+	seededPrompt := meta.Prompt
 	if agentSessionID == "" && seededPrompt == "" {
 		return domain.Session{}, fmt.Errorf("restore %s: no agent session id or seeded prompt (cannot resume or relaunch)", id)
 	}
@@ -287,7 +286,7 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	ws, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
 		ProjectID: rec.ProjectID,
 		SessionID: id,
-		Branch:    meta[lifecycle.MetaBranch],
+		Branch:    meta.Branch,
 	})
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("restore %s: workspace restore: %w", id, err)
@@ -335,7 +334,7 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 		if revertErr := m.lcm.OnSpawnInitiated(ctx, rec); revertErr != nil {
 			return domain.Session{}, fmt.Errorf("restore %s: revert after spawn completed failure: %w (original error: %v)", id, revertErr, err)
 		}
-		if len(rec.Metadata) > 0 {
+		if !rec.Metadata.IsZero() {
 			if revertErr := m.store.PatchMetadata(ctx, id, rec.Metadata); revertErr != nil {
 				return domain.Session{}, fmt.Errorf("restore %s: revert metadata after spawn completed failure: %w (original error: %v)", id, revertErr, err)
 			}
@@ -440,17 +439,17 @@ func seedRecord(id domain.SessionID, cfg ports.SpawnConfig, now time.Time) domai
 // runtimeHandle / workspaceInfo reconstruct teardown handles from the metadata
 // the LCM persisted in OnSpawnCompleted (the metadata-key contract is shared
 // with the lifecycle package).
-func runtimeHandle(meta map[string]string) ports.RuntimeHandle {
+func runtimeHandle(meta domain.SessionMetadata) ports.RuntimeHandle {
 	return ports.RuntimeHandle{
-		ID:          meta[lifecycle.MetaRuntimeHandleID],
-		RuntimeName: meta[lifecycle.MetaRuntimeName],
+		ID:          meta.RuntimeHandleID,
+		RuntimeName: meta.RuntimeName,
 	}
 }
 
-func workspaceInfo(rec domain.SessionRecord, meta map[string]string) ports.WorkspaceInfo {
+func workspaceInfo(rec domain.SessionRecord, meta domain.SessionMetadata) ports.WorkspaceInfo {
 	return ports.WorkspaceInfo{
-		Path:      meta[lifecycle.MetaWorkspacePath],
-		Branch:    meta[lifecycle.MetaBranch],
+		Path:      meta.WorkspacePath,
+		Branch:    meta.Branch,
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}

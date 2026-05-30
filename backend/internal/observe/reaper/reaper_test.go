@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/reaper"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -124,9 +123,9 @@ func aliveSessionWith(id domain.SessionID, runtimeName, handleID string) domain.
 			Session: domain.SessionSubstate{State: domain.SessionWorking, Reason: domain.ReasonTaskInProgress},
 			Runtime: domain.RuntimeSubstate{State: domain.RuntimeAlive, Reason: domain.RuntimeReasonProcessRunning},
 		},
-		Metadata: map[string]string{
-			lifecycle.MetaRuntimeHandleID: handleID,
-			lifecycle.MetaRuntimeName:     runtimeName,
+		Metadata: domain.SessionMetadata{
+			RuntimeHandleID: handleID,
+			RuntimeName:     runtimeName,
 		},
 	}
 }
@@ -141,9 +140,9 @@ func detectingSessionWith(id domain.SessionID, runtimeName, handleID string) dom
 			Session: domain.SessionSubstate{State: domain.SessionDetecting, Reason: domain.ReasonProbeFailure},
 			Runtime: domain.RuntimeSubstate{State: domain.RuntimeProbeFailed, Reason: domain.RuntimeReasonProbeError},
 		},
-		Metadata: map[string]string{
-			lifecycle.MetaRuntimeHandleID: handleID,
-			lifecycle.MetaRuntimeName:     runtimeName,
+		Metadata: domain.SessionMetadata{
+			RuntimeHandleID: handleID,
+			RuntimeName:     runtimeName,
 		},
 	}
 }
@@ -367,7 +366,7 @@ func TestReaper_SkipsMissingHandle(t *testing.T) {
 	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	sess := aliveSessionWith("s1", "tmux", "h1")
-	delete(sess.Metadata, lifecycle.MetaRuntimeHandleID)
+	sess.Metadata.RuntimeHandleID = ""
 	lcm := &fakeLCM{sessions: []domain.SessionRecord{sess}}
 	rt := &fakeRuntime{results: map[string]aliveResult{}}
 	rp := reaper.New(lcm, reaper.MapRegistry{"tmux": rt}, reaper.Config{Clock: clock, Tick: time.Hour})

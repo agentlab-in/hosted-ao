@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -86,16 +85,15 @@ func TestSpawn_HappyPath(t *testing.T) {
 	// persisted too so a later Restore that finds no captured agent session id
 	// can still fall back to a fresh launch using the same prompt.
 	meta, _ := h.store.GetMetadata(ctx, "sess-1")
-	for k, want := range map[string]string{
-		lifecycle.MetaBranch:          "feat/42",
-		lifecycle.MetaWorkspacePath:   "/tmp/ws/sess-1",
-		lifecycle.MetaRuntimeHandleID: "rt-sess-1",
-		lifecycle.MetaRuntimeName:     "tmux",
-		lifecycle.MetaPrompt:          "do the thing\n\nbe careful",
-	} {
-		if meta[k] != want {
-			t.Errorf("meta[%q] = %q, want %q", k, meta[k], want)
-		}
+	want := domain.SessionMetadata{
+		Branch:          "feat/42",
+		WorkspacePath:   "/tmp/ws/sess-1",
+		RuntimeHandleID: "rt-sess-1",
+		RuntimeName:     "tmux",
+		Prompt:          "do the thing\n\nbe careful",
+	}
+	if meta != want {
+		t.Errorf("metadata = %+v, want %+v", meta, want)
 	}
 }
 
@@ -300,7 +298,7 @@ func TestRestore_LiveSession_Rejected(t *testing.T) {
 	}
 	// The session is live (never torn down). Capture an agent id so the only thing
 	// blocking restore is the non-terminal lifecycle, not missing metadata.
-	if err := h.store.PatchMetadata(ctx, "sess-1", map[string]string{lifecycle.MetaAgentSessionID: "agent-xyz"}); err != nil {
+	if err := h.store.PatchMetadata(ctx, "sess-1", domain.SessionMetadata{AgentSessionID: "agent-xyz"}); err != nil {
 		t.Fatalf("patch metadata: %v", err)
 	}
 	createdBefore := len(h.runtime.created)
@@ -398,7 +396,7 @@ func TestRestore_RelaunchesWithResumeCommand(t *testing.T) {
 		t.Fatalf("kill: %v", err)
 	}
 	// The agent's resume id is captured in metadata (here set explicitly).
-	if err := h.store.PatchMetadata(ctx, "sess-1", map[string]string{lifecycle.MetaAgentSessionID: "agent-xyz"}); err != nil {
+	if err := h.store.PatchMetadata(ctx, "sess-1", domain.SessionMetadata{AgentSessionID: "agent-xyz"}); err != nil {
 		t.Fatalf("patch metadata: %v", err)
 	}
 
@@ -505,7 +503,7 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 	if _, err := h.sm.Kill(ctx, "sess-1", ports.KillOptions{Reason: ports.KillManual}); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
-	if err := h.store.PatchMetadata(ctx, "sess-1", map[string]string{lifecycle.MetaAgentSessionID: "agent-xyz"}); err != nil {
+	if err := h.store.PatchMetadata(ctx, "sess-1", domain.SessionMetadata{AgentSessionID: "agent-xyz"}); err != nil {
 		t.Fatalf("patch metadata: %v", err)
 	}
 	beforeMeta, _ := h.store.GetMetadata(ctx, "sess-1")
@@ -528,7 +526,7 @@ func TestRestore_OnSpawnCompletedFailure_RollsBackRuntime(t *testing.T) {
 		t.Fatalf("restore failure should advance revision twice, got %d want %d", rec.Lifecycle.Revision, before.Lifecycle.Revision+2)
 	}
 	afterMeta, _ := h.store.GetMetadata(ctx, "sess-1")
-	if !equalStringMap(afterMeta, beforeMeta) {
+	if afterMeta != beforeMeta {
 		t.Fatalf("restore failure should restore metadata, got %+v want %+v", afterMeta, beforeMeta)
 	}
 
@@ -595,7 +593,7 @@ func seedTerminal(t *testing.T, h *harness, id domain.SessionID, wsPath string) 
 	}, ports.EventSessionCreated); err != nil {
 		t.Fatalf("upsert %s: %v", id, err)
 	}
-	if err := h.store.PatchMetadata(ctx, id, map[string]string{lifecycle.MetaWorkspacePath: wsPath}); err != nil {
+	if err := h.store.PatchMetadata(ctx, id, domain.SessionMetadata{WorkspacePath: wsPath}); err != nil {
 		t.Fatalf("patch metadata %s: %v", id, err)
 	}
 }
@@ -606,18 +604,6 @@ func equalStrings(a, b []string) bool {
 	}
 	for i := range a {
 		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func equalStringMap(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
 			return false
 		}
 	}

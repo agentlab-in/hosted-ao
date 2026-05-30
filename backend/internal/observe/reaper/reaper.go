@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -203,11 +202,11 @@ func (r *Reaper) probeOne(ctx context.Context, sess domain.SessionRecord, now ti
 }
 
 // handleFromRecord reconstructs the RuntimeHandle stored on the session by
-// OnSpawnCompleted. Both keys are required; either being empty is the
+// OnSpawnCompleted. Both fields are required; either being empty is the
 // "session lacks a probable handle" signal that probeOne uses to skip.
 func handleFromRecord(rec domain.SessionRecord) (ports.RuntimeHandle, bool) {
-	id := rec.Metadata[lifecycle.MetaRuntimeHandleID]
-	name := rec.Metadata[lifecycle.MetaRuntimeName]
+	id := rec.Metadata.RuntimeHandleID
+	name := rec.Metadata.RuntimeName
 	if id == "" || name == "" {
 		return ports.RuntimeHandle{}, false
 	}

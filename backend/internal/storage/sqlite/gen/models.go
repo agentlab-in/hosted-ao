@@ -34,14 +34,34 @@ type Outbox struct {
 	CreatedAt    time.Time
 }
 
-type PrEnrichment struct {
-	SessionID       string
-	CiSummary       string
-	ReviewDecision  string
-	Mergeability    string
-	PendingComments string
-	CiLogTail       string
-	LastFetchedAt   time.Time
+type Pr struct {
+	SessionID      string
+	ReviewDecision string
+	Mergeability   string
+	CiState        string
+	CiPassed       int64
+	CiFailed       int64
+	CiPending      int64
+	CiLogTail      string
+	LastFetchedAt  time.Time
+}
+
+type PrCheck struct {
+	SessionID string
+	Name      string
+	Status    string
+	Url       string
+}
+
+type PrComment struct {
+	SessionID string
+	CommentID string
+	Author    string
+	File      string
+	Line      int64
+	Body      string
+	Resolved  int64
+	CreatedAt time.Time
 }
 
 type Project struct {
@@ -93,7 +113,12 @@ type Session struct {
 }
 
 type SessionMetadatum struct {
-	SessionID string
-	Key       string
-	Value     string
+	SessionID       string
+	Branch          string
+	WorkspacePath   string
+	RuntimeHandleID string
+	RuntimeName     string
+	AgentSessionID  string
+	Prompt          string
+	UpdatedAt       time.Time
 }

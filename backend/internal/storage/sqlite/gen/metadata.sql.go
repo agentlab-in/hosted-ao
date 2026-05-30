@@ -7,53 +7,76 @@ package gen
 
 import (
 	"context"
+	"time"
 )
 
-const getMetadata = `-- name: GetMetadata :many
-SELECT key, value FROM session_metadata WHERE session_id = ?
+const getSessionMetadata = `-- name: GetSessionMetadata :one
+SELECT branch, workspace_path, runtime_handle_id, runtime_name, agent_session_id, prompt
+FROM session_metadata
+WHERE session_id = ?
 `
 
-type GetMetadataRow struct {
-	Key   string
-	Value string
+type GetSessionMetadataRow struct {
+	Branch          string
+	WorkspacePath   string
+	RuntimeHandleID string
+	RuntimeName     string
+	AgentSessionID  string
+	Prompt          string
 }
 
-func (q *Queries) GetMetadata(ctx context.Context, sessionID string) ([]GetMetadataRow, error) {
-	rows, err := q.db.QueryContext(ctx, getMetadata, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []GetMetadataRow{}
-	for rows.Next() {
-		var i GetMetadataRow
-		if err := rows.Scan(&i.Key, &i.Value); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) GetSessionMetadata(ctx context.Context, sessionID string) (GetSessionMetadataRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionMetadata, sessionID)
+	var i GetSessionMetadataRow
+	err := row.Scan(
+		&i.Branch,
+		&i.WorkspacePath,
+		&i.RuntimeHandleID,
+		&i.RuntimeName,
+		&i.AgentSessionID,
+		&i.Prompt,
+	)
+	return i, err
 }
 
-const upsertMetadata = `-- name: UpsertMetadata :exec
-INSERT INTO session_metadata (session_id, key, value)
-VALUES (?, ?, ?)
-ON CONFLICT (session_id, key) DO UPDATE SET value = excluded.value
+const upsertSessionMetadata = `-- name: UpsertSessionMetadata :exec
+INSERT INTO session_metadata (
+    session_id, branch, workspace_path, runtime_handle_id, runtime_name, agent_session_id, prompt, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (session_id) DO UPDATE SET
+    branch            = CASE WHEN excluded.branch            <> '' THEN excluded.branch            ELSE session_metadata.branch            END,
+    workspace_path    = CASE WHEN excluded.workspace_path    <> '' THEN excluded.workspace_path    ELSE session_metadata.workspace_path    END,
+    runtime_handle_id = CASE WHEN excluded.runtime_handle_id <> '' THEN excluded.runtime_handle_id ELSE session_metadata.runtime_handle_id END,
+    runtime_name      = CASE WHEN excluded.runtime_name      <> '' THEN excluded.runtime_name      ELSE session_metadata.runtime_name      END,
+    agent_session_id  = CASE WHEN excluded.agent_session_id  <> '' THEN excluded.agent_session_id  ELSE session_metadata.agent_session_id  END,
+    prompt            = CASE WHEN excluded.prompt            <> '' THEN excluded.prompt            ELSE session_metadata.prompt            END,
+    updated_at        = excluded.updated_at
 `
 
-type UpsertMetadataParams struct {
-	SessionID string
-	Key       string
-	Value     string
+type UpsertSessionMetadataParams struct {
+	SessionID       string
+	Branch          string
+	WorkspacePath   string
+	RuntimeHandleID string
+	RuntimeName     string
+	AgentSessionID  string
+	Prompt          string
+	UpdatedAt       time.Time
 }
 
-func (q *Queries) UpsertMetadata(ctx context.Context, arg UpsertMetadataParams) error {
-	_, err := q.db.ExecContext(ctx, upsertMetadata, arg.SessionID, arg.Key, arg.Value)
+// Merge semantics: an empty incoming column is "leave unchanged", so a partial
+// patch (e.g. spawn writing only the runtime handle) never clobbers a value set
+// earlier (e.g. the branch set at creation). Mirrors the old per-key map merge.
+func (q *Queries) UpsertSessionMetadata(ctx context.Context, arg UpsertSessionMetadataParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSessionMetadata,
+		arg.SessionID,
+		arg.Branch,
+		arg.WorkspacePath,
+		arg.RuntimeHandleID,
+		arg.RuntimeName,
+		arg.AgentSessionID,
+		arg.Prompt,
+		arg.UpdatedAt,
+	)
 	return err
 }

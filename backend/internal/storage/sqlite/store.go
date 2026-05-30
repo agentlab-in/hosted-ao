@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -77,42 +78,41 @@ func (s *Store) ListAll(ctx context.Context) ([]domain.SessionRecord, error) {
 	return out, nil
 }
 
-// GetMetadata returns the opaque key/value metadata for a session.
-func (s *Store) GetMetadata(ctx context.Context, id domain.SessionID) (map[string]string, error) {
-	rows, err := s.q.GetMetadata(ctx, string(id))
+// GetMetadata returns the typed metadata for a session, or the zero value if the
+// session has no metadata row yet.
+func (s *Store) GetMetadata(ctx context.Context, id domain.SessionID) (domain.SessionMetadata, error) {
+	row, err := s.q.GetSessionMetadata(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SessionMetadata{}, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("get metadata %s: %w", id, err)
+		return domain.SessionMetadata{}, fmt.Errorf("get metadata %s: %w", id, err)
 	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	m := make(map[string]string, len(rows))
-	for _, r := range rows {
-		m[r.Key] = r.Value
-	}
-	return m, nil
+	return domain.SessionMetadata{
+		Branch:          row.Branch,
+		WorkspacePath:   row.WorkspacePath,
+		RuntimeHandleID: row.RuntimeHandleID,
+		RuntimeName:     row.RuntimeName,
+		AgentSessionID:  row.AgentSessionID,
+		Prompt:          row.Prompt,
+	}, nil
 }
 
-// PatchMetadata merges kv into the session's metadata. It is outside the
-// canonical write path: no revision bump, no CDC event.
-func (s *Store) PatchMetadata(ctx context.Context, id domain.SessionID, kv map[string]string) error {
-	if len(kv) == 0 {
+// PatchMetadata merges meta into the session's metadata. It is outside the
+// canonical write path: no revision bump, no CDC event. Empty fields are left
+// unchanged (see UpsertSessionMetadata), so a partial patch is non-destructive.
+func (s *Store) PatchMetadata(ctx context.Context, id domain.SessionID, meta domain.SessionMetadata) error {
+	if meta.IsZero() {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin patch metadata: %w", err)
-	}
-	defer tx.Rollback()
-	qtx := s.q.WithTx(tx)
-	for k, v := range kv {
-		if err := qtx.UpsertMetadata(ctx, gen.UpsertMetadataParams{
-			SessionID: string(id),
-			Key:       k,
-			Value:     v,
-		}); err != nil {
-			return fmt.Errorf("patch metadata %s[%s]: %w", id, k, err)
-		}
-	}
-	return tx.Commit()
+	return s.q.UpsertSessionMetadata(ctx, gen.UpsertSessionMetadataParams{
+		SessionID:       string(id),
+		Branch:          meta.Branch,
+		WorkspacePath:   meta.WorkspacePath,
+		RuntimeHandleID: meta.RuntimeHandleID,
+		RuntimeName:     meta.RuntimeName,
+		AgentSessionID:  meta.AgentSessionID,
+		Prompt:          meta.Prompt,
+		UpdatedAt:       time.Now().UTC(),
+	})
 }

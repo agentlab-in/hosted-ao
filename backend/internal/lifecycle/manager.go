@@ -21,19 +21,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Metadata keys OnSpawnCompleted records for the spawned session's handles.
-//
-// MetaPrompt is the assembled launch prompt, persisted so a Restore that finds
-// no captured agent session id can still fall back to a fresh launch with the
-// same prompt rather than failing.
-const (
-	MetaBranch          = "branch"
-	MetaWorkspacePath   = "workspacePath"
-	MetaRuntimeHandleID = "runtimeHandleId"
-	MetaRuntimeName     = "runtimeName"
-	MetaAgentSessionID  = "agentSessionId"
-	MetaPrompt          = "prompt"
-)
+// Session metadata is now the typed domain.SessionMetadata struct (was a
+// free-form string map keyed by Meta* constants). OnSpawnCompleted records the
+// spawned session's handles via spawnMetadata; Prompt is the assembled launch
+// prompt, persisted so a Restore that finds no captured agent session id can
+// still fall back to a fresh launch with the same prompt rather than failing.
 
 // Manager is the LCM. The Apply* pipeline persists a transition and then fires
 // the mapped reaction via Notifier/AgentMessenger (see reactions.go).
@@ -381,7 +373,7 @@ func (m *Manager) OnSpawnCompleted(ctx context.Context, id domain.SessionID, o p
 				return err
 			}
 		}
-		if meta := spawnMetadata(o); len(meta) > 0 {
+		if meta := spawnMetadata(o); !meta.IsZero() {
 			if err := m.store.PatchMetadata(ctx, id, meta); err != nil {
 				return err
 			}
@@ -545,25 +537,13 @@ func sameActivity(a, b domain.ActivitySubstate) bool {
 	return a.State == b.State && a.Source == b.Source && a.LastActivityAt.Equal(b.LastActivityAt)
 }
 
-func spawnMetadata(o ports.SpawnOutcome) map[string]string {
-	meta := map[string]string{}
-	if o.Branch != "" {
-		meta[MetaBranch] = o.Branch
+func spawnMetadata(o ports.SpawnOutcome) domain.SessionMetadata {
+	return domain.SessionMetadata{
+		Branch:          o.Branch,
+		WorkspacePath:   o.WorkspacePath,
+		RuntimeHandleID: o.RuntimeHandle.ID,
+		RuntimeName:     o.RuntimeHandle.RuntimeName,
+		AgentSessionID:  o.AgentSessionID,
+		Prompt:          o.Prompt,
 	}
-	if o.WorkspacePath != "" {
-		meta[MetaWorkspacePath] = o.WorkspacePath
-	}
-	if o.RuntimeHandle.ID != "" {
-		meta[MetaRuntimeHandleID] = o.RuntimeHandle.ID
-	}
-	if o.RuntimeHandle.RuntimeName != "" {
-		meta[MetaRuntimeName] = o.RuntimeHandle.RuntimeName
-	}
-	if o.AgentSessionID != "" {
-		meta[MetaAgentSessionID] = o.AgentSessionID
-	}
-	if o.Prompt != "" {
-		meta[MetaPrompt] = o.Prompt
-	}
-	return meta
 }

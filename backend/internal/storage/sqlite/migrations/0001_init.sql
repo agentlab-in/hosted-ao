@@ -39,14 +39,21 @@ CREATE TABLE sessions (
 
 CREATE INDEX idx_sessions_project ON sessions (project_id);
 
--- session_metadata is the opaque key/value side-channel (branch, workspacePath,
--- runtimeHandleId, runtimeName, agentSessionId, prompt). Written by
--- PatchMetadata; never bumps revision and never emits a CDC event.
+-- session_metadata is the 1:1 typed side-channel for a session's operational
+-- handles and seed inputs — the fields the Session Manager and reaper need but
+-- that are NOT part of the canonical lifecycle. One row per session, named
+-- columns (not a free-form key/value bag), so the set of metadata a session can
+-- carry is fixed by the schema. Written by PatchMetadata; never bumps revision
+-- and never emits a CDC event.
 CREATE TABLE session_metadata (
-    session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
-    key        TEXT NOT NULL,
-    value      TEXT NOT NULL,
-    PRIMARY KEY (session_id, key)
+    session_id        TEXT PRIMARY KEY REFERENCES sessions (id) ON DELETE CASCADE,
+    branch            TEXT NOT NULL DEFAULT '',
+    workspace_path    TEXT NOT NULL DEFAULT '',
+    runtime_handle_id TEXT NOT NULL DEFAULT '',
+    runtime_name      TEXT NOT NULL DEFAULT '',
+    agent_session_id  TEXT NOT NULL DEFAULT '',
+    prompt            TEXT NOT NULL DEFAULT '',
+    updated_at        TIMESTAMP NOT NULL
 );
 
 -- change_log is the durable, ordered record of every canonical write. seq is the

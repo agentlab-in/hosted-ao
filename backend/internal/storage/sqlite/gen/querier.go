@@ -10,25 +10,31 @@ import (
 
 type Querier interface {
 	ArchiveProject(ctx context.Context, arg ArchiveProjectParams) error
-	DeletePREnrichment(ctx context.Context, sessionID string) error
+	DeletePR(ctx context.Context, sessionID string) error
+	DeletePRChecks(ctx context.Context, sessionID string) error
+	DeletePRComments(ctx context.Context, sessionID string) error
 	DeleteProject(ctx context.Context, id string) error
 	DeleteReactionTracker(ctx context.Context, arg DeleteReactionTrackerParams) error
 	DeleteSentOutboxBelow(ctx context.Context, changeLogSeq int64) (int64, error)
 	DeleteSessionReactionTrackers(ctx context.Context, sessionID string) error
 	GetConsumerOffset(ctx context.Context, consumer string) (int64, error)
-	GetMetadata(ctx context.Context, sessionID string) ([]GetMetadataRow, error)
-	GetPREnrichment(ctx context.Context, sessionID string) (PrEnrichment, error)
+	GetPR(ctx context.Context, sessionID string) (Pr, error)
 	GetProject(ctx context.Context, id string) (Project, error)
 	GetSession(ctx context.Context, id string) (Session, error)
+	GetSessionMetadata(ctx context.Context, sessionID string) (GetSessionMetadataRow, error)
 	GetSessionRevision(ctx context.Context, id string) (int64, error)
 	// Appends a canonical-write record and returns its monotonic seq so the same
 	// transaction can thread it into the outbox row.
 	InsertChangeLog(ctx context.Context, arg InsertChangeLogParams) (int64, error)
 	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
+	InsertPRCheck(ctx context.Context, arg InsertPRCheckParams) error
+	InsertPRComment(ctx context.Context, arg InsertPRCommentParams) error
 	// CAS insert: only succeeds for a brand-new id. Incoming revision must be 0;
 	// the row is persisted at revision 1.
 	InsertSession(ctx context.Context, arg InsertSessionParams) (int64, error)
 	ListAllSessions(ctx context.Context) ([]Session, error)
+	ListPRChecks(ctx context.Context, sessionID string) ([]ListPRChecksRow, error)
+	ListPRComments(ctx context.Context, sessionID string) ([]ListPRCommentsRow, error)
 	ListProjects(ctx context.Context) ([]Project, error)
 	ListReactionTrackers(ctx context.Context) ([]ReactionTracker, error)
 	ListSessionsByProject(ctx context.Context, projectID string) ([]Session, error)
@@ -41,10 +47,13 @@ type Querier interface {
 	// revision (@expected_revision). 0 rows affected => revision mismatch.
 	UpdateSessionCAS(ctx context.Context, arg UpdateSessionCASParams) (int64, error)
 	UpsertConsumerOffset(ctx context.Context, arg UpsertConsumerOffsetParams) error
-	UpsertMetadata(ctx context.Context, arg UpsertMetadataParams) error
-	UpsertPREnrichment(ctx context.Context, arg UpsertPREnrichmentParams) error
+	UpsertPR(ctx context.Context, arg UpsertPRParams) error
 	UpsertProject(ctx context.Context, arg UpsertProjectParams) error
 	UpsertReactionTracker(ctx context.Context, arg UpsertReactionTrackerParams) error
+	// Merge semantics: an empty incoming column is "leave unchanged", so a partial
+	// patch (e.g. spawn writing only the runtime handle) never clobbers a value set
+	// earlier (e.g. the branch set at creation). Mirrors the old per-key map merge.
+	UpsertSessionMetadata(ctx context.Context, arg UpsertSessionMetadataParams) error
 }
 
 var _ Querier = (*Queries)(nil)

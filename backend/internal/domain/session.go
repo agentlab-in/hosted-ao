@@ -17,16 +17,41 @@ const (
 	KindOrchestrator SessionKind = "orchestrator"
 )
 
+// SessionMetadata is the typed, off-canonical metadata for a session: the
+// operational handles and seed inputs the Session Manager and reaper need but
+// that are NOT part of the canonical lifecycle. The set of fields is fixed here
+// (no free-form keys), so what a session can carry is a compile-time fact, and
+// it is persisted 1:1 in the session_metadata table off the CDC path.
+//
+// Empty fields mean "unset": PatchMetadata never overwrites a stored value with
+// an empty one, so a partial write (spawn setting only the runtime handle) does
+// not clobber a value set earlier (the branch set at creation).
+type SessionMetadata struct {
+	Branch          string `json:"branch,omitempty"`
+	WorkspacePath   string `json:"workspacePath,omitempty"`
+	RuntimeHandleID string `json:"runtimeHandleId,omitempty"`
+	RuntimeName     string `json:"runtimeName,omitempty"`
+	AgentSessionID  string `json:"agentSessionId,omitempty"`
+	Prompt          string `json:"prompt,omitempty"`
+}
+
+// IsZero reports whether no metadata field is set.
+func (m SessionMetadata) IsZero() bool { return m == SessionMetadata{} }
+
 // SessionRecord is the PERSISTENCE shape: identity, canonical lifecycle, and
 // metadata — everything the store holds, and nothing derived. The store reads
 // and writes records; it never produces the derived display status.
+//
+// Metadata is json:"-" on purpose: it lives off the canonical path, so it must
+// never ride along in the change_log / snapshot payloads. Enforcing that at the
+// type level means no caller has to remember to scrub it before marshalling.
 type SessionRecord struct {
 	ID        SessionID                 `json:"id"`
 	ProjectID ProjectID                 `json:"projectId"`
 	IssueID   IssueID                   `json:"issueId,omitempty"`
 	Kind      SessionKind               `json:"kind"`
 	Lifecycle CanonicalSessionLifecycle `json:"lifecycle"`
-	Metadata  map[string]string         `json:"metadata,omitempty"`
+	Metadata  SessionMetadata           `json:"-"`
 	CreatedAt time.Time                 `json:"createdAt"`
 	UpdatedAt time.Time                 `json:"updatedAt"`
 }

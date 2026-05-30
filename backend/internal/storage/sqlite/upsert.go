@@ -82,14 +82,14 @@ func casPersist(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) (
 }
 
 // appendOutbox writes the change_log entry and threads its seq into a fresh
-// outbox row. The change_log payload is the persisted record at its new
-// revision (metadata excluded — it is not on the canonical path).
+// outbox row. The change_log payload is the persisted record at its new revision
+// (metadata is excluded by SessionRecord's json:"-" tag — it is not on the
+// canonical path).
 func appendOutbox(ctx context.Context, q *gen.Queries, rec domain.SessionRecord, newRevision int, eventType ports.EventType) error {
 	now := time.Now().UTC()
 	payload := rec
 	payload.Lifecycle.Revision = newRevision
 	payload.Lifecycle.Version = domain.LifecycleVersion
-	payload.Metadata = nil
 	blob, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal change_log payload %s: %w", rec.ID, err)
