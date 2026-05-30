@@ -1,8 +1,17 @@
 // Package github implements the ports.Tracker outbound port for GitHub
-// Issues. v1 is read-only: Get returns a normalized Issue snapshot that the
-// Session Manager uses to hydrate the agent prompt during spawn-bootstrap.
+// Issues. v1 is read-only:
+//
+//   - Get returns a normalized snapshot of one issue (spawn-bootstrap
+//     reads it to hydrate the agent prompt).
+//   - List returns a filtered slice of issues in a repo (one page, no
+//     auto-pagination in v1; PRs are filtered out client-side because
+//     GitHub's /issues endpoint conflates them).
+//   - Preflight performs a single GET /user against GitHub to verify the
+//     token is accepted; success is cached for the lifetime of the
+//     Tracker, failures are not.
+//
 // Writing back to the tracker (Comment, Transition) is deferred to issue
-// #40; the observer/polling loop is deferred to issue #35.
+// #40. The observer/polling loop is deferred to issue #35.
 //
 // # Reverse state mapping
 //
@@ -24,6 +33,8 @@
 // # Out of scope
 //
 //   - No Comment, no Transition (issue #40).
+//   - No List pagination beyond a single page (callers requesting more than
+//     100 results need to wait for the observer/polling work in issue #35).
 //   - No webhook receiver, no polling goroutine, no fact projection into
 //     LCM (issue #35).
 //   - No richer per-provider metadata on Issue (milestones, project boards,

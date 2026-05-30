@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -29,6 +31,11 @@ const (
 
 	stateClosedGH = "closed"
 	reasonNotPlan = "not_planned"
+
+	// List pagination — GitHub's per_page maxes at 100. We default to 30
+	// (matching the legacy gh CLI default) when the caller passes 0.
+	defaultListLimit = 30
+	maxListLimit     = 100
 )
 
 // Sentinel errors. Adapter-level callers should match on these via
@@ -37,6 +44,7 @@ const (
 var (
 	ErrNotFound      = errors.New("github tracker: issue not found")
 	ErrRateLimited   = errors.New("github tracker: rate limited")
+	ErrAuthFailed    = errors.New("github tracker: authentication failed")
 	ErrWrongProvider = errors.New("github tracker: id is not a github tracker id")
 	ErrBadID         = errors.New("github tracker: malformed native id")
 )
@@ -75,14 +83,19 @@ type Options struct {
 
 // Tracker implements ports.Tracker against the GitHub REST API.
 //
-// Construction performs a fail-fast token presence check (no network call —
-// validating the token's authorization scope against GitHub requires a real
-// request, and that is the first operation any caller will make anyway).
+// Construction performs a fail-fast token presence check (no network call).
+// The first Preflight call validates the token against GitHub itself; a
+// successful preflight is cached for the lifetime of the Tracker so repeat
+// calls are free, while failures are intentionally NOT cached so a
+// transient startup glitch doesn't permanently brick the adapter.
 type Tracker struct {
 	http      *http.Client
 	tokens    TokenSource
 	baseURL   string
 	userAgent string
+
+	preflightMu sync.Mutex
+	preflightOK bool
 }
 
 // New returns a Tracker. It fails fast when no token can be obtained so
@@ -122,15 +135,19 @@ var _ ports.Tracker = (*Tracker)(nil)
 // ---------------------------------------------------------------------------
 
 // ghIssue is the subset of fields we read off the REST issue payload.
+// PullRequest is present (non-nil) iff GitHub considers this row a PR —
+// the /repos/{o}/{r}/issues endpoint conflates the two. List uses it to
+// filter PRs out client-side so the SM never sees a PR number as an issue.
 type ghIssue struct {
-	Number      int       `json:"number"`
-	Title       string    `json:"title"`
-	Body        string    `json:"body"`
-	State       string    `json:"state"`
-	StateReason string    `json:"state_reason"`
-	HTMLURL     string    `json:"html_url"`
-	Labels      []ghLabel `json:"labels"`
-	Assignees   []ghUser  `json:"assignees"`
+	Number      int              `json:"number"`
+	Title       string           `json:"title"`
+	Body        string           `json:"body"`
+	State       string           `json:"state"`
+	StateReason string           `json:"state_reason"`
+	HTMLURL     string           `json:"html_url"`
+	Labels      []ghLabel        `json:"labels"`
+	Assignees   []ghUser         `json:"assignees"`
+	PullRequest *json.RawMessage `json:"pull_request,omitempty"`
 }
 
 type ghLabel struct {
@@ -215,6 +232,113 @@ func mapStateFromGitHub(state, reason string, labels []string) domain.Normalized
 }
 
 // ---------------------------------------------------------------------------
+// List
+// ---------------------------------------------------------------------------
+
+// List returns issues for a repo, filtered by state/labels/assignee. PRs
+// that GitHub's /issues endpoint conflates into the response are filtered
+// out client-side. Pagination is intentionally NOT implemented in v1 —
+// callers get one page bounded by ListFilter.Limit (default 30, max 100).
+func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter domain.ListFilter) ([]domain.Issue, error) {
+	if repo.Provider != domain.TrackerProviderGitHub {
+		return nil, fmt.Errorf("%w: provider=%q", ErrWrongProvider, repo.Provider)
+	}
+	owner, repoName, err := parseGitHubRepo(repo.Native)
+	if err != nil {
+		return nil, err
+	}
+
+	q := url.Values{}
+	switch filter.State {
+	case domain.ListOpen:
+		q.Set("state", "open")
+	case domain.ListClosed:
+		q.Set("state", "closed")
+	default:
+		q.Set("state", "all")
+	}
+	if len(filter.Labels) > 0 {
+		q.Set("labels", strings.Join(filter.Labels, ","))
+	}
+	if filter.Assignee != "" {
+		q.Set("assignee", filter.Assignee)
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+	if limit > maxListLimit {
+		limit = maxListLimit
+	}
+	q.Set("per_page", strconv.Itoa(limit))
+
+	path := fmt.Sprintf("/repos/%s/%s/issues?%s", owner, repoName, q.Encode())
+	resp, err := t.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var raw []ghIssue
+	if err := json.Unmarshal(resp, &raw); err != nil {
+		return nil, fmt.Errorf("github tracker: decode list: %w", err)
+	}
+	out := make([]domain.Issue, 0, len(raw))
+	for _, r := range raw {
+		if r.PullRequest != nil {
+			continue
+		}
+		labels := make([]string, 0, len(r.Labels))
+		for _, l := range r.Labels {
+			labels = append(labels, l.Name)
+		}
+		assignees := make([]string, 0, len(r.Assignees))
+		for _, a := range r.Assignees {
+			assignees = append(assignees, a.Login)
+		}
+		issue := domain.Issue{
+			ID: domain.TrackerID{
+				Provider: domain.TrackerProviderGitHub,
+				Native:   fmt.Sprintf("%s/%s#%d", owner, repoName, r.Number),
+			},
+			Title:     r.Title,
+			Body:      r.Body,
+			State:     mapStateFromGitHub(r.State, r.StateReason, labels),
+			URL:       r.HTMLURL,
+			Labels:    labels,
+			Assignees: assignees,
+		}
+		if len(issue.Labels) == 0 {
+			issue.Labels = nil
+		}
+		if len(issue.Assignees) == 0 {
+			issue.Assignees = nil
+		}
+		out = append(out, issue)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Preflight
+// ---------------------------------------------------------------------------
+
+// Preflight verifies the configured token is accepted by GitHub by making a
+// single GET /user request. A successful check is cached for the lifetime
+// of the Tracker; failures are never cached so a transient network glitch
+// at startup is recoverable on a subsequent call.
+func (t *Tracker) Preflight(ctx context.Context) error {
+	t.preflightMu.Lock()
+	defer t.preflightMu.Unlock()
+	if t.preflightOK {
+		return nil
+	}
+	if _, err := t.do(ctx, http.MethodGet, "/user", nil); err != nil {
+		return err
+	}
+	t.preflightOK = true
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // HTTP plumbing
 // ---------------------------------------------------------------------------
 
@@ -262,16 +386,22 @@ func classifyError(resp *http.Response, body []byte) error {
 		return fmt.Errorf("%w: %s", ErrNotFound, msg)
 	case http.StatusTooManyRequests:
 		return rateLimited(resp, msg)
-	case http.StatusForbidden, http.StatusUnauthorized:
+	case http.StatusUnauthorized:
+		// 401 is unambiguously an auth failure. GitHub never uses 401 for
+		// rate limiting; that's always 403 or 429.
+		return fmt.Errorf("%w: %s", ErrAuthFailed, msg)
+	case http.StatusForbidden:
 		// GitHub returns 403 for primary rate-limit exhaustion, for
-		// secondary/abuse limits, and for genuine auth failures. Three
-		// signals disambiguate the rate-limit cases from auth: the primary
-		// limit sets X-RateLimit-Remaining=0; the secondary/abuse limit
-		// sets Retry-After (and often omits X-RateLimit-Remaining); and
-		// either case mentions "rate limit" / "abuse" in the body.
+		// secondary/abuse limits, and for genuine auth/permission failures.
+		// Disambiguate by signal: primary limit sets X-RateLimit-Remaining=0;
+		// secondary/abuse sets Retry-After (often without the Remaining
+		// header); either case mentions "rate limit" / "abuse" in the body.
+		// Everything else is an auth/permission failure (token missing the
+		// right scope, repo not visible to this token, etc).
 		if isRateLimited(resp, msg) {
 			return rateLimited(resp, msg)
 		}
+		return fmt.Errorf("%w: %s", ErrAuthFailed, msg)
 	}
 	return fmt.Errorf("github tracker: %d %s", resp.StatusCode, msg)
 }
@@ -353,4 +483,25 @@ func parseGitHubID(native string) (owner, repo string, number int, err error) {
 		return "", "", 0, fmt.Errorf("%w: bad issue number %q", ErrBadID, numPart)
 	}
 	return owner, repo, n, nil
+}
+
+// parseGitHubRepo accepts "owner/repo" and rejects anything containing
+// additional slashes or a "#" segment. Used by List.
+func parseGitHubRepo(native string) (owner, repo string, err error) {
+	if native == "" {
+		return "", "", fmt.Errorf("%w: empty repo", ErrBadID)
+	}
+	slash := strings.IndexByte(native, '/')
+	if slash < 0 {
+		return "", "", fmt.Errorf("%w: missing owner/repo separator", ErrBadID)
+	}
+	owner = native[:slash]
+	repo = native[slash+1:]
+	if owner == "" || repo == "" {
+		return "", "", fmt.Errorf("%w: empty owner or repo segment", ErrBadID)
+	}
+	if strings.ContainsAny(repo, "/#") {
+		return "", "", fmt.Errorf("%w: invalid repo segment %q", ErrBadID, repo)
+	}
+	return owner, repo, nil
 }

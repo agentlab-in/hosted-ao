@@ -321,3 +321,220 @@ func TestGet_CanonicalizesProviderOnOutput(t *testing.T) {
 		t.Fatalf("issue.ID.Native = %q, want o/r#1", issue.ID.Native)
 	}
 }
+
+// TestGet_AuthFailed locks in that a 401 (and 403 without rate-limit
+// signals) maps to the typed ErrAuthFailed, so callers — especially
+// Preflight — can distinguish bad-token from other failures.
+func TestGet_AuthFailed(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/repos/o/r/issues/1", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+	})
+	tr := newTrackerForTest(t, f)
+	_, err := tr.Get(ctx(), domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "o/r#1"})
+	if !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("err = %v, want ErrAuthFailed", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Preflight
+// ---------------------------------------------------------------------------
+
+func TestPreflight_HappyPath(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/user", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tkn-test" {
+			t.Errorf("Authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"login":"octocat","id":1}`))
+	})
+	tr := newTrackerForTest(t, f)
+	if err := tr.Preflight(ctx()); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+}
+
+func TestPreflight_InvalidToken(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/user", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+	})
+	tr := newTrackerForTest(t, f)
+	err := tr.Preflight(ctx())
+	if !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("err = %v, want ErrAuthFailed", err)
+	}
+}
+
+// TestPreflight_CachesSuccess pins that a successful check is cached so the
+// daemon doesn't burn a GET /user on every component start that wants to
+// confirm tracker auth.
+func TestPreflight_CachesSuccess(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/user", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"login":"octocat","id":1}`))
+	})
+	tr := newTrackerForTest(t, f)
+	for i := 0; i < 5; i++ {
+		if err := tr.Preflight(ctx()); err != nil {
+			t.Fatalf("Preflight #%d: %v", i, err)
+		}
+	}
+	if got := len(f.calls()); got != 1 {
+		t.Fatalf("HTTP calls = %d, want 1 (success should be cached)", got)
+	}
+}
+
+// TestPreflight_RetriesAfterFailure pins the recovery property: failures
+// must NOT be cached, otherwise a transient network glitch at startup would
+// permanently brick the tracker for the lifetime of the daemon.
+func TestPreflight_RetriesAfterFailure(t *testing.T) {
+	f := newFakeGH(t)
+	var calls int
+	f.on("GET", "/user", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			http.Error(w, `{"message":"server exploded"}`, http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"login":"octocat","id":1}`))
+	})
+	tr := newTrackerForTest(t, f)
+	if err := tr.Preflight(ctx()); err == nil {
+		t.Fatalf("first Preflight expected to fail")
+	}
+	if err := tr.Preflight(ctx()); err != nil {
+		t.Fatalf("second Preflight: %v", err)
+	}
+	if got := len(f.calls()); got != 2 {
+		t.Fatalf("HTTP calls = %d, want 2 (first fail not cached)", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// List
+// ---------------------------------------------------------------------------
+
+func TestList_HappyPathAndDefaults(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if got := q.Get("state"); got != "all" {
+			t.Errorf("state = %q, want all (default)", got)
+		}
+		if got := q.Get("per_page"); got != "30" {
+			t.Errorf("per_page = %q, want 30 (default)", got)
+		}
+		_, _ = w.Write([]byte(`[
+			{"number":1,"title":"first","body":"b1","state":"open","html_url":"https://github.com/o/r/issues/1","labels":[{"name":"bug"}],"assignees":[]},
+			{"number":2,"title":"second","body":"b2","state":"closed","state_reason":"completed","html_url":"https://github.com/o/r/issues/2","labels":[],"assignees":[{"login":"alice"}]}
+		]`))
+	})
+	tr := newTrackerForTest(t, f)
+	issues, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "o/r"}, domain.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("len = %d, want 2", len(issues))
+	}
+	if issues[0].ID.Native != "o/r#1" || issues[0].State != domain.IssueOpen || issues[0].Title != "first" {
+		t.Fatalf("issues[0] = %#v", issues[0])
+	}
+	if issues[1].ID.Native != "o/r#2" || issues[1].State != domain.IssueDone || len(issues[1].Assignees) != 1 || issues[1].Assignees[0] != "alice" {
+		t.Fatalf("issues[1] = %#v", issues[1])
+	}
+}
+
+func TestList_FiltersOutPullRequests(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
+		// GitHub's issues endpoint returns PRs too. We must filter them out
+		// so the LCM never tries to spawn an agent against a PR number.
+		_, _ = w.Write([]byte(`[
+			{"number":10,"title":"real issue","state":"open","html_url":"https://github.com/o/r/issues/10"},
+			{"number":11,"title":"a PR","state":"open","html_url":"https://github.com/o/r/pull/11","pull_request":{"url":"https://api.github.com/repos/o/r/pulls/11"}},
+			{"number":12,"title":"another issue","state":"open","html_url":"https://github.com/o/r/issues/12"}
+		]`))
+	})
+	tr := newTrackerForTest(t, f)
+	issues, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "o/r"}, domain.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("len = %d, want 2 (PR must be filtered out)", len(issues))
+	}
+	if issues[0].ID.Native != "o/r#10" || issues[1].ID.Native != "o/r#12" {
+		t.Fatalf("kept wrong items: %#v", issues)
+	}
+}
+
+func TestList_QueryEncoding(t *testing.T) {
+	cases := []struct {
+		name   string
+		filter domain.ListFilter
+		wantQ  map[string]string
+	}{
+		{
+			name:   "open + labels + assignee + limit",
+			filter: domain.ListFilter{State: domain.ListOpen, Labels: []string{"bug", "help wanted"}, Assignee: "alice", Limit: 50},
+			wantQ:  map[string]string{"state": "open", "labels": "bug,help wanted", "assignee": "alice", "per_page": "50"},
+		},
+		{
+			name:   "closed only",
+			filter: domain.ListFilter{State: domain.ListClosed},
+			wantQ:  map[string]string{"state": "closed", "per_page": "30"},
+		},
+		{
+			name:   "limit capped at 100",
+			filter: domain.ListFilter{Limit: 9999},
+			wantQ:  map[string]string{"state": "all", "per_page": "100"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGH(t)
+			f.on("GET", "/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
+				got := r.URL.Query()
+				for k, want := range tc.wantQ {
+					if g := got.Get(k); g != want {
+						t.Errorf("query[%q] = %q, want %q", k, g, want)
+					}
+				}
+				_, _ = w.Write([]byte(`[]`))
+			})
+			tr := newTrackerForTest(t, f)
+			if _, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "o/r"}, tc.filter); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+		})
+	}
+}
+
+func TestList_RejectsWrongProvider(t *testing.T) {
+	f := newFakeGH(t)
+	tr := newTrackerForTest(t, f)
+	_, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "g/p"}, domain.ListFilter{})
+	if !errors.Is(err, ErrWrongProvider) {
+		t.Fatalf("err = %v, want ErrWrongProvider", err)
+	}
+	if calls := f.calls(); len(calls) != 0 {
+		t.Fatalf("unexpected HTTP calls: %#v", calls)
+	}
+}
+
+func TestList_RejectsBadRepo(t *testing.T) {
+	cases := []string{"", "noseparator", "/repo", "owner/", "a/b/c"}
+	for _, native := range cases {
+		t.Run(native, func(t *testing.T) {
+			f := newFakeGH(t)
+			tr := newTrackerForTest(t, f)
+			_, err := tr.List(ctx(), domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: native}, domain.ListFilter{})
+			if !errors.Is(err, ErrBadID) {
+				t.Fatalf("native=%q: err = %v, want ErrBadID", native, err)
+			}
+		})
+	}
+}
