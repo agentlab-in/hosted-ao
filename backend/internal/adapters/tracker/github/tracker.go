@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -94,8 +95,12 @@ type Tracker struct {
 	baseURL   string
 	userAgent string
 
+	// preflightOK is the fast-path: once a Preflight succeeds, every
+	// subsequent call short-circuits via atomic.Load without touching the
+	// mutex. preflightMu serializes the one-time network call so concurrent
+	// first-callers don't all fire GET /user against GitHub.
+	preflightOK atomic.Bool
 	preflightMu sync.Mutex
-	preflightOK bool
 }
 
 // New returns a Tracker. It fails fast when no token can be obtained so
@@ -173,6 +178,15 @@ func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, e
 	if err := json.Unmarshal(resp, &raw); err != nil {
 		return domain.Issue{}, fmt.Errorf("github tracker: decode issue: %w", err)
 	}
+	return issueFromGH(owner, repo, raw), nil
+}
+
+// issueFromGH projects a raw GitHub issue payload into the normalized
+// domain.Issue. owner and repo are passed in because the TrackerID.Native
+// shape is "owner/repo#N" and we want the returned ID to round-trip
+// through the same adapter even if the original caller used a zero
+// Provider.
+func issueFromGH(owner, repo string, raw ghIssue) domain.Issue {
 	labels := make([]string, 0, len(raw.Labels))
 	for _, l := range raw.Labels {
 		labels = append(labels, l.Name)
@@ -182,9 +196,10 @@ func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, e
 		assignees = append(assignees, a.Login)
 	}
 	out := domain.Issue{
-		// Canonicalize Provider so the returned Issue always re-routes back
-		// to this adapter, even if the caller built id with a zero Provider.
-		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: id.Native},
+		ID: domain.TrackerID{
+			Provider: domain.TrackerProviderGitHub,
+			Native:   fmt.Sprintf("%s/%s#%d", owner, repo, raw.Number),
+		},
 		Title:     raw.Title,
 		Body:      raw.Body,
 		State:     mapStateFromGitHub(raw.State, raw.StateReason, labels),
@@ -198,7 +213,7 @@ func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, e
 	if len(out.Assignees) == 0 {
 		out.Assignees = nil
 	}
-	return out, nil
+	return out
 }
 
 // mapStateFromGitHub projects GitHub's open/closed + state_reason + labels
@@ -286,33 +301,7 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 		if r.PullRequest != nil {
 			continue
 		}
-		labels := make([]string, 0, len(r.Labels))
-		for _, l := range r.Labels {
-			labels = append(labels, l.Name)
-		}
-		assignees := make([]string, 0, len(r.Assignees))
-		for _, a := range r.Assignees {
-			assignees = append(assignees, a.Login)
-		}
-		issue := domain.Issue{
-			ID: domain.TrackerID{
-				Provider: domain.TrackerProviderGitHub,
-				Native:   fmt.Sprintf("%s/%s#%d", owner, repoName, r.Number),
-			},
-			Title:     r.Title,
-			Body:      r.Body,
-			State:     mapStateFromGitHub(r.State, r.StateReason, labels),
-			URL:       r.HTMLURL,
-			Labels:    labels,
-			Assignees: assignees,
-		}
-		if len(issue.Labels) == 0 {
-			issue.Labels = nil
-		}
-		if len(issue.Assignees) == 0 {
-			issue.Assignees = nil
-		}
-		out = append(out, issue)
+		out = append(out, issueFromGH(owner, repoName, r))
 	}
 	return out, nil
 }
@@ -321,20 +310,34 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 // Preflight
 // ---------------------------------------------------------------------------
 
-// Preflight verifies the configured token is accepted by GitHub by making a
-// single GET /user request. A successful check is cached for the lifetime
-// of the Tracker; failures are never cached so a transient network glitch
-// at startup is recoverable on a subsequent call.
+// Preflight verifies the configured token is currently accepted by GitHub
+// (one GET /user). It does NOT prove the token has the repo scope or
+// visibility needed for any specific Get/List call — those may still fail
+// with ErrAuthFailed even after a successful Preflight. The guarantee is
+// "token exists and is valid against GitHub's identity endpoint", not
+// "token can do everything the SM will ask of it." Per-repo authorization
+// is detected lazily at the first Get/List against that repo.
+//
+// Successful checks are cached for the lifetime of the Tracker via a
+// double-checked atomic+mutex pattern: the hot path is one atomic.Load
+// with no contention; concurrent first-callers serialize on the mutex so
+// only one GET /user is in flight. Failures are intentionally NOT cached
+// so a transient startup glitch is recoverable on a subsequent call.
 func (t *Tracker) Preflight(ctx context.Context) error {
+	if t.preflightOK.Load() {
+		return nil
+	}
 	t.preflightMu.Lock()
 	defer t.preflightMu.Unlock()
-	if t.preflightOK {
+	// Re-check after acquiring the lock — another goroutine may have raced
+	// us through the network call and stored success while we were waiting.
+	if t.preflightOK.Load() {
 		return nil
 	}
 	if _, err := t.do(ctx, http.MethodGet, "/user", nil); err != nil {
 		return err
 	}
-	t.preflightOK = true
+	t.preflightOK.Store(true)
 	return nil
 }
 
@@ -485,8 +488,9 @@ func parseGitHubID(native string) (owner, repo string, number int, err error) {
 	return owner, repo, n, nil
 }
 
-// parseGitHubRepo accepts "owner/repo" and rejects anything containing
-// additional slashes or a "#" segment. Used by List.
+// parseGitHubRepo accepts "owner/repo" and rejects empty segments,
+// embedded slashes, "#", and whitespace. Leading dots are kept legal —
+// "owner/.github" is a real GitHub convention for repo-level config repos.
 func parseGitHubRepo(native string) (owner, repo string, err error) {
 	if native == "" {
 		return "", "", fmt.Errorf("%w: empty repo", ErrBadID)
@@ -500,7 +504,10 @@ func parseGitHubRepo(native string) (owner, repo string, err error) {
 	if owner == "" || repo == "" {
 		return "", "", fmt.Errorf("%w: empty owner or repo segment", ErrBadID)
 	}
-	if strings.ContainsAny(repo, "/#") {
+	if strings.ContainsAny(owner, "/# \t\n\r") {
+		return "", "", fmt.Errorf("%w: invalid owner segment %q", ErrBadID, owner)
+	}
+	if strings.ContainsAny(repo, "/# \t\n\r") {
 		return "", "", fmt.Errorf("%w: invalid repo segment %q", ErrBadID, repo)
 	}
 	return owner, repo, nil

@@ -45,16 +45,18 @@ func newFakeGH(t *testing.T) *fakeGH {
 }
 
 func (f *fakeGH) on(method, path string, h http.HandlerFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.handlers[method+" "+path] = h
 }
 
 func (f *fakeGH) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
+	key := r.Method + " " + r.URL.Path
 	f.mu.Lock()
 	f.requests = append(f.requests, recordedReq{Method: r.Method, Path: r.URL.Path, Body: string(body)})
-	f.mu.Unlock()
-	key := r.Method + " " + r.URL.Path
 	h, ok := f.handlers[key]
+	f.mu.Unlock()
 	if !ok {
 		f.t.Errorf("unexpected request: %s", key)
 		http.Error(w, "no handler", http.StatusNotImplemented)
@@ -526,7 +528,23 @@ func TestList_RejectsWrongProvider(t *testing.T) {
 }
 
 func TestList_RejectsBadRepo(t *testing.T) {
-	cases := []string{"", "noseparator", "/repo", "owner/", "a/b/c"}
+	cases := []string{
+		"",             // empty
+		"noseparator",  // missing /
+		"/repo",        // empty owner
+		"owner/",       // empty repo
+		"a/b/c",        // extra slash
+		" owner/repo",  // leading whitespace in owner
+		"owner/repo ",  // trailing whitespace in repo
+		"own er/repo",  // embedded space in owner
+		"owner/re#po",  // embedded # in repo
+		"\towner/repo", // tab in owner
+		"owner/repo\n", // newline in repo
+	}
+	// Sanity: a benign leading-dot repo (".github" convention) must pass.
+	if _, _, err := parseGitHubRepo("octocat/.github"); err != nil {
+		t.Fatalf("leading-dot repo rejected unexpectedly: %v", err)
+	}
 	for _, native := range cases {
 		t.Run(native, func(t *testing.T) {
 			f := newFakeGH(t)

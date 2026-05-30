@@ -72,9 +72,14 @@ const (
 )
 
 // ListFilter is the query the Session Manager passes to Tracker.List.
-// Empty / zero values mean "no filter on this dimension". Limit is the
-// requested page size; the adapter applies its own default when zero and
-// caps at the provider's per-page maximum.
+// Empty / zero values mean "no filter on this dimension".
+//
+// Limit is the requested page size. The adapter applies its own default
+// when zero and SILENTLY CAPS at the provider's per-page maximum — a
+// caller asking for more than the cap gets exactly cap items back with no
+// error and no indication of truncation. v1 has no auto-pagination;
+// callers needing more results need to wait for the observer/polling work
+// in issue #35.
 type ListFilter struct {
 	State    ListStateFilter `json:"state,omitempty"`
 	Labels   []string        `json:"labels,omitempty"`
