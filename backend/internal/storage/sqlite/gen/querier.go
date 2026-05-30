@@ -9,11 +9,16 @@ import (
 )
 
 type Querier interface {
+	ArchiveProject(ctx context.Context, arg ArchiveProjectParams) error
+	DeletePREnrichment(ctx context.Context, sessionID string) error
+	DeleteProject(ctx context.Context, id string) error
 	DeleteReactionTracker(ctx context.Context, arg DeleteReactionTrackerParams) error
 	DeleteSentOutboxBelow(ctx context.Context, changeLogSeq int64) (int64, error)
 	DeleteSessionReactionTrackers(ctx context.Context, sessionID string) error
 	GetConsumerOffset(ctx context.Context, consumer string) (int64, error)
 	GetMetadata(ctx context.Context, sessionID string) ([]GetMetadataRow, error)
+	GetPREnrichment(ctx context.Context, sessionID string) (PrEnrichment, error)
+	GetProject(ctx context.Context, id string) (Project, error)
 	GetSession(ctx context.Context, id string) (Session, error)
 	GetSessionRevision(ctx context.Context, id string) (int64, error)
 	// Appends a canonical-write record and returns its monotonic seq so the same
@@ -24,6 +29,7 @@ type Querier interface {
 	// the row is persisted at revision 1.
 	InsertSession(ctx context.Context, arg InsertSessionParams) (int64, error)
 	ListAllSessions(ctx context.Context) ([]Session, error)
+	ListProjects(ctx context.Context) ([]Project, error)
 	ListReactionTrackers(ctx context.Context) ([]ReactionTracker, error)
 	ListSessionsByProject(ctx context.Context, projectID string) ([]Session, error)
 	ListUnsentOutbox(ctx context.Context, limit int64) ([]ListUnsentOutboxRow, error)
@@ -36,6 +42,8 @@ type Querier interface {
 	UpdateSessionCAS(ctx context.Context, arg UpdateSessionCASParams) (int64, error)
 	UpsertConsumerOffset(ctx context.Context, arg UpsertConsumerOffsetParams) error
 	UpsertMetadata(ctx context.Context, arg UpsertMetadataParams) error
+	UpsertPREnrichment(ctx context.Context, arg UpsertPREnrichmentParams) error
+	UpsertProject(ctx context.Context, arg UpsertProjectParams) error
 	UpsertReactionTracker(ctx context.Context, arg UpsertReactionTrackerParams) error
 }
 

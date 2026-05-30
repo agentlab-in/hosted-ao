@@ -34,6 +34,31 @@ type Outbox struct {
 	CreatedAt    time.Time
 }
 
+type PrEnrichment struct {
+	SessionID       string
+	CiSummary       string
+	ReviewDecision  string
+	Mergeability    string
+	PendingComments string
+	CiLogTail       string
+	LastFetchedAt   time.Time
+}
+
+type Project struct {
+	ID            string
+	Path          string
+	RepoOwner     string
+	RepoName      string
+	RepoPlatform  string
+	RepoOriginUrl string
+	DefaultBranch string
+	DisplayName   string
+	SessionPrefix string
+	Source        string
+	RegisteredAt  time.Time
+	ArchivedAt    sql.NullTime
+}
+
 type ReactionTracker struct {
 	SessionID      string
 	ReactionKey    string
