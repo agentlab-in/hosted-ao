@@ -47,6 +47,8 @@ type PRComment struct {
 
 // UpsertPR inserts or replaces the scalar PR facts for one session.
 func (s *Store) UpsertPR(ctx context.Context, r PRRow) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.UpsertPR(ctx, gen.UpsertPRParams{
 		SessionID:      r.SessionID,
 		ReviewDecision: r.ReviewDecision,
@@ -87,6 +89,8 @@ func (s *Store) GetPR(ctx context.Context, sessionID string) (PRRow, bool, error
 // comments. Normally unnecessary (the chain cascades on session delete); exposed
 // for explicit eviction.
 func (s *Store) DeletePR(ctx context.Context, sessionID string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.DeletePR(ctx, sessionID)
 }
 
@@ -172,9 +176,12 @@ func (s *Store) ListPRComments(ctx context.Context, sessionID string) ([]PRComme
 	return out, nil
 }
 
-// inTx runs fn inside a single transaction over the store's queries, rolling
-// back on error.
+// inTx runs fn inside a single write transaction over the store's queries,
+// rolling back on error. It holds writeMu for the duration, so callers must not
+// already hold it.
 func (s *Store) inTx(ctx context.Context, what string, fn func(*gen.Queries) error) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin %s: %w", what, err)

@@ -34,6 +34,8 @@ type ProjectRow struct {
 
 // UpsertProject inserts or updates one registered project.
 func (s *Store) UpsertProject(ctx context.Context, r ProjectRow) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.UpsertProject(ctx, gen.UpsertProjectParams{
 		ID:            r.ID,
 		Path:          r.Path,
@@ -53,6 +55,8 @@ func (s *Store) UpsertProject(ctx context.Context, r ProjectRow) error {
 // ArchiveProject soft-deletes one project, keeping the row so a session's
 // project_id still resolves. Active-only reads (ListProjects) then hide it.
 func (s *Store) ArchiveProject(ctx context.Context, id string, t time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.ArchiveProject(ctx, gen.ArchiveProjectParams{
 		ArchivedAt: nullTime(t),
 		ID:         id,
@@ -86,6 +90,8 @@ func (s *Store) ListProjects(ctx context.Context) ([]ProjectRow, error) {
 
 // DeleteProject removes one project by id.
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.DeleteProject(ctx, id)
 }
 

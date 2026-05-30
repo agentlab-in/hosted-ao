@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,5 +255,54 @@ func assertOutboxCount(t *testing.T, s *Store, ctx context.Context, want int) {
 	}
 	if len(rows) != want {
 		t.Fatalf("outbox count = %d, want %d", len(rows), want)
+	}
+}
+
+// TestConcurrentReadsAndWrites exercises the read-pool + write-mutex model:
+// many writers (each its own session) run alongside many readers hammering
+// ListAll. Reads must not be serialized behind writes, writes must not corrupt
+// or error under the revision-CAS, and the final state must be exact. Run under
+// -race this also guards the writeMu discipline.
+func TestConcurrentReadsAndWrites(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const n = 16
+
+	var wg sync.WaitGroup
+	errc := make(chan error, n*2)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := s.Upsert(ctx, sampleRecord(fmt.Sprintf("s%02d", i)), ports.EventSessionCreated); err != nil {
+				errc <- err
+			}
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				if _, err := s.ListAll(ctx); err != nil {
+					errc <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errc)
+	for err := range errc {
+		t.Fatalf("concurrent op error: %v", err)
+	}
+
+	got, err := s.ListAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != n {
+		t.Fatalf("after %d concurrent inserts, ListAll returned %d", n, len(got))
 	}
 }

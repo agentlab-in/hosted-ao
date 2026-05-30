@@ -48,6 +48,8 @@ func (s *Store) ListReactionTrackers(ctx context.Context) ([]ReactionTrackerRow,
 
 // SaveReactionTracker durably persists one escalation budget (insert or update).
 func (s *Store) SaveReactionTracker(ctx context.Context, r ReactionTrackerRow) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	escalated := int64(0)
 	if r.Escalated {
 		escalated = 1
@@ -68,6 +70,8 @@ func (s *Store) SaveReactionTracker(ctx context.Context, r ReactionTrackerRow) e
 
 // DeleteReactionTracker drops one escalation budget.
 func (s *Store) DeleteReactionTracker(ctx context.Context, sessionID, reactionKey string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.DeleteReactionTracker(ctx, gen.DeleteReactionTrackerParams{
 		SessionID:   sessionID,
 		ReactionKey: reactionKey,
@@ -76,5 +80,7 @@ func (s *Store) DeleteReactionTracker(ctx context.Context, sessionID, reactionKe
 
 // DeleteSessionReactionTrackers drops every escalation budget for a session.
 func (s *Store) DeleteSessionReactionTrackers(ctx context.Context, sessionID string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.DeleteSessionReactionTrackers(ctx, sessionID)
 }

@@ -24,6 +24,8 @@ import (
 //     stored+1.
 //   - insert: rec.Lifecycle.Revision must be 0, persisted as 1.
 func (s *Store) Upsert(ctx context.Context, rec domain.SessionRecord, eventType ports.EventType) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin upsert: %w", err)

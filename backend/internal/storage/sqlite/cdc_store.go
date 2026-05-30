@@ -45,6 +45,8 @@ func (s *Store) ListUnsent(ctx context.Context, limit int) ([]OutboxEvent, error
 
 // MarkSent flags an outbox row delivered.
 func (s *Store) MarkSent(ctx context.Context, outboxID int64, at time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.MarkOutboxSent(ctx, gen.MarkOutboxSentParams{
 		SentAt: sql.NullTime{Time: at, Valid: true},
 		ID:     outboxID,
@@ -53,6 +55,8 @@ func (s *Store) MarkSent(ctx context.Context, outboxID int64, at time.Time) erro
 
 // MarkFailed bumps the attempt count and records the last error for an outbox row.
 func (s *Store) MarkFailed(ctx context.Context, outboxID int64, errMsg string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.MarkOutboxFailed(ctx, gen.MarkOutboxFailedParams{LastError: errMsg, ID: outboxID})
 }
 
@@ -70,6 +74,8 @@ func (s *Store) GetOffset(ctx context.Context, consumer string) (int64, error) {
 
 // SetOffset durably records a consumer's acknowledged seq.
 func (s *Store) SetOffset(ctx context.Context, consumer string, seq int64, at time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.UpsertConsumerOffset(ctx, gen.UpsertConsumerOffsetParams{
 		Consumer:  consumer,
 		LastSeq:   seq,
@@ -100,5 +106,7 @@ func (s *Store) MinConsumerOffset(ctx context.Context) (int64, error) {
 // DeleteSentOutboxBelow removes delivered outbox rows whose seq is below the
 // watermark, returning the number removed.
 func (s *Store) DeleteSentOutboxBelow(ctx context.Context, seq int64) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.DeleteSentOutboxBelow(ctx, seq)
 }

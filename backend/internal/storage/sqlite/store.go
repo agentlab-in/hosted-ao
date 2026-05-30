@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -12,11 +13,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// Store is the SQLite-backed ports.LifecycleStore. The LCM is its sole logical
-// writer (via Upsert); readers (Session Manager, reaper) use Load/Get/List.
+// Store is the SQLite-backed ports.LifecycleStore. Reads (Load/Get/List/...) run
+// concurrently across the connection pool; every write is funnelled through
+// writeMu so there is exactly one writer at a time. That single-writer guarantee
+// is load-bearing: it keeps WAL's single-writer rule and makes the revision-CAS
+// (read-then-write in Upsert) atomic without depending on the pool size. Hold
+// writeMu only around writes — never around a read — and never call one
+// write method from inside another (the mutex is not reentrant).
 type Store struct {
-	db *sql.DB
-	q  *gen.Queries
+	db      *sql.DB
+	q       *gen.Queries
+	writeMu sync.Mutex
 }
 
 var _ ports.LifecycleStore = (*Store)(nil)
@@ -105,6 +112,8 @@ func (s *Store) PatchMetadata(ctx context.Context, id domain.SessionID, meta dom
 	if meta.IsZero() {
 		return nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.q.UpsertSessionMetadata(ctx, gen.UpsertSessionMetadataParams{
 		SessionID:       string(id),
 		Branch:          meta.Branch,
