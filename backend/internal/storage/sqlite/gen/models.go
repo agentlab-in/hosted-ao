@@ -11,50 +11,36 @@ import (
 
 type ChangeLog struct {
 	Seq       int64
-	SessionID string
+	ProjectID string
+	SessionID sql.NullString
 	EventType string
-	Revision  int64
 	Payload   string
 	CreatedAt time.Time
 }
 
-type ConsumerOffset struct {
-	Consumer  string
-	LastSeq   int64
-	UpdatedAt time.Time
-}
-
-type Outbox struct {
-	ID           int64
-	ChangeLogSeq int64
-	Sent         int64
-	SentAt       sql.NullTime
-	Attempts     int64
-	LastError    string
-	CreatedAt    time.Time
-}
-
 type Pr struct {
+	Url            string
 	SessionID      string
+	Number         int64
+	PrState        string
 	ReviewDecision string
-	Mergeability   string
 	CiState        string
-	CiPassed       int64
-	CiFailed       int64
-	CiPending      int64
-	CiLogTail      string
-	LastFetchedAt  time.Time
+	Mergeability   string
+	UpdatedAt      time.Time
 }
 
 type PrCheck struct {
-	SessionID string
-	Name      string
-	Status    string
-	Url       string
+	PrUrl      string
+	Name       string
+	CommitHash string
+	Status     string
+	Url        string
+	LogTail    string
+	CreatedAt  time.Time
 }
 
 type PrComment struct {
-	SessionID string
+	PrUrl     string
 	CommentID string
 	Author    string
 	File      string
@@ -67,58 +53,34 @@ type PrComment struct {
 type Project struct {
 	ID            string
 	Path          string
-	RepoOwner     string
-	RepoName      string
-	RepoPlatform  string
 	RepoOriginUrl string
-	DefaultBranch string
 	DisplayName   string
-	SessionPrefix string
-	Source        string
 	RegisteredAt  time.Time
 	ArchivedAt    sql.NullTime
-}
-
-type ReactionTracker struct {
-	SessionID      string
-	ReactionKey    string
-	Attempts       int64
-	Escalated      int64
-	FirstAttemptAt sql.NullTime
-	ProjectID      string
 }
 
 type Session struct {
 	ID                    string
 	ProjectID             string
+	Num                   int64
 	IssueID               string
 	Kind                  string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	Revision              int64
+	Harness               string
 	SessionState          string
-	SessionReason         string
-	PrState               string
-	PrReason              string
-	PrNumber              int64
-	PrUrl                 string
-	RuntimeState          string
-	RuntimeReason         string
+	TerminationReason     string
+	IsAlive               int64
 	ActivityState         string
 	ActivityLastAt        time.Time
 	ActivitySource        string
 	DetectingAttempts     sql.NullInt64
 	DetectingStartedAt    sql.NullTime
 	DetectingEvidenceHash sql.NullString
-}
-
-type SessionMetadatum struct {
-	SessionID       string
-	Branch          string
-	WorkspacePath   string
-	RuntimeHandleID string
-	RuntimeName     string
-	AgentSessionID  string
-	Prompt          string
-	UpdatedAt       time.Time
+	Branch                string
+	WorkspacePath         string
+	RuntimeHandleID       string
+	RuntimeName           string
+	AgentSessionID        string
+	Prompt                string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }

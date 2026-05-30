@@ -7,104 +7,100 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// recordToInsert maps a domain record to the generated insert params. The
-// revision column is fixed to 1 by the query itself (insert path), so it is not
-// carried here.
-func recordToInsert(rec domain.SessionRecord) gen.InsertSessionParams {
-	lc := rec.Lifecycle
-	da, ds, dh := detectingToNull(lc.Detecting)
-	return gen.InsertSessionParams{
-		ID:                    string(rec.ID),
-		ProjectID:             string(rec.ProjectID),
-		IssueID:               string(rec.IssueID),
-		Kind:                  string(rec.Kind),
-		CreatedAt:             rec.CreatedAt,
-		UpdatedAt:             rec.UpdatedAt,
-		SessionState:          string(lc.Session.State),
-		SessionReason:         string(lc.Session.Reason),
-		PrState:               string(lc.PR.State),
-		PrReason:              string(lc.PR.Reason),
-		PrNumber:              int64(lc.PR.Number),
-		PrUrl:                 lc.PR.URL,
-		RuntimeState:          string(lc.Runtime.State),
-		RuntimeReason:         string(lc.Runtime.Reason),
-		ActivityState:         string(lc.Activity.State),
-		ActivityLastAt:        lc.Activity.LastActivityAt,
-		ActivitySource:        string(lc.Activity.Source),
-		DetectingAttempts:     da,
-		DetectingStartedAt:    ds,
-		DetectingEvidenceHash: dh,
+func boolToInt(b bool) int64 {
+	if b {
+		return 1
 	}
+	return 0
 }
 
-// recordToUpdate maps a domain record to the CAS update params. expectedRevision
-// is the caller's loaded revision, used in the WHERE clause for the CAS check.
-func recordToUpdate(rec domain.SessionRecord, expectedRevision int64) gen.UpdateSessionCASParams {
-	lc := rec.Lifecycle
-	da, ds, dh := detectingToNull(lc.Detecting)
-	return gen.UpdateSessionCASParams{
-		ProjectID:             string(rec.ProjectID),
-		IssueID:               string(rec.IssueID),
-		Kind:                  string(rec.Kind),
-		UpdatedAt:             rec.UpdatedAt,
-		SessionState:          string(lc.Session.State),
-		SessionReason:         string(lc.Session.Reason),
-		PrState:               string(lc.PR.State),
-		PrReason:              string(lc.PR.Reason),
-		PrNumber:              int64(lc.PR.Number),
-		PrUrl:                 lc.PR.URL,
-		RuntimeState:          string(lc.Runtime.State),
-		RuntimeReason:         string(lc.Runtime.Reason),
-		ActivityState:         string(lc.Activity.State),
-		ActivityLastAt:        lc.Activity.LastActivityAt,
-		ActivitySource:        string(lc.Activity.Source),
-		DetectingAttempts:     da,
-		DetectingStartedAt:    ds,
-		DetectingEvidenceHash: dh,
-		ID:                    string(rec.ID),
-		Revision:              expectedRevision,
-	}
-}
-
-// rowToRecord maps a stored session row back to a domain record. Metadata is
-// deliberately left nil: it is a side-channel (session_metadata) read only by
-// GetMetadata, never reconstructed here — mirroring the in-memory fakeStore.
+// rowToRecord maps a stored session row to a domain record. The folded-in
+// operational columns become Metadata; the canonical lifecycle is reassembled
+// from the typed columns. Display status is never reconstructed here.
 func rowToRecord(row gen.Session) domain.SessionRecord {
 	return domain.SessionRecord{
 		ID:        domain.SessionID(row.ID),
 		ProjectID: domain.ProjectID(row.ProjectID),
 		IssueID:   domain.IssueID(row.IssueID),
 		Kind:      domain.SessionKind(row.Kind),
-		Lifecycle: rowToLifecycle(row),
+		Lifecycle: domain.CanonicalSessionLifecycle{
+			Version:           domain.LifecycleVersion,
+			Harness:           domain.AgentHarness(row.Harness),
+			IsAlive:           row.IsAlive != 0,
+			Session:           domain.SessionSubstate{State: domain.SessionState(row.SessionState)},
+			TerminationReason: domain.TerminationReason(row.TerminationReason),
+			Activity: domain.ActivitySubstate{
+				State:          domain.ActivityState(row.ActivityState),
+				LastActivityAt: row.ActivityLastAt,
+				Source:         domain.ActivitySource(row.ActivitySource),
+			},
+			Detecting: nullToDetecting(row),
+		},
+		Metadata: domain.SessionMetadata{
+			Branch:          row.Branch,
+			WorkspacePath:   row.WorkspacePath,
+			RuntimeHandleID: row.RuntimeHandleID,
+			RuntimeName:     row.RuntimeName,
+			AgentSessionID:  row.AgentSessionID,
+			Prompt:          row.Prompt,
+		},
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 	}
 }
 
-func rowToLifecycle(row gen.Session) domain.CanonicalSessionLifecycle {
-	return domain.CanonicalSessionLifecycle{
-		Version:  domain.LifecycleVersion,
-		Revision: int(row.Revision),
-		Session: domain.SessionSubstate{
-			State:  domain.SessionState(row.SessionState),
-			Reason: domain.SessionReason(row.SessionReason),
-		},
-		PR: domain.PRSubstate{
-			State:  domain.PRState(row.PrState),
-			Reason: domain.PRReason(row.PrReason),
-			Number: int(row.PrNumber),
-			URL:    row.PrUrl,
-		},
-		Runtime: domain.RuntimeSubstate{
-			State:  domain.RuntimeState(row.RuntimeState),
-			Reason: domain.RuntimeReason(row.RuntimeReason),
-		},
-		Activity: domain.ActivitySubstate{
-			State:          domain.ActivityState(row.ActivityState),
-			LastActivityAt: row.ActivityLastAt,
-			Source:         domain.ActivitySource(row.ActivitySource),
-		},
-		Detecting: nullToDetecting(row),
+func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams {
+	da, ds, dh := detectingToNull(rec.Lifecycle.Detecting)
+	return gen.InsertSessionParams{
+		ID:                    string(rec.ID),
+		ProjectID:             string(rec.ProjectID),
+		Num:                   num,
+		IssueID:               string(rec.IssueID),
+		Kind:                  string(rec.Kind),
+		Harness:               string(rec.Lifecycle.Harness),
+		SessionState:          string(rec.Lifecycle.Session.State),
+		TerminationReason:     string(rec.Lifecycle.TerminationReason),
+		IsAlive:               boolToInt(rec.Lifecycle.IsAlive),
+		ActivityState:         string(rec.Lifecycle.Activity.State),
+		ActivityLastAt:        rec.Lifecycle.Activity.LastActivityAt,
+		ActivitySource:        string(rec.Lifecycle.Activity.Source),
+		DetectingAttempts:     da,
+		DetectingStartedAt:    ds,
+		DetectingEvidenceHash: dh,
+		Branch:                rec.Metadata.Branch,
+		WorkspacePath:         rec.Metadata.WorkspacePath,
+		RuntimeHandleID:       rec.Metadata.RuntimeHandleID,
+		RuntimeName:           rec.Metadata.RuntimeName,
+		AgentSessionID:        rec.Metadata.AgentSessionID,
+		Prompt:                rec.Metadata.Prompt,
+		CreatedAt:             rec.CreatedAt,
+		UpdatedAt:             rec.UpdatedAt,
+	}
+}
+
+func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
+	da, ds, dh := detectingToNull(rec.Lifecycle.Detecting)
+	return gen.UpdateSessionParams{
+		IssueID:               string(rec.IssueID),
+		Kind:                  string(rec.Kind),
+		Harness:               string(rec.Lifecycle.Harness),
+		SessionState:          string(rec.Lifecycle.Session.State),
+		TerminationReason:     string(rec.Lifecycle.TerminationReason),
+		IsAlive:               boolToInt(rec.Lifecycle.IsAlive),
+		ActivityState:         string(rec.Lifecycle.Activity.State),
+		ActivityLastAt:        rec.Lifecycle.Activity.LastActivityAt,
+		ActivitySource:        string(rec.Lifecycle.Activity.Source),
+		DetectingAttempts:     da,
+		DetectingStartedAt:    ds,
+		DetectingEvidenceHash: dh,
+		Branch:                rec.Metadata.Branch,
+		WorkspacePath:         rec.Metadata.WorkspacePath,
+		RuntimeHandleID:       rec.Metadata.RuntimeHandleID,
+		RuntimeName:           rec.Metadata.RuntimeName,
+		AgentSessionID:        rec.Metadata.AgentSessionID,
+		Prompt:                rec.Metadata.Prompt,
+		UpdatedAt:             rec.UpdatedAt,
+		ID:                    string(rec.ID),
 	}
 }
 

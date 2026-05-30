@@ -1,43 +1,20 @@
 -- name: UpsertPR :exec
-INSERT INTO pr (
-    session_id, review_decision, mergeability, ci_state, ci_passed, ci_failed, ci_pending, ci_log_tail, last_fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (session_id) DO UPDATE SET
+INSERT INTO pr (url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (url) DO UPDATE SET
+    session_id = excluded.session_id,
+    number = excluded.number,
+    pr_state = excluded.pr_state,
     review_decision = excluded.review_decision,
-    mergeability    = excluded.mergeability,
-    ci_state        = excluded.ci_state,
-    ci_passed       = excluded.ci_passed,
-    ci_failed       = excluded.ci_failed,
-    ci_pending      = excluded.ci_pending,
-    ci_log_tail     = excluded.ci_log_tail,
-    last_fetched_at = excluded.last_fetched_at;
+    ci_state = excluded.ci_state,
+    mergeability = excluded.mergeability,
+    updated_at = excluded.updated_at;
 
 -- name: GetPR :one
-SELECT session_id, review_decision, mergeability, ci_state, ci_passed, ci_failed, ci_pending, ci_log_tail, last_fetched_at
-FROM pr
-WHERE session_id = ?;
+SELECT * FROM pr WHERE url = ?;
+
+-- name: ListPRsBySession :many
+SELECT * FROM pr WHERE session_id = ? ORDER BY updated_at DESC;
 
 -- name: DeletePR :exec
-DELETE FROM pr WHERE session_id = ?;
-
--- name: DeletePRChecks :exec
-DELETE FROM pr_check WHERE session_id = ?;
-
--- name: InsertPRCheck :exec
-INSERT INTO pr_check (session_id, name, status, url) VALUES (?, ?, ?, ?);
-
--- name: ListPRChecks :many
-SELECT name, status, url FROM pr_check WHERE session_id = ? ORDER BY name;
-
--- name: DeletePRComments :exec
-DELETE FROM pr_comment WHERE session_id = ?;
-
--- name: InsertPRComment :exec
-INSERT INTO pr_comment (session_id, comment_id, author, file, line, body, resolved, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-
--- name: ListPRComments :many
-SELECT comment_id, author, file, line, body, resolved, created_at
-FROM pr_comment
-WHERE session_id = ?
-ORDER BY created_at, comment_id;
+DELETE FROM pr WHERE url = ?;

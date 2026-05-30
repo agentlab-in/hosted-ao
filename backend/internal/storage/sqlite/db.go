@@ -1,7 +1,6 @@
-// Package sqlite is the durable persistence adapter behind ports.LifecycleStore.
-// It owns the SQLite schema (goose migrations), the revision-CAS upsert, and the
-// transactional outbox (one txn writes the session row, a change_log entry, and
-// the outbox row that the CDC publisher later drains to JSONL).
+// Package sqlite is the durable persistence adapter: the 6-table schema (goose
+// migrations), typed CRUD over sqlc-generated queries, and the read side of the
+// trigger-driven CDC (it reads change_log; the DB triggers write it).
 package sqlite
 
 import (
@@ -20,40 +19,52 @@ var migrationsFS embed.FS
 
 // pragmas are applied on every connection open. WAL + NORMAL lets readers run
 // concurrently with the writer; busy_timeout absorbs brief writer contention;
-// foreign_keys enforces the cascades.
+// foreign_keys enforces the cascades and the CDC triggers' lookups.
 const pragmas = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=foreign_keys(ON)" +
 	"&_pragma=synchronous(NORMAL)"
 
-// maxConnections caps the pool. WAL allows many concurrent readers, so reads
-// (List/Get/GetPR/...) scale across the pool instead of queuing behind a single
-// connection. Writes do NOT rely on the pool for serialization — the Store funnels
-// every write through its writeMu (see store.go), which keeps WAL's single-writer
-// rule and the revision-CAS read-then-write atomic regardless of pool size.
-const maxConnections = 8
+// maxReaders caps the reader pool. WAL allows many concurrent readers.
+const maxReaders = 8
 
-// Open opens (creating if absent) the SQLite database under dataDir, applies the
-// connection pragmas, and runs all goose migrations up. The returned *sql.DB is
-// sized for the many-reader / serialized-single-writer workload the LCM and
-// readers impose.
-func Open(dataDir string) (*sql.DB, error) {
+// Open opens (creating if absent) the SQLite database under dataDir and returns
+// a Store. It uses TWO pools against the same file:
+//
+//   - a single WRITER connection (writeDB, MaxOpenConns=1): every write goes
+//     here, so a write and the CDC triggers' subqueries it fires always see the
+//     prior writes on the same connection (read-your-writes). This is required
+//     because the pr/pr_checks triggers SELECT from sessions/pr to fill in the
+//     event's project_id; a pooled writer could land that read on a connection
+//     that hasn't caught up to the commit and read NULL.
+//   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
+//     it; WAL readers see the latest committed snapshot.
+func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	dsn := "file:" + filepath.Join(dataDir, "ao.db") + pragmas
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-	db.SetMaxOpenConns(maxConnections)
-	db.SetMaxIdleConns(maxConnections) // keep reader conns warm; avoid open/close churn
 
-	if err := migrate(db); err != nil {
-		db.Close()
+	writeDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite writer: %w", err)
+	}
+	writeDB.SetMaxOpenConns(1)
+	writeDB.SetMaxIdleConns(1)
+	if err := migrate(writeDB); err != nil {
+		writeDB.Close()
 		return nil, err
 	}
-	return db, nil
+
+	readDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		writeDB.Close()
+		return nil, fmt.Errorf("open sqlite reader: %w", err)
+	}
+	readDB.SetMaxOpenConns(maxReaders)
+	readDB.SetMaxIdleConns(maxReaders)
+
+	return NewStore(writeDB, readDB), nil
 }
 
 func migrate(db *sql.DB) error {

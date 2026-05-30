@@ -11,173 +11,56 @@ import (
 )
 
 const deletePR = `-- name: DeletePR :exec
-DELETE FROM pr WHERE session_id = ?
+DELETE FROM pr WHERE url = ?
 `
 
-func (q *Queries) DeletePR(ctx context.Context, sessionID string) error {
-	_, err := q.db.ExecContext(ctx, deletePR, sessionID)
-	return err
-}
-
-const deletePRChecks = `-- name: DeletePRChecks :exec
-DELETE FROM pr_check WHERE session_id = ?
-`
-
-func (q *Queries) DeletePRChecks(ctx context.Context, sessionID string) error {
-	_, err := q.db.ExecContext(ctx, deletePRChecks, sessionID)
-	return err
-}
-
-const deletePRComments = `-- name: DeletePRComments :exec
-DELETE FROM pr_comment WHERE session_id = ?
-`
-
-func (q *Queries) DeletePRComments(ctx context.Context, sessionID string) error {
-	_, err := q.db.ExecContext(ctx, deletePRComments, sessionID)
+func (q *Queries) DeletePR(ctx context.Context, url string) error {
+	_, err := q.db.ExecContext(ctx, deletePR, url)
 	return err
 }
 
 const getPR = `-- name: GetPR :one
-SELECT session_id, review_decision, mergeability, ci_state, ci_passed, ci_failed, ci_pending, ci_log_tail, last_fetched_at
-FROM pr
-WHERE session_id = ?
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at FROM pr WHERE url = ?
 `
 
-func (q *Queries) GetPR(ctx context.Context, sessionID string) (Pr, error) {
-	row := q.db.QueryRowContext(ctx, getPR, sessionID)
+func (q *Queries) GetPR(ctx context.Context, url string) (Pr, error) {
+	row := q.db.QueryRowContext(ctx, getPR, url)
 	var i Pr
 	err := row.Scan(
+		&i.Url,
 		&i.SessionID,
+		&i.Number,
+		&i.PrState,
 		&i.ReviewDecision,
-		&i.Mergeability,
 		&i.CiState,
-		&i.CiPassed,
-		&i.CiFailed,
-		&i.CiPending,
-		&i.CiLogTail,
-		&i.LastFetchedAt,
+		&i.Mergeability,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const insertPRCheck = `-- name: InsertPRCheck :exec
-INSERT INTO pr_check (session_id, name, status, url) VALUES (?, ?, ?, ?)
+const listPRsBySession = `-- name: ListPRsBySession :many
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at FROM pr WHERE session_id = ? ORDER BY updated_at DESC
 `
 
-type InsertPRCheckParams struct {
-	SessionID string
-	Name      string
-	Status    string
-	Url       string
-}
-
-func (q *Queries) InsertPRCheck(ctx context.Context, arg InsertPRCheckParams) error {
-	_, err := q.db.ExecContext(ctx, insertPRCheck,
-		arg.SessionID,
-		arg.Name,
-		arg.Status,
-		arg.Url,
-	)
-	return err
-}
-
-const insertPRComment = `-- name: InsertPRComment :exec
-INSERT INTO pr_comment (session_id, comment_id, author, file, line, body, resolved, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-`
-
-type InsertPRCommentParams struct {
-	SessionID string
-	CommentID string
-	Author    string
-	File      string
-	Line      int64
-	Body      string
-	Resolved  int64
-	CreatedAt time.Time
-}
-
-func (q *Queries) InsertPRComment(ctx context.Context, arg InsertPRCommentParams) error {
-	_, err := q.db.ExecContext(ctx, insertPRComment,
-		arg.SessionID,
-		arg.CommentID,
-		arg.Author,
-		arg.File,
-		arg.Line,
-		arg.Body,
-		arg.Resolved,
-		arg.CreatedAt,
-	)
-	return err
-}
-
-const listPRChecks = `-- name: ListPRChecks :many
-SELECT name, status, url FROM pr_check WHERE session_id = ? ORDER BY name
-`
-
-type ListPRChecksRow struct {
-	Name   string
-	Status string
-	Url    string
-}
-
-func (q *Queries) ListPRChecks(ctx context.Context, sessionID string) ([]ListPRChecksRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPRChecks, sessionID)
+func (q *Queries) ListPRsBySession(ctx context.Context, sessionID string) ([]Pr, error) {
+	rows, err := q.db.QueryContext(ctx, listPRsBySession, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListPRChecksRow{}
+	items := []Pr{}
 	for rows.Next() {
-		var i ListPRChecksRow
-		if err := rows.Scan(&i.Name, &i.Status, &i.Url); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPRComments = `-- name: ListPRComments :many
-SELECT comment_id, author, file, line, body, resolved, created_at
-FROM pr_comment
-WHERE session_id = ?
-ORDER BY created_at, comment_id
-`
-
-type ListPRCommentsRow struct {
-	CommentID string
-	Author    string
-	File      string
-	Line      int64
-	Body      string
-	Resolved  int64
-	CreatedAt time.Time
-}
-
-func (q *Queries) ListPRComments(ctx context.Context, sessionID string) ([]ListPRCommentsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPRComments, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListPRCommentsRow{}
-	for rows.Next() {
-		var i ListPRCommentsRow
+		var i Pr
 		if err := rows.Scan(
-			&i.CommentID,
-			&i.Author,
-			&i.File,
-			&i.Line,
-			&i.Body,
-			&i.Resolved,
-			&i.CreatedAt,
+			&i.Url,
+			&i.SessionID,
+			&i.Number,
+			&i.PrState,
+			&i.ReviewDecision,
+			&i.CiState,
+			&i.Mergeability,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -193,43 +76,39 @@ func (q *Queries) ListPRComments(ctx context.Context, sessionID string) ([]ListP
 }
 
 const upsertPR = `-- name: UpsertPR :exec
-INSERT INTO pr (
-    session_id, review_decision, mergeability, ci_state, ci_passed, ci_failed, ci_pending, ci_log_tail, last_fetched_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (session_id) DO UPDATE SET
+INSERT INTO pr (url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (url) DO UPDATE SET
+    session_id = excluded.session_id,
+    number = excluded.number,
+    pr_state = excluded.pr_state,
     review_decision = excluded.review_decision,
-    mergeability    = excluded.mergeability,
-    ci_state        = excluded.ci_state,
-    ci_passed       = excluded.ci_passed,
-    ci_failed       = excluded.ci_failed,
-    ci_pending      = excluded.ci_pending,
-    ci_log_tail     = excluded.ci_log_tail,
-    last_fetched_at = excluded.last_fetched_at
+    ci_state = excluded.ci_state,
+    mergeability = excluded.mergeability,
+    updated_at = excluded.updated_at
 `
 
 type UpsertPRParams struct {
+	Url            string
 	SessionID      string
+	Number         int64
+	PrState        string
 	ReviewDecision string
-	Mergeability   string
 	CiState        string
-	CiPassed       int64
-	CiFailed       int64
-	CiPending      int64
-	CiLogTail      string
-	LastFetchedAt  time.Time
+	Mergeability   string
+	UpdatedAt      time.Time
 }
 
 func (q *Queries) UpsertPR(ctx context.Context, arg UpsertPRParams) error {
 	_, err := q.db.ExecContext(ctx, upsertPR,
+		arg.Url,
 		arg.SessionID,
+		arg.Number,
+		arg.PrState,
 		arg.ReviewDecision,
-		arg.Mergeability,
 		arg.CiState,
-		arg.CiPassed,
-		arg.CiFailed,
-		arg.CiPending,
-		arg.CiLogTail,
-		arg.LastFetchedAt,
+		arg.Mergeability,
+		arg.UpdatedAt,
 	)
 	return err
 }

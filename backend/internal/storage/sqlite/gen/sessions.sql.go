@@ -11,8 +11,17 @@ import (
 	"time"
 )
 
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions WHERE id = ?
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteSession, id)
+	return err
+}
+
 const getSession = `-- name: GetSession :one
-SELECT id, project_id, issue_id, kind, created_at, updated_at, revision, session_state, session_reason, pr_state, pr_reason, pr_number, pr_url, runtime_state, runtime_reason, activity_state, activity_last_at, activity_source, detecting_attempts, detecting_started_at, detecting_evidence_hash FROM sessions WHERE id = ?
+SELECT id, project_id, num, issue_id, kind, harness, session_state, termination_reason, is_alive, activity_state, activity_last_at, activity_source, detecting_attempts, detecting_started_at, detecting_evidence_hash, branch, workspace_path, runtime_handle_id, runtime_name, agent_session_id, prompt, created_at, updated_at FROM sessions WHERE id = ?
 `
 
 func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
@@ -21,117 +30,99 @@ func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
+		&i.Num,
 		&i.IssueID,
 		&i.Kind,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Revision,
+		&i.Harness,
 		&i.SessionState,
-		&i.SessionReason,
-		&i.PrState,
-		&i.PrReason,
-		&i.PrNumber,
-		&i.PrUrl,
-		&i.RuntimeState,
-		&i.RuntimeReason,
+		&i.TerminationReason,
+		&i.IsAlive,
 		&i.ActivityState,
 		&i.ActivityLastAt,
 		&i.ActivitySource,
 		&i.DetectingAttempts,
 		&i.DetectingStartedAt,
 		&i.DetectingEvidenceHash,
+		&i.Branch,
+		&i.WorkspacePath,
+		&i.RuntimeHandleID,
+		&i.RuntimeName,
+		&i.AgentSessionID,
+		&i.Prompt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const getSessionRevision = `-- name: GetSessionRevision :one
-SELECT revision FROM sessions WHERE id = ?
-`
-
-func (q *Queries) GetSessionRevision(ctx context.Context, id string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getSessionRevision, id)
-	var revision int64
-	err := row.Scan(&revision)
-	return revision, err
-}
-
-const insertSession = `-- name: InsertSession :execrows
+const insertSession = `-- name: InsertSession :exec
 INSERT INTO sessions (
-    id, project_id, issue_id, kind, created_at, updated_at,
-    revision,
-    session_state, session_reason,
-    pr_state, pr_reason, pr_number, pr_url,
-    runtime_state, runtime_reason,
+    id, project_id, num, issue_id, kind, harness,
+    session_state, termination_reason, is_alive,
     activity_state, activity_last_at, activity_source,
-    detecting_attempts, detecting_started_at, detecting_evidence_hash
-) VALUES (
-    ?, ?, ?, ?, ?, ?,
-    1,
-    ?, ?,
-    ?, ?, ?, ?,
-    ?, ?,
-    ?, ?, ?,
-    ?, ?, ?
-)
-ON CONFLICT (id) DO NOTHING
+    detecting_attempts, detecting_started_at, detecting_evidence_hash,
+    branch, workspace_path, runtime_handle_id, runtime_name, agent_session_id, prompt,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertSessionParams struct {
 	ID                    string
 	ProjectID             string
+	Num                   int64
 	IssueID               string
 	Kind                  string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	Harness               string
 	SessionState          string
-	SessionReason         string
-	PrState               string
-	PrReason              string
-	PrNumber              int64
-	PrUrl                 string
-	RuntimeState          string
-	RuntimeReason         string
+	TerminationReason     string
+	IsAlive               int64
 	ActivityState         string
 	ActivityLastAt        time.Time
 	ActivitySource        string
 	DetectingAttempts     sql.NullInt64
 	DetectingStartedAt    sql.NullTime
 	DetectingEvidenceHash sql.NullString
+	Branch                string
+	WorkspacePath         string
+	RuntimeHandleID       string
+	RuntimeName           string
+	AgentSessionID        string
+	Prompt                string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
-// CAS insert: only succeeds for a brand-new id. Incoming revision must be 0;
-// the row is persisted at revision 1.
-func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertSession,
+func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
+	_, err := q.db.ExecContext(ctx, insertSession,
 		arg.ID,
 		arg.ProjectID,
+		arg.Num,
 		arg.IssueID,
 		arg.Kind,
-		arg.CreatedAt,
-		arg.UpdatedAt,
+		arg.Harness,
 		arg.SessionState,
-		arg.SessionReason,
-		arg.PrState,
-		arg.PrReason,
-		arg.PrNumber,
-		arg.PrUrl,
-		arg.RuntimeState,
-		arg.RuntimeReason,
+		arg.TerminationReason,
+		arg.IsAlive,
 		arg.ActivityState,
 		arg.ActivityLastAt,
 		arg.ActivitySource,
 		arg.DetectingAttempts,
 		arg.DetectingStartedAt,
 		arg.DetectingEvidenceHash,
+		arg.Branch,
+		arg.WorkspacePath,
+		arg.RuntimeHandleID,
+		arg.RuntimeName,
+		arg.AgentSessionID,
+		arg.Prompt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return err
 }
 
 const listAllSessions = `-- name: ListAllSessions :many
-SELECT id, project_id, issue_id, kind, created_at, updated_at, revision, session_state, session_reason, pr_state, pr_reason, pr_number, pr_url, runtime_state, runtime_reason, activity_state, activity_last_at, activity_source, detecting_attempts, detecting_started_at, detecting_evidence_hash FROM sessions
+SELECT id, project_id, num, issue_id, kind, harness, session_state, termination_reason, is_alive, activity_state, activity_last_at, activity_source, detecting_attempts, detecting_started_at, detecting_evidence_hash, branch, workspace_path, runtime_handle_id, runtime_name, agent_session_id, prompt, created_at, updated_at FROM sessions ORDER BY project_id, num
 `
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]Session, error) {
@@ -146,25 +137,27 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]Session, error) {
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
+			&i.Num,
 			&i.IssueID,
 			&i.Kind,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.Revision,
+			&i.Harness,
 			&i.SessionState,
-			&i.SessionReason,
-			&i.PrState,
-			&i.PrReason,
-			&i.PrNumber,
-			&i.PrUrl,
-			&i.RuntimeState,
-			&i.RuntimeReason,
+			&i.TerminationReason,
+			&i.IsAlive,
 			&i.ActivityState,
 			&i.ActivityLastAt,
 			&i.ActivitySource,
 			&i.DetectingAttempts,
 			&i.DetectingStartedAt,
 			&i.DetectingEvidenceHash,
+			&i.Branch,
+			&i.WorkspacePath,
+			&i.RuntimeHandleID,
+			&i.RuntimeName,
+			&i.AgentSessionID,
+			&i.Prompt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -180,7 +173,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]Session, error) {
 }
 
 const listSessionsByProject = `-- name: ListSessionsByProject :many
-SELECT id, project_id, issue_id, kind, created_at, updated_at, revision, session_state, session_reason, pr_state, pr_reason, pr_number, pr_url, runtime_state, runtime_reason, activity_state, activity_last_at, activity_source, detecting_attempts, detecting_started_at, detecting_evidence_hash FROM sessions WHERE project_id = ?
+SELECT id, project_id, num, issue_id, kind, harness, session_state, termination_reason, is_alive, activity_state, activity_last_at, activity_source, detecting_attempts, detecting_started_at, detecting_evidence_hash, branch, workspace_path, runtime_handle_id, runtime_name, agent_session_id, prompt, created_at, updated_at FROM sessions WHERE project_id = ? ORDER BY num
 `
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID string) ([]Session, error) {
@@ -195,25 +188,27 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID string) (
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProjectID,
+			&i.Num,
 			&i.IssueID,
 			&i.Kind,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.Revision,
+			&i.Harness,
 			&i.SessionState,
-			&i.SessionReason,
-			&i.PrState,
-			&i.PrReason,
-			&i.PrNumber,
-			&i.PrUrl,
-			&i.RuntimeState,
-			&i.RuntimeReason,
+			&i.TerminationReason,
+			&i.IsAlive,
 			&i.ActivityState,
 			&i.ActivityLastAt,
 			&i.ActivitySource,
 			&i.DetectingAttempts,
 			&i.DetectingStartedAt,
 			&i.DetectingEvidenceHash,
+			&i.Branch,
+			&i.WorkspacePath,
+			&i.RuntimeHandleID,
+			&i.RuntimeName,
+			&i.AgentSessionID,
+			&i.Prompt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -228,80 +223,73 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID string) (
 	return items, nil
 }
 
-const updateSessionCAS = `-- name: UpdateSessionCAS :execrows
-UPDATE sessions SET
-    project_id = ?,
-    issue_id = ?,
-    kind = ?,
-    updated_at = ?,
-    revision = revision + 1,
-    session_state = ?,
-    session_reason = ?,
-    pr_state = ?,
-    pr_reason = ?,
-    pr_number = ?,
-    pr_url = ?,
-    runtime_state = ?,
-    runtime_reason = ?,
-    activity_state = ?,
-    activity_last_at = ?,
-    activity_source = ?,
-    detecting_attempts = ?,
-    detecting_started_at = ?,
-    detecting_evidence_hash = ?
-WHERE id = ? AND revision = ?
+const nextSessionNum = `-- name: NextSessionNum :one
+SELECT COALESCE(MAX(num), 0) + 1 AS next FROM sessions WHERE project_id = ?
 `
 
-type UpdateSessionCASParams struct {
-	ProjectID             string
+func (q *Queries) NextSessionNum(ctx context.Context, projectID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextSessionNum, projectID)
+	var next int64
+	err := row.Scan(&next)
+	return next, err
+}
+
+const updateSession = `-- name: UpdateSession :exec
+UPDATE sessions SET
+    issue_id = ?, kind = ?, harness = ?,
+    session_state = ?, termination_reason = ?, is_alive = ?,
+    activity_state = ?, activity_last_at = ?, activity_source = ?,
+    detecting_attempts = ?, detecting_started_at = ?, detecting_evidence_hash = ?,
+    branch = ?, workspace_path = ?, runtime_handle_id = ?, runtime_name = ?, agent_session_id = ?, prompt = ?,
+    updated_at = ?
+WHERE id = ?
+`
+
+type UpdateSessionParams struct {
 	IssueID               string
 	Kind                  string
-	UpdatedAt             time.Time
+	Harness               string
 	SessionState          string
-	SessionReason         string
-	PrState               string
-	PrReason              string
-	PrNumber              int64
-	PrUrl                 string
-	RuntimeState          string
-	RuntimeReason         string
+	TerminationReason     string
+	IsAlive               int64
 	ActivityState         string
 	ActivityLastAt        time.Time
 	ActivitySource        string
 	DetectingAttempts     sql.NullInt64
 	DetectingStartedAt    sql.NullTime
 	DetectingEvidenceHash sql.NullString
+	Branch                string
+	WorkspacePath         string
+	RuntimeHandleID       string
+	RuntimeName           string
+	AgentSessionID        string
+	Prompt                string
+	UpdatedAt             time.Time
 	ID                    string
-	Revision              int64
 }
 
-// CAS update: succeeds only when the stored revision equals the caller's loaded
-// revision (@expected_revision). 0 rows affected => revision mismatch.
-func (q *Queries) UpdateSessionCAS(ctx context.Context, arg UpdateSessionCASParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateSessionCAS,
-		arg.ProjectID,
+func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) error {
+	_, err := q.db.ExecContext(ctx, updateSession,
 		arg.IssueID,
 		arg.Kind,
-		arg.UpdatedAt,
+		arg.Harness,
 		arg.SessionState,
-		arg.SessionReason,
-		arg.PrState,
-		arg.PrReason,
-		arg.PrNumber,
-		arg.PrUrl,
-		arg.RuntimeState,
-		arg.RuntimeReason,
+		arg.TerminationReason,
+		arg.IsAlive,
 		arg.ActivityState,
 		arg.ActivityLastAt,
 		arg.ActivitySource,
 		arg.DetectingAttempts,
 		arg.DetectingStartedAt,
 		arg.DetectingEvidenceHash,
+		arg.Branch,
+		arg.WorkspacePath,
+		arg.RuntimeHandleID,
+		arg.RuntimeName,
+		arg.AgentSessionID,
+		arg.Prompt,
+		arg.UpdatedAt,
 		arg.ID,
-		arg.Revision,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return err
 }

@@ -3,306 +3,314 @@ package sqlite
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	db, err := Open(t.TempDir())
+	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
-	return NewStore(db)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
 
-func sampleRecord(id string) domain.SessionRecord {
+func seedProject(t *testing.T, s *Store, id string) {
+	t.Helper()
+	if err := s.UpsertProject(context.Background(), ProjectRow{
+		ID: id, Path: "/tmp/" + id, RegisteredAt: time.Now().UTC().Truncate(time.Second),
+	}); err != nil {
+		t.Fatalf("seed project %s: %v", id, err)
+	}
+}
+
+func sampleRecord(project string) domain.SessionRecord {
 	now := time.Now().UTC().Truncate(time.Second)
 	return domain.SessionRecord{
-		ID:        domain.SessionID(id),
-		ProjectID: "proj",
-		IssueID:   "issue-1",
+		ProjectID: domain.ProjectID(project),
 		Kind:      domain.KindWorker,
+		Lifecycle: domain.CanonicalSessionLifecycle{
+			Version: domain.LifecycleVersion,
+			Harness: domain.HarnessClaudeCode,
+			IsAlive: true,
+			Session: domain.SessionSubstate{State: domain.SessionWorking},
+			Activity: domain.ActivitySubstate{
+				State: domain.ActivityActive, LastActivityAt: now, Source: domain.SourceNative,
+			},
+		},
+		Metadata:  domain.SessionMetadata{Branch: "feat/x", WorkspacePath: "/ws"},
 		CreatedAt: now,
 		UpdatedAt: now,
-		Lifecycle: domain.CanonicalSessionLifecycle{
-			Session:  domain.SessionSubstate{State: domain.SessionWorking, Reason: domain.ReasonTaskInProgress},
-			PR:       domain.PRSubstate{State: domain.PRNone, Reason: domain.PRReasonNotCreated},
-			Runtime:  domain.RuntimeSubstate{State: domain.RuntimeAlive, Reason: domain.RuntimeReasonProcessRunning},
-			Activity: domain.ActivitySubstate{State: domain.ActivityActive, LastActivityAt: now, Source: domain.SourceNative},
-		},
 	}
 }
 
-func TestUpsertInsertThenUpdateBumpsRevision(t *testing.T) {
+func TestProjectCRUDAndArchive(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	rec := sampleRecord("s1")
+	seedProject(t, s, "mer")
 
-	if err := s.Upsert(ctx, rec, ports.EventSessionCreated); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	lc, ok, err := s.Load(ctx, "s1")
+	got, ok, err := s.GetProject(ctx, "mer")
 	if err != nil || !ok {
-		t.Fatalf("load after insert: ok=%v err=%v", ok, err)
+		t.Fatalf("get: ok=%v err=%v", ok, err)
 	}
-	if lc.Revision != 1 {
-		t.Fatalf("revision after insert = %d, want 1", lc.Revision)
+	if got.ID != "mer" || got.Path != "/tmp/mer" {
+		t.Fatalf("project = %+v", got)
 	}
-
-	// Update must carry the loaded revision (1) and persist as 2.
-	rec.Lifecycle.Revision = 1
-	rec.Lifecycle.Session.State = domain.SessionIdle
-	if err := s.Upsert(ctx, rec, ports.EventSessionStateChanged); err != nil {
-		t.Fatalf("update: %v", err)
+	if list, _ := s.ListProjects(ctx); len(list) != 1 {
+		t.Fatalf("active list = %d, want 1", len(list))
 	}
-	lc, _, _ = s.Load(ctx, "s1")
-	if lc.Revision != 2 {
-		t.Fatalf("revision after update = %d, want 2", lc.Revision)
+	// archive hides from the active list but still resolves by id.
+	if err := s.ArchiveProject(ctx, "mer", time.Now().UTC()); err != nil {
+		t.Fatal(err)
 	}
-	if lc.Session.State != domain.SessionIdle {
-		t.Fatalf("state after update = %q, want idle", lc.Session.State)
+	if list, _ := s.ListProjects(ctx); len(list) != 0 {
+		t.Fatalf("after archive, active list = %d, want 0", len(list))
+	}
+	if _, ok, _ := s.GetProject(ctx, "mer"); !ok {
+		t.Fatal("archived project must still resolve by id")
 	}
 }
 
-func TestUpsertStaleRevisionMismatch(t *testing.T) {
+func TestSessionCreateAssignsPerProjectID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	rec := sampleRecord("s1")
-	if err := s.Upsert(ctx, rec, ports.EventSessionCreated); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
+	seedProject(t, s, "mer")
+	seedProject(t, s, "ao")
 
-	// Stored revision is 1; submitting revision 0 (stale) must mismatch and
-	// write nothing new (no extra outbox/change_log rows).
-	rec.Lifecycle.Revision = 0
-	err := s.Upsert(ctx, rec, ports.EventSessionStateChanged)
-	if err == nil || !strings.Contains(err.Error(), "revision mismatch") {
-		t.Fatalf("stale update err = %v, want revision mismatch", err)
-	}
-	assertOutboxCount(t, s, ctx, 1)
-}
-
-func TestUpsertInsertNonZeroRevisionErrors(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	rec := sampleRecord("s1")
-	rec.Lifecycle.Revision = 5
-	err := s.Upsert(ctx, rec, ports.EventSessionCreated)
-	if err == nil || !strings.Contains(err.Error(), "revision mismatch") {
-		t.Fatalf("insert with revision 5 err = %v, want revision mismatch", err)
-	}
-	// Nothing should be persisted.
-	if _, ok, _ := s.Get(ctx, "s1"); ok {
-		t.Fatal("session persisted despite revision-mismatch insert")
-	}
-	assertOutboxCount(t, s, ctx, 0)
-}
-
-func TestUpsertOutboxAtomicityAndOrdering(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	rec := sampleRecord("s1")
-	if err := s.Upsert(ctx, rec, ports.EventSessionCreated); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	rec.Lifecycle.Revision = 1
-	if err := s.Upsert(ctx, rec, ports.EventSessionStateChanged); err != nil {
-		t.Fatalf("update: %v", err)
-	}
-
-	rows, err := NewStore(s.db).q.ListUnsentOutbox(ctx, 100)
+	r1, err := s.CreateSession(ctx, sampleRecord("mer"))
 	if err != nil {
-		t.Fatalf("list outbox: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("outbox rows = %d, want 2", len(rows))
-	}
-	// seq strictly monotonic, event types verbatim, revisions 1 then 2.
-	if rows[0].ChangeLogSeq != 1 || rows[1].ChangeLogSeq != 2 {
-		t.Fatalf("seq not monotonic: %d, %d", rows[0].ChangeLogSeq, rows[1].ChangeLogSeq)
-	}
-	if rows[0].EventType != string(ports.EventSessionCreated) || rows[1].EventType != string(ports.EventSessionStateChanged) {
-		t.Fatalf("event types = %q, %q", rows[0].EventType, rows[1].EventType)
-	}
-	if rows[0].Revision != 1 || rows[1].Revision != 2 {
-		t.Fatalf("revisions = %d, %d, want 1, 2", rows[0].Revision, rows[1].Revision)
-	}
-}
-
-func TestGetListRoundTrip(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	a := sampleRecord("a")
-	b := sampleRecord("b")
-	b.ProjectID = "other"
-	if err := s.Upsert(ctx, a, ports.EventSessionCreated); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Upsert(ctx, b, ports.EventSessionCreated); err != nil {
-		t.Fatal(err)
+	r2, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	r3, _ := s.CreateSession(ctx, sampleRecord("ao"))
+	if r1.ID != "mer-1" || r2.ID != "mer-2" || r3.ID != "ao-1" {
+		t.Fatalf("ids = %s, %s, %s; want mer-1, mer-2, ao-1", r1.ID, r2.ID, r3.ID)
 	}
-
-	got, ok, err := s.Get(ctx, "a")
+	got, ok, err := s.GetSession(ctx, "mer-1")
 	if err != nil || !ok {
-		t.Fatalf("get a: ok=%v err=%v", ok, err)
+		t.Fatalf("get: ok=%v err=%v", ok, err)
 	}
-	if got.ID != "a" || got.Lifecycle.Revision != 1 || got.IssueID != "issue-1" {
-		t.Fatalf("unexpected record: %+v", got)
+	if got.Lifecycle.Session.State != domain.SessionWorking || !got.Lifecycle.IsAlive ||
+		got.Lifecycle.Harness != domain.HarnessClaudeCode || got.Metadata.Branch != "feat/x" {
+		t.Fatalf("round-trip mismatch: %+v", got)
 	}
-	if !got.Metadata.IsZero() {
-		t.Fatalf("Get must not reconstruct metadata, got %v", got.Metadata)
+	if list, _ := s.ListSessions(ctx, "mer"); len(list) != 2 {
+		t.Fatalf("list mer = %d, want 2", len(list))
 	}
+	if all, _ := s.ListAllSessions(ctx); len(all) != 3 {
+		t.Fatalf("list all = %d, want 3", len(all))
+	}
+}
 
-	list, err := s.List(ctx, "proj")
+func TestSessionUpdateAndDetecting(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+
+	r.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionDetecting}
+	r.Lifecycle.IsAlive = false
+	r.Lifecycle.Detecting = &domain.DetectingState{Attempts: 2, StartedAt: r.CreatedAt, EvidenceHash: "abc"}
+	if err := s.UpdateSession(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.GetSession(ctx, r.ID)
+	if got.Lifecycle.Session.State != domain.SessionDetecting || got.Lifecycle.IsAlive {
+		t.Fatalf("update not persisted: %+v", got.Lifecycle.Session)
+	}
+	if got.Lifecycle.Detecting == nil || got.Lifecycle.Detecting.Attempts != 2 || got.Lifecycle.Detecting.EvidenceHash != "abc" {
+		t.Fatalf("detecting not round-tripped: %+v", got.Lifecycle.Detecting)
+	}
+	// clearing detecting persists as nil.
+	got.Lifecycle.Detecting = nil
+	got.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionWorking}
+	_ = s.UpdateSession(ctx, got)
+	again, _, _ := s.GetSession(ctx, r.ID)
+	if again.Lifecycle.Detecting != nil {
+		t.Fatalf("detecting should clear to nil, got %+v", again.Lifecycle.Detecting)
+	}
+}
+
+func TestPRCRUD(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+
+	pr := PRRow{
+		URL: "https://gh/pr/1", SessionID: string(r.ID), Number: 1, State: "open",
+		ReviewDecision: "review_required", CIState: "failing", Mergeability: "blocked", UpdatedAt: now,
+	}
+	if err := s.UpsertPR(ctx, pr); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !ok || got != pr {
+		t.Fatalf("get pr: ok=%v err=%v got=%+v", ok, err, got)
+	}
+	if list, _ := s.ListPRsBySession(ctx, string(r.ID)); len(list) != 1 {
+		t.Fatalf("list prs = %d, want 1", len(list))
+	}
+	if err := s.DeletePR(ctx, pr.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.GetPR(ctx, pr.URL); ok {
+		t.Fatal("pr should be gone")
+	}
+}
+
+func TestPRChecksLoopBrakeQuery(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	_ = s.UpsertPR(ctx, PRRow{URL: "pr1", SessionID: string(r.ID), State: "open", UpdatedAt: now})
+
+	// three consecutive failing runs of "build" (one per commit).
+	for i := 1; i <= 3; i++ {
+		if err := s.RecordCheck(ctx, PRCheckRow{
+			PRURL: "pr1", Name: "build", CommitHash: fmt.Sprintf("c%d", i),
+			Status: "failed", CreatedAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last3, err := s.RecentCheckStatuses(ctx, "pr1", "build", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].ID != "a" {
-		t.Fatalf("List(proj) = %+v, want only a", list)
+	if len(last3) != 3 || last3[0] != "failed" || last3[1] != "failed" || last3[2] != "failed" {
+		t.Fatalf("recent statuses = %v, want 3x failed (loop brake would trip)", last3)
+	}
+	// a pass on a newer commit breaks the streak.
+	_ = s.RecordCheck(ctx, PRCheckRow{PRURL: "pr1", Name: "build", CommitHash: "c4", Status: "passed", CreatedAt: now.Add(4 * time.Second)})
+	last3, _ = s.RecentCheckStatuses(ctx, "pr1", "build", 3)
+	if last3[0] != "passed" {
+		t.Fatalf("most recent should be passed, got %v", last3)
 	}
 }
 
-func TestMetadataSideChannel(t *testing.T) {
+func TestPRCommentsReplace(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	if err := s.Upsert(ctx, sampleRecord("s1"), ports.EventSessionCreated); err != nil {
-		t.Fatal(err)
-	}
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	_ = s.UpsertPR(ctx, PRRow{URL: "pr1", SessionID: string(r.ID), State: "open", UpdatedAt: now})
 
-	if err := s.PatchMetadata(ctx, "s1", domain.SessionMetadata{Branch: "feat/x", Prompt: "do it"}); err != nil {
-		t.Fatalf("patch: %v", err)
+	_ = s.ReplacePRComments(ctx, "pr1", []PRCommentRow{
+		{PRURL: "pr1", CommentID: "c1", Author: "a", File: "a.go", Line: 1, Body: "nit", CreatedAt: now},
+		{PRURL: "pr1", CommentID: "c2", Author: "b", File: "b.go", Line: 2, Body: "bug", Resolved: true, CreatedAt: now.Add(time.Second)},
+	})
+	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 2 {
+		t.Fatalf("comments = %d, want 2", len(list))
 	}
-	// A partial patch (only Branch) must not clobber the earlier Prompt.
-	if err := s.PatchMetadata(ctx, "s1", domain.SessionMetadata{Branch: "feat/y"}); err != nil {
-		t.Fatalf("patch overwrite: %v", err)
+	// replace with a smaller set drops the rest.
+	_ = s.ReplacePRComments(ctx, "pr1", []PRCommentRow{{PRURL: "pr1", CommentID: "c1", Body: "x", CreatedAt: now}})
+	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 1 {
+		t.Fatalf("after replace, comments = %d, want 1", len(list))
 	}
+}
 
-	m, err := s.GetMetadata(ctx, "s1")
+func TestCDCTriggersPopulateChangeLog(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	// a real state change logs; a metadata-only change does not (WHEN guard).
+	r.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionIdle}
+	_ = s.UpdateSession(ctx, r)
+	r.Metadata.Prompt = "only metadata changed"
+	_ = s.UpdateSession(ctx, r)
+	// a PR insert logs too.
+	_ = s.UpsertPR(ctx, PRRow{URL: "pr1", SessionID: string(r.ID), State: "open", UpdatedAt: r.UpdatedAt})
+
+	evs, err := s.ReadChangeLogAfter(ctx, 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Branch != "feat/y" || m.Prompt != "do it" {
-		t.Fatalf("metadata = %+v", m)
+	var types []string
+	for _, e := range evs {
+		if e.ProjectID != "mer" {
+			t.Fatalf("event project = %s, want mer", e.ProjectID)
+		}
+		types = append(types, e.EventType)
 	}
-	// Metadata writes must not bump revision (off the canonical path).
-	lc, _, _ := s.Load(ctx, "s1")
-	if lc.Revision != 1 {
-		t.Fatalf("revision = %d after metadata patch, want 1 (no bump)", lc.Revision)
+	want := []string{"session_created", "session_updated", "pr_created"}
+	if len(types) != 3 || types[0] != want[0] || types[1] != want[1] || types[2] != want[2] {
+		t.Fatalf("change_log event types = %v, want %v (metadata-only update suppressed)", types, want)
+	}
+	max, _ := s.MaxChangeLogSeq(ctx)
+	if max != int64(len(evs)) {
+		t.Fatalf("max seq = %d, want %d", max, len(evs))
 	}
 }
 
-func TestDetectingRoundTrip(t *testing.T) {
+func TestConcurrentSessionCreateAssignsUniqueNums(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	rec := sampleRecord("s1")
-	rec.Lifecycle.Session.State = domain.SessionDetecting
-	rec.Lifecycle.Detecting = &domain.DetectingState{
-		Attempts:     2,
-		StartedAt:    time.Now().UTC().Truncate(time.Second),
-		EvidenceHash: "abc123",
-	}
-	if err := s.Upsert(ctx, rec, ports.EventSessionCreated); err != nil {
-		t.Fatal(err)
-	}
-	lc, _, _ := s.Load(ctx, "s1")
-	if lc.Detecting == nil {
-		t.Fatal("Detecting lost on round-trip")
-	}
-	if lc.Detecting.Attempts != 2 || lc.Detecting.EvidenceHash != "abc123" {
-		t.Fatalf("detecting = %+v", lc.Detecting)
-	}
+	seedProject(t, s, "mer")
 
-	// Clearing Detecting must null the columns back out.
-	rec.Lifecycle.Revision = 1
-	rec.Lifecycle.Detecting = nil
-	if err := s.Upsert(ctx, rec, ports.EventSessionStateChanged); err != nil {
-		t.Fatal(err)
-	}
-	lc, _, _ = s.Load(ctx, "s1")
-	if lc.Detecting != nil {
-		t.Fatalf("Detecting not cleared: %+v", lc.Detecting)
-	}
-}
-
-func TestLoadGetMissing(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	if _, ok, err := s.Load(ctx, "nope"); ok || err != nil {
-		t.Fatalf("Load missing: ok=%v err=%v", ok, err)
-	}
-	if _, ok, err := s.Get(ctx, "nope"); ok || err != nil {
-		t.Fatalf("Get missing: ok=%v err=%v", ok, err)
-	}
-	if m, err := s.GetMetadata(ctx, "nope"); err != nil || !m.IsZero() {
-		t.Fatalf("GetMetadata missing: m=%v err=%v", m, err)
-	}
-}
-
-func assertOutboxCount(t *testing.T, s *Store, ctx context.Context, want int) {
-	t.Helper()
-	rows, err := s.q.ListUnsentOutbox(ctx, 1000)
-	if err != nil {
-		t.Fatalf("list outbox: %v", err)
-	}
-	if len(rows) != want {
-		t.Fatalf("outbox count = %d, want %d", len(rows), want)
-	}
-}
-
-// TestConcurrentReadsAndWrites exercises the read-pool + write-mutex model:
-// many writers (each its own session) run alongside many readers hammering
-// ListAll. Reads must not be serialized behind writes, writes must not corrupt
-// or error under the revision-CAS, and the final state must be exact. Run under
-// -race this also guards the writeMu discipline.
-func TestConcurrentReadsAndWrites(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	const n = 16
-
+	const n = 20
 	var wg sync.WaitGroup
-	errc := make(chan error, n*2)
-
+	ids := make([]string, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := s.Upsert(ctx, sampleRecord(fmt.Sprintf("s%02d", i)), ports.EventSessionCreated); err != nil {
-				errc <- err
+			r, err := s.CreateSession(ctx, sampleRecord("mer"))
+			if err != nil {
+				t.Errorf("create: %v", err)
+				return
 			}
+			ids[i] = string(r.ID)
 		}(i)
 	}
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 25; j++ {
-				if _, err := s.ListAll(ctx); err != nil {
-					errc <- err
-					return
-				}
-			}
-		}()
-	}
 	wg.Wait()
-	close(errc)
-	for err := range errc {
-		t.Fatalf("concurrent op error: %v", err)
-	}
 
-	got, err := s.ListAll(ctx)
-	if err != nil {
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			t.Fatalf("duplicate or empty id: %q in %v", id, ids)
+		}
+		seen[id] = true
+	}
+	if all, _ := s.ListAllSessions(ctx); len(all) != n {
+		t.Fatalf("created %d sessions, want %d", len(all), n)
+	}
+}
+
+func TestTerminationReasonRoundTripAndCheck(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+
+	// terminate with a valid reason -> round-trips.
+	r.Lifecycle.Session = domain.SessionSubstate{State: domain.SessionTerminated}
+	r.Lifecycle.TerminationReason = domain.TermManuallyKilled
+	if err := s.UpdateSession(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != n {
-		t.Fatalf("after %d concurrent inserts, ListAll returned %d", n, len(got))
+	got, _, _ := s.GetSession(ctx, r.ID)
+	if got.Lifecycle.TerminationReason != domain.TermManuallyKilled {
+		t.Fatalf("termination_reason = %q, want manually_killed", got.Lifecycle.TerminationReason)
+	}
+	if domain.DeriveStatus(got.Lifecycle, domain.PRFacts{}) != domain.StatusKilled {
+		t.Fatal("terminated+manually_killed should derive to killed")
+	}
+
+	// an off-enum reason is rejected by the CHECK constraint.
+	r.Lifecycle.TerminationReason = domain.TerminationReason("definitely_not_a_reason")
+	if err := s.UpdateSession(ctx, r); err == nil {
+		t.Fatal("expected CHECK constraint to reject an invalid termination_reason")
 	}
 }

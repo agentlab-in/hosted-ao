@@ -25,19 +25,9 @@ func (q *Queries) ArchiveProject(ctx context.Context, arg ArchiveProjectParams) 
 	return err
 }
 
-const deleteProject = `-- name: DeleteProject :exec
-DELETE FROM projects WHERE id = ?
-`
-
-func (q *Queries) DeleteProject(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteProject, id)
-	return err
-}
-
 const getProject = `-- name: GetProject :one
-SELECT id, path, repo_owner, repo_name, repo_platform, repo_origin_url, default_branch, display_name, session_prefix, source, registered_at, archived_at
-FROM projects
-WHERE id = ?
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at
+FROM projects WHERE id = ?
 `
 
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
@@ -46,14 +36,8 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Path,
-		&i.RepoOwner,
-		&i.RepoName,
-		&i.RepoPlatform,
 		&i.RepoOriginUrl,
-		&i.DefaultBranch,
 		&i.DisplayName,
-		&i.SessionPrefix,
-		&i.Source,
 		&i.RegisteredAt,
 		&i.ArchivedAt,
 	)
@@ -61,10 +45,8 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, path, repo_owner, repo_name, repo_platform, repo_origin_url, default_branch, display_name, session_prefix, source, registered_at, archived_at
-FROM projects
-WHERE archived_at IS NULL
-ORDER BY id
+SELECT id, path, repo_origin_url, display_name, registered_at, archived_at
+FROM projects WHERE archived_at IS NULL ORDER BY id
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -79,14 +61,8 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 		if err := rows.Scan(
 			&i.ID,
 			&i.Path,
-			&i.RepoOwner,
-			&i.RepoName,
-			&i.RepoPlatform,
 			&i.RepoOriginUrl,
-			&i.DefaultBranch,
 			&i.DisplayName,
-			&i.SessionPrefix,
-			&i.Source,
 			&i.RegisteredAt,
 			&i.ArchivedAt,
 		); err != nil {
@@ -104,33 +80,20 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 const upsertProject = `-- name: UpsertProject :exec
-INSERT INTO projects (id, path, repo_owner, repo_name, repo_platform, repo_origin_url, default_branch, display_name, session_prefix, source, registered_at, archived_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO projects (id, path, repo_origin_url, display_name, registered_at, archived_at)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     path = excluded.path,
-    repo_owner = excluded.repo_owner,
-    repo_name = excluded.repo_name,
-    repo_platform = excluded.repo_platform,
     repo_origin_url = excluded.repo_origin_url,
-    default_branch = excluded.default_branch,
     display_name = excluded.display_name,
-    session_prefix = excluded.session_prefix,
-    source = excluded.source,
-    registered_at = excluded.registered_at,
     archived_at = excluded.archived_at
 `
 
 type UpsertProjectParams struct {
 	ID            string
 	Path          string
-	RepoOwner     string
-	RepoName      string
-	RepoPlatform  string
 	RepoOriginUrl string
-	DefaultBranch string
 	DisplayName   string
-	SessionPrefix string
-	Source        string
 	RegisteredAt  time.Time
 	ArchivedAt    sql.NullTime
 }
@@ -139,14 +102,8 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 	_, err := q.db.ExecContext(ctx, upsertProject,
 		arg.ID,
 		arg.Path,
-		arg.RepoOwner,
-		arg.RepoName,
-		arg.RepoPlatform,
 		arg.RepoOriginUrl,
-		arg.DefaultBranch,
 		arg.DisplayName,
-		arg.SessionPrefix,
-		arg.Source,
 		arg.RegisteredAt,
 		arg.ArchivedAt,
 	)

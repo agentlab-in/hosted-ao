@@ -10,50 +10,29 @@ import (
 
 type Querier interface {
 	ArchiveProject(ctx context.Context, arg ArchiveProjectParams) error
-	DeletePR(ctx context.Context, sessionID string) error
-	DeletePRChecks(ctx context.Context, sessionID string) error
-	DeletePRComments(ctx context.Context, sessionID string) error
-	DeleteProject(ctx context.Context, id string) error
-	DeleteReactionTracker(ctx context.Context, arg DeleteReactionTrackerParams) error
-	DeleteSentOutboxBelow(ctx context.Context, changeLogSeq int64) (int64, error)
-	DeleteSessionReactionTrackers(ctx context.Context, sessionID string) error
-	GetConsumerOffset(ctx context.Context, consumer string) (int64, error)
-	GetPR(ctx context.Context, sessionID string) (Pr, error)
+	DeletePR(ctx context.Context, url string) error
+	DeletePRComments(ctx context.Context, prUrl string) error
+	DeleteSession(ctx context.Context, id string) error
+	GetPR(ctx context.Context, url string) (Pr, error)
 	GetProject(ctx context.Context, id string) (Project, error)
 	GetSession(ctx context.Context, id string) (Session, error)
-	GetSessionMetadata(ctx context.Context, sessionID string) (GetSessionMetadataRow, error)
-	GetSessionRevision(ctx context.Context, id string) (int64, error)
-	// Appends a canonical-write record and returns its monotonic seq so the same
-	// transaction can thread it into the outbox row.
-	InsertChangeLog(ctx context.Context, arg InsertChangeLogParams) (int64, error)
-	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
-	InsertPRCheck(ctx context.Context, arg InsertPRCheckParams) error
-	InsertPRComment(ctx context.Context, arg InsertPRCommentParams) error
-	// CAS insert: only succeeds for a brand-new id. Incoming revision must be 0;
-	// the row is persisted at revision 1.
-	InsertSession(ctx context.Context, arg InsertSessionParams) (int64, error)
+	InsertSession(ctx context.Context, arg InsertSessionParams) error
 	ListAllSessions(ctx context.Context) ([]Session, error)
-	ListPRChecks(ctx context.Context, sessionID string) ([]ListPRChecksRow, error)
-	ListPRComments(ctx context.Context, sessionID string) ([]ListPRCommentsRow, error)
+	ListChecksByPR(ctx context.Context, prUrl string) ([]PrCheck, error)
+	ListPRComments(ctx context.Context, prUrl string) ([]PrComment, error)
+	ListPRsBySession(ctx context.Context, sessionID string) ([]Pr, error)
 	ListProjects(ctx context.Context) ([]Project, error)
-	ListReactionTrackers(ctx context.Context) ([]ReactionTracker, error)
+	ListRecentChecks(ctx context.Context, arg ListRecentChecksParams) ([]ListRecentChecksRow, error)
 	ListSessionsByProject(ctx context.Context, projectID string) ([]Session, error)
-	ListUnsentOutbox(ctx context.Context, limit int64) ([]ListUnsentOutboxRow, error)
-	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
-	MarkOutboxSent(ctx context.Context, arg MarkOutboxSentParams) error
-	MaxChangeLogSeq(ctx context.Context) (int64, error)
-	MinConsumerOffset(ctx context.Context) (int64, error)
-	// CAS update: succeeds only when the stored revision equals the caller's loaded
-	// revision (@expected_revision). 0 rows affected => revision mismatch.
-	UpdateSessionCAS(ctx context.Context, arg UpdateSessionCASParams) (int64, error)
-	UpsertConsumerOffset(ctx context.Context, arg UpsertConsumerOffsetParams) error
+	MaxChangeLogSeq(ctx context.Context) (interface{}, error)
+	NextSessionNum(ctx context.Context, projectID string) (int64, error)
+	ReadChangeLogAfter(ctx context.Context, arg ReadChangeLogAfterParams) ([]ChangeLog, error)
+	ReadChangeLogAfterForProject(ctx context.Context, arg ReadChangeLogAfterForProjectParams) ([]ChangeLog, error)
+	UpdateSession(ctx context.Context, arg UpdateSessionParams) error
 	UpsertPR(ctx context.Context, arg UpsertPRParams) error
+	UpsertPRCheck(ctx context.Context, arg UpsertPRCheckParams) error
+	UpsertPRComment(ctx context.Context, arg UpsertPRCommentParams) error
 	UpsertProject(ctx context.Context, arg UpsertProjectParams) error
-	UpsertReactionTracker(ctx context.Context, arg UpsertReactionTrackerParams) error
-	// Merge semantics: an empty incoming column is "leave unchanged", so a partial
-	// patch (e.g. spawn writing only the runtime handle) never clobbers a value set
-	// earlier (e.g. the branch set at creation). Mirrors the old per-key map merge.
-	UpsertSessionMetadata(ctx context.Context, arg UpsertSessionMetadataParams) error
 }
 
 var _ Querier = (*Queries)(nil)

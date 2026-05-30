@@ -10,32 +10,163 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// PRRow is the SCM observer's cache of the scalar PR facts that do not live in
-// the canonical lifecycle (which keeps only pr_state/reason/number/url). It is
-// 1:1 with a session and written OFF the canonical CDC path: upserting it never
-// bumps revision and never emits a change_log/outbox event. The list facts
-// (checks, comments) are separate rows — see PRCheck / PRComment.
+// PRRow is the scalar PR facts row (the pr table), keyed by normalized URL. One
+// session can own many PRs; a PR belongs to one session (session_id FK).
 type PRRow struct {
+	URL            string
 	SessionID      string
+	Number         int64
+	State          string // draft | open | merged | closed
 	ReviewDecision string // none | approved | changes_requested | review_required
-	Mergeability   string // unknown | mergeable | conflicting | blocked | unstable
 	CIState        string // unknown | pending | passing | failing
-	CIPassed       int64
-	CIFailed       int64
-	CIPending      int64
-	CILogTail      string
-	LastFetchedAt  time.Time
+	Mergeability   string // unknown | mergeable | conflicting | blocked | unstable
+	UpdatedAt      time.Time
 }
 
-// PRCheck is one CI check belonging to a session's PR.
-type PRCheck struct {
-	Name   string
-	Status string // unknown | queued | in_progress | passed | failed | skipped | cancelled
-	URL    string
+// UpsertPR inserts or replaces the scalar PR facts for a PR URL. Empty enum
+// fields default to their "nothing known yet" value so a partial row is valid
+// against the CHECK constraints (matches the domain zero values none/unknown).
+func (s *Store) UpsertPR(ctx context.Context, r PRRow) error {
+	if r.State == "" {
+		r.State = "open"
+	}
+	if r.ReviewDecision == "" {
+		r.ReviewDecision = "none"
+	}
+	if r.CIState == "" {
+		r.CIState = "unknown"
+	}
+	if r.Mergeability == "" {
+		r.Mergeability = "unknown"
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.UpsertPR(ctx, gen.UpsertPRParams{
+		Url:            r.URL,
+		SessionID:      r.SessionID,
+		Number:         r.Number,
+		PrState:        r.State,
+		ReviewDecision: r.ReviewDecision,
+		CiState:        r.CIState,
+		Mergeability:   r.Mergeability,
+		UpdatedAt:      r.UpdatedAt,
+	})
 }
 
-// PRComment is one review comment belonging to a session's PR.
-type PRComment struct {
+// GetPR returns the PR facts for a URL, or ok=false if absent.
+func (s *Store) GetPR(ctx context.Context, url string) (PRRow, bool, error) {
+	p, err := s.qr.GetPR(ctx, url)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PRRow{}, false, nil
+	}
+	if err != nil {
+		return PRRow{}, false, fmt.Errorf("get pr %s: %w", url, err)
+	}
+	return prRowFromGen(p), true, nil
+}
+
+// ListPRsBySession returns every PR owned by a session, newest first.
+func (s *Store) ListPRsBySession(ctx context.Context, sessionID string) ([]PRRow, error) {
+	rows, err := s.qr.ListPRsBySession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list prs for %s: %w", sessionID, err)
+	}
+	out := make([]PRRow, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, prRowFromGen(p))
+	}
+	return out, nil
+}
+
+// DeletePR removes a PR (cascades to its checks + comments).
+func (s *Store) DeletePR(ctx context.Context, url string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.DeletePR(ctx, url)
+}
+
+func prRowFromGen(p gen.Pr) PRRow {
+	return PRRow{
+		URL:            p.Url,
+		SessionID:      p.SessionID,
+		Number:         p.Number,
+		State:          p.PrState,
+		ReviewDecision: p.ReviewDecision,
+		CIState:        p.CiState,
+		Mergeability:   p.Mergeability,
+		UpdatedAt:      p.UpdatedAt,
+	}
+}
+
+// ---- pr_checks: CI run history ----
+
+// PRCheckRow is one CI check run for a PR (one row per check name per commit).
+type PRCheckRow struct {
+	PRURL      string
+	Name       string
+	CommitHash string
+	Status     string // unknown | queued | in_progress | passed | failed | skipped | cancelled
+	URL        string
+	LogTail    string
+	CreatedAt  time.Time
+}
+
+// RecordCheck upserts a CI check run. Re-polling the same (pr, name, commit)
+// updates the same row; a new commit creates a new row (a fresh agent attempt).
+func (s *Store) RecordCheck(ctx context.Context, r PRCheckRow) error {
+	if r.Status == "" {
+		r.Status = "unknown"
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.UpsertPRCheck(ctx, gen.UpsertPRCheckParams{
+		PrUrl:      r.PRURL,
+		Name:       r.Name,
+		CommitHash: r.CommitHash,
+		Status:     r.Status,
+		Url:        r.URL,
+		LogTail:    r.LogTail,
+		CreatedAt:  r.CreatedAt,
+	})
+}
+
+// RecentCheckStatuses returns the statuses of the last `limit` runs of a check,
+// most-recent first. The CI-fix-loop brake reads this: "last 3 all failed?".
+func (s *Store) RecentCheckStatuses(ctx context.Context, prURL, name string, limit int) ([]string, error) {
+	rows, err := s.qr.ListRecentChecks(ctx, gen.ListRecentChecksParams{
+		PrUrl: prURL, Name: name, Limit: int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("recent checks %s/%s: %w", prURL, name, err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Status)
+	}
+	return out, nil
+}
+
+// ListChecks returns every recorded check run for a PR.
+func (s *Store) ListChecks(ctx context.Context, prURL string) ([]PRCheckRow, error) {
+	rows, err := s.qr.ListChecksByPR(ctx, prURL)
+	if err != nil {
+		return nil, fmt.Errorf("list checks %s: %w", prURL, err)
+	}
+	out := make([]PRCheckRow, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, PRCheckRow{
+			PRURL: c.PrUrl, Name: c.Name, CommitHash: c.CommitHash,
+			Status: c.Status, URL: c.Url, LogTail: c.LogTail, CreatedAt: c.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// ---- pr_comment ----
+
+// PRCommentRow is one review comment on a PR.
+type PRCommentRow struct {
+	PRURL     string
 	CommentID string
 	Author    string
 	File      string
@@ -45,101 +176,18 @@ type PRComment struct {
 	CreatedAt time.Time
 }
 
-// UpsertPR inserts or replaces the scalar PR facts for one session.
-func (s *Store) UpsertPR(ctx context.Context, r PRRow) error {
+// ReplacePRComments atomically replaces the full comment set for a PR (each SCM
+// fetch reports the current set, so a replace keeps it in sync).
+func (s *Store) ReplacePRComments(ctx context.Context, prURL string, comments []PRCommentRow) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.q.UpsertPR(ctx, gen.UpsertPRParams{
-		SessionID:      r.SessionID,
-		ReviewDecision: r.ReviewDecision,
-		Mergeability:   r.Mergeability,
-		CiState:        r.CIState,
-		CiPassed:       r.CIPassed,
-		CiFailed:       r.CIFailed,
-		CiPending:      r.CIPending,
-		CiLogTail:      r.CILogTail,
-		LastFetchedAt:  r.LastFetchedAt,
-	})
-}
-
-// GetPR returns the scalar PR facts for one session. ok is false when no row
-// exists (the SCM observer has not fetched yet, or the session has no PR).
-func (s *Store) GetPR(ctx context.Context, sessionID string) (PRRow, bool, error) {
-	p, err := s.q.GetPR(ctx, sessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return PRRow{}, false, nil
-	}
-	if err != nil {
-		return PRRow{}, false, fmt.Errorf("get pr: %w", err)
-	}
-	return PRRow{
-		SessionID:      p.SessionID,
-		ReviewDecision: p.ReviewDecision,
-		Mergeability:   p.Mergeability,
-		CIState:        p.CiState,
-		CIPassed:       p.CiPassed,
-		CIFailed:       p.CiFailed,
-		CIPending:      p.CiPending,
-		CILogTail:      p.CiLogTail,
-		LastFetchedAt:  p.LastFetchedAt,
-	}, true, nil
-}
-
-// DeletePR drops the scalar PR facts for one session, cascading its checks and
-// comments. Normally unnecessary (the chain cascades on session delete); exposed
-// for explicit eviction.
-func (s *Store) DeletePR(ctx context.Context, sessionID string) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.q.DeletePR(ctx, sessionID)
-}
-
-// ReplacePRChecks atomically replaces the full set of CI checks for a session's
-// PR — each SCM fetch reports the current set, so a replace (not a merge) keeps
-// the table in sync (a check that disappeared upstream is removed). The PR row
-// must already exist (pr_check FKs pr).
-func (s *Store) ReplacePRChecks(ctx context.Context, sessionID string, checks []PRCheck) error {
-	return s.inTx(ctx, "replace pr checks", func(qtx *gen.Queries) error {
-		if err := qtx.DeletePRChecks(ctx, sessionID); err != nil {
-			return err
-		}
-		for _, c := range checks {
-			if err := qtx.InsertPRCheck(ctx, gen.InsertPRCheckParams{
-				SessionID: sessionID,
-				Name:      c.Name,
-				Status:    c.Status,
-				Url:       c.URL,
-			}); err != nil {
-				return fmt.Errorf("check %q: %w", c.Name, err)
-			}
-		}
-		return nil
-	})
-}
-
-// ListPRChecks returns a session's CI checks, ordered by name.
-func (s *Store) ListPRChecks(ctx context.Context, sessionID string) ([]PRCheck, error) {
-	rows, err := s.q.ListPRChecks(ctx, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("list pr checks: %w", err)
-	}
-	out := make([]PRCheck, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, PRCheck{Name: r.Name, Status: r.Status, URL: r.Url})
-	}
-	return out, nil
-}
-
-// ReplacePRComments atomically replaces the full set of review comments for a
-// session's PR (same replace-not-merge rationale as ReplacePRChecks).
-func (s *Store) ReplacePRComments(ctx context.Context, sessionID string, comments []PRComment) error {
-	return s.inTx(ctx, "replace pr comments", func(qtx *gen.Queries) error {
-		if err := qtx.DeletePRComments(ctx, sessionID); err != nil {
+	return s.inTx(ctx, "replace pr comments", func(q *gen.Queries) error {
+		if err := q.DeletePRComments(ctx, prURL); err != nil {
 			return err
 		}
 		for _, c := range comments {
-			if err := qtx.InsertPRComment(ctx, gen.InsertPRCommentParams{
-				SessionID: sessionID,
+			if err := q.UpsertPRComment(ctx, gen.UpsertPRCommentParams{
+				PrUrl:     prURL,
 				CommentID: c.CommentID,
 				Author:    c.Author,
 				File:      c.File,
@@ -155,47 +203,18 @@ func (s *Store) ReplacePRComments(ctx context.Context, sessionID string, comment
 	})
 }
 
-// ListPRComments returns a session's review comments, ordered by creation time.
-func (s *Store) ListPRComments(ctx context.Context, sessionID string) ([]PRComment, error) {
-	rows, err := s.q.ListPRComments(ctx, sessionID)
+// ListPRComments returns a PR's review comments, oldest first.
+func (s *Store) ListPRComments(ctx context.Context, prURL string) ([]PRCommentRow, error) {
+	rows, err := s.qr.ListPRComments(ctx, prURL)
 	if err != nil {
-		return nil, fmt.Errorf("list pr comments: %w", err)
+		return nil, fmt.Errorf("list pr comments %s: %w", prURL, err)
 	}
-	out := make([]PRComment, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, PRComment{
-			CommentID: r.CommentID,
-			Author:    r.Author,
-			File:      r.File,
-			Line:      r.Line,
-			Body:      r.Body,
-			Resolved:  r.Resolved != 0,
-			CreatedAt: r.CreatedAt,
+	out := make([]PRCommentRow, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, PRCommentRow{
+			PRURL: c.PrUrl, CommentID: c.CommentID, Author: c.Author, File: c.File,
+			Line: c.Line, Body: c.Body, Resolved: c.Resolved != 0, CreatedAt: c.CreatedAt,
 		})
 	}
 	return out, nil
-}
-
-// inTx runs fn inside a single write transaction over the store's queries,
-// rolling back on error. It holds writeMu for the duration, so callers must not
-// already hold it.
-func (s *Store) inTx(ctx context.Context, what string, fn func(*gen.Queries) error) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin %s: %w", what, err)
-	}
-	defer tx.Rollback()
-	if err := fn(s.q.WithTx(tx)); err != nil {
-		return fmt.Errorf("%s: %w", what, err)
-	}
-	return tx.Commit()
-}
-
-func boolToInt(b bool) int64 {
-	if b {
-		return 1
-	}
-	return 0
 }

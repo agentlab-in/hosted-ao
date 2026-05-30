@@ -6,48 +6,77 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// Store is the SQLite-backed ports.LifecycleStore. Reads (Load/Get/List/...) run
-// concurrently across the connection pool; every write is funnelled through
-// writeMu so there is exactly one writer at a time. That single-writer guarantee
-// is load-bearing: it keeps WAL's single-writer rule and makes the revision-CAS
-// (read-then-write in Upsert) atomic without depending on the pool size. Hold
-// writeMu only around writes — never around a read — and never call one
-// write method from inside another (the mutex is not reentrant).
+// Store is the SQLite-backed persistence layer. It routes writes to a single
+// writer connection (qw) and reads to a reader pool (qr) — see Open. writeMu
+// guards the read-modify-write write methods (e.g. CreateSession's
+// next-num-then-insert) so concurrent writes can't interleave them.
+//
+// CDC is captured by DB triggers (migration 0001), NOT by this layer: the store
+// never writes change_log, it only reads it for the CDC poller.
 type Store struct {
-	db      *sql.DB
-	q       *gen.Queries
+	writeDB *sql.DB
+	readDB  *sql.DB
+	qw      *gen.Queries // bound to the single writer connection
+	qr      *gen.Queries // bound to the reader pool
 	writeMu sync.Mutex
 }
 
-var _ ports.LifecycleStore = (*Store)(nil)
-
-// NewStore wraps an opened *sql.DB (see Open) as a LifecycleStore.
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db, q: gen.New(db)}
+// NewStore wraps an opened writer + reader *sql.DB (see Open) as a Store.
+func NewStore(writeDB, readDB *sql.DB) *Store {
+	return &Store{
+		writeDB: writeDB,
+		readDB:  readDB,
+		qw:      gen.New(writeDB),
+		qr:      gen.New(readDB),
+	}
 }
 
-// Load returns the canonical lifecycle for a session, or ok=false if absent.
-func (s *Store) Load(ctx context.Context, id domain.SessionID) (domain.CanonicalSessionLifecycle, bool, error) {
-	row, err := s.q.GetSession(ctx, string(id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.CanonicalSessionLifecycle{}, false, nil
+// Close closes both pools.
+func (s *Store) Close() error {
+	err := s.writeDB.Close()
+	if e := s.readDB.Close(); e != nil && err == nil {
+		err = e
 	}
+	return err
+}
+
+// ---- sessions ----
+
+// CreateSession assigns the per-project identity ("{project}-{num}") and inserts
+// the record, returning it with ID populated. The next-num read and the insert
+// run on the writer connection under writeMu, so two concurrent creates in the
+// same project can't collide on num.
+func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	num, err := s.qw.NextSessionNum(ctx, string(rec.ProjectID))
 	if err != nil {
-		return domain.CanonicalSessionLifecycle{}, false, fmt.Errorf("load session %s: %w", id, err)
+		return domain.SessionRecord{}, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
 	}
-	return rowToLifecycle(row), true, nil
+	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", rec.ProjectID, num))
+	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("insert session %s: %w", rec.ID, err)
+	}
+	return rec, nil
 }
 
-// Get returns the full record (no derived status) for a session.
-func (s *Store) Get(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
-	row, err := s.q.GetSession(ctx, string(id))
+// UpdateSession writes the full mutable state of an existing session. The
+// id/project/num/created_at are immutable and not touched here.
+func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.UpdateSession(ctx, recordToUpdate(rec))
+}
+
+// GetSession returns the full record for a session, or ok=false if absent.
+func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	row, err := s.qr.GetSession(ctx, string(id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.SessionRecord{}, false, nil
 	}
@@ -57,71 +86,49 @@ func (s *Store) Get(ctx context.Context, id domain.SessionID) (domain.SessionRec
 	return rowToRecord(row), true, nil
 }
 
-// List returns every record for a project (no archive filter — mirrors the
-// in-memory store contract; terminal filtering is the caller's job).
-func (s *Store) List(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
-	rows, err := s.q.ListSessionsByProject(ctx, string(project))
+// ListSessions returns every session in a project, ordered by num.
+func (s *Store) ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	rows, err := s.qr.ListSessionsByProject(ctx, string(project))
 	if err != nil {
 		return nil, fmt.Errorf("list sessions for %s: %w", project, err)
 	}
-	out := make([]domain.SessionRecord, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, rowToRecord(row))
-	}
-	return out, nil
+	return mapSessionRows(rows), nil
 }
 
-// ListAll returns every persisted session across all projects. The CDC snapshot
-// source uses it to rebuild current state after a log-rotation gap.
-func (s *Store) ListAll(ctx context.Context) ([]domain.SessionRecord, error) {
-	rows, err := s.q.ListAllSessions(ctx)
+// ListAllSessions returns every session across all projects.
+func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	rows, err := s.qr.ListAllSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list all sessions: %w", err)
 	}
-	out := make([]domain.SessionRecord, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, rowToRecord(row))
-	}
-	return out, nil
+	return mapSessionRows(rows), nil
 }
 
-// GetMetadata returns the typed metadata for a session, or the zero value if the
-// session has no metadata row yet.
-func (s *Store) GetMetadata(ctx context.Context, id domain.SessionID) (domain.SessionMetadata, error) {
-	row, err := s.q.GetSessionMetadata(ctx, string(id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.SessionMetadata{}, nil
-	}
-	if err != nil {
-		return domain.SessionMetadata{}, fmt.Errorf("get metadata %s: %w", id, err)
-	}
-	return domain.SessionMetadata{
-		Branch:          row.Branch,
-		WorkspacePath:   row.WorkspacePath,
-		RuntimeHandleID: row.RuntimeHandleID,
-		RuntimeName:     row.RuntimeName,
-		AgentSessionID:  row.AgentSessionID,
-		Prompt:          row.Prompt,
-	}, nil
-}
-
-// PatchMetadata merges meta into the session's metadata. It is outside the
-// canonical write path: no revision bump, no CDC event. Empty fields are left
-// unchanged (see UpsertSessionMetadata), so a partial patch is non-destructive.
-func (s *Store) PatchMetadata(ctx context.Context, id domain.SessionID, meta domain.SessionMetadata) error {
-	if meta.IsZero() {
-		return nil
-	}
+// DeleteSession removes a session (cascades to its pr/checks/comments).
+func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.q.UpsertSessionMetadata(ctx, gen.UpsertSessionMetadataParams{
-		SessionID:       string(id),
-		Branch:          meta.Branch,
-		WorkspacePath:   meta.WorkspacePath,
-		RuntimeHandleID: meta.RuntimeHandleID,
-		RuntimeName:     meta.RuntimeName,
-		AgentSessionID:  meta.AgentSessionID,
-		Prompt:          meta.Prompt,
-		UpdatedAt:       time.Now().UTC(),
-	})
+	return s.qw.DeleteSession(ctx, string(id))
+}
+
+func mapSessionRows(rows []gen.Session) []domain.SessionRecord {
+	out := make([]domain.SessionRecord, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, rowToRecord(r))
+	}
+	return out
+}
+
+// inTx runs fn inside a single write transaction on the writer connection,
+// rolling back on error. The caller must already hold writeMu.
+func (s *Store) inTx(ctx context.Context, what string, fn func(*gen.Queries) error) error {
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin %s: %w", what, err)
+	}
+	defer tx.Rollback()
+	if err := fn(s.qw.WithTx(tx)); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return tx.Commit()
 }
