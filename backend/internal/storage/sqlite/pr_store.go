@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -16,6 +17,14 @@ import (
 // becomes the single pr.state column, empty enums default to their
 // "nothing known yet" value (matching the CHECK constraints), and ints widen to
 // int64.
+
+// Compile-time proof that *Store satisfies both ports it is wired into, so a
+// drift between either interface and this implementation fails here at the point
+// of definition rather than later at the call sites in lifecycle_wiring / tests.
+var (
+	_ ports.SessionStore = (*Store)(nil)
+	_ ports.PRWriter     = (*Store)(nil)
+)
 
 // UpsertPR inserts or replaces the scalar PR facts for a PR URL.
 func (s *Store) UpsertPR(ctx context.Context, r domain.PRRow) error {
