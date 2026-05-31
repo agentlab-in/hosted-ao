@@ -47,12 +47,13 @@ func run() error {
 		return err
 	}
 
-	// Open the durable store and bring up the CDC substrate (outbox publisher,
-	// JSONL consumer + broadcaster, outbox janitor). The LCM/Session Manager and
-	// the HTTP API routes that drive and read this store are owned by the daemon
-	// lane and are wired there once their collaborators (Notifier, AgentMessenger,
-	// and the runtime/agent/workspace plugins) have production implementations;
-	// here we stand up the persistence + change-delivery foundation they build on.
+	// Open the durable store and bring up the CDC substrate: the DB triggers
+	// capture changes into change_log, the poller tails it, and the broadcaster
+	// fans events out to the SSE transport. The LCM/Session Manager and the HTTP
+	// API routes that drive and read this store are owned by the daemon lane and
+	// are wired there once their collaborators (Notifier, AgentMessenger, and the
+	// runtime/agent/workspace plugins) have production implementations; here we
+	// stand up the persistence + change-delivery foundation they build on.
 	store, err := sqlite.Open(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -60,7 +61,7 @@ func run() error {
 	defer store.Close()
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
-	// graceful shutdown inside Server.Run.
+	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -68,17 +69,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := cdcPipe.Stop(); err != nil {
-			log.Error("cdc pipeline shutdown", "err", err)
-		}
-	}()
 
 	// Bring up the Lifecycle Manager (sole store writer) and the reaper (OBSERVE
-	// timer). This makes the write path live end-to-end: LCM.Upsert -> store ->
-	// outbox -> CDC JSONL -> broadcaster. The collaborators it needs that don't
-	// yet have production implementations (Notifier, AgentMessenger, runtime
-	// registry) are stubbed in lifecycle_wiring.go with TODO markers.
+	// timer). This makes the write path live end-to-end: LCM write -> store -> DB
+	// trigger -> change_log -> poller -> broadcaster. The collaborators it needs
+	// that don't yet have production implementations (Notifier, AgentMessenger,
+	// runtime registry) are stubbed in lifecycle_wiring.go with TODO markers.
 	//
 	// NOT wired here yet — both await collaborators the daemon lane owns:
 	//   - Session Manager: session.New needs Runtime/Agent/Workspace plugins to
@@ -90,11 +86,21 @@ func run() error {
 	//     the SM work since the routes call into it.
 	lcStack, err := startLifecycle(ctx, store, log)
 	if err != nil {
-		return fmt.Errorf("start lifecycle: %w", err)
+		return err
 	}
-	defer lcStack.Stop()
 
-	return srv.Run(ctx)
+	runErr := srv.Run(ctx)
+
+	// Shut the background goroutines down in order: cancel the context FIRST so
+	// their loops exit, then wait for them to drain. Doing this explicitly (not
+	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
+	// runs before the cancel — which would hang any non-signal exit path.
+	stop()
+	lcStack.Stop()
+	if err := cdcPipe.Stop(); err != nil {
+		log.Error("cdc pipeline shutdown", "err", err)
+	}
+	return runErr
 }
 
 // newLogger returns the daemon's slog logger. It writes to stderr so the
