@@ -8,18 +8,24 @@ Lifecycle Manager + Session Manager lane in [`docs/architecture.md`](docs/archit
 
 ## Backend daemon
 
-The Go binary in [`backend/`](backend/) is the HTTP daemon — a loopback-only
-sidecar the Electron supervisor will spawn (Phase 1c). Phase 1a landed the
-skeleton: chi router, middleware stack (recoverer → request-id → logger →
-real-ip), `/healthz` + `/readyz`, atomic `running.json` PID/port handshake,
-graceful shutdown on SIGINT/SIGTERM.
+The Go backend now has a Cobra-based `ao` CLI in [`backend/cmd/ao`](backend/cmd/ao).
+The CLI controls the HTTP daemon — a loopback-only sidecar the Electron
+supervisor will also use. The daemon skeleton includes the chi router,
+middleware stack (recoverer → request-id → logger → real-ip), `/healthz` +
+`/readyz`, atomic `running.json` PID/port handshake, graceful shutdown on
+SIGINT/SIGTERM, SQLite storage, CDC polling, and lifecycle/reaper wiring.
 
 ### Run
 
 ```bash
 cd backend
-go run .                          # binds 127.0.0.1:3001 with all defaults
-AO_PORT=3019 go run .             # override per invocation
+go run ./cmd/ao start             # start the daemon and wait for readiness
+go run ./cmd/ao status            # inspect PID/port/health/readiness
+go run ./cmd/ao stop              # gracefully stop the daemon
+go run ./cmd/ao daemon            # internal daemon entrypoint
+
+go run .                          # compatibility wrapper; starts the daemon
+AO_PORT=3019 go run ./cmd/ao start # override per invocation
 ```
 
 Health check:
@@ -48,4 +54,3 @@ is intentionally not env-configurable.
 cd backend
 gofmt -l . && go build ./... && go vet ./... && go test -race ./...
 ```
-

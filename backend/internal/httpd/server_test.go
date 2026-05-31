@@ -91,6 +91,49 @@ func TestServerLifecycle(t *testing.T) {
 	}
 }
 
+func TestServerShutdownEndpoint(t *testing.T) {
+	runPath := filepath.Join(t.TempDir(), "running.json")
+	cfg := config.Config{
+		Host:            "127.0.0.1",
+		Port:            0,
+		ShutdownTimeout: 5 * time.Second,
+		RunFilePath:     runPath,
+	}
+
+	srv, err := New(cfg, discardLogger(), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- srv.Run(context.Background()) }()
+
+	base := "http://" + srv.Addr().String()
+	waitForHealth(t, base)
+
+	resp, err := http.Post(base+"/shutdown", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /shutdown: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /shutdown = %d, want 202", resp.StatusCode)
+	}
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned error on shutdown endpoint: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after shutdown endpoint")
+	}
+
+	if after, _ := runfile.Read(runPath); after != nil {
+		t.Error("run-file still present after shutdown endpoint; want it removed")
+	}
+}
+
 func waitForHealth(t *testing.T, base string) {
 	t.Helper()
 	// Per-request timeout so a stalled connect or hung handshake doesn't park
