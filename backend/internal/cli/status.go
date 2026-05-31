@@ -89,7 +89,7 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 
 	health, err := c.readProbe(ctx, info.Port, "healthz")
 	if err != nil {
-		st.State = "stale"
+		st.State = "unhealthy"
 		st.Error = err.Error()
 		return st, nil
 	}

@@ -153,6 +153,81 @@ func TestStopDoesNotSignalUnverifiedReusedPID(t *testing.T) {
 	}
 }
 
+func TestStatusKeepsLiveProbeFailureUnhealthy(t *testing.T) {
+	cfg := setConfigEnv(t)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: closedPort(t), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == 4242 },
+	}, "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"state": "unhealthy"`) {
+		t.Fatalf("status should keep live probe failures unhealthy:\n%s", out)
+	}
+	info, err := runfile.Read(cfg.runFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info == nil {
+		t.Fatal("live probe failure should not remove run-file")
+	}
+}
+
+func TestStopRefusesUnverifiedLivePID(t *testing.T) {
+	cfg := setConfigEnv(t)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: closedPort(t), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	var signaled bool
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == 4242 },
+		SignalTerm: func(pid int) error {
+			signaled = true
+			return nil
+		},
+	}, "stop", "--json")
+	if err == nil {
+		t.Fatal("stop should fail when daemon ownership cannot be verified")
+	}
+	if signaled {
+		t.Fatal("stop signaled a PID whose ownership was unknown")
+	}
+	info, err := runfile.Read(cfg.runFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info == nil {
+		t.Fatal("unverified live PID should remain tracked")
+	}
+}
+
+func TestStartDoesNotSpawnWhenLiveProbeFails(t *testing.T) {
+	cfg := setConfigEnv(t)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: closedPort(t), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	var started bool
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == 4242 },
+		StartProcess: func(processStartConfig) (processHandle, error) {
+			started = true
+			return processHandle{}, nil
+		},
+	}, "start", "--timeout", "1ns", "--json")
+	if err == nil {
+		t.Fatal("start should fail instead of spawning over a live unverified PID")
+	}
+	if started {
+		t.Fatal("start spawned while run-file PID was still alive")
+	}
+}
+
 type testConfig struct {
 	runFile string
 	dataDir string
@@ -194,6 +269,25 @@ func serverPort(t *testing.T, raw string) int {
 		t.Fatal(err)
 	}
 	_, portRaw, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func closedPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	_, portRaw, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}

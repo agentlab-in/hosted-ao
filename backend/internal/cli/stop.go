@@ -62,10 +62,10 @@ func (c *commandContext) stopDaemon(ctx context.Context, opts stopOptions) (daem
 		return daemonStatus{State: "stopped", RunFile: cfg.RunFilePath, DataDir: cfg.DataDir}, nil
 	}
 	if !st.owned {
-		if err := runfile.Remove(cfg.RunFilePath); err != nil {
-			return daemonStatus{}, err
+		if st.Error != "" {
+			return daemonStatus{}, fmt.Errorf("daemon pid %d is alive but ownership could not be verified: %s", st.PID, st.Error)
 		}
-		return daemonStatus{State: "stopped", RunFile: cfg.RunFilePath, DataDir: cfg.DataDir}, nil
+		return daemonStatus{}, fmt.Errorf("daemon pid %d is alive but ownership could not be verified", st.PID)
 	}
 
 	if err := c.deps.SignalTerm(st.PID); err != nil {
