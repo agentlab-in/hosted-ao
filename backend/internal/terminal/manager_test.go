@@ -174,6 +174,46 @@ func TestServeExitAfterOpenClearsEntryAllowingReopen(t *testing.T) {
 	recv(t, conn, chTerminal, msgOpened, 2*time.Second)
 }
 
+// The subscribe-to-assign window: a session can exit (running onExit, which
+// deletes c.terms[id]) between subscribe returning exited=false and openTerminal
+// assigning c.terms[id] = unsub. If the assign resurrects that entry without
+// re-checking, the stale entry traps every later open for the id on this
+// connection. Close the pty concurrently with the open (IsAlive false => no
+// re-attach) so the exit races the assign across many iterations; every reopen
+// must be served (opened), never silently dropped by the open guard.
+func TestServeReopenAfterImmediateExitNeverStuck(t *testing.T) {
+	for i := 0; i < 400; i++ {
+		src := &fakeSource{}
+		src.setAlive(false) // dropped pty must not re-attach -> session exits
+		p := newFakePTY()   // alive at subscribe; closed below to race the assign
+		sp := &fakeSpawner{ptys: []*fakePTY{p}}
+		mgr := NewManager(src, nil, testLogger(), WithSpawn(sp.spawn), WithHeartbeat(0))
+
+		conn := newFakeConn()
+		ctx, cancel := context.WithCancel(context.Background())
+		go mgr.Serve(ctx, conn)
+
+		// Send the open and close the pty concurrently: the session's exit
+		// (onExit -> delete c.terms[id]) then races openTerminal's assign of
+		// c.terms[id] = unsub. On the iterations where exit lands in the
+		// subscribe-to-assign window, an unguarded assign resurrects a stale
+		// entry for the dead pane, trapping every later open for this id.
+		conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+		go p.Close()
+
+		recv(t, conn, chTerminal, msgOpened, time.Second)
+		recv(t, conn, chTerminal, msgExited, time.Second)
+
+		// The reopen must be served even when the first open's session exited in
+		// the subscribe-to-assign window.
+		conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+		recv(t, conn, chTerminal, msgOpened, time.Second)
+
+		cancel()
+		mgr.Close()
+	}
+}
+
 func TestServeRejectsOpenWithoutID(t *testing.T) {
 	mgr := NewManager(&fakeSource{}, nil, testLogger(), WithSpawn((&fakeSpawner{}).spawn), WithHeartbeat(0))
 	defer mgr.Close()

@@ -232,6 +232,11 @@ func (c *connState) openTerminal(_ context.Context, id string) {
 	// open acknowledgement.
 	c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgOpened})
 
+	// exitFired guards the subscribe-to-assign window: the session can exit (and
+	// run onExit) at any point after subscribe returns exited=false, including
+	// before c.terms[id] is assigned below. onExit and the assign both read/write
+	// this flag and the map only under c.mu, so no atomic is needed.
+	var exitFired bool
 	unsub, exited := s.subscribe(
 		func(data []byte) {
 			c.enqueue(serverMsg{
@@ -248,6 +253,7 @@ func (c *connState) openTerminal(_ context.Context, id string) {
 			// the delete after the frame would race that reopen. markExited fires
 			// this without s.mu held, so taking c.mu is safe.
 			c.mu.Lock()
+			exitFired = true
 			delete(c.terms, id)
 			c.mu.Unlock()
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
@@ -262,6 +268,12 @@ func (c *connState) openTerminal(_ context.Context, id string) {
 	}
 	c.mu.Lock()
 	c.terms[id] = unsub
+	// If onExit already ran in the subscribe-to-assign window its delete was a
+	// no-op (the key did not exist yet), so the assign above just resurrected a
+	// stale entry for a dead pane. Re-apply the delete while still holding c.mu.
+	if exitFired {
+		delete(c.terms, id)
+	}
 	c.mu.Unlock()
 }
 
