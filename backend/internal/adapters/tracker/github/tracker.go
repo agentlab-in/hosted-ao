@@ -70,6 +70,7 @@ func (e *RateLimitError) Error() string {
 	return ErrRateLimited.Error()
 }
 
+// Is lets errors.Is match a *RateLimitError against the ErrRateLimited sentinel.
 func (e *RateLimitError) Is(target error) bool { return target == ErrRateLimited }
 
 // Options configures a Tracker. All fields except Token are optional —
@@ -163,6 +164,7 @@ type ghUser struct {
 	Login string `json:"login"`
 }
 
+// Get fetches a single issue by id and maps it onto the normalized domain.Issue.
 func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, error) {
 	owner, repo, number, err := t.parseID(id)
 	if err != nil {
@@ -220,8 +222,7 @@ func issueFromGH(owner, repo string, raw ghIssue) domain.Issue {
 // surface onto the normalized state. "in-review" wins over "in-progress"
 // when both labels are present (the workflow is progress -> review -> done).
 func mapStateFromGitHub(state, reason string, labels []string) domain.NormalizedIssueState {
-	switch strings.ToLower(state) {
-	case stateClosedGH:
+	if strings.EqualFold(state, stateClosedGH) {
 		if strings.EqualFold(reason, reasonNotPlan) {
 			return domain.IssueCancelled
 		}
@@ -374,7 +375,7 @@ func (t *Tracker) do(ctx context.Context, method, path string, body any) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("github tracker: %s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return respBody, nil

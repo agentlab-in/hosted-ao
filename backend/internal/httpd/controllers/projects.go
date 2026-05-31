@@ -62,7 +62,7 @@ func (c *ProjectsController) list(w http.ResponseWriter, r *http.Request) {
 	}
 	projects, err := c.Mgr.List(r.Context())
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, map[string]any{"projects": projects})
@@ -80,7 +80,7 @@ func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := c.Mgr.Add(r.Context(), in)
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, map[string]any{"project": p})
@@ -93,7 +93,7 @@ func (c *ProjectsController) get(w http.ResponseWriter, r *http.Request) {
 	}
 	got, err := c.Mgr.Get(r.Context(), projectID(r))
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	if got.Status == "degraded" {
@@ -123,7 +123,7 @@ func (c *ProjectsController) updateConfig(w http.ResponseWriter, r *http.Request
 	}
 	p, err := c.Mgr.UpdateConfig(r.Context(), projectID(r), patch)
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, map[string]any{"project": p})
@@ -136,7 +136,7 @@ func (c *ProjectsController) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := c.Mgr.Remove(r.Context(), projectID(r))
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
@@ -149,7 +149,7 @@ func (c *ProjectsController) repair(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := c.Mgr.Repair(r.Context(), projectID(r))
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, map[string]any{"project": p})
@@ -162,7 +162,7 @@ func (c *ProjectsController) reload(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := c.Mgr.Reload(r.Context())
 	if err != nil {
-		writeProjectError(w, r, err, http.StatusInternalServerError)
+		writeProjectError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
@@ -196,10 +196,12 @@ func containsFrozenIdentityField(r *http.Request) ([]string, error) {
 	return frozen, nil
 }
 
-func writeProjectError(w http.ResponseWriter, r *http.Request, err error, fallbackStatus int) {
+// writeProjectError maps a project.Error to its HTTP status, falling back to
+// 500 for an unrecognized kind or a non-project.Error.
+func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {
 	var pe *project.Error
 	if errors.As(err, &pe) {
-		status := fallbackStatus
+		status := http.StatusInternalServerError
 		switch pe.Kind {
 		case "bad_request":
 			status = http.StatusBadRequest
@@ -215,5 +217,5 @@ func writeProjectError(w http.ResponseWriter, r *http.Request, err error, fallba
 		envelope.WriteAPIError(w, r, status, pe.Kind, pe.Code, pe.Message, pe.Details)
 		return
 	}
-	envelope.WriteAPIError(w, r, fallbackStatus, "internal", "INTERNAL_ERROR", "Internal server error", nil)
+	envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil)
 }

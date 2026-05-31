@@ -5,6 +5,7 @@ package domain
 // never persisted.
 type SessionStatus string
 
+// The display statuses the dashboard renders.
 const (
 	StatusSpawning         SessionStatus = "spawning"
 	StatusWorking          SessionStatus = "working"

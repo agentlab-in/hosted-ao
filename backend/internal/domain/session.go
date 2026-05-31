@@ -2,16 +2,21 @@ package domain
 
 import "time"
 
-// SessionID, ProjectID, IssueID are distinct string types so they can't be
-// swapped at a call site by accident.
+// These ID types are distinct string types so they can't be swapped at a call
+// site by accident.
 type (
+	// SessionID identifies a session.
 	SessionID string
+	// ProjectID identifies a project.
 	ProjectID string
-	IssueID   string
+	// IssueID identifies a tracker issue.
+	IssueID string
 )
 
+// SessionKind distinguishes a worker session from an orchestrator session.
 type SessionKind string
 
+// Session kinds.
 const (
 	KindWorker       SessionKind = "worker"
 	KindOrchestrator SessionKind = "orchestrator"

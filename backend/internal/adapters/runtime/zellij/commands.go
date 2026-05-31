@@ -99,7 +99,7 @@ func layoutString(workspacePath, shellPath string, shellArgs []string, shellComm
 
 func shellLaunchCommand(cfg ports.RuntimeConfig, shellPath string, spec shellLaunchSpec) string {
 	if len(spec.args) > 0 && spec.args[0] == "-NoLogo" {
-		return wrapLaunchCommandPowerShell(cfg, shellPath)
+		return wrapLaunchCommandPowerShell(cfg)
 	}
 	if len(spec.args) > 0 && spec.args[0] == "/D" {
 		return wrapLaunchCommandCmd(cfg)
@@ -136,7 +136,7 @@ func wrapLaunchCommandUnix(cfg ports.RuntimeConfig, shellPath string) string {
 	return b.String()
 }
 
-func wrapLaunchCommandPowerShell(cfg ports.RuntimeConfig, shellPath string) string {
+func wrapLaunchCommandPowerShell(cfg ports.RuntimeConfig) string {
 	path := cfg.Env["PATH"]
 	if path == "" {
 		path = getenv("PATH")

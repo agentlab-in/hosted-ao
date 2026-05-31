@@ -36,12 +36,12 @@ type lifecycleStack struct {
 //   - noopMessenger — swap for the runtime/agent-plugin-backed AgentMessenger.
 //   - reaper.MapRegistry{} — empty runtime registry, so the reaper ticks
 //     escalations but probes nothing until the runtime plugins exist.
-func startLifecycle(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*lifecycleStack, error) {
+func startLifecycle(ctx context.Context, store *sqlite.Store, logger *slog.Logger) *lifecycleStack {
 	renderer := notification.NewRenderer(store)
 	notifier := notification.NewEnqueuer(store, renderer, logger)
 	lcm := lifecycle.New(store, store, notifier, noopMessenger{})
 	rp := reaper.New(lcm, reaper.MapRegistry{}, reaper.Config{Logger: logger})
-	return &lifecycleStack{LCM: lcm, Store: store, reaperDone: rp.Start(ctx)}, nil
+	return &lifecycleStack{LCM: lcm, Store: store, reaperDone: rp.Start(ctx)}
 }
 
 // Stop waits for the reaper goroutine to exit (the caller must have cancelled the

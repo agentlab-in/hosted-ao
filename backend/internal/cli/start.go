@@ -82,14 +82,14 @@ func (c *commandContext) startDaemon(ctx context.Context, opts startOptions) (da
 	if logPath == "" {
 		logPath = filepath.Join(filepath.Dir(cfg.RunFilePath), "daemon.log")
 	}
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o750); err != nil {
 		return daemonStatus{}, fmt.Errorf("create log dir: %w", err)
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return daemonStatus{}, fmt.Errorf("open daemon log: %w", err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	if _, err := c.deps.StartProcess(processStartConfig{
 		Path:   exe,

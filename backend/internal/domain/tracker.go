@@ -6,6 +6,7 @@ package domain
 // NormalizedIssueState.
 type TrackerProvider string
 
+// Supported tracker providers.
 const (
 	TrackerProviderGitHub TrackerProvider = "github"
 	TrackerProviderGitLab TrackerProvider = "gitlab"
@@ -27,6 +28,7 @@ type TrackerID struct {
 // here is a port-level decision because every adapter must map it.
 type NormalizedIssueState string
 
+// The normalized cross-provider issue states.
 const (
 	IssueOpen       NormalizedIssueState = "open"
 	IssueInProgress NormalizedIssueState = "in_progress"
@@ -64,6 +66,7 @@ type TrackerRepo struct {
 // Labels field of ListFilter.
 type ListStateFilter string
 
+// Coarse list-state filters for Tracker.List.
 const (
 	// ListAll is the zero value and returns issues in any state.
 	ListAll    ListStateFilter = ""

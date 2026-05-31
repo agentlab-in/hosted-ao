@@ -44,7 +44,7 @@ const maxReaders = 8
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
 func Open(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	dsn := "file:" + filepath.Join(dataDir, "ao.db") + pragmas
@@ -56,13 +56,13 @@ func Open(dataDir string) (*Store, error) {
 	writeDB.SetMaxOpenConns(1)
 	writeDB.SetMaxIdleConns(1)
 	if err := migrate(writeDB); err != nil {
-		writeDB.Close()
+		_ = writeDB.Close()
 		return nil, err
 	}
 
 	readDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		writeDB.Close()
+		_ = writeDB.Close()
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
 	}
 	readDB.SetMaxOpenConns(maxReaders)

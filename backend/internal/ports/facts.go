@@ -14,6 +14,8 @@ import (
 // route to the detecting quarantine, never to a death conclusion.
 type ProbeResult string
 
+// Probe readings. Alive/Dead are conclusions; Failed/Unknown route to the
+// detecting quarantine instead of a death decision.
 const (
 	ProbeAlive   ProbeResult = "alive"
 	ProbeDead    ProbeResult = "dead"

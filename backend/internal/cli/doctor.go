@@ -83,7 +83,7 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		Message: fmt.Sprintf("runFile=%s dataDir=%s port=%d", cfg.RunFilePath, cfg.DataDir, cfg.Port),
 	})
 
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
 		checks = append(checks, doctorCheck{Level: doctorFail, Name: "data-dir", Message: err.Error()})
 	} else {
 		checks = append(checks, doctorCheck{Level: doctorPass, Name: "data-dir", Message: cfg.DataDir})
@@ -112,9 +112,11 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		checks = append(checks, doctorCheck{Level: level, Name: "daemon", Message: msg})
 	}
 
-	checks = append(checks, c.checkTool("git", true))
-	checks = append(checks, c.checkTool("tmux", false))
-	checks = append(checks, c.checkTool("zellij", false))
+	checks = append(checks,
+		c.checkTool("git", true),
+		c.checkTool("tmux", false),
+		c.checkTool("zellij", false),
+	)
 	return checks
 }
 

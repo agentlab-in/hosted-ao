@@ -248,9 +248,9 @@ func TestCDCTriggersPopulateChangeLog(t *testing.T) {
 	if len(types) != 3 || types[0] != want[0] || types[1] != want[1] || types[2] != want[2] {
 		t.Fatalf("change_log event types = %v, want %v (metadata-only update suppressed)", types, want)
 	}
-	max, _ := s.MaxChangeLogSeq(ctx)
-	if max != int64(len(evs)) {
-		t.Fatalf("max seq = %d, want %d", max, len(evs))
+	maxSeq, _ := s.MaxChangeLogSeq(ctx)
+	if maxSeq != int64(len(evs)) {
+		t.Fatalf("max seq = %d, want %d", maxSeq, len(evs))
 	}
 }
 

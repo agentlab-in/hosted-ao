@@ -18,16 +18,22 @@ const (
 	defaultBranch    = "main"
 )
 
+// ErrUnsafePath is returned when a resolved worktree path escapes the managed
+// root (path traversal guard).
 var (
 	ErrUnsafePath = errors.New("gitworktree: unsafe workspace path")
 )
 
+// RepoResolver maps a project to the absolute path of its source git repo.
 type RepoResolver interface {
 	RepoPath(projectID domain.ProjectID) (string, error)
 }
 
+// StaticRepoResolver is a RepoResolver backed by a fixed project→repo-path map.
 type StaticRepoResolver map[domain.ProjectID]string
 
+// RepoPath returns the configured repo path for a project, or an error if none
+// is configured.
 func (r StaticRepoResolver) RepoPath(projectID domain.ProjectID) (string, error) {
 	path := r[projectID]
 	if path == "" {
@@ -36,6 +42,8 @@ func (r StaticRepoResolver) RepoPath(projectID domain.ProjectID) (string, error)
 	return path, nil
 }
 
+// Options configures a gitworktree Workspace. ManagedRoot and RepoResolver are
+// required; Binary and DefaultBranch fall back to defaults.
 type Options struct {
 	Binary        string
 	ManagedRoot   string
@@ -43,6 +51,8 @@ type Options struct {
 	RepoResolver  RepoResolver
 }
 
+// Workspace creates per-session git worktrees under a managed root. It
+// implements ports.Workspace.
 type Workspace struct {
 	binary        string
 	managedRoot   string
@@ -55,6 +65,8 @@ type commandRunner func(ctx context.Context, binary string, args ...string) ([]b
 
 var _ ports.Workspace = (*Workspace)(nil)
 
+// New builds a gitworktree Workspace, validating that ManagedRoot and
+// RepoResolver are set and resolving the root to an absolute, symlink-free path.
 func New(opts Options) (*Workspace, error) {
 	binary := opts.Binary
 	if binary == "" {
@@ -83,6 +95,8 @@ func New(opts Options) (*Workspace, error) {
 	}, nil
 }
 
+// Create adds a git worktree for the session under the managed root, checking
+// out the requested branch, and returns where it landed.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -104,6 +118,8 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
+// Destroy removes the session's worktree and prunes it from the repo, refusing
+// (rather than force-deleting) if git still has the path registered afterwards.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	if info.ProjectID == "" {
 		return errors.New("gitworktree: project id is required")
@@ -139,6 +155,7 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 	return nil
 }
 
+// List returns the managed worktrees that belong to a project.
 func (w *Workspace) List(ctx context.Context, project domain.ProjectID) ([]ports.WorkspaceInfo, error) {
 	if project == "" {
 		return nil, errors.New("gitworktree: project id is required")
@@ -158,6 +175,8 @@ func (w *Workspace) List(ctx context.Context, project domain.ProjectID) ([]ports
 	return filterProjectWorktrees(records, projectRoot, project), nil
 }
 
+// Restore re-attaches to an existing worktree for the session if one is still
+// present, recreating the handle without disturbing its contents.
 func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err

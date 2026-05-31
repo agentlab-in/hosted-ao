@@ -29,10 +29,12 @@ const (
 )
 
 var sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-var paneIDPattern = regexp.MustCompile(`^terminal_[0-9]+$`)
+var paneIDPattern = regexp.MustCompile(`^terminal_\d+$`)
 
 var getenv = os.Getenv
 
+// Options configures a zellij Runtime; every field has a sensible default
+// (see New), so the zero value is usable.
 type Options struct {
 	Binary    string
 	Timeout   time.Duration
@@ -42,6 +44,8 @@ type Options struct {
 	ChunkSize int
 }
 
+// Runtime runs agent sessions inside zellij sessions, driving them via the
+// zellij CLI. It implements ports.Runtime.
 type Runtime struct {
 	binary    string
 	timeout   time.Duration
@@ -68,6 +72,9 @@ func (execRunner) Run(ctx context.Context, env []string, name string, args ...st
 	return cmd.CombinedOutput()
 }
 
+// New builds a zellij Runtime, filling unset Options with defaults: binary
+// "zellij", shell from $SHELL (else /bin/sh, or powershell.exe on Windows), and
+// the default timeout and output chunk size.
 func New(opts Options) *Runtime {
 	binary := opts.Binary
 	if binary == "" {
@@ -95,6 +102,8 @@ func New(opts Options) *Runtime {
 	return &Runtime{binary: binary, timeout: timeout, shell: shellPath, socketDir: opts.SocketDir, configDir: opts.ConfigDir, chunkSize: chunkSize, runner: execRunner{}}
 }
 
+// Create starts a new zellij session in the workspace, running the agent's
+// launch command, and returns a handle to it.
 func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	id, err := zellijSessionName(cfg.SessionID)
 	if err != nil {
@@ -114,7 +123,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	if err != nil {
 		return ports.RuntimeHandle{}, err
 	}
-	defer os.Remove(layoutPath)
+	defer func() { _ = os.Remove(layoutPath) }()
 
 	if _, err := r.run(ctx, createSessionArgs(id, layoutPath)...); err != nil {
 		return ports.RuntimeHandle{}, fmt.Errorf("zellij runtime: create session %s: %w", id, err)
@@ -127,6 +136,8 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	return ports.RuntimeHandle{ID: handleIDValue(id, paneID), RuntimeName: runtimeName}, nil
 }
 
+// Destroy kills the handle's zellij session. An already-gone session is treated
+// as success.
 func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error {
 	id, _, err := handleID(handle)
 	if err != nil {
@@ -142,6 +153,8 @@ func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error
 	return nil
 }
 
+// SendMessage pastes a message into the session's pane (chunked) and presses
+// Enter to submit it.
 func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error {
 	id, paneID, err := handleID(handle)
 	if err != nil {
@@ -158,6 +171,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	return nil
 }
 
+// GetOutput returns the last `lines` lines of the session pane's screen dump.
 func (r *Runtime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	id, paneID, err := handleID(handle)
 	if err != nil {
@@ -173,6 +187,8 @@ func (r *Runtime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lin
 	return tailLines(string(out), lines), nil
 }
 
+// IsAlive reports whether the handle's session still appears in `zellij
+// list-sessions`.
 func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
 	id, _, err := handleID(handle)
 	if err != nil {
@@ -189,6 +205,8 @@ func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool
 	return sessionListedAlive(string(out), id), nil
 }
 
+// AttachCommand returns the argv a human runs to attach their terminal to the
+// session.
 func (r *Runtime) AttachCommand(handle ports.RuntimeHandle) ([]string, error) {
 	id, _, err := handleID(handle)
 	if err != nil {
@@ -420,7 +438,7 @@ func chunks(s string, maxBytes int) []string {
 		return []string{s}
 	}
 	parts := []string{}
-	for len(s) > 0 {
+	for s != "" {
 		if len(s) <= maxBytes {
 			parts = append(parts, s)
 			break

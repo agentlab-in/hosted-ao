@@ -31,7 +31,7 @@ type Info struct {
 // partial file and a stale running.json from a crashed predecessor is
 // overwritten without an intermediate "no file" window.
 func Write(path string, info Info) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create run-file dir: %w", err)
 	}
 	data, err := json.MarshalIndent(info, "", "  ")
@@ -45,10 +45,10 @@ func Write(path string, info Info) error {
 		return fmt.Errorf("create temp run-file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write temp run-file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

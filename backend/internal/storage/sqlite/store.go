@@ -126,7 +126,7 @@ func (s *Store) inTx(ctx context.Context, what string, fn func(*gen.Queries) err
 	if err != nil {
 		return fmt.Errorf("begin %s: %w", what, err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(s.qw.WithTx(tx)); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}

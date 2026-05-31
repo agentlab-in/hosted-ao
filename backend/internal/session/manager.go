@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// Sentinel errors returned by the Session Manager.
 var (
 	ErrNotFound         = errors.New("session: not found")
 	ErrNotRestorable    = errors.New("session: not restorable (not terminal)")
@@ -40,6 +41,7 @@ type Manager struct {
 
 var _ ports.SessionManager = (*Manager)(nil)
 
+// Deps are the collaborators a Session Manager needs; New wires them together.
 type Deps struct {
 	Runtime   ports.Runtime
 	Agent     ports.Agent
@@ -50,6 +52,8 @@ type Deps struct {
 	Clock     func() time.Time
 }
 
+// New builds a Session Manager from its dependencies, defaulting the clock to
+// time.Now when Deps.Clock is nil.
 func New(d Deps) *Manager {
 	m := &Manager{
 		runtime:   d.Runtime,
@@ -184,6 +188,7 @@ func (m *Manager) Restore(ctx context.Context, id domain.SessionID) (domain.Sess
 	return m.Get(ctx, id)
 }
 
+// List returns the project's sessions as enriched display models.
 func (m *Manager) List(ctx context.Context, project domain.ProjectID) ([]domain.Session, error) {
 	recs, err := m.store.ListSessions(ctx, project)
 	if err != nil {
@@ -200,6 +205,7 @@ func (m *Manager) List(ctx context.Context, project domain.ProjectID) ([]domain.
 	return out, nil
 }
 
+// Get returns one session as a display model, or ErrNotFound if it is absent.
 func (m *Manager) Get(ctx context.Context, id domain.SessionID) (domain.Session, error) {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -211,6 +217,7 @@ func (m *Manager) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return m.toSession(ctx, rec)
 }
 
+// Send delivers a message to a running session's agent via the messenger.
 func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string) error {
 	if err := m.messenger.Send(ctx, id, message); err != nil {
 		return fmt.Errorf("send %s: %w", id, err)

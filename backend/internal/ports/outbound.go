@@ -44,8 +44,11 @@ type AgentMessenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
 }
 
+// Priority ranks a notification's urgency so a notifier can decide how loudly
+// to surface it, from PriorityUrgent down to PriorityInfo.
 type Priority string
 
+// Notification priorities, highest urgency first.
 const (
 	PriorityUrgent  Priority = "urgent"
 	PriorityAction  Priority = "action"
@@ -69,11 +72,15 @@ type Event struct {
 	OccurredAt time.Time
 }
 
+// ReactionEvent is the reaction context carried on an Event: which reaction
+// fired and whether it merely notified or escalated.
 type ReactionEvent struct {
 	Key    string // agent-needs-input, approved-and-green, ci-failed, etc.
 	Action string // notify | escalated
 }
 
+// EscalationEvent is the escalation context carried on an Event once a reaction
+// has exhausted its retry/attempt/duration budget.
 type EscalationEvent struct {
 	Attempts   int
 	Cause      string // max_retries | max_attempts | max_duration
@@ -82,12 +89,15 @@ type EscalationEvent struct {
 
 // ---- runtime / agent / workspace plugin ports (used by the Session Manager) ----
 
+// Runtime is where a session's agent process runs — a tmux/zellij session or a
+// bare process. The Session Manager creates one per session and tears it down.
 type Runtime interface {
 	Create(ctx context.Context, cfg RuntimeConfig) (RuntimeHandle, error)
 	Destroy(ctx context.Context, handle RuntimeHandle) error
 	IsAlive(ctx context.Context, handle RuntimeHandle) (bool, error)
 }
 
+// RuntimeConfig is the spec for launching a session's process in a Runtime.
 type RuntimeConfig struct {
 	SessionID     domain.SessionID
 	WorkspacePath string
@@ -95,35 +105,42 @@ type RuntimeConfig struct {
 	Env           map[string]string
 }
 
+// RuntimeHandle identifies a live runtime instance (e.g. a tmux session).
 type RuntimeHandle struct {
 	ID          string
 	RuntimeName string
 }
 
+// Agent is the AI coding tool driving a session (claude-code, codex, …): it
+// supplies the launch/restore commands and the process environment.
 type Agent interface {
 	GetLaunchCommand(cfg AgentConfig) string
 	GetEnvironment(cfg AgentConfig) map[string]string
 	GetRestoreCommand(agentSessionID string) string
 }
 
+// AgentConfig is the per-session input to an Agent's command and environment.
 type AgentConfig struct {
 	SessionID     domain.SessionID
 	WorkspacePath string
 	Prompt        string
 }
 
+// Workspace is the isolated checkout an agent works in (a git worktree or clone).
 type Workspace interface {
 	Create(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)
 	Destroy(ctx context.Context, info WorkspaceInfo) error
 	Restore(ctx context.Context, cfg WorkspaceConfig) (WorkspaceInfo, error)
 }
 
+// WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {
 	ProjectID domain.ProjectID
 	SessionID domain.SessionID
 	Branch    string
 }
 
+// WorkspaceInfo describes a created workspace — where it lives and its branch.
 type WorkspaceInfo struct {
 	Path      string
 	Branch    string

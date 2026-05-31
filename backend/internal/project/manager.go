@@ -19,6 +19,8 @@ type manager struct {
 
 var _ Manager = (*manager)(nil)
 
+// NewManager returns a project Manager backed by the given Store, defaulting to
+// an in-memory store when store is nil.
 func NewManager(store Store) Manager {
 	if store == nil {
 		store = NewMemoryStore()
@@ -26,6 +28,8 @@ func NewManager(store Store) Manager {
 	return &manager{store: store}
 }
 
+// NewMemoryManager returns a project Manager backed by a fresh in-memory store,
+// for tests and ephemeral use.
 func NewMemoryManager() Manager {
 	return NewManager(NewMemoryStore())
 }
@@ -103,7 +107,7 @@ func (m *manager) Add(ctx context.Context, in AddInput) (Project, error) {
 		})
 	}
 
-	row := ProjectRow{
+	row := Row{
 		ID:           string(id),
 		Path:         path,
 		DisplayName:  name,
@@ -173,7 +177,7 @@ func (m *manager) suggestID(ctx context.Context, base domain.ProjectID) domain.P
 	}
 }
 
-func projectFromRow(row ProjectRow) Project {
+func projectFromRow(row Row) Project {
 	return Project{
 		ID:            domain.ProjectID(row.ID),
 		Name:          displayName(row),
@@ -183,7 +187,7 @@ func projectFromRow(row ProjectRow) Project {
 	}
 }
 
-func displayName(row ProjectRow) string {
+func displayName(row Row) string {
 	if strings.TrimSpace(row.DisplayName) != "" {
 		return row.DisplayName
 	}

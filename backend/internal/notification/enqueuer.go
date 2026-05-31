@@ -24,6 +24,8 @@ type Enqueuer struct {
 
 var _ ports.Notifier = (*Enqueuer)(nil)
 
+// NewEnqueuer returns a Notifier that renders events and persists the resulting
+// notification rows via store, defaulting the logger to slog.Default.
 func NewEnqueuer(store Store, renderer *Renderer, logger *slog.Logger) *Enqueuer {
 	if logger == nil {
 		logger = slog.Default()
@@ -31,6 +33,7 @@ func NewEnqueuer(store Store, renderer *Renderer, logger *slog.Logger) *Enqueuer
 	return &Enqueuer{store: store, renderer: renderer, logger: logger}
 }
 
+// Notify renders the event and enqueues the resulting notification row.
 func (e *Enqueuer) Notify(ctx context.Context, event ports.Event) error {
 	row, err := e.renderer.Render(ctx, event)
 	if err != nil {

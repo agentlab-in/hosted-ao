@@ -41,6 +41,7 @@ type ProbeInput struct {
 // ProcessLiveness mirrors isProcessRunning's three-valued answer.
 type ProcessLiveness string
 
+// Process liveness readings.
 const (
 	ProcessAlive         ProcessLiveness = "alive"
 	ProcessDead          ProcessLiveness = "dead"
