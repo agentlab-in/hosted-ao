@@ -52,6 +52,7 @@ type CanonicalSessionLifecycle struct {
 // AgentHarness identifies which agent CLI/runtime a session drives.
 type AgentHarness string
 
+// Supported agent harnesses.
 const (
 	HarnessClaudeCode AgentHarness = "claude-code"
 	HarnessCodex      AgentHarness = "codex"
@@ -61,8 +62,10 @@ const (
 
 // ---- session sub-state ----
 
+// SessionState is the canonical lifecycle phase of a session.
 type SessionState string
 
+// The canonical session states (see the package doc for the transition model).
 const (
 	SessionNotStarted SessionState = "not_started"
 	SessionWorking    SessionState = "working"
@@ -81,6 +84,7 @@ const (
 // the pr table, not persisted on the session.
 type TerminationReason string
 
+// Termination reasons; TermNone is the non-terminal zero value.
 const (
 	TermNone               TerminationReason = ""
 	TermManuallyKilled     TerminationReason = "manually_killed"
@@ -92,6 +96,8 @@ const (
 	TermPRMerged           TerminationReason = "pr_merged"
 )
 
+// SessionSubstate wraps the session phase in a struct so the persisted/CDC JSON
+// shape can gain fields without a migration.
 type SessionSubstate struct {
 	State SessionState `json:"state"`
 }
@@ -115,8 +121,10 @@ type PRFacts struct {
 	ReviewComments bool // has unresolved review comments (any author) to address
 }
 
+// CIState is the aggregate CI status of a PR.
 type CIState string
 
+// CI states.
 const (
 	CIUnknown CIState = "unknown"
 	CIPending CIState = "pending"
@@ -124,8 +132,10 @@ const (
 	CIFailing CIState = "failing"
 )
 
+// ReviewDecision is the aggregate human-review verdict on a PR.
 type ReviewDecision string
 
+// Review decisions.
 const (
 	ReviewNone           ReviewDecision = "none"
 	ReviewApproved       ReviewDecision = "approved"
@@ -133,8 +143,10 @@ const (
 	ReviewRequired       ReviewDecision = "review_required"
 )
 
+// Mergeability is whether a PR can currently be merged.
 type Mergeability string
 
+// Mergeability states.
 const (
 	MergeUnknown     Mergeability = "unknown"
 	MergeMergeable   Mergeability = "mergeable"
@@ -145,8 +157,10 @@ const (
 
 // ---- activity sub-state (decider input) ----
 
+// ActivityState is how busy the agent is, derived from its output/JSONL.
 type ActivityState string
 
+// Activity states. WaitingInput and Blocked are sticky (see IsSticky).
 const (
 	ActivityActive       ActivityState = "active"
 	ActivityReady        ActivityState = "ready"
@@ -162,8 +176,11 @@ func (a ActivityState) IsSticky() bool {
 	return a == ActivityWaitingInput || a == ActivityBlocked
 }
 
+// ActivitySource records where an activity reading came from, so a weaker
+// source can't override a stronger one.
 type ActivitySource string
 
+// Activity signal sources, strongest first.
 const (
 	SourceNative   ActivitySource = "native"
 	SourceTerminal ActivitySource = "terminal"
@@ -172,6 +189,8 @@ const (
 	SourceNone     ActivitySource = "none"
 )
 
+// ActivitySubstate is the persisted activity reading: the state, when it was
+// last observed, and which source reported it.
 type ActivitySubstate struct {
 	State          ActivityState  `json:"state"`
 	LastActivityAt time.Time      `json:"lastActivityAt"`
@@ -180,6 +199,9 @@ type ActivitySubstate struct {
 
 // ---- detecting quarantine memory (decider input) ----
 
+// DetectingState is the anti-flap quarantine memory carried while a session is
+// detecting: how many ambiguous observations, since when, and a hash of the
+// (timestamp-stripped) evidence to tell "same signal again" from "signal moved".
 type DetectingState struct {
 	Attempts     int       `json:"attempts"`
 	StartedAt    time.Time `json:"startedAt"`

@@ -130,7 +130,7 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, fmt.Sprintf("http://%s:%d/%s", config.LoopbackHost, port, path), nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, fmt.Sprintf("http://%s:%d/%s", config.LoopbackHost, port, path), http.NoBody)
 	if err != nil {
 		return probeResult{}, err
 	}
@@ -138,7 +138,7 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 	if err != nil {
 		return probeResult{}, fmt.Errorf("%s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return probeResult{}, fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
 	}

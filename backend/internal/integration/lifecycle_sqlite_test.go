@@ -700,7 +700,7 @@ func assertNotificationCreatedCDC(t *testing.T, store *sqlite.Store, after int64
 type pollerSource struct{ *sqlite.Store }
 
 func (s pollerSource) EventsAfter(ctx context.Context, after int64, limit int) ([]cdc.Event, error) {
-	rows, err := s.Store.ReadChangeLogAfter(ctx, after, limit)
+	rows, err := s.ReadChangeLogAfter(ctx, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -718,7 +718,7 @@ func (s pollerSource) EventsAfter(ctx context.Context, after int64, limit int) (
 	return out, nil
 }
 func (s pollerSource) LatestSeq(ctx context.Context) (int64, error) {
-	return s.Store.MaxChangeLogSeq(ctx)
+	return s.MaxChangeLogSeq(ctx)
 }
 
 func anyEventType(evs []ports.Event, t string) bool {

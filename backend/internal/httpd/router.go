@@ -37,6 +37,8 @@ func NewRouter(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager) c
 	return NewRouterWithAPI(cfg, log, termMgr, APIDeps{})
 }
 
+// ControlDeps carries the daemon-control hooks the router exposes, such as the
+// callback that requests a graceful shutdown.
 type ControlDeps struct {
 	RequestShutdown func()
 }
@@ -48,6 +50,8 @@ func NewRouterWithAPI(cfg config.Config, log *slog.Logger, termMgr *terminal.Man
 	return NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{})
 }
 
+// NewRouterWithControl is NewRouterWithAPI plus daemon-control hooks: it mounts
+// the same API surface and additionally wires the ControlDeps callbacks.
 func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps, control ControlDeps) chi.Router {
 	r := chi.NewRouter()
 

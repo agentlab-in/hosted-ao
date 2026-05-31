@@ -35,6 +35,9 @@ type Manager struct {
 
 var _ ports.LifecycleManager = (*Manager)(nil)
 
+// New builds a Lifecycle Manager over its collaborators: the session store it
+// is the sole writer of, the PR-facts writer, the notifier, and the messenger
+// used to nudge running agents.
 func New(store ports.SessionStore, pr ports.PRWriter, notifier ports.Notifier, messenger ports.AgentMessenger) *Manager {
 	return &Manager{
 		store:     store,

@@ -16,11 +16,11 @@ type ringBuffer struct {
 	max int
 }
 
-func newRingBuffer(max int) *ringBuffer {
-	if max <= 0 {
-		max = defaultRingMax
+func newRingBuffer(maxBytes int) *ringBuffer {
+	if maxBytes <= 0 {
+		maxBytes = defaultRingMax
 	}
-	return &ringBuffer{max: max}
+	return &ringBuffer{max: maxBytes}
 }
 
 // append adds p and drops the oldest bytes beyond max. A single write larger

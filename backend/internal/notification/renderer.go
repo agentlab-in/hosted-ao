@@ -24,10 +24,13 @@ type Renderer struct {
 	clock  func() time.Time
 }
 
+// NewRenderer returns a Renderer that sources session/PR facts via reader.
 func NewRenderer(reader Reader) *Renderer {
 	return &Renderer{reader: reader, clock: time.Now}
 }
 
+// Render builds a durable Notification (subject + typed payload) from a
+// lifecycle Event.
 func (r *Renderer) Render(ctx context.Context, event ports.Event) (domain.Notification, error) {
 	if event.SessionID == "" {
 		return domain.Notification{}, fmt.Errorf("render notification: missing session id")

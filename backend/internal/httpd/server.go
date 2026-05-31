@@ -71,7 +71,7 @@ func (s *Server) Run(ctx context.Context) error {
 		StartedAt: time.Now().UTC(),
 	}
 	if err := runfile.Write(s.cfg.RunFilePath, info); err != nil {
-		s.listen.Close()
+		_ = s.listen.Close()
 		return fmt.Errorf("write run-file: %w", err)
 	}
 	defer func() {

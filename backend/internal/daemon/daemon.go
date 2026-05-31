@@ -49,7 +49,7 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
@@ -77,10 +77,7 @@ func Run() error {
 	// Bring up the Lifecycle Manager (sole store writer) and the reaper (OBSERVE
 	// timer). This makes the write path live end-to-end: LCM write -> store -> DB
 	// trigger -> change_log -> poller -> broadcaster.
-	lcStack, err := startLifecycle(ctx, store, log)
-	if err != nil {
-		return err
-	}
+	lcStack := startLifecycle(ctx, store, log)
 
 	// Bring up the Session Manager. Runtime (tmux) and Workspace (gitworktree)
 	// are real on main; ports.Agent has no production adapter yet, so a loud

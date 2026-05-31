@@ -40,6 +40,8 @@ type SessionManager interface {
 	Cleanup(ctx context.Context, project domain.ProjectID) ([]domain.SessionID, error)
 }
 
+// SpawnConfig is the request to start a new session: which project/issue, which
+// agent harness, and the branch/prompt/rules the agent launches with.
 type SpawnConfig struct {
 	ProjectID  domain.ProjectID
 	IssueID    domain.IssueID

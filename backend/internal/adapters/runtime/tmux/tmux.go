@@ -25,12 +25,15 @@ var sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 var getenv = os.Getenv
 
+// Options configures a tmux Runtime; every field has a default (see New).
 type Options struct {
 	Binary  string
 	Timeout time.Duration
 	Shell   string
 }
 
+// Runtime runs agent sessions inside tmux sessions, driving them via the tmux
+// CLI. It implements ports.Runtime.
 type Runtime struct {
 	binary  string
 	timeout time.Duration
@@ -50,6 +53,8 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+// New builds a tmux Runtime, filling unset Options with defaults: binary
+// "tmux", shell from $SHELL (else /bin/sh), and the default timeout.
 func New(opts Options) *Runtime {
 	binary := opts.Binary
 	if binary == "" {
@@ -69,6 +74,8 @@ func New(opts Options) *Runtime {
 	return &Runtime{binary: binary, timeout: timeout, shell: shellPath, runner: execRunner{}}
 }
 
+// Create starts a new tmux session in the workspace, running the agent's
+// launch command, and returns a handle to it.
 func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	id, err := tmuxSessionName(cfg.SessionID)
 	if err != nil {
@@ -92,6 +99,8 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	return ports.RuntimeHandle{ID: id, RuntimeName: runtimeName}, nil
 }
 
+// Destroy kills the handle's tmux session. An already-gone session is treated
+// as success.
 func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error {
 	id, err := handleID(handle)
 	if err != nil {
@@ -107,6 +116,8 @@ func (r *Runtime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error
 	return nil
 }
 
+// SendMessage types a message into the session's pane and presses Enter,
+// routing large messages through a tmux paste buffer.
 func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error {
 	id, err := handleID(handle)
 	if err != nil {
@@ -124,6 +135,7 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	return nil
 }
 
+// GetOutput captures the last `lines` lines of the session pane.
 func (r *Runtime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	id, err := handleID(handle)
 	if err != nil {
@@ -139,6 +151,7 @@ func (r *Runtime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lin
 	return string(out), nil
 }
 
+// IsAlive reports whether the handle's tmux session still exists.
 func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error) {
 	id, err := handleID(handle)
 	if err != nil {
@@ -155,6 +168,8 @@ func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool
 	return false, fmt.Errorf("tmux runtime: probe session %s: %w", id, err)
 }
 
+// AttachCommand returns the argv a human runs to attach their terminal to the
+// session.
 func (r *Runtime) AttachCommand(handle ports.RuntimeHandle) ([]string, error) {
 	id, err := handleID(handle)
 	if err != nil {
@@ -170,7 +185,7 @@ func (r *Runtime) sendViaBuffer(ctx context.Context, id, message string) error {
 		return fmt.Errorf("tmux runtime: create message temp file: %w", err)
 	}
 	path := file.Name()
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 	if _, err := file.WriteString(message); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("tmux runtime: write message temp file: %w", err)

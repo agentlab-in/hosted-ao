@@ -1,6 +1,7 @@
 package apispec_test
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func TestOperation_InheritsPathParameters(t *testing.T) {
 // whole rather than reconstructing it from per-operation slices.
 func TestServeYAML(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/v1/openapi.yaml", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/openapi.yaml", nil)
 	apispec.ServeYAML(rec, req)
 
 	if rec.Code != 200 {

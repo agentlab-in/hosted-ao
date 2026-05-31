@@ -99,10 +99,7 @@ func TestWiring_SessionManagerSharesLifecycleStoreAndLCM(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := config.Config{DataDir: t.TempDir()}
 
-	lcStack, err := startLifecycle(ctx, store, log)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lcStack := startLifecycle(ctx, store, log)
 	// lcStack.Stop blocks on the reaper goroutine, which only exits once its
 	// ctx is cancelled. Production main.go calls stop() before lcStack.Stop()
 	// for the same reason — same ordering here.

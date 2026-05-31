@@ -17,6 +17,7 @@ import (
 // EventType mirrors the event_type values the DB triggers write.
 type EventType string
 
+// Event types, one per row-change the DB triggers emit into change_log.
 const (
 	EventSessionCreated      EventType = "session_created"
 	EventSessionUpdated      EventType = "session_updated"

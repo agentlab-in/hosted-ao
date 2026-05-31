@@ -6,7 +6,7 @@ import "time"
 // tables, shared by the PRWriter port and the sqlite store (the store maps them
 // to/from the sqlc gen.* models). They are flat by design — these tables carry
 // no nesting or derivation, so a single definition serves every layer.
-//
+
 // PRRow is the scalar facts of one tracked pull request (the pr table). A session
 // can own several PRs; a PR belongs to one session. PRFacts is the read-model
 // derived from these for display status; PRRow is what gets written.

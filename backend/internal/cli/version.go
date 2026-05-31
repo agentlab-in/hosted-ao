@@ -14,6 +14,8 @@ var (
 	Date    = ""
 )
 
+// VersionString renders the build metadata as "<version> commit <c> built <d>",
+// omitting the commit/date parts when they are unset.
 func VersionString() string {
 	parts := []string{Version}
 	if Commit != "" {
