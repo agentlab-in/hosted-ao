@@ -284,9 +284,9 @@ func (c *connState) handleSubscribe() {
 			Type: msgSnapshot,
 			Session: &sessionUpdate{
 				Seq:       e.Seq,
+				ProjectID: e.ProjectID,
 				SessionID: e.SessionID,
-				EventType: e.EventType,
-				Revision:  e.Revision,
+				EventType: string(e.Type),
 			},
 		})
 	})

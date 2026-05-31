@@ -33,7 +33,7 @@ func TestServerMsgSessionFrameWireShape(t *testing.T) {
 		Ch:   chSessions,
 		Type: msgSnapshot,
 		Session: &sessionUpdate{
-			Seq: 7, SessionID: "s1", EventType: "session_updated", Revision: 3,
+			Seq: 7, ProjectID: "p1", SessionID: "s1", EventType: "session_updated",
 		},
 	}
 	raw, err := json.Marshal(msg)
@@ -41,7 +41,7 @@ func TestServerMsgSessionFrameWireShape(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	// Golden wire shape the client depends on.
-	want := `{"ch":"sessions","type":"snapshot","session":{"seq":7,"sessionId":"s1","eventType":"session_updated","revision":3}}`
+	want := `{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1","sessionId":"s1","eventType":"session_updated"}}`
 	if string(raw) != want {
 		t.Fatalf("wire shape:\n got %s\nwant %s", raw, want)
 	}

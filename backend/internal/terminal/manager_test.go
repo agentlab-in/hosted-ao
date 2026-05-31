@@ -127,7 +127,7 @@ func TestServeForwardsSessionChannelFromCDC(t *testing.T) {
 	conn.in <- clientMsg{Ch: chSubscribe, Type: msgSubscribe}
 	// Give the subscription time to register before publishing.
 	eventually(t, time.Second, func() bool {
-		bc.Publish(cdc.Event{Seq: 9, SessionID: "s1", EventType: "session_updated", Revision: 4})
+		bc.Publish(cdc.Event{Seq: 9, ProjectID: "p1", SessionID: "s1", Type: cdc.EventSessionUpdated})
 		select {
 		case m := <-conn.out:
 			return m.Ch == chSessions && m.Session != nil && m.Session.Seq == 9

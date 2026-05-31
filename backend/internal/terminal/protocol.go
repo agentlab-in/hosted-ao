@@ -65,7 +65,7 @@ type serverMsg struct {
 // change_log payload blob; the client refetches detail over the REST surface.
 type sessionUpdate struct {
 	Seq       int64  `json:"seq"`
-	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	SessionID string `json:"sessionId,omitempty"`
 	EventType string `json:"eventType"`
-	Revision  int64  `json:"revision"`
 }
