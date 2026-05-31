@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // fakeConn is an in-memory wsConn driven by channels.
@@ -97,6 +98,80 @@ func TestServeOpenStreamsAndWritesTerminal(t *testing.T) {
 		rs := pty.resizeCalls()
 		return len(rs) == 1 && rs[0] == [2]uint16{30, 100}
 	})
+}
+
+// nextTerminal returns the next frame on conn.out (no skipping), so callers can
+// assert frame ordering rather than just presence.
+func nextTerminal(t *testing.T, c *fakeConn) serverMsg {
+	t.Helper()
+	select {
+	case m := <-c.out:
+		return m
+	case <-time.After(time.Second):
+		t.Fatal("no frame within 1s")
+		return serverMsg{}
+	}
+}
+
+// Opening a terminal whose session has already exited but is not yet reaped from
+// m.sessions must (1) send opened before exited and (2) not register the noop
+// unsubscribe, so a later open for the same id on this connection is still
+// served instead of being silently dropped by the already-open guard.
+func TestServeOpenAlreadyExitedSessionDoesNotBlockReopen(t *testing.T) {
+	src := &fakeSource{}
+	sp := &fakeSpawner{}
+	mgr := NewManager(src, nil, testLogger(), WithSpawn(sp.spawn), WithHeartbeat(0))
+	defer mgr.Close()
+
+	exited := newSession("t1", ports.RuntimeHandle{ID: "t1"}, src, sp.spawn, testLogger())
+	exited.markExited()
+	mgr.mu.Lock()
+	mgr.sessions["t1"] = exited
+	mgr.mu.Unlock()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	if m := nextTerminal(t, conn); m.Type != msgOpened {
+		t.Fatalf("first frame = %q, want opened", m.Type)
+	}
+	if m := nextTerminal(t, conn); m.Type != msgExited {
+		t.Fatalf("second frame = %q, want exited", m.Type)
+	}
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	if m := nextTerminal(t, conn); m.Type != msgOpened {
+		t.Fatalf("re-open frame = %q, want opened (open was dropped, entry stuck)", m.Type)
+	}
+}
+
+// A session that exits after being opened must clear its connection entry on
+// exit, so a later open for the same id is served rather than dropped by the
+// already-open guard.
+func TestServeExitAfterOpenClearsEntryAllowingReopen(t *testing.T) {
+	src := &fakeSource{}
+	src.setAlive(false) // a dropped pty must not re-attach -> session exits
+	p := newFakePTY()
+	sp := &fakeSpawner{ptys: []*fakePTY{p}}
+	mgr := NewManager(src, nil, testLogger(), WithSpawn(sp.spawn), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	p.Close() // drop the pty; IsAlive false => session exits, no re-attach
+	recv(t, conn, chTerminal, msgExited, time.Second)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, 2*time.Second)
 }
 
 func TestServeRejectsOpenWithoutID(t *testing.T) {

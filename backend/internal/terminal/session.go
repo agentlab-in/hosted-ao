@@ -180,15 +180,17 @@ func reattachBackoff(failures int) time.Duration {
 
 // subscribe registers an output callback and an exit callback, replays the ring
 // buffer to the new subscriber, and returns an unsubscribe func. If the pane has
-// already exited, onExit fires immediately.
-func (s *session) subscribe(onData subscriber, onExit func()) (unsubscribe func()) {
+// already exited, onExit fires immediately and exited is true; the caller must
+// not treat the returned no-op unsubscribe as a live registration (there is
+// nothing to track and re-opening must stay possible).
+func (s *session) subscribe(onData subscriber, onExit func()) (unsubscribe func(), exited bool) {
 	s.mu.Lock()
 	if s.exited {
 		s.mu.Unlock()
 		if onExit != nil {
 			onExit()
 		}
-		return func() {}
+		return func() {}, true
 	}
 	id := s.nextSub
 	s.nextSub++
@@ -215,7 +217,7 @@ func (s *session) subscribe(onData subscriber, onExit func()) (unsubscribe func(
 		delete(s.subs, id)
 		delete(s.exitSubs, id)
 		s.mu.Unlock()
-	}
+	}, false
 }
 
 // deliver appends a chunk to the ring and fans it out to current subscribers as

@@ -225,7 +225,14 @@ func (c *connState) openTerminal(_ context.Context, id string) {
 		return
 	}
 
-	unsub := s.subscribe(
+	// Ack before subscribing so opened always precedes the replay and any
+	// data/exited frames subscribe delivers (the single out channel preserves
+	// this order). Reversing it would let a reconnecting client with buffered
+	// content, or one opening an already-dead pane, see data/exited before the
+	// open acknowledgement.
+	c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgOpened})
+
+	unsub, exited := s.subscribe(
 		func(data []byte) {
 			c.enqueue(serverMsg{
 				Ch:   chTerminal,
@@ -236,12 +243,24 @@ func (c *connState) openTerminal(_ context.Context, id string) {
 		},
 		func() {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
+			// Drop the connection's entry for this id when the pane exits so a
+			// later open is served instead of being dropped by the open guard.
+			// markExited fires this without s.mu held, so taking c.mu is safe.
+			c.mu.Lock()
+			delete(c.terms, id)
+			c.mu.Unlock()
 		},
 	)
+	// An already-exited session sent its exited frame from subscribe and has
+	// nothing to unsubscribe. Don't register it: leaving c.terms[id] set would
+	// trip the open guard above and silently drop every later open for this id
+	// on this connection (e.g. after the pane respawns) until close/reconnect.
+	if exited {
+		return
+	}
 	c.mu.Lock()
 	c.terms[id] = unsub
 	c.mu.Unlock()
-	c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgOpened})
 }
 
 func (c *connState) closeTerminal(id string) {
