@@ -180,12 +180,12 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 // in one atomic store call. PR-table CDC is emitted by the DB triggers.
 func (m *Manager) writePR(ctx context.Context, id domain.SessionID, o ports.PRObservation) error {
 	now := m.clock()
-	row := ports.PRRow{
+	row := domain.PRRow{
 		URL: o.URL, SessionID: string(id), Number: o.Number,
 		Draft: o.Draft, Merged: o.Merged, Closed: o.Closed,
 		CI: o.CI, Review: o.Review, Mergeability: o.Mergeability, UpdatedAt: now,
 	}
-	checks := make([]ports.PRCheckRow, len(o.Checks))
+	checks := make([]domain.PRCheckRow, len(o.Checks))
 	for i, c := range o.Checks {
 		c.PRURL = o.URL
 		if c.CreatedAt.IsZero() {
@@ -193,7 +193,7 @@ func (m *Manager) writePR(ctx context.Context, id domain.SessionID, o ports.PROb
 		}
 		checks[i] = c
 	}
-	comments := make([]ports.PRComment, len(o.Comments))
+	comments := make([]domain.PRComment, len(o.Comments))
 	for i, c := range o.Comments {
 		if c.CreatedAt.IsZero() {
 			c.CreatedAt = now

@@ -16,17 +16,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/wiring"
 )
 
 // lifecycleStack owns the running LCM + reaper. The LCM is the sole writer of
 // canonical transitions; the reaper is the OBSERVE-layer timer that probes live
-// runtimes and reports facts back through it. Adapter is exposed so the Session
+// runtimes and reports facts back through it. Store is exposed so the Session
 // Manager construction in startSession can plug the same SessionStore + PRWriter
-// instance the LCM already holds.
+// instance the LCM already holds (*sqlite.Store satisfies both ports directly).
 type lifecycleStack struct {
 	LCM        *lifecycle.Manager
-	Adapter    wiring.Adapter
+	Store      *sqlite.Store
 	reaperDone <-chan struct{}
 }
 
@@ -38,12 +37,11 @@ type lifecycleStack struct {
 //   - reaper.MapRegistry{} — empty runtime registry, so the reaper ticks
 //     escalations but probes nothing until the runtime plugins exist.
 func startLifecycle(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*lifecycleStack, error) {
-	a := wiring.Adapter{Store: store}
 	renderer := notification.NewRenderer(store)
 	notifier := notification.NewEnqueuer(store, renderer, logger)
-	lcm := lifecycle.New(a, a, notifier, noopMessenger{})
+	lcm := lifecycle.New(store, store, notifier, noopMessenger{})
 	rp := reaper.New(lcm, reaper.MapRegistry{}, reaper.Config{Logger: logger})
-	return &lifecycleStack{LCM: lcm, Adapter: a, reaperDone: rp.Start(ctx)}, nil
+	return &lifecycleStack{LCM: lcm, Store: store, reaperDone: rp.Start(ctx)}, nil
 }
 
 // Stop waits for the reaper goroutine to exit (the caller must have cancelled the
@@ -88,7 +86,7 @@ func startSession(ctx context.Context, cfg config.Config, ls *lifecycleStack, lo
 		Runtime:   runtime,
 		Agent:     agent,
 		Workspace: ws,
-		Store:     ls.Adapter,
+		Store:     ls.Store,
 		Messenger: noopMessenger{},
 		Lifecycle: ls.LCM,
 	})

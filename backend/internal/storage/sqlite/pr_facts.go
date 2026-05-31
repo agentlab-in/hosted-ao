@@ -19,17 +19,15 @@ func (s *Store) PRFactsForSession(ctx context.Context, id domain.SessionID) (dom
 	}
 	pick := rows[0]
 	for _, r := range rows {
-		if r.State == "draft" || r.State == "open" {
+		if !r.Merged && !r.Closed { // newest non-closed (draft or open)
 			pick = r
 			break
 		}
 	}
 	facts := domain.PRFacts{
-		URL: pick.URL, Number: int(pick.Number), Exists: true,
-		Draft: pick.State == "draft", Merged: pick.State == "merged", Closed: pick.State == "closed",
-		CI:           domain.CIState(pick.CIState),
-		Review:       domain.ReviewDecision(pick.ReviewDecision),
-		Mergeability: domain.Mergeability(pick.Mergeability),
+		URL: pick.URL, Number: pick.Number, Exists: true,
+		Draft: pick.Draft, Merged: pick.Merged, Closed: pick.Closed,
+		CI: pick.CI, Review: pick.Review, Mergeability: pick.Mergeability,
 	}
 	comments, err := s.ListPRComments(ctx, pick.URL)
 	if err != nil {

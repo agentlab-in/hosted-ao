@@ -28,7 +28,7 @@ type PRWriter interface {
 	// WritePR persists a full PR observation — scalar facts, check runs, and the
 	// replacement comment set — in one transaction, so the rows and the CDC
 	// events they emit are all-or-nothing.
-	WritePR(ctx context.Context, pr PRRow, checks []PRCheckRow, comments []PRComment) error
+	WritePR(ctx context.Context, pr domain.PRRow, checks []domain.PRCheckRow, comments []domain.PRComment) error
 	// RecentCheckStatuses reads the last `limit` runs of a check (the CI brake).
 	RecentCheckStatuses(ctx context.Context, prURL, name string, limit int) ([]string, error)
 }

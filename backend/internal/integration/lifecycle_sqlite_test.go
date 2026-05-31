@@ -24,99 +24,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// ---- store adapter ----
-//
-// MIRROR OF backend/lifecycle_wiring.go's storeAdapter. The integration tests
-// can't import package main, so the small set of methods that bridge
-// *sqlite.Store to ports.SessionStore + ports.PRWriter is duplicated here.
-// Function bodies are line-for-line identical to the production adapter so a
-// future divergence shows up as a real diff in code review; the obvious
-// follow-up is to extract the production adapter into a shared internal
-// package — explicitly out of scope for this PR ("do NOT redesign anything").
-
-type storeAdapter struct{ *sqlite.Store }
-
-var (
-	_ ports.SessionStore = storeAdapter{}
-	_ ports.PRWriter     = storeAdapter{}
-)
-
-func (a storeAdapter) PRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, error) {
-	rows, err := a.Store.ListPRsBySession(ctx, string(id))
-	if err != nil {
-		return domain.PRFacts{}, err
-	}
-	if len(rows) == 0 {
-		return domain.PRFacts{}, nil
-	}
-	pick := rows[0]
-	for _, r := range rows {
-		if r.State == "draft" || r.State == "open" {
-			pick = r
-			break
-		}
-	}
-	facts := domain.PRFacts{
-		URL: pick.URL, Number: int(pick.Number), Exists: true,
-		Draft: pick.State == "draft", Merged: pick.State == "merged", Closed: pick.State == "closed",
-		CI:           domain.CIState(pick.CIState),
-		Review:       domain.ReviewDecision(pick.ReviewDecision),
-		Mergeability: domain.Mergeability(pick.Mergeability),
-	}
-	comments, err := a.Store.ListPRComments(ctx, pick.URL)
-	if err != nil {
-		return domain.PRFacts{}, err
-	}
-	for _, c := range comments {
-		if !c.Resolved {
-			facts.ReviewComments = true
-			break
-		}
-	}
-	return facts, nil
-}
-
-func (a storeAdapter) WritePR(ctx context.Context, pr ports.PRRow, checks []ports.PRCheckRow, comments []ports.PRComment) error {
-	row := sqlite.PRRow{
-		URL: pr.URL, SessionID: pr.SessionID, Number: int64(pr.Number),
-		State:          prState(pr),
-		ReviewDecision: string(pr.Review),
-		CIState:        string(pr.CI),
-		Mergeability:   string(pr.Mergeability),
-		UpdatedAt:      pr.UpdatedAt,
-	}
-	checkRows := make([]sqlite.PRCheckRow, len(checks))
-	for i, c := range checks {
-		checkRows[i] = sqlite.PRCheckRow{
-			PRURL: c.PRURL, Name: c.Name, CommitHash: c.CommitHash,
-			Status: c.Status, URL: c.URL, LogTail: c.LogTail, CreatedAt: c.CreatedAt,
-		}
-	}
-	commentRows := make([]sqlite.PRCommentRow, len(comments))
-	for i, c := range comments {
-		commentRows[i] = sqlite.PRCommentRow{
-			PRURL: pr.URL, CommentID: c.ID, Author: c.Author, File: c.File,
-			Line: int64(c.Line), Body: c.Body, Resolved: c.Resolved, CreatedAt: c.CreatedAt,
-		}
-	}
-	return a.Store.WritePRObservation(ctx, row, checkRows, commentRows)
-}
-
-// prState mirrors the production helper of the same name in
-// backend/lifecycle_wiring.go.
-func prState(r ports.PRRow) string {
-	switch {
-	case r.Merged:
-		return "merged"
-	case r.Closed:
-		return "closed"
-	case r.Draft:
-		return "draft"
-	default:
-		return "open"
-	}
-}
-
 // ---- plugin fakes (minimal: only enough to drive SM through real LCM) ----
 
 type stubRuntime struct {
@@ -197,7 +104,6 @@ func (n *captureNotifier) drain() []ports.Event {
 type liveStack struct {
 	dataDir   string
 	store     *sqlite.Store
-	adapter   storeAdapter
 	lcm       *lifecycle.Manager
 	sm        *session.Manager
 	notifier  *captureNotifier
@@ -216,24 +122,22 @@ func openLiveStack(t *testing.T, dataDir string) *liveStack {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	adapter := storeAdapter{store}
 	notifier := &captureNotifier{}
 	messenger := &captureMessenger{}
-	lcm := lifecycle.New(adapter, adapter, notifier, messenger)
+	lcm := lifecycle.New(store, store, notifier, messenger)
 
 	wsRoot := t.TempDir()
 	sm := session.New(session.Deps{
 		Runtime:   &stubRuntime{id: "h1", name: "tmux"},
 		Agent:     stubAgent{},
 		Workspace: &stubWorkspace{root: wsRoot},
-		Store:     adapter,
+		Store:     store,
 		Messenger: messenger,
 		Lifecycle: lcm,
 	})
 	st := &liveStack{
 		dataDir:   dataDir,
 		store:     store,
-		adapter:   adapter,
 		lcm:       lcm,
 		sm:        sm,
 		notifier:  notifier,
@@ -272,11 +176,10 @@ func seedProject(t *testing.T, store *sqlite.Store, id string) {
 }
 
 func durableLifecycle(store *sqlite.Store, messenger ports.AgentMessenger) *lifecycle.Manager {
-	adapter := storeAdapter{store}
 	renderer := notification.NewRenderer(store)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	notifier := notification.NewEnqueuer(store, renderer, logger)
-	return lifecycle.New(adapter, adapter, notifier, messenger)
+	return lifecycle.New(store, store, notifier, messenger)
 }
 
 func durableRecord(project, issue, branch string) domain.SessionRecord {
@@ -347,7 +250,7 @@ func TestHappyPath_Spawn_PR_Kill(t *testing.T) {
 	if err := st.lcm.ApplyPRObservation(ctx, sess.ID, ports.PRObservation{
 		Fetched: true, URL: prURL, Number: 1,
 		CI: domain.CIPassing, Review: domain.ReviewNone, Mergeability: domain.MergeMergeable,
-		Checks: []ports.PRCheckRow{{
+		Checks: []domain.PRCheckRow{{
 			Name: "ci/build", CommitHash: "abc123", Status: "passed", CreatedAt: time.Now(),
 		}},
 	}); err != nil {
@@ -357,7 +260,7 @@ func TestHappyPath_Spawn_PR_Kill(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get pr: ok=%v err=%v", ok, err)
 	}
-	if prRow.SessionID != string(sess.ID) || prRow.CIState != "passing" || prRow.State != "open" {
+	if prRow.SessionID != string(sess.ID) || prRow.CI != domain.CIPassing || prRow.Draft || prRow.Merged || prRow.Closed {
 		t.Fatalf("pr row wrong: %+v", prRow)
 	}
 
@@ -491,7 +394,7 @@ func TestCIFailureAndRecovery_NudgeThenClears(t *testing.T) {
 	if err := st.lcm.ApplyPRObservation(ctx, sess.ID, ports.PRObservation{
 		Fetched: true, URL: prURL, Number: 2,
 		CI: domain.CIFailing, Mergeability: domain.MergeUnstable,
-		Checks: []ports.PRCheckRow{{
+		Checks: []domain.PRCheckRow{{
 			Name: "ci/build", CommitHash: "c1", Status: "failed", LogTail: "panic: nil map", CreatedAt: time.Now(),
 		}},
 	}); err != nil {
@@ -507,7 +410,7 @@ func TestCIFailureAndRecovery_NudgeThenClears(t *testing.T) {
 
 	// Brake confirmation: only one failure so far, RecentCheckStatuses should
 	// reflect it.
-	history, err := st.adapter.RecentCheckStatuses(ctx, prURL, "ci/build", 3)
+	history, err := st.store.RecentCheckStatuses(ctx, prURL, "ci/build", 3)
 	if err != nil {
 		t.Fatalf("recent checks: %v", err)
 	}
@@ -521,7 +424,7 @@ func TestCIFailureAndRecovery_NudgeThenClears(t *testing.T) {
 	if err := st.lcm.ApplyPRObservation(ctx, sess.ID, ports.PRObservation{
 		Fetched: true, URL: prURL, Number: 2,
 		CI: domain.CIPassing, Mergeability: domain.MergeMergeable,
-		Checks: []ports.PRCheckRow{{
+		Checks: []domain.PRCheckRow{{
 			Name: "ci/build", CommitHash: "c2", Status: "passed", CreatedAt: time.Now(),
 		}},
 	}); err != nil {
@@ -537,7 +440,7 @@ func TestCIFailureAndRecovery_NudgeThenClears(t *testing.T) {
 
 	// And the pr row reflects the recovery in the canonical fact store.
 	prRow, ok, _ := st.store.GetPR(ctx, prURL)
-	if !ok || prRow.CIState != "passing" {
+	if !ok || prRow.CI != domain.CIPassing {
 		t.Fatalf("pr ci_state should be passing post-recovery: %+v", prRow)
 	}
 }

@@ -143,9 +143,9 @@ func TestPRCRUD(t *testing.T) {
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 	now := time.Now().UTC().Truncate(time.Second)
 
-	pr := PRRow{
-		URL: "https://gh/pr/1", SessionID: string(r.ID), Number: 1, State: "open",
-		ReviewDecision: "review_required", CIState: "failing", Mergeability: "blocked", UpdatedAt: now,
+	pr := domain.PRRow{
+		URL: "https://gh/pr/1", SessionID: string(r.ID), Number: 1,
+		Review: domain.ReviewRequired, CI: domain.CIFailing, Mergeability: domain.MergeBlocked, UpdatedAt: now,
 	}
 	if err := s.UpsertPR(ctx, pr); err != nil {
 		t.Fatal(err)
@@ -171,11 +171,11 @@ func TestPRChecksLoopBrakeQuery(t *testing.T) {
 	seedProject(t, s, "mer")
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 	now := time.Now().UTC().Truncate(time.Second)
-	_ = s.UpsertPR(ctx, PRRow{URL: "pr1", SessionID: string(r.ID), State: "open", UpdatedAt: now})
+	_ = s.UpsertPR(ctx, domain.PRRow{URL: "pr1", SessionID: string(r.ID), UpdatedAt: now})
 
 	// three consecutive failing runs of "build" (one per commit).
 	for i := 1; i <= 3; i++ {
-		if err := s.RecordCheck(ctx, PRCheckRow{
+		if err := s.RecordCheck(ctx, domain.PRCheckRow{
 			PRURL: "pr1", Name: "build", CommitHash: fmt.Sprintf("c%d", i),
 			Status: "failed", CreatedAt: now.Add(time.Duration(i) * time.Second),
 		}); err != nil {
@@ -190,7 +190,7 @@ func TestPRChecksLoopBrakeQuery(t *testing.T) {
 		t.Fatalf("recent statuses = %v, want 3x failed (loop brake would trip)", last3)
 	}
 	// a pass on a newer commit breaks the streak.
-	_ = s.RecordCheck(ctx, PRCheckRow{PRURL: "pr1", Name: "build", CommitHash: "c4", Status: "passed", CreatedAt: now.Add(4 * time.Second)})
+	_ = s.RecordCheck(ctx, domain.PRCheckRow{PRURL: "pr1", Name: "build", CommitHash: "c4", Status: "passed", CreatedAt: now.Add(4 * time.Second)})
 	last3, _ = s.RecentCheckStatuses(ctx, "pr1", "build", 3)
 	if last3[0] != "passed" {
 		t.Fatalf("most recent should be passed, got %v", last3)
@@ -203,17 +203,17 @@ func TestPRCommentsReplace(t *testing.T) {
 	seedProject(t, s, "mer")
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 	now := time.Now().UTC().Truncate(time.Second)
-	_ = s.UpsertPR(ctx, PRRow{URL: "pr1", SessionID: string(r.ID), State: "open", UpdatedAt: now})
+	_ = s.UpsertPR(ctx, domain.PRRow{URL: "pr1", SessionID: string(r.ID), UpdatedAt: now})
 
-	_ = s.ReplacePRComments(ctx, "pr1", []PRCommentRow{
-		{PRURL: "pr1", CommentID: "c1", Author: "a", File: "a.go", Line: 1, Body: "nit", CreatedAt: now},
-		{PRURL: "pr1", CommentID: "c2", Author: "b", File: "b.go", Line: 2, Body: "bug", Resolved: true, CreatedAt: now.Add(time.Second)},
+	_ = s.ReplacePRComments(ctx, "pr1", []domain.PRComment{
+		{ID: "c1", Author: "a", File: "a.go", Line: 1, Body: "nit", CreatedAt: now},
+		{ID: "c2", Author: "b", File: "b.go", Line: 2, Body: "bug", Resolved: true, CreatedAt: now.Add(time.Second)},
 	})
 	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 2 {
 		t.Fatalf("comments = %d, want 2", len(list))
 	}
 	// replace with a smaller set drops the rest.
-	_ = s.ReplacePRComments(ctx, "pr1", []PRCommentRow{{PRURL: "pr1", CommentID: "c1", Body: "x", CreatedAt: now}})
+	_ = s.ReplacePRComments(ctx, "pr1", []domain.PRComment{{ID: "c1", Body: "x", CreatedAt: now}})
 	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 1 {
 		t.Fatalf("after replace, comments = %d, want 1", len(list))
 	}
@@ -231,7 +231,7 @@ func TestCDCTriggersPopulateChangeLog(t *testing.T) {
 	r.Metadata.Prompt = "only metadata changed"
 	_ = s.UpdateSession(ctx, r)
 	// a PR insert logs too.
-	_ = s.UpsertPR(ctx, PRRow{URL: "pr1", SessionID: string(r.ID), State: "open", UpdatedAt: r.UpdatedAt})
+	_ = s.UpsertPR(ctx, domain.PRRow{URL: "pr1", SessionID: string(r.ID), UpdatedAt: r.UpdatedAt})
 
 	evs, err := s.ReadChangeLogAfter(ctx, 0, 100)
 	if err != nil {

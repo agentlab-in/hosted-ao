@@ -52,8 +52,8 @@ type PRObservation struct {
 	CI           domain.CIState
 	Review       domain.ReviewDecision
 	Mergeability domain.Mergeability
-	Checks       []PRCheckRow
-	Comments     []PRComment
+	Checks       []domain.PRCheckRow
+	Comments     []domain.PRComment
 }
 
 // SpawnOutcome is what the Session Manager reports once a spawn is live: the
@@ -64,43 +64,4 @@ type SpawnOutcome struct {
 	RuntimeHandle  RuntimeHandle
 	AgentSessionID string
 	Prompt         string
-}
-
-// ---- store row DTOs (shared by the PRWriter port and its sqlite adapter) ----
-
-// PRRow is the scalar PR facts row.
-type PRRow struct {
-	URL          string
-	SessionID    string
-	Number       int
-	Draft        bool
-	Merged       bool
-	Closed       bool
-	CI           domain.CIState
-	Review       domain.ReviewDecision
-	Mergeability domain.Mergeability
-	UpdatedAt    time.Time
-}
-
-// PRCheckRow is one CI check run (one row per check name per commit).
-type PRCheckRow struct {
-	PRURL      string
-	Name       string
-	CommitHash string
-	Status     string
-	URL        string
-	LogTail    string
-	CreatedAt  time.Time
-}
-
-// PRComment is one review comment. Review feedback is injected into the agent
-// regardless of author, so there is no bot/human distinction.
-type PRComment struct {
-	ID        string
-	Author    string
-	File      string
-	Line      int
-	Body      string
-	Resolved  bool
-	CreatedAt time.Time
 }
