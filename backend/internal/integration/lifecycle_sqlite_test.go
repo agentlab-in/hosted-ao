@@ -382,8 +382,14 @@ func TestRestoreRoundTrip_PreservesMetadata(t *testing.T) {
 	// fold an AgentSessionID into the row — the LCM does this through the spawn
 	// outcome on Restore too, but a fresh spawn doesn't (the agent has not
 	// reported one yet). We patch via the store so the restore branch has
-	// something to resume from.
-	rec, _, _ := st.store.GetSession(ctx, sess.ID)
+	// something to resume from. Check ok/err: without it, a missed row would
+	// hand UpdateSession a zero-value record (ID==""), which matches no rows
+	// and returns nil — Phase B would then fail with a misleading "agent id
+	// lost across restart" rather than the real cause.
+	rec, ok, err := st.store.GetSession(ctx, sess.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session for patch: ok=%v err=%v", ok, err)
+	}
 	rec.Metadata.AgentSessionID = "agent-xyz"
 	if err := st.store.UpdateSession(ctx, rec); err != nil {
 		t.Fatalf("patch agent id: %v", err)
@@ -534,7 +540,10 @@ func TestDetectingPersistsAcrossRestart(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("apply runtime: %v", err)
 	}
-	rec, _, _ := st.store.GetSession(ctx, sess.ID)
+	rec, ok, err := st.store.GetSession(ctx, sess.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session post-probe: ok=%v err=%v", ok, err)
+	}
 	if rec.Lifecycle.Session.State != domain.SessionDetecting {
 		t.Fatalf("expected detecting state, got %q", rec.Lifecycle.Session.State)
 	}
@@ -567,7 +576,10 @@ func TestDetectingPersistsAcrossRestart(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("recovery probe: %v", err)
 	}
-	rec3, _, _ := st2.store.GetSession(ctx, sess.ID)
+	rec3, ok3, err := st2.store.GetSession(ctx, sess.ID)
+	if err != nil || !ok3 {
+		t.Fatalf("get session post-recovery: ok=%v err=%v", ok3, err)
+	}
 	if rec3.Lifecycle.Detecting != nil {
 		t.Fatalf("alive probe should clear detecting, got %+v", rec3.Lifecycle.Detecting)
 	}
