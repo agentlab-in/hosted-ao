@@ -27,6 +27,7 @@ type Notification struct {
 	CauseKey     string
 	ReadAt       time.Time
 	ArchivedAt   time.Time
+	RoutedAt     time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

@@ -1,0 +1,45 @@
+package notification
+
+import (
+	"context"
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+func TestSettingsFromConfigDefaultsWhenUnset(t *testing.T) {
+	got := SettingsFromConfig(config.Config{}).Settings(context.Background())
+	if !got.Enabled || !got.Desktop.Enabled || !got.Dashboard.Enabled {
+		t.Fatalf("zero config should resolve safe enabled defaults: %+v", got)
+	}
+	if got.Retry.MaxAttempts != 5 || got.Retry.BatchSize != 50 {
+		t.Fatalf("retry defaults = %+v", got.Retry)
+	}
+}
+
+func TestNormalizeSettingsPreservesExplicitEmptyRoute(t *testing.T) {
+	cfg := config.DefaultNotificationConfig()
+	cfg.Routing.Priorities[ports.PriorityUrgent] = []string{}
+
+	got := StaticSettings(cfg).Settings(context.Background())
+	if routes := got.Routing.Priorities[ports.PriorityUrgent]; len(routes) != 0 {
+		t.Fatalf("explicit empty urgent route should be preserved, got %v", routes)
+	}
+}
+
+func TestSettingsProviderReturnsClone(t *testing.T) {
+	cfg := config.DefaultNotificationConfig()
+	provider := StaticSettings(cfg)
+	first := provider.Settings(context.Background())
+	first.Desktop.Priorities[0] = ports.PriorityInfo
+	first.Routing.Priorities[ports.PriorityUrgent][0] = "mutated"
+
+	second := provider.Settings(context.Background())
+	if second.Desktop.Priorities[0] != ports.PriorityUrgent {
+		t.Fatalf("desktop priorities were mutated through clone: %v", second.Desktop.Priorities)
+	}
+	if second.Routing.Priorities[ports.PriorityUrgent][0] != RouteDashboard {
+		t.Fatalf("routes were mutated through clone: %v", second.Routing.Priorities[ports.PriorityUrgent])
+	}
+}

@@ -16,7 +16,7 @@ UPDATE notifications
 SET archived_at = ?, updated_at = ?
 WHERE id = ? AND archived_at IS NULL
 RETURNING seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 `
 
 type ArchiveNotificationParams struct {
@@ -46,13 +46,14 @@ func (q *Queries) ArchiveNotification(ctx context.Context, arg ArchiveNotificati
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoutedAt,
 	)
 	return i, err
 }
 
 const getNotification = `-- name: GetNotification :one
 SELECT seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 FROM notifications WHERE id = ?
 `
 
@@ -77,13 +78,14 @@ func (q *Queries) GetNotification(ctx context.Context, id string) (Notification,
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoutedAt,
 	)
 	return i, err
 }
 
 const getNotificationByDedupeKey = `-- name: GetNotificationByDedupeKey :one
 SELECT seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 FROM notifications WHERE dedupe_key = ?
 `
 
@@ -108,6 +110,7 @@ func (q *Queries) GetNotificationByDedupeKey(ctx context.Context, dedupeKey stri
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoutedAt,
 	)
 	return i, err
 }
@@ -119,7 +122,7 @@ INSERT INTO notifications (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (dedupe_key) DO NOTHING
 RETURNING seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 `
 
 type InsertNotificationParams struct {
@@ -173,13 +176,14 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoutedAt,
 	)
 	return i, err
 }
 
 const listNotifications = `-- name: ListNotifications :many
 SELECT seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 FROM notifications
 ORDER BY seq DESC
 LIMIT ?
@@ -212,6 +216,7 @@ func (q *Queries) ListNotifications(ctx context.Context, limit int64) ([]Notific
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RoutedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -228,7 +233,7 @@ func (q *Queries) ListNotifications(ctx context.Context, limit int64) ([]Notific
 
 const listNotificationsByProject = `-- name: ListNotificationsByProject :many
 SELECT seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 FROM notifications
 WHERE project_id = ?
 ORDER BY seq DESC
@@ -267,6 +272,7 @@ func (q *Queries) ListNotificationsByProject(ctx context.Context, arg ListNotifi
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RoutedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -283,7 +289,7 @@ func (q *Queries) ListNotificationsByProject(ctx context.Context, arg ListNotifi
 
 const listNotificationsBySession = `-- name: ListNotificationsBySession :many
 SELECT seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 FROM notifications
 WHERE session_id = ?
 ORDER BY seq DESC
@@ -322,6 +328,7 @@ func (q *Queries) ListNotificationsBySession(ctx context.Context, arg ListNotifi
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RoutedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -338,7 +345,7 @@ func (q *Queries) ListNotificationsBySession(ctx context.Context, arg ListNotifi
 
 const listUnreadNotifications = `-- name: ListUnreadNotifications :many
 SELECT seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 FROM notifications
 WHERE read_at IS NULL AND archived_at IS NULL
 ORDER BY seq DESC
@@ -372,6 +379,7 @@ func (q *Queries) ListUnreadNotifications(ctx context.Context, limit int64) ([]N
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RoutedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -391,7 +399,7 @@ UPDATE notifications
 SET read_at = ?, updated_at = ?
 WHERE id = ? AND read_at IS NULL
 RETURNING seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 `
 
 type MarkNotificationReadParams struct {
@@ -421,6 +429,7 @@ func (q *Queries) MarkNotificationRead(ctx context.Context, arg MarkNotification
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoutedAt,
 	)
 	return i, err
 }
@@ -430,7 +439,7 @@ UPDATE notifications
 SET read_at = NULL, updated_at = ?
 WHERE id = ? AND read_at IS NOT NULL
 RETURNING seq, id, project_id, session_id, source, event_type, semantic_type, priority,
-    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at
+    message, payload_json, actions_json, dedupe_key, cause_key, read_at, archived_at, created_at, updated_at, routed_at
 `
 
 type MarkNotificationUnreadParams struct {
@@ -459,6 +468,7 @@ func (q *Queries) MarkNotificationUnread(ctx context.Context, arg MarkNotificati
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoutedAt,
 	)
 	return i, err
 }

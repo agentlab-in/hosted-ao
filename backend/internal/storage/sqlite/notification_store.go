@@ -238,5 +238,8 @@ func notificationFromGen(r gen.Notification) (NotificationRow, error) {
 	if r.ArchivedAt.Valid {
 		row.ArchivedAt = r.ArchivedAt.Time
 	}
+	if r.RoutedAt.Valid {
+		row.RoutedAt = r.RoutedAt.Time
+	}
 	return row, nil
 }

@@ -18,13 +18,15 @@ import (
 type EventType string
 
 const (
-	EventSessionCreated      EventType = "session_created"
-	EventSessionUpdated      EventType = "session_updated"
-	EventPRCreated           EventType = "pr_created"
-	EventPRUpdated           EventType = "pr_updated"
-	EventPRCheckRecorded     EventType = "pr_check_recorded"
-	EventNotificationCreated EventType = "notification_created"
-	EventNotificationUpdated EventType = "notification_updated"
+	EventSessionCreated              EventType = "session_created"
+	EventSessionUpdated              EventType = "session_updated"
+	EventPRCreated                   EventType = "pr_created"
+	EventPRUpdated                   EventType = "pr_updated"
+	EventPRCheckRecorded             EventType = "pr_check_recorded"
+	EventNotificationCreated         EventType = "notification_created"
+	EventNotificationUpdated         EventType = "notification_updated"
+	EventNotificationDeliveryCreated EventType = "notification_delivery_created"
+	EventNotificationDeliveryUpdated EventType = "notification_delivery_updated"
 )
 
 // Event is one CDC change read from change_log. Seq is the monotonic ordering +
