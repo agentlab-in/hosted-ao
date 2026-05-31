@@ -14,10 +14,13 @@ What works now:
 - `ao start` starts the daemon in the background and waits for `/readyz`.
 - `ao status` and `ao status --json` report stopped, stale, unhealthy,
   not-ready, or ready daemon state.
-- `ao stop` gracefully stops the daemon using the PID in `running.json`.
+- `ao stop` gracefully stops the daemon via the loopback `POST /shutdown`
+  endpoint, only after verifying the daemon's identity from `running.json`.
 - `ao daemon` is the hidden internal daemon entrypoint used by `ao start`.
-- `ao doctor` checks config, data dir, SQLite migrations, daemon state, and
-  local tool availability for `git`, `tmux`, and `zellij`.
+- `ao doctor` (and `ao doctor --json`) checks config, data dir, the database
+  file's presence, daemon state, and local tool availability for `git`, `tmux`,
+  and `zellij`. It never opens or migrates the store — the daemon is the sole
+  writer/migrator, so doctor only reports whether the database exists yet.
 - `ao completion` generates shell completions for `bash`, `zsh`, `fish`, and
   `powershell`.
 - `ao version` and `ao --version` print build metadata.
@@ -52,8 +55,9 @@ What is intentionally not implemented yet:
 
 Next steps:
 
-1. Add `/api/v1/projects` on the daemon over a small project service.
-2. Implement `ao project list/add/show/remove`.
+1. Wire the existing project manager/controller shell into the daemon with a
+   durable SQLite-backed project store.
+2. Implement `ao project list/add/show/remove` against `/api/v1/projects`.
 3. Wire production Session Manager dependencies: project-backed repo resolver,
    tmux/zellij runtime registry, first agent adapter, and AgentMessenger.
 4. Add `/api/v1/sessions`, then implement `ao spawn`, `ao session ...`, and
@@ -281,8 +285,8 @@ Acceptance criteria for the foundation:
 ## Implementation Readiness
 
 This section records what the CLI can connect to in the current codebase and
-what still needs to be built. Inventory date: 2026-05-31 on `main` at
-`0672dbb`.
+what still needs to be built. Inventory date: 2026-05-31 after merging
+`origin/main` at `438b830`.
 
 ### Implemented Foundation
 
@@ -298,8 +302,9 @@ Implemented commands:
   supports `--json` and `--timeout`.
 - `ao status` reports stopped/stale/unhealthy/not-ready/ready states and
   supports `--json`.
-- `ao doctor` checks config, data dir, SQLite open/migrations, daemon state, and
-  local tool availability for `git`, `tmux`, and `zellij`.
+- `ao doctor` checks config, data dir, database-file presence, daemon state, and
+  local tool availability for `git`, `tmux`, and `zellij`; supports `--json`. It
+  does not open or migrate the store (the daemon owns that).
 - `ao completion` generates `bash`, `zsh`, `fish`, and `powershell`
   completions.
 - `ao version` prints build metadata.
@@ -331,7 +336,7 @@ they are wired into the daemon and exposed through HTTP.
 
 | Area | Existing code | Missing before CLI can use it |
 |---|---|---|
-| Project persistence | `sqlite.Store` has `UpsertProject`, `GetProject`, `ListProjects`, and `ArchiveProject`. | Project domain/service layer, project ID/path/origin validation, and `/api/v1/projects` routes. |
+| Project API pieces | `internal/project` has manager/controller DTOs, `/api/v1/projects` routes exist, and `sqlite.Store` has project CRUD. | Durable project-store adapter/wiring in the daemon and CLI commands. The daemon currently constructs the router with nil API deps, so project routes are not product-usable from `ao` yet. |
 | Session Manager | `backend/internal/session.Manager` implements `Spawn`, `Kill`, `Restore`, `List`, `Get`, `Send`, and `Cleanup`. | Production daemon wiring with real runtime, agent, workspace, messenger, and HTTP routes. |
 | Runtime adapters | tmux and zellij adapters implement `ports.Runtime` and also have attach/send/output helpers. | Runtime registry wiring in daemon, attach/send abstractions in ports/API, and selection config. |
 | Workspace adapter | git worktree adapter implements create/destroy/restore/list with safety checks. | Repo resolver backed by registered projects and daemon wiring into Session Manager. |
@@ -345,12 +350,10 @@ These are the main gaps before the full initial command set is real.
 
 | Gap | Blocks |
 |---|---|
-| Cobra dependency and CLI packages. | All CLI commands. |
-| Daemon extraction from `backend/main.go` into `internal/daemon`. | `ao daemon`, `ao start`, tests around daemon startup. |
-| CLI process runner and PID signal helpers. | `ao start`, `ao stop`. |
-| Loopback HTTP client package with run-file discovery. | `ao status`, later all daemon-backed commands. |
+| Product API client package with run-file discovery. | `project`, `spawn`, `session`, `send`, `events list`, richer `status`. |
 | Shutdown mechanism choice: PID signal now, optional `POST /api/v1/daemon/shutdown` later. | `ao stop` polish and cross-platform behavior. |
-| HTTP API route surface under `/api/v1`. | `project`, `spawn`, `session`, `send`, `events list`, richer `status`. |
+| Session/send API route surface under `/api/v1`. | `spawn`, `session`, `send`, richer `status`. |
+| Project API daemon wiring. | `ao project list/add/show/remove`. |
 | SSE route for live CDC events plus durable catch-up reads. | `ao events tail`, frontend live updates. |
 | Agent adapters for supported harnesses (`codex`, `claude-code`, etc.). | `ao spawn`, `ao session restore`. |
 | AgentMessenger implementation over tmux/zellij. | `ao send`, LCM auto-nudge reactions. |
@@ -368,10 +371,10 @@ These are the main gaps before the full initial command set is real.
 | `ao start` | Implemented | Config, run-file stale check, HTTP readiness probes. | Later: package-manager/service integration if needed. |
 | `ao stop` | Implemented | Run-file discovery gives PID/port; server exits cleanly on SIGINT/SIGTERM. | Optional later shutdown HTTP route. |
 | `ao status` | Partially implemented | Run-file, process liveness via PID, `/healthz`, `/readyz`. | Rich project/session summary waits for `/api/v1/projects` and `/api/v1/sessions`. |
-| `ao doctor` | Partially implemented | Config resolution, run-file, storage open, runtime binary checks. | Deeper adapter preflights need daemon wiring/config. |
+| `ao doctor` | Partially implemented | Config resolution, run-file, database-file presence (no open/migrate), runtime binary checks. | Deeper adapter preflights need daemon wiring/config and should be queried from the daemon, not run in-process. |
 | `ao completion` | Implemented | Cobra generators. | None for foundation. |
 | `ao version` | Implemented | Build metadata can be injected with `-ldflags`. | Release tooling needs to set metadata. |
-| `ao project list/add/show/remove` | Not yet | SQLite project CRUD exists. | Project service and HTTP routes. CLI must not write SQLite directly. |
+| `ao project list/add/show/remove` | Not yet | Project manager/controller route shell and SQLite project CRUD exist. | Durable project-store adapter, daemon API wiring, and CLI HTTP client. CLI must not write SQLite directly. |
 | `ao spawn` | Not yet | Session Manager exists; runtime/workspace/tracker pieces partly exist. | Agent adapters, registry/config wiring, project lookup, tracker hydration, HTTP route. |
 | `ao session list/show` | Not yet | Store and Session Manager read model exist. | HTTP routes and response DTOs. |
 | `ao session attach` | Not yet | tmux/zellij have attach command helpers. | Runtime attach port/API and terminal-launch policy. |
@@ -383,8 +386,8 @@ These are the main gaps before the full initial command set is real.
 
 1. Build CLI foundation around the daemon only: `daemon`, `start`, `stop`,
    `status`, `doctor`, `completion`, `version`.
-2. Add `/api/v1/projects` over a small project service, then implement
-   `project list/add/show/remove`.
+2. Wire the existing project manager/controller shell into the daemon with a
+   durable SQLite-backed store, then implement `project list/add/show/remove`.
 3. Wire production Session Manager dependencies: project-backed repo resolver,
    tmux/zellij runtime registry, first agent adapter, and AgentMessenger.
 4. Add `/api/v1/sessions` and implement `spawn`, `session list/show/kill/restore`,

@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -17,6 +18,27 @@ import (
 // Execute runs the ao CLI with process stdio.
 func Execute() error {
 	return NewRootCommand(DefaultDeps()).Execute()
+}
+
+// usageError marks a command-line misuse (bad flag, wrong arg count). It lets
+// the process entrypoint return exit code 2 for usage errors versus 1 for
+// runtime failures, matching the convention CLIs are scripted against.
+type usageError struct{ err error }
+
+func (e usageError) Error() string { return e.err.Error() }
+func (e usageError) Unwrap() error { return e.err }
+
+// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 1 for
+// any other failure, 0 for success.
+func ExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ue usageError
+	if errors.As(err, &ue) {
+		return 2
+	}
+	return 1
 }
 
 // Deps holds the small set of side effects the CLI needs. Tests replace these
@@ -103,6 +125,11 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.SetOut(deps.Out)
 	root.SetErr(deps.Err)
 	root.CompletionOptions.DisableDefaultCmd = true
+	// Tag flag-parse failures as usage errors so the entrypoint can exit 2 for
+	// misuse versus 1 for runtime failures. Subcommands inherit this func.
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return usageError{err}
+	})
 
 	root.AddCommand(newDaemonCommand())
 	root.AddCommand(newStartCommand(ctx))

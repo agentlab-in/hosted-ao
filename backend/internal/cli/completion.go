@@ -8,9 +8,14 @@ import (
 
 func newCompletionCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:       "completion [bash|zsh|fish|powershell]",
-		Short:     "Generate shell completion scripts",
-		Args:      cobra.ExactArgs(1),
+		Use:   "completion [bash|zsh|fish|powershell]",
+		Short: "Generate shell completion scripts",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+				return usageError{err}
+			}
+			return nil
+		},
 		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := cmd.Root()

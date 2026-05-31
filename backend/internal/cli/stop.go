@@ -115,8 +115,14 @@ func (c *commandContext) waitForStopped(ctx context.Context, pid int, runFilePat
 			return daemonStatus{State: "stopped", RunFile: runFilePath, DataDir: dataDir}, nil
 		}
 		if !alive {
-			if err := runfile.Remove(runFilePath); err != nil {
-				return daemonStatus{}, err
+			// Only remove the run-file if it still belongs to the process we
+			// stopped. A concurrent `ao start` may have already written a new
+			// run-file for a different daemon; removing that would corrupt its
+			// handshake and make a live daemon look stopped.
+			if info.PID == pid {
+				if err := runfile.Remove(runFilePath); err != nil {
+					return daemonStatus{}, err
+				}
 			}
 			return daemonStatus{State: "stopped", RunFile: runFilePath, DataDir: dataDir}, nil
 		}

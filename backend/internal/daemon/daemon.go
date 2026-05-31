@@ -27,7 +27,7 @@ func Run() error {
 		return err
 	}
 
-	log := NewLogger()
+	log := newLogger()
 
 	// Fail fast if a live daemon already owns the handshake file. A run-file
 	// left by a crashed predecessor (dead PID) is treated as stale and
@@ -119,8 +119,8 @@ func Run() error {
 	return runErr
 }
 
-// NewLogger returns the daemon's slog logger. It writes to stderr so supervisors
+// newLogger returns the daemon's slog logger. It writes to stderr so supervisors
 // can capture it separately from any structured stdout protocol added later.
-func NewLogger() *slog.Logger {
+func newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }

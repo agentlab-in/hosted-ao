@@ -6,6 +6,7 @@ package httpd
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 
@@ -76,11 +77,22 @@ func mountHealth(r chi.Router) {
 	r.Get("/readyz", handleReadyz)
 }
 
+// mountControl registers the loopback daemon-control endpoints. /shutdown is
+// unauthenticated and state-changing, so it is gated by localControlRequest to
+// keep a browser the user happens to have open (CSRF / DNS-rebinding) or a
+// remote client from being able to kill the daemon.
 func mountControl(r chi.Router, deps ControlDeps) {
 	if deps.RequestShutdown == nil {
 		return
 	}
-	r.Post("/shutdown", func(w http.ResponseWriter, _ *http.Request) {
+	r.Post("/shutdown", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"status":  "forbidden",
+				"service": daemonmeta.ServiceName,
+			})
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status":  "shutting_down",
 			"service": daemonmeta.ServiceName,
@@ -88,6 +100,29 @@ func mountControl(r chi.Router, deps ControlDeps) {
 		})
 		deps.RequestShutdown()
 	})
+}
+
+// localControlRequest reports whether a control request is a trusted local
+// caller. The Go CLI client addresses the daemon by its loopback host and
+// never sets an Origin header; a cross-site browser fetch always carries an
+// Origin, and a DNS-rebinding attempt resolves a non-loopback Host. Rejecting
+// either closes the CSRF/rebinding vector while leaving the CLI unaffected.
+func localControlRequest(r *http.Request) bool {
+	if r.Header.Get("Origin") != "" {
+		return false
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	switch host {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // handleHealthz is the liveness probe: it answers 200 as long as the process is
