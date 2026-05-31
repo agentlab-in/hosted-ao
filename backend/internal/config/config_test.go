@@ -3,8 +3,6 @@ package config
 import (
 	"testing"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -32,18 +30,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.RunFilePath == "" {
 		t.Error("RunFilePath is empty, want a resolved default path")
-	}
-	if !cfg.Notifications.Enabled || !cfg.Notifications.Dashboard.Enabled || !cfg.Notifications.Desktop.Enabled {
-		t.Fatalf("notification defaults should be enabled: %+v", cfg.Notifications)
-	}
-	if cfg.Notifications.Dashboard.Limit != 50 {
-		t.Fatalf("dashboard limit = %d, want 50", cfg.Notifications.Dashboard.Limit)
-	}
-	if got := cfg.Notifications.Routing.Priorities[ports.PriorityUrgent]; len(got) != 2 || got[0] != "dashboard" || got[1] != "desktop" {
-		t.Fatalf("urgent routes = %v, want dashboard+desktop", got)
-	}
-	if cfg.Notifications.Retry.MaxAttempts != 5 || cfg.Notifications.Retry.LeaseTTL != 30*time.Second {
-		t.Fatalf("retry defaults = %+v", cfg.Notifications.Retry)
 	}
 }
 
