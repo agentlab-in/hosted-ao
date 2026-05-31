@@ -176,27 +176,31 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	return m.runReactions(ctx, id, prContent(o))
 }
 
-// writePR upserts the scalar facts, records each check run, and replaces the
-// comment set. PR-table CDC is emitted by the DB triggers.
+// writePR persists the observation's scalar facts, check runs, and comment set
+// in one atomic store call. PR-table CDC is emitted by the DB triggers.
 func (m *Manager) writePR(ctx context.Context, id domain.SessionID, o ports.PRObservation) error {
 	now := m.clock()
-	if err := m.pr.UpsertPR(ctx, ports.PRRow{
+	row := ports.PRRow{
 		URL: o.URL, SessionID: string(id), Number: o.Number,
 		Draft: o.Draft, Merged: o.Merged, Closed: o.Closed,
 		CI: o.CI, Review: o.Review, Mergeability: o.Mergeability, UpdatedAt: now,
-	}); err != nil {
-		return err
 	}
-	for _, c := range o.Checks {
+	checks := make([]ports.PRCheckRow, len(o.Checks))
+	for i, c := range o.Checks {
 		c.PRURL = o.URL
 		if c.CreatedAt.IsZero() {
 			c.CreatedAt = now
 		}
-		if err := m.pr.RecordCheck(ctx, c); err != nil {
-			return err
-		}
+		checks[i] = c
 	}
-	return m.pr.ReplacePRComments(ctx, o.URL, o.Comments)
+	comments := make([]ports.PRComment, len(o.Comments))
+	for i, c := range o.Comments {
+		if c.CreatedAt.IsZero() {
+			c.CreatedAt = now
+		}
+		comments[i] = c
+	}
+	return m.pr.WritePR(ctx, row, checks, comments)
 }
 
 // ---- mutation commands from the Session Manager ----

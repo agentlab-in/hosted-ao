@@ -202,6 +202,25 @@ BEGIN
 END;
 -- +goose StatementEnd
 
+-- A re-polled check can change status on the same commit (in_progress -> failed)
+-- via UpsertPRCheck's ON CONFLICT DO UPDATE. Without this trigger that status
+-- transition would update the row silently, so CDC consumers would never see it.
+-- Guarded on the status so a no-op re-poll emits nothing.
+-- +goose StatementBegin
+CREATE TRIGGER pr_checks_cdc_update
+AFTER UPDATE ON pr_checks
+WHEN OLD.status <> NEW.status
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    VALUES (
+        (SELECT s.project_id FROM pr p JOIN sessions s ON s.id = p.session_id WHERE p.url = NEW.pr_url),
+        (SELECT session_id FROM pr WHERE url = NEW.pr_url),
+        'pr_check_recorded',
+        json_object('pr', NEW.pr_url, 'name', NEW.name, 'commit', NEW.commit_hash, 'status', NEW.status),
+        NEW.created_at);
+END;
+-- +goose StatementEnd
+
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE change_log;

@@ -82,12 +82,10 @@ func (f *fakeStore) PRFactsForSession(_ context.Context, id domain.SessionID) (d
 	}
 	return facts, nil
 }
-func (f *fakeStore) UpsertPR(_ context.Context, r ports.PRRow) error {
-	f.pr[domain.SessionID(r.SessionID)] = r
-	return nil
-}
-func (f *fakeStore) RecordCheck(_ context.Context, r ports.PRCheckRow) error {
-	f.checks = append(f.checks, r)
+func (f *fakeStore) WritePR(_ context.Context, pr ports.PRRow, checks []ports.PRCheckRow, comments []ports.PRComment) error {
+	f.pr[domain.SessionID(pr.SessionID)] = pr
+	f.checks = append(f.checks, checks...)
+	f.comments[pr.URL] = comments
 	return nil
 }
 func (f *fakeStore) RecentCheckStatuses(_ context.Context, url, name string, limit int) ([]string, error) {
@@ -98,10 +96,6 @@ func (f *fakeStore) RecentCheckStatuses(_ context.Context, url, name string, lim
 		}
 	}
 	return out, nil
-}
-func (f *fakeStore) ReplacePRComments(_ context.Context, url string, cs []ports.PRComment) error {
-	f.comments[url] = cs
-	return nil
 }
 
 type fakeNotifier struct{ events []ports.Event }

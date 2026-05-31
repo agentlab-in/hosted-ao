@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 
 	"github.com/pressly/goose/v3"
+	// modernc.org/sqlite is the pure-Go (CGO-free) SQLite driver — chosen so the
+	// daemon cross-compiles and ships as a static binary with no libsqlite/CGO
+	// toolchain dependency, at the cost of some raw throughput vs a C-backed driver.
 	_ "modernc.org/sqlite"
 )
 

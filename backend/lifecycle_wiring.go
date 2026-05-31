@@ -87,33 +87,30 @@ func (a storeAdapter) PRFactsForSession(ctx context.Context, id domain.SessionID
 	return facts, nil
 }
 
-func (a storeAdapter) UpsertPR(ctx context.Context, r ports.PRRow) error {
-	return a.Store.UpsertPR(ctx, sqlite.PRRow{
-		URL: r.URL, SessionID: r.SessionID, Number: int64(r.Number),
-		State:          prState(r),
-		ReviewDecision: string(r.Review),
-		CIState:        string(r.CI),
-		Mergeability:   string(r.Mergeability),
-		UpdatedAt:      r.UpdatedAt,
-	})
-}
-
-func (a storeAdapter) RecordCheck(ctx context.Context, r ports.PRCheckRow) error {
-	return a.Store.RecordCheck(ctx, sqlite.PRCheckRow{
-		PRURL: r.PRURL, Name: r.Name, CommitHash: r.CommitHash,
-		Status: r.Status, URL: r.URL, LogTail: r.LogTail, CreatedAt: r.CreatedAt,
-	})
-}
-
-func (a storeAdapter) ReplacePRComments(ctx context.Context, prURL string, comments []ports.PRComment) error {
-	rows := make([]sqlite.PRCommentRow, len(comments))
+func (a storeAdapter) WritePR(ctx context.Context, pr ports.PRRow, checks []ports.PRCheckRow, comments []ports.PRComment) error {
+	row := sqlite.PRRow{
+		URL: pr.URL, SessionID: pr.SessionID, Number: int64(pr.Number),
+		State:          prState(pr),
+		ReviewDecision: string(pr.Review),
+		CIState:        string(pr.CI),
+		Mergeability:   string(pr.Mergeability),
+		UpdatedAt:      pr.UpdatedAt,
+	}
+	checkRows := make([]sqlite.PRCheckRow, len(checks))
+	for i, c := range checks {
+		checkRows[i] = sqlite.PRCheckRow{
+			PRURL: c.PRURL, Name: c.Name, CommitHash: c.CommitHash,
+			Status: c.Status, URL: c.URL, LogTail: c.LogTail, CreatedAt: c.CreatedAt,
+		}
+	}
+	commentRows := make([]sqlite.PRCommentRow, len(comments))
 	for i, c := range comments {
-		rows[i] = sqlite.PRCommentRow{
-			PRURL: prURL, CommentID: c.ID, Author: c.Author, File: c.File,
+		commentRows[i] = sqlite.PRCommentRow{
+			PRURL: pr.URL, CommentID: c.ID, Author: c.Author, File: c.File,
 			Line: int64(c.Line), Body: c.Body, Resolved: c.Resolved, CreatedAt: c.CreatedAt,
 		}
 	}
-	return a.Store.ReplacePRComments(ctx, prURL, rows)
+	return a.Store.WritePRObservation(ctx, row, checkRows, commentRows)
 }
 
 // prState collapses the PR's bools into the single pr.state column value.

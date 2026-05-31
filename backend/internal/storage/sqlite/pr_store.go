@@ -27,18 +27,7 @@ type PRRow struct {
 // fields default to their "nothing known yet" value so a partial row is valid
 // against the CHECK constraints (matches the domain zero values none/unknown).
 func (s *Store) UpsertPR(ctx context.Context, r PRRow) error {
-	if r.State == "" {
-		r.State = "open"
-	}
-	if r.ReviewDecision == "" {
-		r.ReviewDecision = "none"
-	}
-	if r.CIState == "" {
-		r.CIState = "unknown"
-	}
-	if r.Mergeability == "" {
-		r.Mergeability = "unknown"
-	}
+	r = r.withDefaults()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.UpsertPR(ctx, gen.UpsertPRParams{
@@ -51,6 +40,67 @@ func (s *Store) UpsertPR(ctx context.Context, r PRRow) error {
 		Mergeability:   r.Mergeability,
 		UpdatedAt:      r.UpdatedAt,
 	})
+}
+
+// WritePRObservation persists a full PR observation — scalar facts, check runs,
+// and the replacement comment set — in one write transaction, so the rows and
+// the change_log events their triggers emit are committed all-or-nothing. The
+// scalar PR upsert runs first so the checks'/comments' CDC triggers can resolve
+// the session id from the pr row within the same transaction.
+func (s *Store) WritePRObservation(ctx context.Context, pr PRRow, checks []PRCheckRow, comments []PRCommentRow) error {
+	pr = pr.withDefaults()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "write pr observation", func(q *gen.Queries) error {
+		if err := q.UpsertPR(ctx, gen.UpsertPRParams{
+			Url: pr.URL, SessionID: pr.SessionID, Number: pr.Number,
+			PrState: pr.State, ReviewDecision: pr.ReviewDecision,
+			CiState: pr.CIState, Mergeability: pr.Mergeability, UpdatedAt: pr.UpdatedAt,
+		}); err != nil {
+			return err
+		}
+		for _, c := range checks {
+			if c.Status == "" {
+				c.Status = "unknown"
+			}
+			if err := q.UpsertPRCheck(ctx, gen.UpsertPRCheckParams{
+				PrUrl: c.PRURL, Name: c.Name, CommitHash: c.CommitHash,
+				Status: c.Status, Url: c.URL, LogTail: c.LogTail, CreatedAt: c.CreatedAt,
+			}); err != nil {
+				return err
+			}
+		}
+		if err := q.DeletePRComments(ctx, pr.URL); err != nil {
+			return err
+		}
+		for _, cm := range comments {
+			if err := q.UpsertPRComment(ctx, gen.UpsertPRCommentParams{
+				PrUrl: pr.URL, CommentID: cm.CommentID, Author: cm.Author, File: cm.File,
+				Line: cm.Line, Body: cm.Body, Resolved: boolToInt(cm.Resolved), CreatedAt: cm.CreatedAt,
+			}); err != nil {
+				return fmt.Errorf("comment %q: %w", cm.CommentID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// withDefaults fills empty enum fields with their "nothing known yet" value so a
+// partial row satisfies the CHECK constraints (matches UpsertPR).
+func (r PRRow) withDefaults() PRRow {
+	if r.State == "" {
+		r.State = "open"
+	}
+	if r.ReviewDecision == "" {
+		r.ReviewDecision = "none"
+	}
+	if r.CIState == "" {
+		r.CIState = "unknown"
+	}
+	if r.Mergeability == "" {
+		r.Mergeability = "unknown"
+	}
+	return r
 }
 
 // GetPR returns the PR facts for a URL, or ok=false if absent.
