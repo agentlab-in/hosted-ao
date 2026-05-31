@@ -12,10 +12,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
 func main() {
@@ -42,11 +44,6 @@ func run() error {
 		return fmt.Errorf("daemon already running (pid %d, port %d); refusing to start", live.PID, live.Port)
 	}
 
-	srv, err := httpd.New(cfg, log)
-	if err != nil {
-		return err
-	}
-
 	// Open the durable store and bring up the CDC substrate: the DB triggers
 	// capture changes into change_log, the poller tails it, and the broadcaster
 	// fans events out to the SSE transport. The LCM/Session Manager and the HTTP
@@ -66,6 +63,19 @@ func run() error {
 	defer stop()
 
 	cdcPipe, err := startCDC(ctx, store, log)
+	if err != nil {
+		return err
+	}
+
+	// Terminal streaming: the tmux runtime supplies the PTY-attach command and
+	// liveness; the CDC broadcaster feeds the session-state channel. The manager
+	// is handed to httpd, which mounts it at /mux. Raw PTY bytes never flow
+	// through the CDC change_log — only session-state events do.
+	runtimeAdapter := tmux.New(tmux.Options{})
+	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
+	defer termMgr.Close()
+
+	srv, err := httpd.New(cfg, log, termMgr)
 	if err != nil {
 		return err
 	}

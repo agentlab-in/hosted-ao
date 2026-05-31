@@ -20,7 +20,7 @@ import (
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(httpd.NewRouterWithAPI(config.Config{}, log, httpd.APIDeps{
+	srv := httptest.NewServer(httpd.NewRouterWithAPI(config.Config{}, log, nil, httpd.APIDeps{
 		Projects: project.NewMemoryManager(),
 	}))
 	t.Cleanup(srv.Close)
@@ -29,7 +29,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 func TestProjectsRoutes_DefaultToStubsWithoutManager(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(httpd.NewRouter(config.Config{}, log))
+	srv := httptest.NewServer(httpd.NewRouter(config.Config{}, log, nil))
 	t.Cleanup(srv.Close)
 
 	body, status, headers := doRequest(t, srv, "GET", "/api/v1/projects", "")

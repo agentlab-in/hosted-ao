@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
 // NewRouter builds the root router with the standard middleware stack and the
@@ -29,14 +30,14 @@ import (
 // SSE (/events) or WebSocket (/mux) surfaces, nor the always-must-answer health
 // probes. It is therefore applied per-surface when those subrouters are mounted
 // in Phase 1b; cfg.RequestTimeout carries the value through to that point.
-func NewRouter(cfg config.Config, log *slog.Logger) chi.Router {
-	return NewRouterWithAPI(cfg, log, APIDeps{})
+func NewRouter(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager) chi.Router {
+	return NewRouterWithAPI(cfg, log, termMgr, APIDeps{})
 }
 
 // NewRouterWithAPI is the dependency-injected variant. main.go calls it with
 // real Managers when they exist; tests/dev wiring inject mocks explicitly.
 // Missing Managers intentionally keep the route-shell 501 behavior.
-func NewRouterWithAPI(cfg config.Config, log *slog.Logger, deps APIDeps) chi.Router {
+func NewRouterWithAPI(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
@@ -51,6 +52,7 @@ func NewRouterWithAPI(cfg config.Config, log *slog.Logger, deps APIDeps) chi.Rou
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
 	mountHealth(r)
+	mountMux(r, termMgr, log)
 	NewAPI(cfg, deps).Register(r)
 
 	return r
