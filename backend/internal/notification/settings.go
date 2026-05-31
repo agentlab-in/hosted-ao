@@ -33,14 +33,8 @@ func NormalizeSettings(in config.NotificationConfig) config.NotificationConfig {
 	def := config.DefaultNotificationConfig()
 	out := in
 
-	if isZeroDashboardConfig(in.Dashboard) {
-		out.Dashboard.Enabled = def.Dashboard.Enabled
-	}
 	if out.Dashboard.Limit == 0 {
 		out.Dashboard.Limit = def.Dashboard.Limit
-	}
-	if isZeroDesktopConfig(in.Desktop) {
-		out.Desktop.Enabled = def.Desktop.Enabled
 	}
 	if out.Desktop.Priorities == nil {
 		out.Desktop.Priorities = append([]ports.Priority(nil), def.Desktop.Priorities...)
@@ -92,24 +86,4 @@ func cloneRoutes(in map[ports.Priority][]string) map[ports.Priority][]string {
 		out[p] = append([]string(nil), routes...)
 	}
 	return out
-}
-
-func isZeroNotificationConfig(c config.NotificationConfig) bool {
-	return !c.Enabled &&
-		isZeroDashboardConfig(c.Dashboard) &&
-		isZeroDesktopConfig(c.Desktop) &&
-		c.Routing.Priorities == nil &&
-		c.Retry.MaxAttempts == 0 &&
-		c.Retry.BaseDelay == 0 &&
-		c.Retry.MaxDelay == 0 &&
-		c.Retry.LeaseTTL == 0 &&
-		c.Retry.BatchSize == 0
-}
-
-func isZeroDashboardConfig(c config.DashboardNotificationConfig) bool {
-	return !c.Enabled && c.Limit == 0
-}
-
-func isZeroDesktopConfig(c config.DesktopNotificationConfig) bool {
-	return !c.Enabled && len(c.Priorities) == 0 && len(c.SoundPriorities) == 0
 }

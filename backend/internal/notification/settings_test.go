@@ -28,6 +28,27 @@ func TestSettingsFromConfigPreservesExplicitGlobalDisable(t *testing.T) {
 	}
 }
 
+func TestNormalizeSettingsPreservesExplicitSurfaceDisables(t *testing.T) {
+	got := StaticSettings(config.NotificationConfig{
+		Enabled:   true,
+		Dashboard: config.DashboardNotificationConfig{Enabled: false},
+		Desktop:   config.DesktopNotificationConfig{Enabled: false},
+	}).Settings(context.Background())
+
+	if !got.Enabled {
+		t.Fatalf("global notifications should remain enabled: %+v", got)
+	}
+	if got.Dashboard.Enabled {
+		t.Fatalf("explicit dashboard disable should stay disabled: %+v", got.Dashboard)
+	}
+	if got.Desktop.Enabled {
+		t.Fatalf("explicit desktop disable should stay disabled: %+v", got.Desktop)
+	}
+	if got.Dashboard.Limit != 50 || len(got.Desktop.Priorities) == 0 || got.Retry.MaxAttempts != 5 {
+		t.Fatalf("disabled surfaces should still receive non-bool defaults: %+v", got)
+	}
+}
+
 func TestNormalizeSettingsPreservesExplicitEmptyRoute(t *testing.T) {
 	cfg := config.DefaultNotificationConfig()
 	cfg.Routing.Priorities[ports.PriorityUrgent] = []string{}

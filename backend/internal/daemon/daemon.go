@@ -61,6 +61,8 @@ func Run() error {
 		return err
 	}
 
+	notifier := startNotifier(ctx, cfg, store, log)
+
 	// Terminal streaming: the tmux runtime supplies the PTY-attach command and
 	// liveness; the CDC broadcaster feeds the session-state channel. The manager
 	// is handed to httpd, which mounts it at /mux. Raw PTY bytes never flow
@@ -71,6 +73,11 @@ func Run() error {
 
 	srv, err := httpd.New(cfg, log, termMgr)
 	if err != nil {
+		stop()
+		notifier.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
 		return err
 	}
 
@@ -79,6 +86,11 @@ func Run() error {
 	// trigger -> change_log -> poller -> broadcaster.
 	lcStack, err := startLifecycle(ctx, store, log)
 	if err != nil {
+		stop()
+		notifier.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
 		return err
 	}
 
@@ -98,6 +110,7 @@ func Run() error {
 		// the LIFO trap (see comment after srv.Run), hence explicit.
 		stop()
 		lcStack.Stop()
+		notifier.Stop()
 		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
 		}
@@ -113,6 +126,7 @@ func Run() error {
 	// runs before the cancel — which would hang any non-signal exit path.
 	stop()
 	lcStack.Stop()
+	notifier.Stop()
 	if err := cdcPipe.Stop(); err != nil {
 		log.Error("cdc pipeline shutdown", "err", err)
 	}
