@@ -143,8 +143,7 @@ func (s *session) copyOut(p ptyProcess) {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			s.ring.append(chunk)
-			s.fanout(chunk)
+			s.deliver(chunk)
 		}
 		if err != nil {
 			return
@@ -197,12 +196,20 @@ func (s *session) subscribe(onData subscriber, onExit func()) (unsubscribe func(
 	if onExit != nil {
 		s.exitSubs[id] = onExit
 	}
+	// Deliver the replay while still holding s.mu. deliver (the copyOut path)
+	// also takes s.mu around append+fanout, so the two are fully serialized: a
+	// chunk is either in this snapshot (and was fanned out before this
+	// subscriber registered) or it is fanned out after this returns, never both.
+	// Releasing the lock before replaying would let a chunk land in both the
+	// snapshot and a concurrent fanout, delivering it twice (or let an exit
+	// frame overtake the replay). onData is a non-blocking enqueue, so holding
+	// the lock across it cannot deadlock.
 	replay := s.ring.snapshot()
-	s.mu.Unlock()
-
 	if len(replay) > 0 {
 		onData(replay)
 	}
+	s.mu.Unlock()
+
 	return func() {
 		s.mu.Lock()
 		delete(s.subs, id)
@@ -211,15 +218,18 @@ func (s *session) subscribe(onData subscriber, onExit func()) (unsubscribe func(
 	}
 }
 
-func (s *session) fanout(data []byte) {
+// deliver appends a chunk to the ring and fans it out to current subscribers as
+// one atomic step under s.mu. Holding the lock across both is what lets
+// subscribe (which snapshots + replays under the same lock) guarantee
+// exactly-once delivery: append+fanout and register+snapshot+replay can never
+// interleave. Each fn is a non-blocking enqueue, so the lock is held only
+// briefly and cannot deadlock.
+func (s *session) deliver(chunk []byte) {
 	s.mu.Lock()
-	fns := make([]subscriber, 0, len(s.subs))
+	defer s.mu.Unlock()
+	s.ring.append(chunk)
 	for _, fn := range s.subs {
-		fns = append(fns, fn)
-	}
-	s.mu.Unlock()
-	for _, fn := range fns {
-		fn(data)
+		fn(chunk)
 	}
 }
 
