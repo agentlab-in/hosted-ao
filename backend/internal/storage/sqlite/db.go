@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/pressly/goose/v3"
 	// modernc.org/sqlite is the pure-Go (CGO-free) SQLite driver — chosen so the
@@ -70,7 +71,17 @@ func Open(dataDir string) (*Store, error) {
 	return NewStore(writeDB, readDB), nil
 }
 
+// gooseMu serialises calls into goose. goose v3 keeps its baseFS / logger /
+// dialect as package-level globals (goose.SetBaseFS, goose.SetLogger,
+// goose.SetDialect), so two concurrent Open() calls — uncommon in production
+// but normal in -race test runs — race on those writes. The cost of holding the
+// mutex is one process-startup migration; readers and writers afterwards never
+// touch goose.
+var gooseMu sync.Mutex
+
 func migrate(db *sql.DB) error {
+	gooseMu.Lock()
+	defer gooseMu.Unlock()
 	goose.SetBaseFS(migrationsFS)
 	goose.SetLogger(goose.NopLogger())
 	if err := goose.SetDialect("sqlite3"); err != nil {
