@@ -1,6 +1,10 @@
 -- +goose Up
 -- +goose StatementBegin
 ALTER TABLE notifications ADD COLUMN routed_at TIMESTAMP;
+-- Notifications that already exist when this migration runs predate the
+-- delivery runtime. Treat them as already routed so an upgrade does not
+-- synthesize new AO-app desktop toasts for historical notification rows; the
+-- dashboard read model still sees those rows directly from notifications.
 UPDATE notifications SET routed_at = updated_at WHERE routed_at IS NULL;
 CREATE INDEX idx_notifications_unrouted
     ON notifications(seq)
