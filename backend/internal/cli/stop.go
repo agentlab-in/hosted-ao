@@ -61,6 +61,12 @@ func (c *commandContext) stopDaemon(ctx context.Context, opts stopOptions) (daem
 		}
 		return daemonStatus{State: "stopped", RunFile: cfg.RunFilePath, DataDir: cfg.DataDir}, nil
 	}
+	if !st.owned {
+		if err := runfile.Remove(cfg.RunFilePath); err != nil {
+			return daemonStatus{}, err
+		}
+		return daemonStatus{State: "stopped", RunFile: cfg.RunFilePath, DataDir: cfg.DataDir}, nil
+	}
 
 	if err := c.deps.SignalTerm(st.PID); err != nil {
 		if c.deps.ProcessAlive(st.PID) {

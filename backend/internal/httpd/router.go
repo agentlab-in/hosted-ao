@@ -7,11 +7,13 @@ package httpd
 import (
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
@@ -68,12 +70,20 @@ func mountHealth(r chi.Router) {
 // handleHealthz is the liveness probe: it answers 200 as long as the process is
 // up and serving. It does no dependency checks by design.
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"service": daemonmeta.ServiceName,
+		"pid":     os.Getpid(),
+	})
 }
 
 // handleReadyz is the readiness probe. In the 1a skeleton the daemon is ready
 // as soon as it is listening; later phases will gate this on dependency
 // initialisation (e.g. store/event-bus warm-up).
 func handleReadyz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ready",
+		"service": daemonmeta.ServiceName,
+		"pid":     os.Getpid(),
+	})
 }

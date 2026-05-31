@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
@@ -30,6 +31,13 @@ type daemonStatus struct {
 	Health    string     `json:"health,omitempty"`
 	Ready     string     `json:"ready,omitempty"`
 	Error     string     `json:"error,omitempty"`
+	owned     bool
+}
+
+type probeResult struct {
+	Status  string `json:"status"`
+	Service string `json:"service"`
+	PID     int    `json:"pid"`
 }
 
 func newStatusCommand(ctx *commandContext) *cobra.Command {
@@ -81,11 +89,21 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 
 	health, err := c.readProbe(ctx, info.Port, "healthz")
 	if err != nil {
-		st.State = "unhealthy"
+		st.State = "stale"
 		st.Error = err.Error()
 		return st, nil
 	}
-	st.Health = health
+	if err := verifyProbeOwner(health, info.PID, "healthz"); err != nil {
+		st.State = "stale"
+		st.Error = err.Error()
+		return st, nil
+	}
+	st.owned = true
+	st.Health = health.Status
+	if health.Status != "ok" {
+		st.State = "unhealthy"
+		return st, nil
+	}
 
 	ready, err := c.readProbe(ctx, info.Port, "readyz")
 	if err != nil {
@@ -93,8 +111,14 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 		st.Error = err.Error()
 		return st, nil
 	}
-	st.Ready = ready
-	if ready == "ready" {
+	if err := verifyProbeOwner(ready, info.PID, "readyz"); err != nil {
+		st.State = "stale"
+		st.owned = false
+		st.Error = err.Error()
+		return st, nil
+	}
+	st.Ready = ready.Status
+	if ready.Status == "ready" {
 		st.State = "ready"
 		return st, nil
 	}
@@ -102,32 +126,40 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 	return st, nil
 }
 
-func (c *commandContext) readProbe(ctx context.Context, port int, path string) (string, error) {
+func (c *commandContext) readProbe(ctx context.Context, port int, path string) (probeResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, fmt.Sprintf("http://%s:%d/%s", config.LoopbackHost, port, path), nil)
 	if err != nil {
-		return "", err
+		return probeResult{}, err
 	}
 	resp, err := c.deps.HTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", path, err)
+		return probeResult{}, fmt.Errorf("%s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
+		return probeResult{}, fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
 	}
-	var body struct {
-		Status string `json:"status"`
-	}
+	var body probeResult
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("%s: decode response: %w", path, err)
+		return probeResult{}, fmt.Errorf("%s: decode response: %w", path, err)
 	}
 	if body.Status == "" {
-		return "", fmt.Errorf("%s: missing status", path)
+		return probeResult{}, fmt.Errorf("%s: missing status", path)
 	}
-	return body.Status, nil
+	return body, nil
+}
+
+func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
+	if probe.Service != daemonmeta.ServiceName {
+		return fmt.Errorf("%s: response is not from AO daemon", path)
+	}
+	if probe.PID != wantPID {
+		return fmt.Errorf("%s: daemon pid %d does not match run-file pid %d", path, probe.PID, wantPID)
+	}
+	return nil
 }
 
 func writeStatus(cmd *cobra.Command, st daemonStatus) error {

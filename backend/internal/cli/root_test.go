@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
@@ -51,9 +53,9 @@ func TestStartReturnsExistingReadyDaemon(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
 		case "/readyz":
-			_, _ = w.Write([]byte(`{"status":"ready"}`))
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
 		default:
 			http.NotFound(w, r)
 		}
@@ -104,6 +106,50 @@ func TestStopRemovesStaleRunFile(t *testing.T) {
 	}
 	if info != nil {
 		t.Fatalf("stale run-file was not removed: %#v", info)
+	}
+}
+
+func TestStopDoesNotSignalUnverifiedReusedPID(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/readyz":
+			_, _ = w.Write([]byte(`{"status":"ready"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	var signaled bool
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == 4242 },
+		SignalTerm: func(pid int) error {
+			signaled = true
+			return nil
+		},
+	}, "stop", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signaled {
+		t.Fatal("stop signaled a PID whose health probe did not prove AO daemon ownership")
+	}
+	if !strings.Contains(out, `"state": "stopped"`) {
+		t.Fatalf("stop did not report stopped:\n%s", out)
+	}
+	info, err := runfile.Read(cfg.runFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info != nil {
+		t.Fatalf("unverified run-file was not removed: %#v", info)
 	}
 }
 
