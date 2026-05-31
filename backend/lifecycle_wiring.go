@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
+	"github.com/aoagents/agent-orchestrator/backend/internal/notification"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/reaper"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/session"
@@ -33,13 +34,14 @@ type lifecycleStack struct {
 // The goroutine stops when ctx is cancelled; Stop waits for it to drain.
 //
 // TEMPORARY STUBS (replace as the daemon lane lands the collaborators):
-//   - noopNotifier — swap for the notifier multiplexer (desktop/Slack/webhook).
 //   - noopMessenger — swap for the runtime/agent-plugin-backed AgentMessenger.
 //   - reaper.MapRegistry{} — empty runtime registry, so the reaper ticks
 //     escalations but probes nothing until the runtime plugins exist.
 func startLifecycle(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*lifecycleStack, error) {
 	a := wiring.Adapter{Store: store}
-	lcm := lifecycle.New(a, a, noopNotifier{}, noopMessenger{})
+	renderer := notification.NewRenderer(store)
+	notifier := notification.NewEnqueuer(store, renderer, logger)
+	lcm := lifecycle.New(a, a, notifier, noopMessenger{})
 	rp := reaper.New(lcm, reaper.MapRegistry{}, reaper.Config{Logger: logger})
 	return &lifecycleStack{LCM: lcm, Adapter: a, reaperDone: rp.Start(ctx)}, nil
 }
@@ -94,13 +96,9 @@ func startSession(ctx context.Context, cfg config.Config, ls *lifecycleStack, lo
 	return &sessionStack{SM: sm}, nil
 }
 
-// noopNotifier / noopMessenger are TEMPORARY stubs (see startLifecycle): the
-// write path and CDC work without them; only the human push / agent nudge are
-// absent until the real plugins are wired.
-type noopNotifier struct{}
-
-func (noopNotifier) Notify(context.Context, ports.Event) error { return nil }
-
+// noopMessenger is a TEMPORARY stub (see startLifecycle): the canonical write
+// path and durable notifications work without it; only live agent nudges are
+// absent until the real runtime/agent plugin is wired.
 type noopMessenger struct{}
 
 func (noopMessenger) Send(context.Context, domain.SessionID, string) error { return nil }

@@ -168,7 +168,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		}
 		if changed {
 			m.clearReactions(id)
-			return m.fireNotify(ctx, id, rec.ProjectID, reactions[rxMerged])
+			return m.fireNotify(ctx, id, rec.ProjectID, rxMerged, reactions[rxMerged])
 		}
 		return nil
 	}

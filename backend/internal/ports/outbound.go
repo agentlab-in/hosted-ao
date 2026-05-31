@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -46,18 +47,37 @@ type AgentMessenger interface {
 type Priority string
 
 const (
-	PriorityUrgent Priority = "urgent"
-	PriorityAction Priority = "action"
-	PriorityInfo   Priority = "info"
+	PriorityUrgent  Priority = "urgent"
+	PriorityAction  Priority = "action"
+	PriorityWarning Priority = "warning"
+	PriorityInfo    Priority = "info"
 )
 
-// Event is a human-facing notification produced by a reaction.
+// Event is a human-facing notification produced by a reaction. It carries the
+// stable reaction/escalation context a durable notification renderer needs,
+// while lifecycle remains responsible for deciding what should notify.
 type Event struct {
-	Type      string
-	Priority  Priority
-	SessionID domain.SessionID
-	ProjectID domain.ProjectID
-	Message   string
+	Type       string
+	Priority   Priority
+	SessionID  domain.SessionID
+	ProjectID  domain.ProjectID
+	Message    string
+	Reaction   *ReactionEvent
+	Escalation *EscalationEvent
+	DedupeKey  string
+	CauseKey   string
+	OccurredAt time.Time
+}
+
+type ReactionEvent struct {
+	Key    string // agent-needs-input, approved-and-green, ci-failed, etc.
+	Action string // notify | escalated
+}
+
+type EscalationEvent struct {
+	Attempts   int
+	Cause      string // max_retries | max_attempts | max_duration
+	DurationMs int64
 }
 
 // ---- runtime / agent / workspace plugin ports (used by the Session Manager) ----

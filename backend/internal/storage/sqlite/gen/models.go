@@ -18,6 +18,26 @@ type ChangeLog struct {
 	CreatedAt time.Time
 }
 
+type Notification struct {
+	Seq          int64
+	ID           string
+	ProjectID    string
+	SessionID    string
+	Source       string
+	EventType    string
+	SemanticType string
+	Priority     string
+	Message      string
+	PayloadJson  string
+	ActionsJson  string
+	DedupeKey    string
+	CauseKey     string
+	ReadAt       sql.NullTime
+	ArchivedAt   sql.NullTime
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type Pr struct {
 	Url            string
 	SessionID      string
