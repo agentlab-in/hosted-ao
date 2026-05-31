@@ -1,6 +1,7 @@
 -- +goose Up
 -- +goose StatementBegin
 ALTER TABLE notifications ADD COLUMN routed_at TIMESTAMP;
+UPDATE notifications SET routed_at = updated_at WHERE routed_at IS NULL;
 CREATE INDEX idx_notifications_unrouted
     ON notifications(seq)
     WHERE routed_at IS NULL;

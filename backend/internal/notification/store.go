@@ -18,8 +18,8 @@ type Store interface {
 	EnqueueDelivery(ctx context.Context, row DeliveryRow) (DeliveryRow, bool, error)
 	ClaimDueDeliveries(ctx context.Context, sink string, owner string, now time.Time, limit int, lease time.Duration) ([]DeliveryRow, error)
 	ReleaseExpiredDeliveryLeases(ctx context.Context, now time.Time) (int, error)
-	MarkDeliverySent(ctx context.Context, id string, externalID string, at time.Time) error
-	MarkDeliveryRetry(ctx context.Context, id string, errCode string, errMessage string, next time.Time) error
-	MarkDeliveryFailed(ctx context.Context, id string, errCode string, errMessage string, at time.Time) error
+	MarkDeliverySent(ctx context.Context, id string, owner string, externalID string, at time.Time) error
+	MarkDeliveryRetry(ctx context.Context, id string, owner string, errCode string, errMessage string, next time.Time, at time.Time) error
+	MarkDeliveryFailed(ctx context.Context, id string, owner string, errCode string, errMessage string, at time.Time) error
 	MarkDeliverySkipped(ctx context.Context, id string, reason string, at time.Time) error
 }

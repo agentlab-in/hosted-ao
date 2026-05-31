@@ -130,11 +130,11 @@ func (m *Manager) ClaimDesktopDeliveries(ctx context.Context, owner string, limi
 	return m.store.ClaimDueDeliveries(ctx, SinkAOApp, owner, m.clock().UTC(), limit, policy.LeaseTTL)
 }
 
-func (m *Manager) MarkDeliverySent(ctx context.Context, id, externalID string) error {
-	return m.store.MarkDeliverySent(ctx, id, externalID, m.clock().UTC())
+func (m *Manager) MarkDeliverySent(ctx context.Context, id, owner, externalID string) error {
+	return m.store.MarkDeliverySent(ctx, id, owner, externalID, m.clock().UTC())
 }
 
-func (m *Manager) MarkDeliveryError(ctx context.Context, id, code, message string) error {
+func (m *Manager) MarkDeliveryError(ctx context.Context, id, owner, code, message string) error {
 	settings := m.settings.Settings(ctx)
 	policy := RetryPolicyFromConfig(settings.Retry)
 	now := m.clock().UTC()
@@ -143,7 +143,7 @@ func (m *Manager) MarkDeliveryError(ctx context.Context, id, code, message strin
 	// fetch the current delivery attempts and provide the attempt-aware next
 	// retry timestamp for retry_wait rows.
 	if ClassifyError(code) == ErrorPermanent {
-		return m.store.MarkDeliveryFailed(ctx, id, code, message, now)
+		return m.store.MarkDeliveryFailed(ctx, id, owner, code, message, now)
 	}
 	row, ok, err := m.store.GetDelivery(ctx, id)
 	if err != nil {
@@ -153,5 +153,5 @@ func (m *Manager) MarkDeliveryError(ctx context.Context, id, code, message strin
 		return fmt.Errorf("notification delivery %s not found", id)
 	}
 	nextAttemptNo := row.Attempts + 1
-	return m.store.MarkDeliveryRetry(ctx, id, code, message, policy.NextAttemptAt(now, nextAttemptNo))
+	return m.store.MarkDeliveryRetry(ctx, id, owner, code, message, policy.NextAttemptAt(now, nextAttemptNo), now)
 }

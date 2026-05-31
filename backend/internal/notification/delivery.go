@@ -4,11 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+var ErrDeliveryUpdateConflict = errors.New("notification delivery update conflict")
 
 const (
 	RouteDashboard = "dashboard"

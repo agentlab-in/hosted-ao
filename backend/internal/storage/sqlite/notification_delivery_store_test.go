@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -42,6 +43,20 @@ func TestNotificationDeliveryEnqueueIdempotentAndCDC(t *testing.T) {
 	}
 	if createdEvents != 1 {
 		t.Fatalf("delivery created CDC count = %d, want 1 events=%+v", createdEvents, evs)
+	}
+}
+
+func TestNotificationDeliveryEnqueueDefaultMaxAttempts(t *testing.T) {
+	s, ntf := newDeliveryTestNotification(t, "delivery-default-max")
+	ctx := context.Background()
+	row := sampleDelivery(ntf, "desktop")
+	row.MaxAttempts = 0
+	got, _, err := s.EnqueueDelivery(ctx, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxAttempts != 5 {
+		t.Fatalf("default max attempts = %d, want 5", got.MaxAttempts)
 	}
 }
 
@@ -126,7 +141,7 @@ func TestNotificationDeliveryMarkSentRetryFailedAndSkipped(t *testing.T) {
 	if len(claimed) != 1 {
 		t.Fatalf("claim sent row len=%d", len(claimed))
 	}
-	if err := s.MarkDeliverySent(ctx, sent.ID, "native-1", now.Add(time.Second)); err != nil {
+	if err := s.MarkDeliverySent(ctx, sent.ID, "owner", "native-1", now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ := s.GetDelivery(ctx, sent.ID)
@@ -142,7 +157,7 @@ func TestNotificationDeliveryMarkSentRetryFailedAndSkipped(t *testing.T) {
 		t.Fatalf("claim retry row len=%d", len(claimed))
 	}
 	next := now.Add(30 * time.Second)
-	if err := s.MarkDeliveryRetry(ctx, retry.ID, "timeout", "timed out", next); err != nil {
+	if err := s.MarkDeliveryRetry(ctx, retry.ID, "owner", "timeout", "timed out", next, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.GetDelivery(ctx, retry.ID)
@@ -158,7 +173,7 @@ func TestNotificationDeliveryMarkSentRetryFailedAndSkipped(t *testing.T) {
 	if len(claimed) != 1 {
 		t.Fatalf("claim fail row len=%d", len(claimed))
 	}
-	if err := s.MarkDeliveryRetry(ctx, fail.ID, "timeout", "timed out", next); err != nil {
+	if err := s.MarkDeliveryRetry(ctx, fail.ID, "owner", "timeout", "timed out", next, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = s.GetDelivery(ctx, fail.ID)
@@ -179,12 +194,46 @@ func TestNotificationDeliveryMarkSentRetryFailedAndSkipped(t *testing.T) {
 			t.Fatalf("skipped row should not be claimable: %+v", claimed)
 		}
 	}
-	if err := s.MarkDeliveryRetry(ctx, skipped.ID, "timeout", "timed out", next); err != nil {
-		t.Fatal(err)
+	if err := s.MarkDeliveryRetry(ctx, skipped.ID, "owner", "timeout", "timed out", next, now.Add(time.Second)); !errors.Is(err, notification.ErrDeliveryUpdateConflict) {
+		t.Fatalf("retry skipped row err = %v, want update conflict", err)
 	}
 	got, _, _ = s.GetDelivery(ctx, skipped.ID)
 	if got.Status != notification.DeliverySkipped || got.Attempts != 0 {
 		t.Fatalf("skipped row should be terminal: %+v", got)
+	}
+}
+
+func TestNotificationDeliveryCompletionFencedByLeaseOwner(t *testing.T) {
+	s, ntf := newDeliveryTestNotification(t, "delivery-owner-fence")
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	row, _, err := s.EnqueueDelivery(ctx, sampleDueDelivery(ntf, "desktop", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimDueDeliveries(ctx, notification.SinkAOApp, "owner-1", now, 1, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if released, err := s.ReleaseExpiredDeliveryLeases(ctx, now.Add(2*time.Second)); err != nil || released != 1 {
+		t.Fatalf("release = %d err=%v", released, err)
+	}
+	if _, err := s.ClaimDueDeliveries(ctx, notification.SinkAOApp, "owner-2", now.Add(2*time.Second), 1, time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MarkDeliverySent(ctx, row.ID, "owner-1", "stale", now.Add(2500*time.Millisecond)); !errors.Is(err, notification.ErrDeliveryUpdateConflict) {
+		t.Fatalf("stale owner MarkDeliverySent err = %v, want update conflict", err)
+	}
+	got, _, _ := s.GetDelivery(ctx, row.ID)
+	if got.Status != notification.DeliveryLeased || got.LeaseOwner != "owner-2" || got.ExternalID != "" {
+		t.Fatalf("stale owner should not change active lease: %+v", got)
+	}
+	if err := s.MarkDeliverySent(ctx, row.ID, "owner-2", "native-2", now.Add(2500*time.Millisecond)); err != nil {
+		t.Fatalf("current owner sent: %v", err)
+	}
+	got, _, _ = s.GetDelivery(ctx, row.ID)
+	if got.Status != notification.DeliverySent || got.ExternalID != "native-2" {
+		t.Fatalf("current owner should complete delivery: %+v", got)
 	}
 }
 
@@ -199,7 +248,7 @@ func TestNotificationDeliveryUpdateCDC(t *testing.T) {
 	if _, err := s.ClaimDueDeliveries(ctx, notification.SinkAOApp, "owner", time.Now().UTC(), 1, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkDeliveryFailed(ctx, row.ID, "permanent", "bad route", time.Now().UTC()); err != nil {
+	if err := s.MarkDeliveryFailed(ctx, row.ID, "owner", "permanent", "bad route", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	evs, err := s.ReadChangeLogAfter(ctx, startSeq, 10)

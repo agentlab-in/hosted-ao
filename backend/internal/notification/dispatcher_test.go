@@ -63,16 +63,16 @@ func (f *fakeRuntimeStore) ReleaseExpiredDeliveryLeases(context.Context, time.Ti
 	f.releases++
 	return 0, nil
 }
-func (f *fakeRuntimeStore) MarkDeliverySent(context.Context, string, string, time.Time) error {
+func (f *fakeRuntimeStore) MarkDeliverySent(context.Context, string, string, string, time.Time) error {
 	return nil
 }
-func (f *fakeRuntimeStore) MarkDeliveryRetry(_ context.Context, _ string, _ string, _ string, next time.Time) error {
+func (f *fakeRuntimeStore) MarkDeliveryRetry(_ context.Context, _ string, _ string, _ string, _ string, next time.Time, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retryNext = next
 	return nil
 }
-func (f *fakeRuntimeStore) MarkDeliveryFailed(context.Context, string, string, string, time.Time) error {
+func (f *fakeRuntimeStore) MarkDeliveryFailed(context.Context, string, string, string, string, time.Time) error {
 	return nil
 }
 func (f *fakeRuntimeStore) MarkDeliverySkipped(context.Context, string, string, time.Time) error {
@@ -142,7 +142,7 @@ func TestMarkDeliveryErrorUsesAttemptAwareBackoff(t *testing.T) {
 	mgr := NewManager(store, StaticSettings(cfg), discardLogger())
 	mgr.clock = func() time.Time { return now }
 
-	if err := mgr.MarkDeliveryError(context.Background(), "del_1", "timeout", "timed out"); err != nil {
+	if err := mgr.MarkDeliveryError(context.Background(), "del_1", "electron", "timeout", "timed out"); err != nil {
 		t.Fatal(err)
 	}
 	store.mu.Lock()

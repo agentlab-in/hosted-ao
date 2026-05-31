@@ -18,7 +18,10 @@ const deliveryColumns = `id, notification_id, notification_seq, project_id, sess
     last_error_code, last_error, external_id,
     created_at, updated_at, delivered_at`
 
-const defaultDeliveryLimit = 100
+const (
+	defaultDeliveryLimit       = 100
+	defaultDeliveryMaxAttempts = 5 // mirrors notification_deliveries.max_attempts schema default
+)
 
 type DeliveryFilter struct {
 	NotificationID string
@@ -59,7 +62,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, row notification.DeliveryRo
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	row, err := notification.NormalizeDelivery(row, now, row.MaxAttempts)
+	row, err := notification.NormalizeDelivery(row, now, defaultDeliveryMaxAttempts)
 	if err != nil {
 		return notification.DeliveryRow{}, false, err
 	}
@@ -222,7 +225,7 @@ WHERE status = 'leased'
 	return int(n), nil
 }
 
-func (s *Store) MarkDeliverySent(ctx context.Context, id string, externalID string, at time.Time) error {
+func (s *Store) MarkDeliverySent(ctx context.Context, id string, owner string, externalID string, at time.Time) error {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
@@ -234,13 +237,18 @@ SET status = 'sent',
     external_id = ?,
     delivered_at = ?,
     updated_at = ?
-WHERE id = ? AND status = 'leased'`, externalID, at, at, id)
+WHERE id = ?
+  AND status = 'leased'
+  AND lease_owner = ?
+  AND lease_expires_at > ?`, externalID, at, at, id, owner, at)
 }
 
-func (s *Store) MarkDeliveryRetry(ctx context.Context, id string, errCode string, errMessage string, next time.Time) error {
-	now := time.Now().UTC()
+func (s *Store) MarkDeliveryRetry(ctx context.Context, id string, owner string, errCode string, errMessage string, next time.Time, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	if next.IsZero() {
-		next = now
+		next = at
 	}
 	return s.updateDelivery(ctx, "mark delivery retry", `UPDATE notification_deliveries
 SET attempts = attempts + 1,
@@ -251,10 +259,13 @@ SET attempts = attempts + 1,
     last_error_code = ?,
     last_error = ?,
     updated_at = ?
-WHERE id = ? AND status = 'leased'`, next, errCode, errMessage, now, id)
+WHERE id = ?
+  AND status = 'leased'
+  AND lease_owner = ?
+  AND lease_expires_at > ?`, next, errCode, errMessage, at, id, owner, at)
 }
 
-func (s *Store) MarkDeliveryFailed(ctx context.Context, id string, errCode string, errMessage string, at time.Time) error {
+func (s *Store) MarkDeliveryFailed(ctx context.Context, id string, owner string, errCode string, errMessage string, at time.Time) error {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
@@ -266,7 +277,10 @@ SET status = 'failed',
     last_error_code = ?,
     last_error = ?,
     updated_at = ?
-WHERE id = ? AND status NOT IN ('sent','failed','skipped','cancelled')`, errCode, errMessage, at, id)
+WHERE id = ?
+  AND status = 'leased'
+  AND lease_owner = ?
+  AND lease_expires_at > ?`, errCode, errMessage, at, id, owner, at)
 }
 
 func (s *Store) MarkDeliverySkipped(ctx context.Context, id string, reason string, at time.Time) error {
@@ -346,8 +360,16 @@ func (s *Store) ListDeliveries(ctx context.Context, filter DeliveryFilter) ([]no
 func (s *Store) updateDelivery(ctx context.Context, what string, query string, args ...any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if _, err := s.writeDB.ExecContext(ctx, query, args...); err != nil {
+	res, err := s.writeDB.ExecContext(ctx, query, args...)
+	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s rows affected: %w", what, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%s: %w", what, notification.ErrDeliveryUpdateConflict)
 	}
 	return nil
 }
