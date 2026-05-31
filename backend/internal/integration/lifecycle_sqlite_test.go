@@ -21,14 +21,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// ---- store adapter (mirrors backend.storeAdapter so integration tests don't
-// import package main; kept local and minimal). ----
+// ---- store adapter ----
 //
 // MIRROR OF backend/lifecycle_wiring.go's storeAdapter. The integration tests
 // can't import package main, so the small set of methods that bridge
-// *sqlite.Store to ports.SessionStore + ports.PRWriter is duplicated here. Keep
-// in sync; the obvious follow-up is to extract the production adapter into a
-// shared internal package once the lane stabilises.
+// *sqlite.Store to ports.SessionStore + ports.PRWriter is duplicated here.
+// Function bodies are line-for-line identical to the production adapter so a
+// future divergence shows up as a real diff in code review; the obvious
+// follow-up is to extract the production adapter into a shared internal
+// package — explicitly out of scope for this PR ("do NOT redesign anything").
 
 type storeAdapter struct{ *sqlite.Store }
 
@@ -39,8 +40,11 @@ var (
 
 func (a storeAdapter) PRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, error) {
 	rows, err := a.Store.ListPRsBySession(ctx, string(id))
-	if err != nil || len(rows) == 0 {
+	if err != nil {
 		return domain.PRFacts{}, err
+	}
+	if len(rows) == 0 {
+		return domain.PRFacts{}, nil
 	}
 	pick := rows[0]
 	for _, r := range rows {
@@ -51,9 +55,7 @@ func (a storeAdapter) PRFactsForSession(ctx context.Context, id domain.SessionID
 	}
 	facts := domain.PRFacts{
 		URL: pick.URL, Number: int(pick.Number), Exists: true,
-		Draft:        pick.State == "draft",
-		Merged:       pick.State == "merged",
-		Closed:       pick.State == "closed",
+		Draft: pick.State == "draft", Merged: pick.State == "merged", Closed: pick.State == "closed",
 		CI:           domain.CIState(pick.CIState),
 		Review:       domain.ReviewDecision(pick.ReviewDecision),
 		Mergeability: domain.Mergeability(pick.Mergeability),
@@ -72,19 +74,13 @@ func (a storeAdapter) PRFactsForSession(ctx context.Context, id domain.SessionID
 }
 
 func (a storeAdapter) WritePR(ctx context.Context, pr ports.PRRow, checks []ports.PRCheckRow, comments []ports.PRComment) error {
-	state := "open"
-	switch {
-	case pr.Merged:
-		state = "merged"
-	case pr.Closed:
-		state = "closed"
-	case pr.Draft:
-		state = "draft"
-	}
 	row := sqlite.PRRow{
 		URL: pr.URL, SessionID: pr.SessionID, Number: int64(pr.Number),
-		State: state, ReviewDecision: string(pr.Review),
-		CIState: string(pr.CI), Mergeability: string(pr.Mergeability), UpdatedAt: pr.UpdatedAt,
+		State:          prState(pr),
+		ReviewDecision: string(pr.Review),
+		CIState:        string(pr.CI),
+		Mergeability:   string(pr.Mergeability),
+		UpdatedAt:      pr.UpdatedAt,
 	}
 	checkRows := make([]sqlite.PRCheckRow, len(checks))
 	for i, c := range checks {
@@ -101,6 +97,21 @@ func (a storeAdapter) WritePR(ctx context.Context, pr ports.PRRow, checks []port
 		}
 	}
 	return a.Store.WritePRObservation(ctx, row, checkRows, commentRows)
+}
+
+// prState mirrors the production helper of the same name in
+// backend/lifecycle_wiring.go.
+func prState(r ports.PRRow) string {
+	switch {
+	case r.Merged:
+		return "merged"
+	case r.Closed:
+		return "closed"
+	case r.Draft:
+		return "draft"
+	default:
+		return "open"
+	}
 }
 
 // ---- plugin fakes (minimal: only enough to drive SM through real LCM) ----
@@ -188,8 +199,14 @@ type liveStack struct {
 	sm        *session.Manager
 	notifier  *captureNotifier
 	messenger *captureMessenger
+
+	closed bool // guard so the explicit close() and t.Cleanup don't double-close
 }
 
+// openLiveStack opens the store + hydrates the LCM/SM and registers an
+// idempotent t.Cleanup so a mid-test t.Fatalf can't leak the SQLite handle.
+// Tests that need to simulate a daemon restart still call close() explicitly
+// between phases; the cleanup hook becomes a no-op once that runs.
 func openLiveStack(t *testing.T, dataDir string) *liveStack {
 	t.Helper()
 	store, err := sqlite.Open(dataDir)
@@ -210,7 +227,7 @@ func openLiveStack(t *testing.T, dataDir string) *liveStack {
 		Messenger: messenger,
 		Lifecycle: lcm,
 	})
-	return &liveStack{
+	st := &liveStack{
 		dataDir:   dataDir,
 		store:     store,
 		adapter:   adapter,
@@ -219,10 +236,24 @@ func openLiveStack(t *testing.T, dataDir string) *liveStack {
 		notifier:  notifier,
 		messenger: messenger,
 	}
+	t.Cleanup(func() {
+		if st.closed {
+			return
+		}
+		// Best-effort: failures here would be noise after t.Fatalf already
+		// recorded the real cause.
+		_ = st.store.Close()
+		st.closed = true
+	})
+	return st
 }
 
 func (s *liveStack) close(t *testing.T) {
 	t.Helper()
+	if s.closed {
+		return
+	}
+	s.closed = true
 	if err := s.store.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
 	}
@@ -249,15 +280,17 @@ func TestHappyPath_Spawn_PR_Kill(t *testing.T) {
 	defer st.close(t)
 	seedProject(t, st.store, "mer")
 
-	// 1. Spawn — SM inserts the session row, LCM marks it live.
+	// 1. Spawn — SM inserts the session row, LCM marks it live. We only assert
+	//    the structural invariant of the id (project-scoped, non-empty), not the
+	//    literal counter — that's a store-internal detail.
 	sess, err := st.sm.Spawn(ctx, ports.SpawnConfig{
 		ProjectID: "mer", Kind: domain.KindWorker, Prompt: "ship it",
 	})
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	if sess.ID != "mer-1" {
-		t.Fatalf("want id mer-1, got %q", sess.ID)
+	if sess.ID == "" || !strings.HasPrefix(string(sess.ID), "mer-") {
+		t.Fatalf("expected project-scoped id like mer-N, got %q", sess.ID)
 	}
 
 	rec, ok, err := st.store.GetSession(ctx, sess.ID)
