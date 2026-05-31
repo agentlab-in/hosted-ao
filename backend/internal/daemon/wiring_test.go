@@ -18,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/wiring"
 )
 
 // TestWiring_WriteFlowsToBroadcaster exercises the real boot path end to end:
@@ -32,11 +31,10 @@ func TestWiring_WriteFlowsToBroadcaster(t *testing.T) {
 	}
 	defer store.Close()
 
-	a := wiring.Adapter{Store: store}
 	renderer := notification.NewRenderer(store)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	notifier := notification.NewEnqueuer(store, renderer, logger)
-	lcm := lifecycle.New(a, a, notifier, noopMessenger{})
+	lcm := lifecycle.New(store, store, notifier, noopMessenger{})
 
 	bcast := cdc.NewBroadcaster()
 	poller := cdc.NewPoller(cdcSource{store}, bcast, cdc.PollerConfig{})
@@ -123,13 +121,13 @@ func TestWiring_SessionManagerSharesLifecycleStoreAndLCM(t *testing.T) {
 
 	gotStore, gotLCM := inspectSessionDeps(t, sStack.SM)
 
-	// Store should be the exact wiring.Adapter the LCM was constructed with.
-	gotAdapter, ok := gotStore.(wiring.Adapter)
+	// Store should be the exact *sqlite.Store the LCM was constructed with.
+	gotSqlite, ok := gotStore.(*sqlite.Store)
 	if !ok {
-		t.Fatalf("SM.store is %T, want wiring.Adapter", gotStore)
+		t.Fatalf("SM.store is %T, want *sqlite.Store", gotStore)
 	}
-	if gotAdapter.Store != lcStack.Adapter.Store {
-		t.Fatalf("SM.store wraps a different *sqlite.Store than lcStack.Adapter")
+	if gotSqlite != lcStack.Store {
+		t.Fatalf("SM.store is a different *sqlite.Store than lcStack.Store")
 	}
 
 	// Lifecycle should be the exact *lifecycle.Manager pointer from startLifecycle.

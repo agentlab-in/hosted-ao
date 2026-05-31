@@ -20,17 +20,17 @@ var ctx = context.Background()
 // write path and the read-back together.
 type fakeStore struct {
 	sessions map[domain.SessionID]domain.SessionRecord
-	pr       map[domain.SessionID]ports.PRRow
-	comments map[string][]ports.PRComment
-	checks   []ports.PRCheckRow
+	pr       map[domain.SessionID]domain.PRRow
+	comments map[string][]domain.PRComment
+	checks   []domain.PRCheckRow
 	num      int
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		sessions: map[domain.SessionID]domain.SessionRecord{},
-		pr:       map[domain.SessionID]ports.PRRow{},
-		comments: map[string][]ports.PRComment{},
+		pr:       map[domain.SessionID]domain.PRRow{},
+		comments: map[string][]domain.PRComment{},
 	}
 }
 
@@ -82,7 +82,7 @@ func (f *fakeStore) PRFactsForSession(_ context.Context, id domain.SessionID) (d
 	}
 	return facts, nil
 }
-func (f *fakeStore) WritePR(_ context.Context, pr ports.PRRow, checks []ports.PRCheckRow, comments []ports.PRComment) error {
+func (f *fakeStore) WritePR(_ context.Context, pr domain.PRRow, checks []domain.PRCheckRow, comments []domain.PRComment) error {
 	f.pr[domain.SessionID(pr.SessionID)] = pr
 	f.checks = append(f.checks, checks...)
 	f.comments[pr.URL] = comments
@@ -222,7 +222,7 @@ func TestPR_CIFailingNudgesAgentWithLogs(t *testing.T) {
 	m, st, _, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
 
-	o := openPR(ports.PRObservation{CI: domain.CIFailing, Checks: []ports.PRCheckRow{{Name: "build", CommitHash: "c1", Status: "failed", LogTail: "boom"}}})
+	o := openPR(ports.PRObservation{CI: domain.CIFailing, Checks: []domain.PRCheckRow{{Name: "build", CommitHash: "c1", Status: "failed", LogTail: "boom"}}})
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestPR_CIBrakeEscalatesAfterThreeFails(t *testing.T) {
 	st.sessions["mer-1"] = working("mer-1")
 
 	for _, commit := range []string{"c1", "c2", "c3"} {
-		o := openPR(ports.PRObservation{CI: domain.CIFailing, Checks: []ports.PRCheckRow{{Name: "build", CommitHash: commit, Status: "failed", LogTail: "boom"}}})
+		o := openPR(ports.PRObservation{CI: domain.CIFailing, Checks: []domain.PRCheckRow{{Name: "build", CommitHash: commit, Status: "failed", LogTail: "boom"}}})
 		if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 			t.Fatal(err)
 		}
@@ -255,7 +255,7 @@ func TestPR_ReviewCommentsInjectedRegardlessOfAuthor(t *testing.T) {
 
 	o := openPR(ports.PRObservation{
 		Review:   domain.ReviewChangesRequest,
-		Comments: []ports.PRComment{{ID: "1", Author: "greptileai", Body: "use a constant here"}},
+		Comments: []domain.PRComment{{ID: "1", Author: "greptileai", Body: "use a constant here"}},
 	})
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)

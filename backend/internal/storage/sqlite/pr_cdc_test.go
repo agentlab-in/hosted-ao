@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // A check can change status on the same commit (in_progress -> failed) via
@@ -19,13 +21,13 @@ func TestPRChecksCDC_EmitsOnInsertAndStatusUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := "https://example/pr/1"
-	if err := s.UpsertPR(ctx, PRRow{URL: url, SessionID: string(rec.ID), Number: 1}); err != nil {
+	if err := s.UpsertPR(ctx, domain.PRRow{URL: url, SessionID: string(rec.ID), Number: 1}); err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Now()
 	mustCheck := func(status string) {
-		if err := s.RecordCheck(ctx, PRCheckRow{PRURL: url, Name: "build", CommitHash: "c1", Status: status, CreatedAt: now}); err != nil {
+		if err := s.RecordCheck(ctx, domain.PRCheckRow{PRURL: url, Name: "build", CommitHash: "c1", Status: status, CreatedAt: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,9 +53,9 @@ func TestPRChecksCDC_EmitsOnInsertAndStatusUpdate(t *testing.T) {
 	}
 }
 
-// WritePRObservation persists scalar facts, checks, and comments in one tx; all
-// three should be queryable afterward.
-func TestWritePRObservation_PersistsScalarsChecksAndComments(t *testing.T) {
+// WritePR persists scalar facts, checks, and comments in one tx; all three
+// should be queryable afterward.
+func TestWritePR_PersistsScalarsChecksAndComments(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
@@ -64,18 +66,18 @@ func TestWritePRObservation_PersistsScalarsChecksAndComments(t *testing.T) {
 	url := "https://example/pr/7"
 	now := time.Now()
 
-	err = s.WritePRObservation(ctx,
-		PRRow{URL: url, SessionID: string(rec.ID), Number: 7, CIState: "failing", UpdatedAt: now},
-		[]PRCheckRow{{PRURL: url, Name: "build", CommitHash: "c1", Status: "failed", CreatedAt: now}},
-		[]PRCommentRow{{PRURL: url, CommentID: "1", Author: "reviewer", Body: "use a const", CreatedAt: now}},
+	err = s.WritePR(ctx,
+		domain.PRRow{URL: url, SessionID: string(rec.ID), Number: 7, CI: domain.CIFailing, UpdatedAt: now},
+		[]domain.PRCheckRow{{PRURL: url, Name: "build", CommitHash: "c1", Status: "failed", CreatedAt: now}},
+		[]domain.PRComment{{ID: "1", Author: "reviewer", Body: "use a const", CreatedAt: now}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	pr, ok, err := s.GetPR(ctx, url)
-	if err != nil || !ok || pr.CIState != "failing" {
-		t.Fatalf("scalar facts not persisted: ok=%v ci=%q err=%v", ok, pr.CIState, err)
+	if err != nil || !ok || pr.CI != domain.CIFailing {
+		t.Fatalf("scalar facts not persisted: ok=%v ci=%q err=%v", ok, pr.CI, err)
 	}
 	if checks, _ := s.ListChecks(ctx, url); len(checks) != 1 || checks[0].Status != "failed" {
 		t.Fatalf("check not persisted: %+v", checks)
