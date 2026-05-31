@@ -61,7 +61,8 @@ type sessionStack struct {
 // implementations yet. It does NOT mount any HTTP routes — those come with the
 // daemon lane (#10). Returning the SM here lets main hold the wired-but-quiet
 // instance so future route wiring is a one-line plumb-through.
-func startSession(_ context.Context, cfg config.Config, ls *lifecycleStack, log *slog.Logger) (*sessionStack, error) {
+func startSession(ctx context.Context, cfg config.Config, ls *lifecycleStack, log *slog.Logger) (*sessionStack, error) {
+	_ = ctx // reserved for future ctx-aware plugin construction; today's tmux/gitworktree constructors are synchronous.
 	runtime := tmux.New(tmux.Options{})
 
 	ws, err := gitworktree.New(gitworktree.Options{
