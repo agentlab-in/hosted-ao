@@ -33,15 +33,15 @@ RUN apt-get update \
 
 # "Install" the CLI the way a user would: drop the binary on PATH.
 COPY --from=build /out/ao /usr/local/bin/ao
-COPY test/cli/smoke.sh /usr/local/bin/ao-smoke.sh
-RUN chmod +x /usr/local/bin/ao /usr/local/bin/ao-smoke.sh
+COPY test/cli/install-check.sh /usr/local/bin/ao-install-check.sh
+RUN chmod +x /usr/local/bin/ao /usr/local/bin/ao-install-check.sh
 
 # Run as an unprivileged user with a real HOME, like a normal install.
 RUN useradd --create-home --shell /bin/bash ao
 USER ao
 WORKDIR /home/ao
 
-# Sanity: prove the install resolved before the suite runs.
+# Sanity: prove the install resolved before the check runs.
 RUN ao version
 
-ENTRYPOINT ["/usr/local/bin/ao-smoke.sh"]
+ENTRYPOINT ["/usr/local/bin/ao-install-check.sh"]
