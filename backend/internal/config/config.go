@@ -149,9 +149,9 @@ func resolveRunFilePath() (string, error) {
 	return filepath.Join(dir, "agent-orchestrator", "running.json"), nil
 }
 
-// resolveDataDir picks where durable state (SQLite DB, CDC JSONL) lives. An
-// explicit AO_DATA_DIR wins; otherwise it sits under the per-user state
-// directory alongside running.json.
+// resolveDataDir picks where durable state (the SQLite DB) lives. An explicit
+// AO_DATA_DIR wins; otherwise it sits under the per-user state directory
+// alongside running.json.
 func resolveDataDir() (string, error) {
 	if p, ok := os.LookupEnv("AO_DATA_DIR"); ok && p != "" {
 		return p, nil
