@@ -103,9 +103,8 @@ logic in-process. The rewrite needs the CLI to sit outside the core daemon.
 
 ## Current Legacy CLI Inventory
 
-Inventory source: installed `ao` binary at version `0.9.2`, plus
-`/Users/dhruvsharma/Development/agent-orchestrator/packages/cli/src/program.ts`
-and `packages/cli/src/commands/*.ts`.
+Inventory source: installed `ao` binary at version `0.9.2`, plus the old
+`packages/cli/src/program.ts` and `packages/cli/src/commands/*.ts` files.
 
 Count:
 

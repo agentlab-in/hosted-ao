@@ -2,18 +2,31 @@
 
 package cli
 
-import "os"
+import (
+	"errors"
+	"os"
+
+	"golang.org/x/sys/windows"
+)
 
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	p, err := os.FindProcess(pid)
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			return true
+		}
+		return false
+	}
+	defer windows.CloseHandle(handle)
+
+	status, err := windows.WaitForSingleObject(handle, 0)
 	if err != nil {
 		return false
 	}
-	_ = p.Release()
-	return true
+	return status == uint32(windows.WAIT_TIMEOUT)
 }
 
 func signalTerm(pid int) error {
