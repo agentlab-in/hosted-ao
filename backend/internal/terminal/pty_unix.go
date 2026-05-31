@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/creack/pty"
 )
@@ -27,8 +28,10 @@ func defaultSpawn(ctx context.Context, argv []string) (ptyProcess, error) {
 }
 
 type creackPTY struct {
-	f   *os.File
-	cmd *exec.Cmd
+	f         *os.File
+	cmd       *exec.Cmd
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (p *creackPTY) Read(b []byte) (int, error)  { return p.f.Read(b) }
@@ -42,11 +45,18 @@ func (p *creackPTY) Wait() error { return p.cmd.Wait() }
 
 // Close stops the attach process and releases the PTY. tmux attach exits cleanly
 // when the master closes, but kill the process to be sure it does not linger.
+//
+// It is idempotent: both the session run loop (after copyOut returns) and
+// session.close (via Manager.Close) call Close on the same PTY, and cmd.Wait
+// must run exactly once. A second concurrent Wait on the same process blocks
+// forever, deadlocking daemon shutdown when a terminal is still attached.
 func (p *creackPTY) Close() error {
-	closeErr := p.f.Close()
-	if p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
-	}
-	_ = p.cmd.Wait()
-	return closeErr
+	p.closeOnce.Do(func() {
+		p.closeErr = p.f.Close()
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		_ = p.cmd.Wait()
+	})
+	return p.closeErr
 }
