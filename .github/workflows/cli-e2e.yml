@@ -1,0 +1,55 @@
+name: CLI E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "backend/**"
+      - "test/cli/**"
+      - ".github/workflows/cli-e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  # Primary tier: run the REAL `ao` binary on GitHub's native VM runners. These
+  # runners are the "VMs" — the only place that exercises the OS-specific code
+  # paths (unix Setsid process-group detach + macOS os.UserConfigDir resolution).
+  # Bash is available on both ubuntu and macos runners, so the one smoke.sh runs
+  # unchanged. State is isolated per run (own temp dir + a free loopback port).
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: false
+
+      - name: Build ao
+        run: cd backend && CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/ao" ./cmd/ao
+
+      - name: CLI smoke test
+        run: AO_BIN="$RUNNER_TEMP/ao" bash test/cli/smoke.sh
+
+  # Secondary hardening tier: model "install ao on a fresh machine" in a clean,
+  # locked-down Linux container with no access to a developer's real state.
+  # --init gives the container a real PID-1 reaper (tini) so the stale-daemon
+  # assertion is reliable — without it, an orphaned daemon can linger as a
+  # zombie and skew the check.
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build smoke image (fresh-machine install)
+        run: docker build -f test/cli/Dockerfile -t ao-cli-smoke .
+
+      - name: Run CLI smoke test in container
+        run: docker run --rm --init ao-cli-smoke
