@@ -8,23 +8,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Store is the durable write-side used by the enqueuer. *sqlite.Store satisfies
-// this interface.
-type Store interface {
+// EnqueueStore is the durable write-side used by the enqueuer. *sqlite.Store
+// satisfies this interface.
+type EnqueueStore interface {
 	EnqueueNotification(ctx context.Context, row domain.Notification) (domain.Notification, bool, error)
 }
 
 // Enqueuer is a store-backed ports.Notifier. It does not deliver to external
 // sinks; it renders and persists the notification for later dashboard/app sinks.
 type Enqueuer struct {
-	store    Store
+	store    EnqueueStore
 	renderer *Renderer
 	logger   *slog.Logger
 }
 
 var _ ports.Notifier = (*Enqueuer)(nil)
 
-func NewEnqueuer(store Store, renderer *Renderer, logger *slog.Logger) *Enqueuer {
+func NewEnqueuer(store EnqueueStore, renderer *Renderer, logger *slog.Logger) *Enqueuer {
 	if logger == nil {
 		logger = slog.Default()
 	}

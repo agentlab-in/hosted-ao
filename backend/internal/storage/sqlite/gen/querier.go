@@ -16,10 +16,13 @@ type Querier interface {
 	DeleteSession(ctx context.Context, id string) error
 	GetNotification(ctx context.Context, id string) (Notification, error)
 	GetNotificationByDedupeKey(ctx context.Context, dedupeKey string) (Notification, error)
+	GetNotificationDelivery(ctx context.Context, id string) (NotificationDelivery, error)
+	GetNotificationDeliveryByUnique(ctx context.Context, arg GetNotificationDeliveryByUniqueParams) (NotificationDelivery, error)
 	GetPR(ctx context.Context, url string) (Pr, error)
 	GetProject(ctx context.Context, id string) (Project, error)
 	GetSession(ctx context.Context, id string) (Session, error)
 	InsertNotification(ctx context.Context, arg InsertNotificationParams) (Notification, error)
+	InsertNotificationDelivery(ctx context.Context, arg InsertNotificationDeliveryParams) (NotificationDelivery, error)
 	InsertSession(ctx context.Context, arg InsertSessionParams) error
 	ListAllSessions(ctx context.Context) ([]Session, error)
 	ListChecksByPR(ctx context.Context, prUrl string) ([]PrCheck, error)
@@ -32,7 +35,9 @@ type Querier interface {
 	ListRecentChecks(ctx context.Context, arg ListRecentChecksParams) ([]ListRecentChecksRow, error)
 	ListSessionsByProject(ctx context.Context, projectID string) ([]Session, error)
 	ListUnreadNotifications(ctx context.Context, limit int64) ([]Notification, error)
+	ListUnroutedNotifications(ctx context.Context, limit int64) ([]Notification, error)
 	MarkNotificationRead(ctx context.Context, arg MarkNotificationReadParams) (Notification, error)
+	MarkNotificationRouted(ctx context.Context, arg MarkNotificationRoutedParams) error
 	MarkNotificationUnread(ctx context.Context, arg MarkNotificationUnreadParams) (Notification, error)
 	MaxChangeLogSeq(ctx context.Context) (interface{}, error)
 	NextSessionNum(ctx context.Context, projectID string) (int64, error)

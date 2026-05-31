@@ -36,6 +36,43 @@ type Notification struct {
 	ArchivedAt   sql.NullTime
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	RoutedAt     sql.NullTime
+}
+
+type NotificationDelivery struct {
+	ID              string
+	NotificationID  string
+	NotificationSeq int64
+	ProjectID       string
+	SessionID       string
+	RouteName       string
+	Sink            string
+	DestinationKey  string
+	RequestJson     string
+	Status          string
+	Attempts        int64
+	MaxAttempts     int64
+	NextAttemptAt   time.Time
+	LeaseOwner      string
+	LeaseExpiresAt  sql.NullTime
+	LastErrorCode   string
+	LastError       string
+	ExternalID      string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	DeliveredAt     sql.NullTime
+}
+
+type NotificationDeliveryAttempt struct {
+	ID           int64
+	DeliveryID   string
+	AttemptNo    int64
+	Status       string
+	StartedAt    time.Time
+	FinishedAt   sql.NullTime
+	ErrorCode    string
+	Error        string
+	ResponseJson string
 }
 
 type Pr struct {
