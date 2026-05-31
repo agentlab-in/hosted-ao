@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,6 +88,57 @@ func TestStartReturnsExistingReadyDaemon(t *testing.T) {
 	}
 }
 
+func TestStartClearsStaleRunFileBeforeSpawning(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawned atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !spawned.Load() {
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":"not-ao","pid":4242}`)
+			return
+		}
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	port := serverPort(t, srv.URL)
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 4242, Port: port, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == 4242 || pid == os.Getpid() },
+		StartProcess: func(processStartConfig) (processHandle, error) {
+			info, err := runfile.Read(cfg.runFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info != nil {
+				t.Fatalf("stale run-file was not removed before spawn: %#v", info)
+			}
+			spawned.Store(true)
+			if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: port, StartedAt: time.Unix(110, 0).UTC()}); err != nil {
+				t.Fatal(err)
+			}
+			return processHandle{PID: os.Getpid()}, nil
+		},
+		Now: func() time.Time { return time.Unix(120, 0).UTC() },
+	}, "start", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"state": "ready"`) {
+		t.Fatalf("start did not report ready after clearing stale run-file:\n%s", out)
+	}
+}
+
 func TestStopRemovesStaleRunFile(t *testing.T) {
 	cfg := setConfigEnv(t)
 	if err := runfile.Write(cfg.runFile, runfile.Info{PID: 999999, Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
@@ -109,14 +161,18 @@ func TestStopRemovesStaleRunFile(t *testing.T) {
 	}
 }
 
-func TestStopDoesNotSignalUnverifiedReusedPID(t *testing.T) {
+func TestStopDoesNotShutdownUnverifiedReusedPID(t *testing.T) {
 	cfg := setConfigEnv(t)
+	shutdownCalled := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		case "/readyz":
 			_, _ = w.Write([]byte(`{"status":"ready"}`))
+		case "/shutdown":
+			shutdownCalled <- struct{}{}
+			http.Error(w, "unexpected shutdown", http.StatusInternalServerError)
 		default:
 			http.NotFound(w, r)
 		}
@@ -127,19 +183,16 @@ func TestStopDoesNotSignalUnverifiedReusedPID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var signaled bool
 	out, _, err := executeCLI(t, Deps{
 		ProcessAlive: func(pid int) bool { return pid == 4242 },
-		SignalTerm: func(pid int) error {
-			signaled = true
-			return nil
-		},
 	}, "stop", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if signaled {
-		t.Fatal("stop signaled a PID whose health probe did not prove AO daemon ownership")
+	select {
+	case <-shutdownCalled:
+		t.Fatal("stop requested shutdown from a process whose health probe did not prove AO daemon ownership")
+	default:
 	}
 	if !strings.Contains(out, `"state": "stopped"`) {
 		t.Fatalf("stop did not report stopped:\n%s", out)
@@ -150,6 +203,47 @@ func TestStopDoesNotSignalUnverifiedReusedPID(t *testing.T) {
 	}
 	if info != nil {
 		t.Fatalf("unverified run-file was not removed: %#v", info)
+	}
+}
+
+func TestStopUsesShutdownEndpoint(t *testing.T) {
+	cfg := setConfigEnv(t)
+	shutdownCalled := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		case "/readyz":
+			_, _ = fmt.Fprintf(w, `{"status":"ready","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		case "/shutdown":
+			if err := runfile.Remove(cfg.runFile); err != nil {
+				t.Fatal(err)
+			}
+			shutdownCalled <- struct{}{}
+			_, _ = fmt.Fprintf(w, `{"status":"shutting_down","service":%q,"pid":%d}`, daemonmeta.ServiceName, os.Getpid())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(pid int) bool { return pid == os.Getpid() },
+	}, "stop", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-shutdownCalled:
+	default:
+		t.Fatal("stop did not call daemon shutdown endpoint")
+	}
+	if !strings.Contains(out, `"state": "stopped"`) {
+		t.Fatalf("stop did not report stopped:\n%s", out)
 	}
 }
 
@@ -183,19 +277,11 @@ func TestStopRefusesUnverifiedLivePID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var signaled bool
 	_, _, err := executeCLI(t, Deps{
 		ProcessAlive: func(pid int) bool { return pid == 4242 },
-		SignalTerm: func(pid int) error {
-			signaled = true
-			return nil
-		},
 	}, "stop", "--json")
 	if err == nil {
 		t.Fatal("stop should fail when daemon ownership cannot be verified")
-	}
-	if signaled {
-		t.Fatal("stop signaled a PID whose ownership was unknown")
 	}
 	info, err := runfile.Read(cfg.runFile)
 	if err != nil {

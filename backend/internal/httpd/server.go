@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -23,6 +24,9 @@ type Server struct {
 	log    *slog.Logger
 	http   *http.Server
 	listen net.Listener
+
+	shutdownRequested chan struct{}
+	shutdownOnce      sync.Once
 }
 
 // New constructs a Server and binds the listener immediately so a port
@@ -36,15 +40,18 @@ func New(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager) (*Serve
 	}
 
 	srv := &Server{
-		cfg:    cfg,
-		log:    log,
-		listen: ln,
-		http: &http.Server{
-			Handler: NewRouter(cfg, log, termMgr),
-			// ReadHeaderTimeout guards against slow-loris even on loopback;
-			// per-request body/handler timeouts are applied per-surface.
-			ReadHeaderTimeout: 10 * time.Second,
-		},
+		cfg:               cfg,
+		log:               log,
+		listen:            ln,
+		shutdownRequested: make(chan struct{}),
+	}
+	srv.http = &http.Server{
+		Handler: NewRouterWithControl(cfg, log, termMgr, APIDeps{}, ControlDeps{
+			RequestShutdown: srv.requestShutdown,
+		}),
+		// ReadHeaderTimeout guards against slow-loris even on loopback;
+		// per-request body/handler timeouts are applied per-surface.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return srv, nil
 }
@@ -89,6 +96,8 @@ func (s *Server) Run(ctx context.Context) error {
 		// Serve died on its own (bind already happened, so this is a real
 		// runtime failure) before any shutdown signal.
 		return err
+	case <-s.shutdownRequested:
+		s.log.Info("shutdown requested over HTTP", "timeout", s.cfg.ShutdownTimeout)
 	case <-ctx.Done():
 		s.log.Info("shutdown signal received, draining connections", "timeout", s.cfg.ShutdownTimeout)
 	}
@@ -112,4 +121,10 @@ func (s *Server) boundPort() int {
 		return tcp.Port
 	}
 	return s.cfg.Port
+}
+
+func (s *Server) requestShutdown() {
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownRequested)
+	})
 }

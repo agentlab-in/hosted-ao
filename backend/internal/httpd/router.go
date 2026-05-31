@@ -36,10 +36,18 @@ func NewRouter(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager) c
 	return NewRouterWithAPI(cfg, log, termMgr, APIDeps{})
 }
 
+type ControlDeps struct {
+	RequestShutdown func()
+}
+
 // NewRouterWithAPI is the dependency-injected variant. main.go calls it with
 // real Managers when they exist; tests/dev wiring inject mocks explicitly.
 // Missing Managers intentionally keep the route-shell 501 behavior.
 func NewRouterWithAPI(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps) chi.Router {
+	return NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{})
+}
+
+func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps, control ControlDeps) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
@@ -55,6 +63,7 @@ func NewRouterWithAPI(cfg config.Config, log *slog.Logger, termMgr *terminal.Man
 
 	mountHealth(r)
 	mountMux(r, termMgr, log)
+	mountControl(r, control)
 	NewAPI(cfg, deps).Register(r)
 
 	return r
@@ -65,6 +74,20 @@ func NewRouterWithAPI(cfg config.Config, log *slog.Logger, termMgr *terminal.Man
 func mountHealth(r chi.Router) {
 	r.Get("/healthz", handleHealthz)
 	r.Get("/readyz", handleReadyz)
+}
+
+func mountControl(r chi.Router, deps ControlDeps) {
+	if deps.RequestShutdown == nil {
+		return
+	}
+	r.Post("/shutdown", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":  "shutting_down",
+			"service": daemonmeta.ServiceName,
+			"pid":     os.Getpid(),
+		})
+		deps.RequestShutdown()
+	})
 }
 
 // handleHealthz is the liveness probe: it answers 200 as long as the process is

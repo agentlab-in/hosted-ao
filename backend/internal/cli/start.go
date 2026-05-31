@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
 const defaultStartTimeout = 10 * time.Second
@@ -65,6 +66,11 @@ func (c *commandContext) startDaemon(ctx context.Context, opts startOptions) (da
 			return ready, nil
 		}
 		return daemonStatus{}, fmt.Errorf("daemon process exists but did not become ready: %w", waitErr)
+	}
+	if st.State == "stale" {
+		if err := runfile.Remove(cfg.RunFilePath); err != nil {
+			return daemonStatus{}, err
+		}
 	}
 
 	exe, err := c.deps.Executable()

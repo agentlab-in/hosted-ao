@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -68,14 +69,29 @@ func (c *commandContext) stopDaemon(ctx context.Context, opts stopOptions) (daem
 		return daemonStatus{}, fmt.Errorf("daemon pid %d is alive but ownership could not be verified", st.PID)
 	}
 
-	if err := c.deps.SignalTerm(st.PID); err != nil {
-		if c.deps.ProcessAlive(st.PID) {
-			return daemonStatus{}, fmt.Errorf("signal daemon pid %d: %w", st.PID, err)
-		}
-		_ = runfile.Remove(cfg.RunFilePath)
-		return daemonStatus{State: "stopped", RunFile: cfg.RunFilePath, DataDir: cfg.DataDir}, nil
+	if err := c.requestShutdown(ctx, st.Port); err != nil {
+		return daemonStatus{}, fmt.Errorf("request daemon shutdown: %w", err)
 	}
 	return c.waitForStopped(ctx, st.PID, cfg.RunFilePath, cfg.DataDir, opts.timeout)
+}
+
+func (c *commandContext) requestShutdown(ctx context.Context, port int) error {
+	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, fmt.Sprintf("http://%s:%d/shutdown", config.LoopbackHost, port), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.deps.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (c *commandContext) waitForStopped(ctx context.Context, pid int, runFilePath, dataDir string, timeout time.Duration) (daemonStatus, error) {

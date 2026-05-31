@@ -4,7 +4,6 @@ package cli
 
 import (
 	"errors"
-	"os"
 
 	"golang.org/x/sys/windows"
 )
@@ -27,16 +26,4 @@ func processAlive(pid int) bool {
 		return false
 	}
 	return status == uint32(windows.WAIT_TIMEOUT)
-}
-
-func signalTerm(pid int) error {
-	if pid <= 0 {
-		return os.ErrProcessDone
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	defer p.Release()
-	return p.Kill()
 }

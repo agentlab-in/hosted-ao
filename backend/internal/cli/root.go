@@ -29,7 +29,6 @@ type Deps struct {
 	HTTPClient   *http.Client
 	Executable   func() (string, error)
 	StartProcess func(processStartConfig) (processHandle, error)
-	SignalTerm   func(pid int) error
 	ProcessAlive func(pid int) bool
 	LookPath     func(file string) (string, error)
 	Now          func() time.Time
@@ -45,7 +44,6 @@ func DefaultDeps() Deps {
 		HTTPClient:   &http.Client{Timeout: 2 * time.Second},
 		Executable:   os.Executable,
 		StartProcess: startProcess,
-		SignalTerm:   signalTerm,
 		ProcessAlive: processAlive,
 		LookPath:     exec.LookPath,
 		Now:          time.Now,
@@ -72,9 +70,6 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.StartProcess == nil {
 		d.StartProcess = def.StartProcess
-	}
-	if d.SignalTerm == nil {
-		d.SignalTerm = def.SignalTerm
 	}
 	if d.ProcessAlive == nil {
 		d.ProcessAlive = def.ProcessAlive
