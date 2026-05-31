@@ -42,7 +42,7 @@ func run() error {
 		return fmt.Errorf("daemon already running (pid %d, port %d); refusing to start", live.PID, live.Port)
 	}
 
-	srv, err := httpd.New(cfg, log)
+	srv, err := httpd.New(cfg, log, nil)
 	if err != nil {
 		return err
 	}

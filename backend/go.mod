@@ -3,14 +3,14 @@ module github.com/aoagents/agent-orchestrator/backend
 go 1.25.7
 
 require (
+	github.com/coder/websocket v1.8.14
+	github.com/creack/pty v1.1.24
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/pressly/goose/v3 v3.27.1
 	modernc.org/sqlite v1.51.0
 )
 
 require (
-	github.com/coder/websocket v1.8.14 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect

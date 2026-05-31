@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
 // NewRouter builds the root router with the standard middleware stack and the
@@ -29,7 +30,7 @@ import (
 // SSE (/events) or WebSocket (/mux) surfaces, nor the always-must-answer health
 // probes. It is therefore applied per-surface when those subrouters are mounted
 // in Phase 1b; cfg.RequestTimeout carries the value through to that point.
-func NewRouter(cfg config.Config, log *slog.Logger) chi.Router {
+func NewRouter(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
@@ -38,6 +39,7 @@ func NewRouter(cfg config.Config, log *slog.Logger) chi.Router {
 	r.Use(middleware.RealIP)
 
 	mountHealth(r)
+	mountMux(r, termMgr, log)
 
 	return r
 }
