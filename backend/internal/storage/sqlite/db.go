@@ -1,5 +1,5 @@
-// Package sqlite is the durable persistence adapter: the 6-table schema (goose
-// migrations), typed CRUD over sqlc-generated queries, and the read side of the
+// Package sqlite is the durable persistence adapter: the goose-managed schema,
+// typed CRUD over sqlc-generated queries, and the read side of the
 // trigger-driven CDC (it reads change_log; the DB triggers write it).
 package sqlite
 

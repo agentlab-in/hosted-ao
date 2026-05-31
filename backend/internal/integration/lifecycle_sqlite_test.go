@@ -7,6 +7,8 @@ package integration
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
+	"github.com/aoagents/agent-orchestrator/backend/internal/notification"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -265,6 +268,34 @@ func seedProject(t *testing.T, store *sqlite.Store, id string) {
 		ID: id, Path: "/repo/" + id, RegisteredAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("upsert project: %v", err)
+	}
+}
+
+func durableLifecycle(store *sqlite.Store, messenger ports.AgentMessenger) *lifecycle.Manager {
+	adapter := storeAdapter{store}
+	renderer := notification.NewRenderer(store)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	notifier := notification.NewEnqueuer(store, renderer, logger)
+	return lifecycle.New(adapter, adapter, notifier, messenger)
+}
+
+func durableRecord(project, issue, branch string) domain.SessionRecord {
+	now := time.Now().UTC().Truncate(time.Second)
+	return domain.SessionRecord{
+		ProjectID: domain.ProjectID(project),
+		IssueID:   domain.IssueID(issue),
+		Kind:      domain.KindWorker,
+		Lifecycle: domain.CanonicalSessionLifecycle{
+			Version: domain.LifecycleVersion,
+			Session: domain.SessionSubstate{State: domain.SessionWorking},
+			IsAlive: true,
+			Activity: domain.ActivitySubstate{
+				State: domain.ActivityActive, LastActivityAt: now, Source: domain.SourceHook,
+			},
+		},
+		Metadata:  domain.SessionMetadata{Branch: branch, WorkspacePath: "/workspace/" + branch},
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 
@@ -651,6 +682,114 @@ func TestCDCPollerReceivesAllStages(t *testing.T) {
 		}
 		prev = e.Seq
 	}
+}
+
+func TestLifecycleDurableNotification_NeedsInput(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer store.Close()
+	seedProject(t, store, "mer")
+	rec, err := store.CreateSession(ctx, durableRecord("mer", "MER-1", "feat/input"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	lcm := durableLifecycle(store, &captureMessenger{})
+	startSeq, _ := store.MaxChangeLogSeq(ctx)
+
+	if err := lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityWaitingInput, Source: domain.SourceHook, Timestamp: time.Now(),
+	}); err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+
+	notifications, err := store.ListNotifications(ctx, sqlite.NotificationFilter{SessionID: string(rec.ID), Limit: 10})
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 || notifications[0].SemanticType != "session.needs_input" || notifications[0].DedupeKey == "" {
+		t.Fatalf("needs_input notification missing: %+v", notifications)
+	}
+	assertNotificationCreatedCDC(t, store, startSeq)
+}
+
+func TestLifecycleDurableNotification_ApprovedAndGreen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer store.Close()
+	seedProject(t, store, "mer")
+	rec, err := store.CreateSession(ctx, durableRecord("mer", "MER-2", "feat/green"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	lcm := durableLifecycle(store, &captureMessenger{})
+
+	if err := lcm.ApplyPRObservation(ctx, rec.ID, ports.PRObservation{
+		Fetched: true, URL: "https://github.com/org/repo/pull/2", Number: 2,
+		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
+	}); err != nil {
+		t.Fatalf("apply pr: %v", err)
+	}
+	notifications, err := store.ListNotifications(ctx, sqlite.NotificationFilter{SessionID: string(rec.ID), Limit: 10})
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 || notifications[0].SemanticType != "merge.ready" {
+		t.Fatalf("approved-and-green notification missing: %+v", notifications)
+	}
+}
+
+func TestLifecycleDurableNotification_PRMerged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer store.Close()
+	seedProject(t, store, "mer")
+	rec, err := store.CreateSession(ctx, durableRecord("mer", "MER-3", "feat/merge"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	lcm := durableLifecycle(store, &captureMessenger{})
+	startSeq, _ := store.MaxChangeLogSeq(ctx)
+
+	if err := lcm.ApplyPRObservation(ctx, rec.ID, ports.PRObservation{
+		Fetched: true, URL: "https://github.com/org/repo/pull/3", Number: 3, Merged: true,
+		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
+	}); err != nil {
+		t.Fatalf("apply pr: %v", err)
+	}
+	notifications, err := store.ListNotifications(ctx, sqlite.NotificationFilter{SessionID: string(rec.ID), Limit: 10})
+	if err != nil {
+		t.Fatalf("list notifications: %v", err)
+	}
+	if len(notifications) != 1 || notifications[0].SemanticType != "pr.merged" {
+		t.Fatalf("pr_merged notification missing: %+v", notifications)
+	}
+	assertNotificationCreatedCDC(t, store, startSeq)
+}
+
+func assertNotificationCreatedCDC(t *testing.T, store *sqlite.Store, after int64) {
+	t.Helper()
+	evs, err := store.ReadChangeLogAfter(context.Background(), after, 20)
+	if err != nil {
+		t.Fatalf("read change_log: %v", err)
+	}
+	for _, e := range evs {
+		if e.EventType == string(cdc.EventNotificationCreated) {
+			return
+		}
+	}
+	t.Fatalf("missing notification_created CDC after %d: %+v", after, evs)
 }
 
 // ---- small helpers ----

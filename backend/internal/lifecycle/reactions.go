@@ -208,7 +208,7 @@ func (m *Manager) dispatch(ctx context.Context, id domain.SessionID, project dom
 	if cfg.toAgent {
 		return m.fireAgentEntry(ctx, id, project, key, cfg)
 	}
-	return m.fireNotify(ctx, id, project, cfg)
+	return m.fireNotify(ctx, id, project, key, cfg)
 }
 
 // reactionFor maps (session state, PR facts) to the reaction to enter. CI failure
@@ -312,7 +312,11 @@ func (m *Manager) fireFeedback(ctx context.Context, id domain.SessionID, project
 		m.react.mu.Lock()
 		t.escalated = true
 		m.react.mu.Unlock()
-		return m.escalate(ctx, id, pid, key)
+		cause := "max_attempts"
+		if key == rxCIFailed {
+			cause = "max_retries"
+		}
+		return m.escalate(ctx, id, pid, key, ports.EscalationEvent{Attempts: attempts, Cause: cause})
 	}
 	return m.messenger.Send(ctx, id, message)
 }
@@ -339,18 +343,28 @@ func (m *Manager) fireAgentEntry(ctx context.Context, id domain.SessionID, proje
 	return m.messenger.Send(ctx, id, cfg.message)
 }
 
-func (m *Manager) fireNotify(ctx context.Context, id domain.SessionID, project domain.ProjectID, cfg reactionConfig) error {
+func (m *Manager) fireNotify(ctx context.Context, id domain.SessionID, project domain.ProjectID, key reactionKey, cfg reactionConfig) error {
 	return m.notifier.Notify(ctx, ports.Event{
 		Type: cfg.eventType, Priority: cfg.priority,
 		SessionID: id, ProjectID: project, Message: cfg.message,
+		Reaction:   &ports.ReactionEvent{Key: string(key), Action: "notify"},
+		CauseKey:   string(key),
+		OccurredAt: m.clock(),
 	})
 }
 
-func (m *Manager) escalate(ctx context.Context, id domain.SessionID, project domain.ProjectID, key reactionKey) error {
+func (m *Manager) escalate(ctx context.Context, id domain.SessionID, project domain.ProjectID, key reactionKey, esc ports.EscalationEvent) error {
+	if esc.Cause == "" {
+		esc.Cause = "max_attempts"
+	}
 	return m.notifier.Notify(ctx, ports.Event{
 		Type: "reaction.escalated", Priority: ports.PriorityUrgent,
 		SessionID: id, ProjectID: project,
-		Message: fmt.Sprintf("Automatic handling of %q is exhausted — needs a human.", key),
+		Message:    fmt.Sprintf("Automatic handling of %q is exhausted — needs a human.", key),
+		Reaction:   &ports.ReactionEvent{Key: string(key), Action: "escalated"},
+		Escalation: &esc,
+		CauseKey:   string(key) + ":" + esc.Cause,
+		OccurredAt: m.clock(),
 	})
 }
 
@@ -358,9 +372,11 @@ func (m *Manager) escalate(ctx context.Context, id domain.SessionID, project dom
 // cannot wake itself for. The reaper calls it on a timer.
 func (m *Manager) TickEscalations(ctx context.Context, now time.Time) error {
 	type due struct {
-		id      domain.SessionID
-		project domain.ProjectID
-		key     reactionKey
+		id         domain.SessionID
+		project    domain.ProjectID
+		key        reactionKey
+		attempts   int
+		durationMs int64
 	}
 	var fire []due
 	m.react.mu.Lock()
@@ -371,13 +387,13 @@ func (m *Manager) TickEscalations(ctx context.Context, now time.Time) error {
 		cfg := reactions[k.key]
 		if cfg.escalateAfter > 0 && !t.firstAt.IsZero() && now.Sub(t.firstAt) >= cfg.escalateAfter {
 			t.escalated = true
-			fire = append(fire, due{k.id, t.projectID, k.key})
+			fire = append(fire, due{k.id, t.projectID, k.key, t.attempts, now.Sub(t.firstAt).Milliseconds()})
 		}
 	}
 	m.react.mu.Unlock()
 
 	for _, d := range fire {
-		if err := m.escalate(ctx, d.id, d.project, d.key); err != nil {
+		if err := m.escalate(ctx, d.id, d.project, d.key, ports.EscalationEvent{Attempts: d.attempts, Cause: "max_duration", DurationMs: d.durationMs}); err != nil {
 			return err
 		}
 	}
