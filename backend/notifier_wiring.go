@@ -14,10 +14,10 @@ type notifierStack struct {
 	done    <-chan struct{}
 }
 
-func startNotifier(ctx context.Context, cfg config.Config, store *sqlite.Store, log *slog.Logger) (*notifierStack, error) {
+func startNotifier(ctx context.Context, cfg config.Config, store *sqlite.Store, log *slog.Logger) *notifierStack {
 	mgr := notification.NewManager(store, notification.SettingsFromConfig(cfg), log)
 	done := mgr.Start(ctx)
-	return &notifierStack{Manager: mgr, done: done}, nil
+	return &notifierStack{Manager: mgr, done: done}
 }
 
 func (s *notifierStack) Stop() {

@@ -70,39 +70,29 @@ func (s *Store) EnqueueDelivery(ctx context.Context, row notification.DeliveryRo
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	insert := `INSERT INTO notification_deliveries (
-    id, notification_id, notification_seq, project_id, session_id,
-    route_name, sink, destination_key, request_json,
-    status, attempts, max_attempts, next_attempt_at, lease_owner, lease_expires_at,
-    last_error_code, last_error, external_id,
-    created_at, updated_at, delivered_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(notification_id, route_name, destination_key) DO NOTHING
-RETURNING ` + deliveryColumns
-
-	got, err := scanDelivery(s.writeDB.QueryRowContext(ctx, insert,
-		row.ID,
-		string(row.NotificationID),
-		row.NotificationSeq,
-		string(row.ProjectID),
-		string(row.SessionID),
-		row.RouteName,
-		row.Sink,
-		row.DestinationKey,
-		string(row.RequestJSON),
-		string(row.Status),
-		row.Attempts,
-		row.MaxAttempts,
-		row.NextAttemptAt,
-		row.LeaseOwner,
-		nullTime(row.LeaseExpiresAt),
-		row.LastErrorCode,
-		row.LastError,
-		row.ExternalID,
-		row.CreatedAt,
-		row.UpdatedAt,
-		nullTime(row.DeliveredAt),
-	))
+	got, err := s.qw.InsertNotificationDelivery(ctx, gen.InsertNotificationDeliveryParams{
+		ID:              row.ID,
+		NotificationID:  string(row.NotificationID),
+		NotificationSeq: row.NotificationSeq,
+		ProjectID:       string(row.ProjectID),
+		SessionID:       string(row.SessionID),
+		RouteName:       row.RouteName,
+		Sink:            row.Sink,
+		DestinationKey:  row.DestinationKey,
+		RequestJson:     string(row.RequestJSON),
+		Status:          string(row.Status),
+		Attempts:        int64(row.Attempts),
+		MaxAttempts:     int64(row.MaxAttempts),
+		NextAttemptAt:   row.NextAttemptAt,
+		LeaseOwner:      row.LeaseOwner,
+		LeaseExpiresAt:  nullTime(row.LeaseExpiresAt),
+		LastErrorCode:   row.LastErrorCode,
+		LastError:       row.LastError,
+		ExternalID:      row.ExternalID,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+		DeliveredAt:     nullTime(row.DeliveredAt),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		existing, readErr := s.getDeliveryByUniqueLocked(ctx, row.NotificationID, row.RouteName, row.DestinationKey)
 		if readErr != nil {
@@ -113,7 +103,7 @@ RETURNING ` + deliveryColumns
 	if err != nil {
 		return notification.DeliveryRow{}, false, fmt.Errorf("insert notification delivery: %w", err)
 	}
-	return got, true, nil
+	return deliveryFromGen(got), true, nil
 }
 
 func (s *Store) ClaimDueDeliveries(ctx context.Context, sink string, owner string, now time.Time, limit int, lease time.Duration) ([]notification.DeliveryRow, error) {
@@ -298,14 +288,14 @@ WHERE id = ? AND status NOT IN ('sent','failed','skipped','cancelled')`, reason,
 }
 
 func (s *Store) GetDelivery(ctx context.Context, id string) (notification.DeliveryRow, bool, error) {
-	row, err := scanDelivery(s.readDB.QueryRowContext(ctx, `SELECT `+deliveryColumns+` FROM notification_deliveries WHERE id = ?`, id))
+	row, err := s.qr.GetNotificationDelivery(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return notification.DeliveryRow{}, false, nil
 	}
 	if err != nil {
 		return notification.DeliveryRow{}, false, fmt.Errorf("get notification delivery %s: %w", id, err)
 	}
-	return row, true, nil
+	return deliveryFromGen(row), true, nil
 }
 
 func (s *Store) ListDeliveries(ctx context.Context, filter DeliveryFilter) ([]notification.DeliveryRow, error) {
@@ -375,13 +365,15 @@ func (s *Store) updateDelivery(ctx context.Context, what string, query string, a
 }
 
 func (s *Store) getDeliveryByUniqueLocked(ctx context.Context, id domain.NotificationID, routeName, destinationKey string) (notification.DeliveryRow, error) {
-	row, err := scanDelivery(s.writeDB.QueryRowContext(ctx, `SELECT `+deliveryColumns+`
-FROM notification_deliveries
-WHERE notification_id = ? AND route_name = ? AND destination_key = ?`, string(id), routeName, destinationKey))
+	row, err := s.qw.GetNotificationDeliveryByUnique(ctx, gen.GetNotificationDeliveryByUniqueParams{
+		NotificationID: string(id),
+		RouteName:      routeName,
+		DestinationKey: destinationKey,
+	})
 	if err != nil {
 		return notification.DeliveryRow{}, fmt.Errorf("get notification delivery by unique key: %w", err)
 	}
-	return row, nil
+	return deliveryFromGen(row), nil
 }
 
 type rowScanner interface {
@@ -436,4 +428,35 @@ func scanDelivery(scanner rowScanner) (notification.DeliveryRow, error) {
 		row.DeliveredAt = deliveredAt.Time
 	}
 	return row, nil
+}
+
+func deliveryFromGen(r gen.NotificationDelivery) notification.DeliveryRow {
+	row := notification.DeliveryRow{
+		ID:              r.ID,
+		NotificationID:  domain.NotificationID(r.NotificationID),
+		NotificationSeq: r.NotificationSeq,
+		ProjectID:       domain.ProjectID(r.ProjectID),
+		SessionID:       domain.SessionID(r.SessionID),
+		RouteName:       r.RouteName,
+		Sink:            r.Sink,
+		DestinationKey:  r.DestinationKey,
+		RequestJSON:     []byte(r.RequestJson),
+		Status:          notification.DeliveryStatus(r.Status),
+		Attempts:        int(r.Attempts),
+		MaxAttempts:     int(r.MaxAttempts),
+		NextAttemptAt:   r.NextAttemptAt,
+		LeaseOwner:      r.LeaseOwner,
+		LastErrorCode:   r.LastErrorCode,
+		LastError:       r.LastError,
+		ExternalID:      r.ExternalID,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
+	}
+	if r.LeaseExpiresAt.Valid {
+		row.LeaseExpiresAt = r.LeaseExpiresAt.Time
+	}
+	if r.DeliveredAt.Valid {
+		row.DeliveredAt = r.DeliveredAt.Time
+	}
+	return row
 }

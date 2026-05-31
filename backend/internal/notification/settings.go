@@ -16,11 +16,7 @@ type staticSettings struct {
 }
 
 func SettingsFromConfig(cfg config.Config) SettingsProvider {
-	settings := cfg.Notifications
-	if isZeroNotificationConfig(settings) {
-		settings = config.DefaultNotificationConfig()
-	}
-	return staticSettings{cfg: NormalizeSettings(settings)}
+	return staticSettings{cfg: NormalizeSettings(cfg.Notifications)}
 }
 
 func StaticSettings(cfg config.NotificationConfig) SettingsProvider {
@@ -35,9 +31,6 @@ func (s staticSettings) Settings(context.Context) config.NotificationConfig {
 // explicit route overrides, including an explicit empty route list.
 func NormalizeSettings(in config.NotificationConfig) config.NotificationConfig {
 	def := config.DefaultNotificationConfig()
-	if isZeroNotificationConfig(in) {
-		return cloneSettings(def)
-	}
 	out := in
 
 	if isZeroDashboardConfig(in.Dashboard) {

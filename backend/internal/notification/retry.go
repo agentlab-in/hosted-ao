@@ -1,8 +1,9 @@
 package notification
 
 import (
+	crand "crypto/rand"
+	"encoding/binary"
 	"math"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func RetryPolicyFromConfig(cfg config.NotificationRetryConfig) RetryPolicy {
 		LeaseTTL:    settings.Retry.LeaseTTL,
 		BatchSize:   settings.Retry.BatchSize,
 		Jitter:      retryJitterFraction,
-		RandFloat64: rand.Float64,
+		RandFloat64: cryptoRandFloat64,
 	}
 }
 
@@ -69,11 +70,22 @@ func (p RetryPolicy) BackoffDelay(attempt int) time.Duration {
 	}
 	randFloat := p.RandFloat64
 	if randFloat == nil {
-		randFloat = rand.Float64
+		randFloat = cryptoRandFloat64
 	}
 	// rand in [0,1) -> factor in [1-jitter, 1+jitter)
 	factor := 1 - p.Jitter + (2 * p.Jitter * randFloat())
 	return time.Duration(float64(delay) * factor)
+}
+
+func cryptoRandFloat64() float64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		// Fall back to a time-derived value only if the OS CSPRNG fails. The
+		// fallback still avoids math/rand's deterministic process seed.
+		return float64(time.Now().UnixNano()&((1<<53)-1)) / float64(1<<53)
+	}
+	// Match math/rand.Float64's 53 bits of precision in [0,1).
+	return float64(binary.BigEndian.Uint64(b[:])>>11) / float64(1<<53)
 }
 
 func (p RetryPolicy) NextAttemptAt(now time.Time, attempt int) time.Time {

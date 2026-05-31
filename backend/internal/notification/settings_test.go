@@ -9,12 +9,22 @@ import (
 )
 
 func TestSettingsFromConfigDefaultsWhenUnset(t *testing.T) {
-	got := SettingsFromConfig(config.Config{}).Settings(context.Background())
+	got := SettingsFromConfig(config.Config{Notifications: config.DefaultNotificationConfig()}).Settings(context.Background())
 	if !got.Enabled || !got.Desktop.Enabled || !got.Dashboard.Enabled {
-		t.Fatalf("zero config should resolve safe enabled defaults: %+v", got)
+		t.Fatalf("default config should resolve safe enabled defaults: %+v", got)
 	}
 	if got.Retry.MaxAttempts != 5 || got.Retry.BatchSize != 50 {
 		t.Fatalf("retry defaults = %+v", got.Retry)
+	}
+}
+
+func TestSettingsFromConfigPreservesExplicitGlobalDisable(t *testing.T) {
+	got := SettingsFromConfig(config.Config{Notifications: config.NotificationConfig{Enabled: false}}).Settings(context.Background())
+	if got.Enabled {
+		t.Fatalf("explicit disabled notifications should stay disabled: %+v", got)
+	}
+	if got.Retry.MaxAttempts != 5 || got.Routing.Priorities == nil {
+		t.Fatalf("disabled config should still receive non-global defaults: %+v", got)
 	}
 }
 
