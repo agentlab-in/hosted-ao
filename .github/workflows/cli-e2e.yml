@@ -40,9 +40,10 @@ jobs:
 
   # Secondary hardening tier: model "install ao on a fresh machine" in a clean,
   # locked-down Linux container with no access to a developer's real state.
-  # --init gives the container a real PID-1 reaper (tini) so the stale-daemon
-  # assertion is reliable — without it, an orphaned daemon can linger as a
-  # zombie and skew the check.
+  # --init gives the container a real PID-1 reaper (tini) so the live daemon the
+  # `start` test spawns (it detaches via setsid) is reaped after `stop` rather
+  # than lingering as a zombie. The suite doesn't depend on it (the stale case
+  # uses a fabricated dead PID), but it keeps process accounting clean.
   container:
     runs-on: ubuntu-latest
     steps:

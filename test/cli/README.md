@@ -28,9 +28,10 @@ AO_BIN=/path/to/ao test/cli/smoke.sh
 docker build -f test/cli/Dockerfile -t ao-cli-smoke .
 docker run --rm --init ao-cli-smoke
 ```
-> `--init` is important: it gives the container a real PID-1 reaper so the
-> "stale daemon" assertion is reliable. Without it an orphaned daemon can linger
-> as a zombie and skew the check.
+> `--init` gives the container a real PID-1 reaper (tini) so the live daemon
+> spawned during the `start` test is reaped after `stop` instead of lingering as
+> a zombie. The suite itself doesn't depend on it — the stale-daemon case uses a
+> fabricated dead PID — but it keeps process accounting clean.
 
 ## What it covers
 

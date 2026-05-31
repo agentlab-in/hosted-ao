@@ -4,9 +4,10 @@
 #   docker build -f test/cli/Dockerfile -t ao-cli-smoke .
 #   docker run --rm --init ao-cli-smoke
 #
-# --init gives the container a real PID-1 reaper (tini) so a stopped daemon is
-# reaped promptly; the test is written to not depend on it, but it keeps process
-# accounting clean.
+# Run with --init so the real daemon spawned during the `start` test (it detaches
+# via setsid) is reaped promptly after `stop` instead of lingering as a zombie.
+# The suite does NOT depend on it — the stale-daemon case uses a fabricated dead
+# PID — but --init keeps process accounting clean.
 
 # ---- stage 1: build the binary (the "release" a user would download) ----
 FROM golang:1.25-bookworm AS build
