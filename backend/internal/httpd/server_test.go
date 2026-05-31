@@ -100,7 +100,7 @@ func TestServerShutdownEndpoint(t *testing.T) {
 		RunFilePath:     runPath,
 	}
 
-	srv, err := New(cfg, discardLogger())
+	srv, err := New(cfg, discardLogger(), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
