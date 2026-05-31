@@ -95,7 +95,7 @@ func prPipelineStatus(pr PRFacts) SessionStatus {
 		return StatusCIFailed
 	case pr.Draft:
 		return StatusDraft
-	case pr.Review == ReviewChangesRequest || pr.BotComments:
+	case pr.Review == ReviewChangesRequest || pr.ReviewComments:
 		return StatusChangesRequested
 	case pr.Mergeability == MergeMergeable:
 		return StatusMergeable

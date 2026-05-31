@@ -21,11 +21,11 @@ const (
 // operational handles and seed inputs the Session Manager and reaper need but
 // that are NOT part of the canonical lifecycle. The set of fields is fixed here
 // (no free-form keys), so what a session can carry is a compile-time fact, and
-// it is persisted 1:1 in the session_metadata table off the CDC path.
+// it is folded into the sessions row off the CDC path.
 //
-// Empty fields mean "unset": PatchMetadata never overwrites a stored value with
-// an empty one, so a partial write (spawn setting only the runtime handle) does
-// not clobber a value set earlier (the branch set at creation).
+// Empty fields mean "unset": the LCM merges metadata without overwriting a
+// stored value with an empty one, so a partial write (spawn setting only the
+// runtime handle) does not clobber a value set earlier (the branch at creation).
 type SessionMetadata struct {
 	Branch          string `json:"branch,omitempty"`
 	WorkspacePath   string `json:"workspacePath,omitempty"`

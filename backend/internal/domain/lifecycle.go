@@ -103,17 +103,16 @@ type SessionSubstate struct {
 // axis. The zero value (Exists=false) means "no PR", which derivation treats as
 // "session has no PR".
 type PRFacts struct {
-	URL          string
-	Number       int
-	Exists       bool
-	Draft        bool
-	Merged       bool
-	Closed       bool
-	CI           CIState
-	Review       ReviewDecision
-	Mergeability Mergeability
-	BotComments  bool
-	IdleBeyond   bool // idle past the stuck threshold
+	URL            string
+	Number         int
+	Exists         bool
+	Draft          bool
+	Merged         bool
+	Closed         bool
+	CI             CIState
+	Review         ReviewDecision
+	Mergeability   Mergeability
+	ReviewComments bool // has unresolved review comments (any author) to address
 }
 
 type CIState string

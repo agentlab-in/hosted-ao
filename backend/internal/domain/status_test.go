@@ -42,7 +42,7 @@ func TestDeriveStatus(t *testing.T) {
 		{"draft PR failing CI -> ci_failed (CI dominates)", sess(SessionWorking), openPR(func(f *PRFacts) { f.Draft = true; f.CI = CIFailing }), StatusCIFailed},
 		{"draft PR ignores review state -> draft", sess(SessionWorking), openPR(func(f *PRFacts) { f.Draft = true; f.Review = ReviewApproved }), StatusDraft},
 		{"open PR changes_requested", sess(SessionWorking), openPR(func(f *PRFacts) { f.Review = ReviewChangesRequest }), StatusChangesRequested},
-		{"open PR bot comments -> changes_requested", sess(SessionWorking), openPR(func(f *PRFacts) { f.BotComments = true }), StatusChangesRequested},
+		{"open PR review comments -> changes_requested", sess(SessionWorking), openPR(func(f *PRFacts) { f.ReviewComments = true }), StatusChangesRequested},
 		{"open PR mergeable", sess(SessionWorking), openPR(func(f *PRFacts) { f.Mergeability = MergeMergeable }), StatusMergeable},
 		{"open PR approved", sess(SessionWorking), openPR(func(f *PRFacts) { f.Review = ReviewApproved }), StatusApproved},
 		{"open PR review required -> review_pending", sess(SessionWorking), openPR(func(f *PRFacts) { f.Review = ReviewRequired }), StatusReviewPending},

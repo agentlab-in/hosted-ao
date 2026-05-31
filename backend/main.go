@@ -53,19 +53,18 @@ func run() error {
 	// lane and are wired there once their collaborators (Notifier, AgentMessenger,
 	// and the runtime/agent/workspace plugins) have production implementations;
 	// here we stand up the persistence + change-delivery foundation they build on.
-	db, err := sqlite.Open(cfg.DataDir)
+	store, err := sqlite.Open(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer db.Close()
-	store := sqlite.NewStore(db)
+	defer store.Close()
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cdcPipe, err := startCDC(ctx, store, cfg.DataDir, log)
+	cdcPipe, err := startCDC(ctx, store, log)
 	if err != nil {
 		return err
 	}

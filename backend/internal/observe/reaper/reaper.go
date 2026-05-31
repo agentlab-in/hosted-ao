@@ -183,16 +183,16 @@ func (r *Reaper) probeOne(ctx context.Context, sess domain.SessionRecord, now ti
 		// transient tmux/zellij outage hide a really-dead session, and a
 		// transient adapter bug terminate a really-alive one. Report failed
 		// and let the LCM's detecting quarantine arbitrate.
-		facts.RuntimeState = ports.RuntimeProbeFailed
-		facts.ProcessState = ports.ProcessProbeFailed
+		facts.Runtime = ports.ProbeFailed
+		facts.Process = ports.ProbeFailed
 		r.logger.Debug("reaper: probe error reported as failed fact",
 			"session", sess.ID, "runtime", handle.RuntimeName, "err", probeErr)
 	case alive:
-		facts.RuntimeState = ports.RuntimeProbeAlive
-		facts.ProcessState = ports.ProcessProbeAlive
+		facts.Runtime = ports.ProbeAlive
+		facts.Process = ports.ProbeAlive
 	default:
-		facts.RuntimeState = ports.RuntimeProbeDead
-		facts.ProcessState = ports.ProcessProbeDead
+		facts.Runtime = ports.ProbeDead
+		facts.Process = ports.ProbeDead
 	}
 
 	if err := r.lcm.ApplyRuntimeObservation(ctx, sess.ID, facts); err != nil {
