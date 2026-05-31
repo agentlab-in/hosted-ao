@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const (
@@ -52,46 +50,6 @@ type Config struct {
 	// DataDir is the directory holding durable state (the SQLite database and
 	// the CDC JSONL log). It is created on first use by the storage layer.
 	DataDir string
-	// Notifications controls the central notifier runtime. The dashboard is the
-	// durable notifications table itself; desktop delivery is handed off to the
-	// AO Electron app via notification_deliveries rows.
-	Notifications NotificationConfig
-}
-
-// NotificationConfig contains the global notification settings used by the
-// central notifier runtime. It intentionally starts global (not per-project) so
-// the routing model can grow without changing lifecycle reactions.
-type NotificationConfig struct {
-	Enabled   bool
-	Dashboard DashboardNotificationConfig
-	Desktop   DesktopNotificationConfig
-	Routing   NotificationRoutingConfig
-	Retry     NotificationRetryConfig
-}
-
-type DashboardNotificationConfig struct {
-	Enabled bool
-	Limit   int
-}
-
-type DesktopNotificationConfig struct {
-	Enabled         bool
-	Priorities      []ports.Priority
-	SoundPriorities []ports.Priority
-}
-
-type NotificationRoutingConfig struct {
-	// Priorities maps notification priority to built-in route names. The
-	// notifier currently implements dashboard and desktop only.
-	Priorities map[ports.Priority][]string
-}
-
-type NotificationRetryConfig struct {
-	MaxAttempts int
-	BaseDelay   time.Duration
-	MaxDelay    time.Duration
-	LeaseTTL    time.Duration
-	BatchSize   int
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -119,7 +77,6 @@ func Load() (Config, error) {
 		Port:            DefaultPort,
 		RequestTimeout:  DefaultRequestTimeout,
 		ShutdownTimeout: DefaultShutdownTimeout,
-		Notifications:   DefaultNotificationConfig(),
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -162,35 +119,6 @@ func Load() (Config, error) {
 	cfg.DataDir = dataDir
 
 	return cfg, nil
-}
-
-// DefaultNotificationConfig returns the safe zero-setup notification settings.
-func DefaultNotificationConfig() NotificationConfig {
-	return NotificationConfig{
-		Enabled: true,
-		Dashboard: DashboardNotificationConfig{
-			Enabled: true,
-			Limit:   50,
-		},
-		Desktop: DesktopNotificationConfig{
-			Enabled:         true,
-			Priorities:      []ports.Priority{ports.PriorityUrgent, ports.PriorityAction},
-			SoundPriorities: []ports.Priority{ports.PriorityUrgent},
-		},
-		Routing: NotificationRoutingConfig{Priorities: map[ports.Priority][]string{
-			ports.PriorityUrgent:  []string{"dashboard", "desktop"},
-			ports.PriorityAction:  []string{"dashboard", "desktop"},
-			ports.PriorityWarning: []string{"dashboard"},
-			ports.PriorityInfo:    []string{"dashboard"},
-		}},
-		Retry: NotificationRetryConfig{
-			MaxAttempts: 5,
-			BaseDelay:   time.Second,
-			MaxDelay:    5 * time.Minute,
-			LeaseTTL:    30 * time.Second,
-			BatchSize:   50,
-		},
-	}
 }
 
 // parsePositiveDuration rejects zero and negative durations: a zero
