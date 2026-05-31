@@ -14,6 +14,7 @@ type Store interface {
 	ListUnroutedNotifications(ctx context.Context, limit int) ([]domain.Notification, error)
 	MarkNotificationRouted(ctx context.Context, id domain.NotificationID, at time.Time) error
 
+	GetDelivery(ctx context.Context, id string) (DeliveryRow, bool, error)
 	EnqueueDelivery(ctx context.Context, row DeliveryRow) (DeliveryRow, bool, error)
 	ClaimDueDeliveries(ctx context.Context, sink string, owner string, now time.Time, limit int, lease time.Duration) ([]DeliveryRow, error)
 	ReleaseExpiredDeliveryLeases(ctx context.Context, now time.Time) (int, error)

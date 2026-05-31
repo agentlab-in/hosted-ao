@@ -1,6 +1,9 @@
 -- +goose Up
 -- +goose StatementBegin
 ALTER TABLE notifications ADD COLUMN routed_at TIMESTAMP;
+CREATE INDEX idx_notifications_unrouted
+    ON notifications(seq)
+    WHERE routed_at IS NULL;
 
 CREATE TABLE notification_deliveries (
     id                  TEXT PRIMARY KEY,
@@ -115,5 +118,6 @@ DROP TRIGGER IF EXISTS notification_deliveries_cdc_update;
 DROP TRIGGER IF EXISTS notification_deliveries_cdc_insert;
 DROP TABLE IF EXISTS notification_delivery_attempts;
 DROP TABLE IF EXISTS notification_deliveries;
+DROP INDEX IF EXISTS idx_notifications_unrouted;
 ALTER TABLE notifications DROP COLUMN routed_at;
 -- +goose StatementEnd

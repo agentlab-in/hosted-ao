@@ -17,8 +17,10 @@ type fakeRuntimeStore struct {
 	mu          sync.Mutex
 	unrouted    []domain.Notification
 	deliveries  []DeliveryRow
+	byID        map[string]DeliveryRow
 	routed      []domain.NotificationID
 	releases    int
+	retryNext   time.Time
 	failEnqueue map[domain.NotificationID]error
 }
 
@@ -45,6 +47,13 @@ func (f *fakeRuntimeStore) EnqueueDelivery(_ context.Context, row DeliveryRow) (
 	return row, true, nil
 }
 
+func (f *fakeRuntimeStore) GetDelivery(_ context.Context, id string) (DeliveryRow, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.byID[id]
+	return row, ok, nil
+}
+
 func (f *fakeRuntimeStore) ClaimDueDeliveries(context.Context, string, string, time.Time, int, time.Duration) ([]DeliveryRow, error) {
 	return nil, nil
 }
@@ -57,7 +66,10 @@ func (f *fakeRuntimeStore) ReleaseExpiredDeliveryLeases(context.Context, time.Ti
 func (f *fakeRuntimeStore) MarkDeliverySent(context.Context, string, string, time.Time) error {
 	return nil
 }
-func (f *fakeRuntimeStore) MarkDeliveryRetry(context.Context, string, string, string, time.Time) error {
+func (f *fakeRuntimeStore) MarkDeliveryRetry(_ context.Context, _ string, _ string, _ string, next time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retryNext = next
 	return nil
 }
 func (f *fakeRuntimeStore) MarkDeliveryFailed(context.Context, string, string, string, time.Time) error {
@@ -116,6 +128,29 @@ func TestRoutePendingDeliveryFailureDoesNotBlockOtherNotifications(t *testing.T)
 	defer store.mu.Unlock()
 	if len(store.routed) != 1 || store.routed[0] != n2.ID {
 		t.Fatalf("routed IDs = %v, want only %s", store.routed, n2.ID)
+	}
+}
+
+func TestMarkDeliveryErrorUsesAttemptAwareBackoff(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	cfg := config.DefaultNotificationConfig()
+	cfg.Retry.BaseDelay = time.Second
+	cfg.Retry.MaxDelay = time.Minute
+	store := &fakeRuntimeStore{byID: map[string]DeliveryRow{
+		"del_1": {ID: "del_1", Attempts: 2, MaxAttempts: 5},
+	}}
+	mgr := NewManager(store, StaticSettings(cfg), discardLogger())
+	mgr.clock = func() time.Time { return now }
+
+	if err := mgr.MarkDeliveryError(context.Background(), "del_1", "timeout", "timed out"); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	next := store.retryNext
+	store.mu.Unlock()
+	delay := next.Sub(now)
+	if delay < 3200*time.Millisecond || delay > 4800*time.Millisecond {
+		t.Fatalf("retry delay for third attempt = %s, want jittered 4s backoff", delay)
 	}
 }
 

@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -136,11 +137,21 @@ func (m *Manager) MarkDeliverySent(ctx context.Context, id, externalID string) e
 func (m *Manager) MarkDeliveryError(ctx context.Context, id, code, message string) error {
 	settings := m.settings.Settings(ctx)
 	policy := RetryPolicyFromConfig(settings.Retry)
+	now := m.clock().UTC()
 	// The store is the source of truth for attempts/max-attempt terminal
 	// handling. Permanent classification short-circuits to failed; otherwise we
-	// provide the next retry timestamp for retry_wait rows.
+	// fetch the current delivery attempts and provide the attempt-aware next
+	// retry timestamp for retry_wait rows.
 	if ClassifyError(code) == ErrorPermanent {
-		return m.store.MarkDeliveryFailed(ctx, id, code, message, m.clock().UTC())
+		return m.store.MarkDeliveryFailed(ctx, id, code, message, now)
 	}
-	return m.store.MarkDeliveryRetry(ctx, id, code, message, policy.NextAttemptAt(m.clock().UTC(), 1))
+	row, ok, err := m.store.GetDelivery(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("notification delivery %s not found", id)
+	}
+	nextAttemptNo := row.Attempts + 1
+	return m.store.MarkDeliveryRetry(ctx, id, code, message, policy.NextAttemptAt(now, nextAttemptNo))
 }

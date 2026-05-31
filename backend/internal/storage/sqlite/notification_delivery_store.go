@@ -59,7 +59,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, row notification.DeliveryRo
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	row, err := notification.NormalizeDelivery(row, now, 5)
+	row, err := notification.NormalizeDelivery(row, now, row.MaxAttempts)
 	if err != nil {
 		return notification.DeliveryRow{}, false, err
 	}
