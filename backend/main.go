@@ -87,6 +87,16 @@ func run() error {
 	// surfacing — so we hold the SM in a local until it does.
 	sStack, err := startSession(ctx, cfg, lcStack, log)
 	if err != nil {
+		// startSession is the first start* call after this point that can
+		// realistically fail while the cdc poller and the reaper are already
+		// running. Mirror the bottom-of-run shutdown sequence so both have
+		// drained before the deferred store.Close() fires. Defers would hit
+		// the LIFO trap (see comment after srv.Run), hence explicit.
+		stop()
+		lcStack.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
 		return err
 	}
 	_ = sStack
