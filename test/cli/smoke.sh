@@ -10,6 +10,8 @@
 #
 # Run locally against a binary you built:
 #   AO_BIN=/path/to/ao test/cli/smoke.sh
+# Verbose — print each command and its full output:
+#   AO_BIN=/path/to/ao test/cli/smoke.sh -v       (or AO_SMOKE_VERBOSE=1)
 # Or in the container (models install-on-a-fresh-machine):
 #   docker build -f test/cli/Dockerfile -t ao-cli-smoke . && docker run --rm --init ao-cli-smoke
 #
@@ -19,6 +21,16 @@ set -uo pipefail
 
 AO_BIN="${AO_BIN:-ao}"
 
+# Verbose mode prints every command and its complete output, not just PASS/FAIL.
+VERBOSE="${AO_SMOKE_VERBOSE:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    -v|--verbose) VERBOSE=1 ;;
+    -h|--help) echo "usage: [AO_BIN=...] smoke.sh [-v|--verbose]"; exit 0 ;;
+    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
+
 # ---------------------------------------------------------------------------
 # Tiny assertion framework
 # ---------------------------------------------------------------------------
@@ -27,10 +39,29 @@ FAIL=0
 CURRENT=""
 
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
-step()    { CURRENT="$1"; printf '  • %s ... ' "$1"; }
 
-ok()   { PASS=$((PASS + 1)); printf '\033[32mPASS\033[0m\n'; }
-bad()  { FAIL=$((FAIL + 1)); printf '\033[31mFAIL\033[0m\n      %s\n' "$1"; }
+step() {
+  CURRENT="$1"
+  if [ "$VERBOSE" = 1 ]; then printf '  • %s\n' "$1"; else printf '  • %s ... ' "$1"; fi
+}
+
+ok() {
+  PASS=$((PASS + 1))
+  if [ "$VERBOSE" = 1 ]; then printf '      \033[32m→ PASS\033[0m\n'; else printf '\033[32mPASS\033[0m\n'; fi
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  if [ "$VERBOSE" = 1 ]; then printf '      \033[31m→ FAIL\033[0m  %s\n' "$1"; else printf '\033[31mFAIL\033[0m\n      %s\n' "$1"; fi
+}
+
+# vdump <command-label> <output> <exit-code> : in verbose mode, echo the command
+# and its complete output, indented. A no-op otherwise.
+vdump() {
+  [ "$VERBOSE" = 1 ] || return 0
+  printf '      \033[2m$ %s\033[0m\n' "$1"
+  if [ -n "$2" ]; then printf '%s\n' "$2" | sed 's/^/      | /'; fi
+  printf '      \033[2m(exit %s)\033[0m\n' "$3"
+}
 
 # assert_eq <actual> <expected> [msg]
 assert_eq() {
@@ -55,6 +86,7 @@ assert_not_contains() {
 run_rc() {
   OUT="$("$@" 2>&1)"
   RC=$?
+  vdump "$*" "$OUT" "$RC"
 }
 
 # ---------------------------------------------------------------------------
@@ -204,11 +236,13 @@ if command -v curl >/dev/null 2>&1; then
   step "cross-origin POST /shutdown is rejected (403)"
   CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
             -H 'Origin: https://evil.example' "http://127.0.0.1:$AO_PORT/shutdown")"
+  vdump "curl -X POST -H 'Origin: https://evil.example' http://127.0.0.1:$AO_PORT/shutdown" "HTTP $CODE" "-"
   assert_eq "$CODE" "403" "cross-origin shutdown"
 
   step "non-loopback Host POST /shutdown is rejected (403)"
   CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
             -H 'Host: evil.example' "http://127.0.0.1:$AO_PORT/shutdown")"
+  vdump "curl -X POST -H 'Host: evil.example' http://127.0.0.1:$AO_PORT/shutdown" "HTTP $CODE" "-"
   assert_eq "$CODE" "403" "rebinding-host shutdown"
 
   step "daemon survived the rejected shutdown attempts"
@@ -275,6 +309,7 @@ if [ "$RC" -ne 0 ]; then ok; else bad "expected non-zero for bad shell"; fi
 
 step "invalid config (AO_PORT out of range) exits 1, not 2"
 OUT="$(AO_PORT=99999 "$AO_BIN" status 2>&1)"; RC=$?
+vdump "AO_PORT=99999 $AO_BIN status" "$OUT" "$RC"
 assert_eq "$RC" "1" "config-error exit code (runtime, not usage)"
 
 # ---------------------------------------------------------------------------

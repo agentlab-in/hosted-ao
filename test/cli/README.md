@@ -18,9 +18,10 @@ so they never touch a developer's real AO installation.
 
 **Native (fastest, uses your toolchain):**
 ```bash
-test/cli/run-local.sh
+test/cli/run-local.sh          # PASS/FAIL per assertion
+test/cli/run-local.sh -v       # also print every command and its full output
 # or, against a binary you already built:
-AO_BIN=/path/to/ao test/cli/smoke.sh
+AO_BIN=/path/to/ao test/cli/smoke.sh [-v]
 ```
 
 **Fresh-machine install, in a clean container:**
