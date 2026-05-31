@@ -119,9 +119,9 @@ func (s *stubRuntime) IsAlive(context.Context, ports.RuntimeHandle) (bool, error
 
 type stubAgent struct{}
 
-func (stubAgent) GetLaunchCommand(ports.AgentConfig) string         { return "launch" }
+func (stubAgent) GetLaunchCommand(ports.AgentConfig) string          { return "launch" }
 func (stubAgent) GetEnvironment(ports.AgentConfig) map[string]string { return map[string]string{} }
-func (stubAgent) GetRestoreCommand(id string) string                { return "resume " + id }
+func (stubAgent) GetRestoreCommand(id string) string                 { return "resume " + id }
 
 type stubWorkspace struct {
 	root string
