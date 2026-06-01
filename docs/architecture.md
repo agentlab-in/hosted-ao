@@ -13,8 +13,7 @@ OBSERVE external facts → UPDATE durable facts → DERIVE display status / ACT
 The durable session facts are:
 
 - `activity_state` — what the agent last reported or what the runtime observer
-  can safely conclude (`active`, `ready`, `idle`, `waiting_input`, `blocked`,
-  `exited`).
+  can safely conclude (`active`, `idle`, `waiting_input`, `exited`).
 - `is_terminated` — whether the session should be treated as over.
 - PR facts in the `pr`, `pr_checks`, and `pr_comment` tables.
 
@@ -43,11 +42,10 @@ backend/internal/adapters     Zellij/git-worktree/GitHub adapters
 
 1. `is_terminated` → `terminated`, except merged PRs display `merged`.
 2. `activity_state=waiting_input` → `needs_input`.
-3. `activity_state=blocked` → `stuck`.
-4. Open PR facts drive PR pipeline statuses: `ci_failed`, `draft`,
+3. Open PR facts drive PR pipeline statuses: `ci_failed`, `draft`,
    `changes_requested`, `mergeable`, `approved`, `review_pending`, `pr_open`.
-5. `activity_state=active` → `working`.
-6. Everything else → `idle`.
+4. `activity_state=active` → `working`.
+5. Everything else → `idle`.
 
 ## Lifecycle manager
 

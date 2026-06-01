@@ -14,7 +14,7 @@ import (
 
 const getSession = `-- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, activity_source, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, prompt, created_at, updated_at
 FROM sessions WHERE id = ?
 `
@@ -31,7 +31,6 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (Session,
 		&i.Harness,
 		&i.ActivityState,
 		&i.ActivityLastAt,
-		&i.ActivitySource,
 		&i.IsTerminated,
 		&i.Branch,
 		&i.WorkspacePath,
@@ -47,10 +46,10 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (Session,
 const insertSession = `-- name: InsertSession :exec
 INSERT INTO sessions (
     id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, activity_source, is_terminated,
+    activity_state, activity_last_at, is_terminated,
     branch, workspace_path, runtime_handle_id, agent_session_id, prompt,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertSessionParams struct {
@@ -62,7 +61,6 @@ type InsertSessionParams struct {
 	Harness         domain.AgentHarness
 	ActivityState   domain.ActivityState
 	ActivityLastAt  time.Time
-	ActivitySource  domain.ActivitySource
 	IsTerminated    bool
 	Branch          string
 	WorkspacePath   string
@@ -83,7 +81,6 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.Harness,
 		arg.ActivityState,
 		arg.ActivityLastAt,
-		arg.ActivitySource,
 		arg.IsTerminated,
 		arg.Branch,
 		arg.WorkspacePath,
@@ -98,7 +95,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 
 const listAllSessions = `-- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, activity_source, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, prompt, created_at, updated_at
 FROM sessions ORDER BY project_id, num
 `
@@ -121,7 +118,6 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]Session, error) {
 			&i.Harness,
 			&i.ActivityState,
 			&i.ActivityLastAt,
-			&i.ActivitySource,
 			&i.IsTerminated,
 			&i.Branch,
 			&i.WorkspacePath,
@@ -146,7 +142,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]Session, error) {
 
 const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
-    activity_state, activity_last_at, activity_source, is_terminated, branch, workspace_path,
+    activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, prompt, created_at, updated_at
 FROM sessions WHERE project_id = ? ORDER BY num
 `
@@ -169,7 +165,6 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID domain.Pr
 			&i.Harness,
 			&i.ActivityState,
 			&i.ActivityLastAt,
-			&i.ActivitySource,
 			&i.IsTerminated,
 			&i.Branch,
 			&i.WorkspacePath,
@@ -206,7 +201,7 @@ func (q *Queries) NextSessionNum(ctx context.Context, projectID domain.ProjectID
 const updateSession = `-- name: UpdateSession :exec
 UPDATE sessions SET
     issue_id = ?, kind = ?, harness = ?,
-    activity_state = ?, activity_last_at = ?, activity_source = ?, is_terminated = ?,
+    activity_state = ?, activity_last_at = ?, is_terminated = ?,
     branch = ?, workspace_path = ?, runtime_handle_id = ?, agent_session_id = ?, prompt = ?,
     updated_at = ?
 WHERE id = ?
@@ -218,7 +213,6 @@ type UpdateSessionParams struct {
 	Harness         domain.AgentHarness
 	ActivityState   domain.ActivityState
 	ActivityLastAt  time.Time
-	ActivitySource  domain.ActivitySource
 	IsTerminated    bool
 	Branch          string
 	WorkspacePath   string
@@ -236,7 +230,6 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.Harness,
 		arg.ActivityState,
 		arg.ActivityLastAt,
-		arg.ActivitySource,
 		arg.IsTerminated,
 		arg.Branch,
 		arg.WorkspacePath,

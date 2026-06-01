@@ -37,7 +37,7 @@ func sampleRecord(project string) domain.SessionRecord {
 		ProjectID: domain.ProjectID(project),
 		Kind:      domain.KindWorker,
 		Harness:   domain.HarnessClaudeCode,
-		Activity:  domain.ActivitySubstate{State: domain.ActivityActive, LastActivityAt: now, Source: domain.SourceNative},
+		Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: now},
 		Metadata:  domain.SessionMetadata{Branch: "feat/x", WorkspacePath: "/ws"},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -108,7 +108,7 @@ func TestSessionUpdateActivityAndTermination(t *testing.T) {
 	seedProject(t, s, "mer")
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 
-	r.Activity = domain.ActivitySubstate{State: domain.ActivityWaitingInput, LastActivityAt: r.CreatedAt, Source: domain.SourceHook}
+	r.Activity = domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: r.CreatedAt}
 	r.IsTerminated = true
 	if err := s.UpdateSession(ctx, r); err != nil {
 		t.Fatal(err)

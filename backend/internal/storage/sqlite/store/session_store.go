@@ -85,10 +85,9 @@ func rowToRecord(row gen.Session) domain.SessionRecord {
 		IssueID:   row.IssueID,
 		Kind:      row.Kind,
 		Harness:   row.Harness,
-		Activity: domain.ActivitySubstate{
+		Activity: domain.Activity{
 			State:          row.ActivityState,
 			LastActivityAt: row.ActivityLastAt,
-			Source:         row.ActivitySource,
 		},
 		IsTerminated: row.IsTerminated,
 		Metadata: domain.SessionMetadata{
@@ -114,7 +113,6 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		Harness:         rec.Harness,
 		ActivityState:   activity.State,
 		ActivityLastAt:  activity.LastActivityAt,
-		ActivitySource:  activity.Source,
 		IsTerminated:    rec.IsTerminated,
 		Branch:          rec.Metadata.Branch,
 		WorkspacePath:   rec.Metadata.WorkspacePath,
@@ -135,7 +133,6 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		Harness:         rec.Harness,
 		ActivityState:   activity.State,
 		ActivityLastAt:  activity.LastActivityAt,
-		ActivitySource:  activity.Source,
 		IsTerminated:    rec.IsTerminated,
 		Branch:          rec.Metadata.Branch,
 		WorkspacePath:   rec.Metadata.WorkspacePath,
@@ -146,12 +143,9 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 	}
 }
 
-func normalActivity(a domain.ActivitySubstate, fallback time.Time) domain.ActivitySubstate {
+func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	if a.State == "" {
 		a.State = domain.ActivityIdle
-	}
-	if a.Source == "" {
-		a.Source = domain.SourceNone
 	}
 	if a.LastActivityAt.IsZero() {
 		a.LastActivityAt = fallback

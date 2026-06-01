@@ -288,7 +288,7 @@ func seedRecord(cfg ports.SpawnConfig, now time.Time) domain.SessionRecord {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Harness:   cfg.Harness,
-		Activity:  domain.ActivitySubstate{State: domain.ActivityIdle, LastActivityAt: now, Source: domain.SourceNone},
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 	}
 }
 

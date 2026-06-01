@@ -68,7 +68,7 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 	l.completed++
 	rec := l.store.sessions[id]
 	rec.IsTerminated = false
-	rec.Activity = domain.ActivitySubstate{State: domain.ActivityIdle, LastActivityAt: time.Now(), Source: domain.SourceRuntime}
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	rec.Metadata = metadata
 	l.store.sessions[id] = rec
 	return nil
@@ -76,7 +76,7 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 func (l *fakeLCM) MarkTerminated(_ context.Context, id domain.SessionID) error {
 	rec := l.store.sessions[id]
 	rec.IsTerminated = true
-	rec.Activity = domain.ActivitySubstate{State: domain.ActivityExited, LastActivityAt: time.Now(), Source: domain.SourceRuntime}
+	rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
 	l.store.sessions[id] = rec
 	return nil
 }
@@ -134,10 +134,10 @@ func newManager() (*Manager, *fakeStore, *fakeRuntime, *fakeWorkspace) {
 	return m, st, rt, ws
 }
 func seedTerminal(st *fakeStore, id domain.SessionID, meta domain.SessionMetadata) {
-	st.sessions[id] = domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: meta, IsTerminated: true, Activity: domain.ActivitySubstate{State: domain.ActivityExited}}
+	st.sessions[id] = domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: meta, IsTerminated: true, Activity: domain.Activity{State: domain.ActivityExited}}
 }
 func mkLive(id domain.SessionID) domain.SessionRecord {
-	return domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: domain.SessionMetadata{WorkspacePath: "/ws/" + string(id), RuntimeHandleID: "h1"}, Activity: domain.ActivitySubstate{State: domain.ActivityActive}}
+	return domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: domain.SessionMetadata{WorkspacePath: "/ws/" + string(id), RuntimeHandleID: "h1"}, Activity: domain.Activity{State: domain.ActivityActive}}
 }
 
 func TestSpawn_AssignsIDAndGoesIdle(t *testing.T) {
@@ -185,7 +185,7 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 }
 func TestKill_RefusesIncompleteHandle(t *testing.T) {
 	m, st, _, _ := newManager()
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Activity: domain.ActivitySubstate{State: domain.ActivityActive}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Activity: domain.Activity{State: domain.ActivityActive}}
 	if _, err := m.Kill(ctx, "mer-1"); !errors.Is(err, ErrIncompleteHandle) {
 		t.Fatalf("want ErrIncompleteHandle, got %v", err)
 	}

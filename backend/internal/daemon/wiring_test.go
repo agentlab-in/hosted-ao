@@ -42,14 +42,14 @@ func TestWiring_WriteFlowsToBroadcaster(t *testing.T) {
 	}
 	rec, err := store.CreateSession(ctx, domain.SessionRecord{
 		ProjectID: "mer", Kind: domain.KindWorker,
-		Activity: domain.ActivitySubstate{State: domain.ActivityIdle, LastActivityAt: time.Now(), Source: domain.SourceNone},
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A real transition through the engine, which writes the row and fires the
 	// activity_state/is_terminated CDC trigger.
-	if err := lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Timestamp: time.Now(), Source: domain.SourceNative}); err != nil {
+	if err := lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Timestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 

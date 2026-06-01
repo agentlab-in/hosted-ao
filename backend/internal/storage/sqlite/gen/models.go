@@ -71,7 +71,6 @@ type Session struct {
 	Harness         domain.AgentHarness
 	ActivityState   domain.ActivityState
 	ActivityLastAt  time.Time
-	ActivitySource  domain.ActivitySource
 	IsTerminated    bool
 	Branch          string
 	WorkspacePath   string

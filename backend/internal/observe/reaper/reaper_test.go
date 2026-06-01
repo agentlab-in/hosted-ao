@@ -43,7 +43,7 @@ func (r fakeRuntime) IsAlive(context.Context, ports.RuntimeHandle) (bool, error)
 func probableSession(id domain.SessionID) domain.SessionRecord {
 	return domain.SessionRecord{
 		ID:       id,
-		Activity: domain.ActivitySubstate{State: domain.ActivityActive},
+		Activity: domain.Activity{State: domain.ActivityActive},
 		Metadata: domain.SessionMetadata{RuntimeHandleID: "h1"},
 	}
 }

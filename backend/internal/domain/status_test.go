@@ -3,7 +3,7 @@ package domain
 import "testing"
 
 func rec(activity ActivityState, terminated bool) SessionRecord {
-	return SessionRecord{Activity: ActivitySubstate{State: activity}, IsTerminated: terminated}
+	return SessionRecord{Activity: Activity{State: activity}, IsTerminated: terminated}
 }
 
 func pr(facts PRFacts) *PRFacts { return &facts }
@@ -18,7 +18,6 @@ func TestDeriveStatusFromSessionFactsAndPR(t *testing.T) {
 		{"terminated", rec(ActivityExited, true), nil, StatusTerminated},
 		{"merged-pr", rec(ActivityIdle, true), pr(PRFacts{Merged: true}), StatusMerged},
 		{"needs-input", rec(ActivityWaitingInput, false), pr(PRFacts{CI: CIFailing}), StatusNeedsInput},
-		{"blocked", rec(ActivityBlocked, false), pr(PRFacts{CI: CIFailing}), StatusStuck},
 		{"ci-failed", rec(ActivityIdle, false), pr(PRFacts{CI: CIFailing}), StatusCIFailed},
 		{"draft", rec(ActivityIdle, false), pr(PRFacts{Draft: true}), StatusDraft},
 		{"changes-requested", rec(ActivityIdle, false), pr(PRFacts{Review: ReviewChangesRequest}), StatusChangesRequested},

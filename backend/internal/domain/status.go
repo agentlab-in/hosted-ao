@@ -16,7 +16,6 @@ const (
 	StatusMergeable        SessionStatus = "mergeable"
 	StatusMerged           SessionStatus = "merged"
 	StatusNeedsInput       SessionStatus = "needs_input"
-	StatusStuck            SessionStatus = "stuck"
 	StatusIdle             SessionStatus = "idle"
 	StatusTerminated       SessionStatus = "terminated"
 )
@@ -32,11 +31,8 @@ func DeriveStatus(rec SessionRecord, pr *PRFacts) SessionStatus {
 		return StatusTerminated
 	}
 
-	switch rec.Activity.State {
-	case ActivityWaitingInput:
+	if rec.Activity.State == ActivityWaitingInput {
 		return StatusNeedsInput
-	case ActivityBlocked:
-		return StatusStuck
 	}
 
 	if pr != nil {

@@ -30,5 +30,4 @@ type ActivitySignal struct {
 	Valid     bool
 	State     domain.ActivityState
 	Timestamp time.Time
-	Source    domain.ActivitySource
 }

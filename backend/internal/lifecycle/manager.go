@@ -65,7 +65,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		}
 		next := cur
 		next.IsTerminated = true
-		next.Activity = domain.ActivitySubstate{State: domain.ActivityExited, LastActivityAt: timeOr(f.ObservedAt, now), Source: domain.SourceRuntime}
+		next.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: timeOr(f.ObservedAt, now)}
 		return next, true
 	})
 }
@@ -79,11 +79,8 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 		if cur.IsTerminated {
 			return cur, false
 		}
-		if !s.Source.CanOverride(cur.Activity.Source) {
-			return cur, false
-		}
 		next := cur
-		act := domain.ActivitySubstate{State: s.State, LastActivityAt: timeOr(s.Timestamp, now), Source: s.Source}
+		act := domain.Activity{State: s.State, LastActivityAt: timeOr(s.Timestamp, now)}
 		if sameActivity(cur.Activity, act) {
 			return cur, false
 		}
@@ -108,7 +105,7 @@ func (m *Manager) MarkSpawned(ctx context.Context, id domain.SessionID, metadata
 	}
 	now := m.clock()
 	rec.IsTerminated = false
-	rec.Activity = domain.ActivitySubstate{State: domain.ActivityIdle, LastActivityAt: now, Source: domain.SourceRuntime}
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
 	rec.Metadata = mergeMetadata(rec.Metadata, metadata)
 	rec.UpdatedAt = now
 	return m.store.UpdateSession(ctx, rec)
@@ -121,13 +118,13 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 			return cur, false
 		}
 		cur.IsTerminated = true
-		cur.Activity = domain.ActivitySubstate{State: domain.ActivityExited, LastActivityAt: now, Source: domain.SourceRuntime}
+		cur.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: now}
 		return cur, true
 	})
 }
 
-func sameActivity(a, b domain.ActivitySubstate) bool {
-	return a.State == b.State && a.Source == b.Source && a.LastActivityAt.Equal(b.LastActivityAt)
+func sameActivity(a, b domain.Activity) bool {
+	return a.State == b.State && a.LastActivityAt.Equal(b.LastActivityAt)
 }
 
 func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {

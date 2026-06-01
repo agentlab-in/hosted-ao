@@ -9,7 +9,7 @@ import (
 
 const defaultRecentActivityWindow = 60 * time.Second
 
-func hasRecentActivity(a domain.ActivitySubstate, now time.Time, window time.Duration) bool {
+func hasRecentActivity(a domain.Activity, now time.Time, window time.Duration) bool {
 	switch {
 	case a.State == domain.ActivityExited:
 		return false
@@ -22,7 +22,7 @@ func hasRecentActivity(a domain.ActivitySubstate, now time.Time, window time.Dur
 	}
 }
 
-func runtimeClearlyDead(f ports.RuntimeFacts, activity domain.ActivitySubstate, now time.Time, window time.Duration) bool {
+func runtimeClearlyDead(f ports.RuntimeFacts, activity domain.Activity, now time.Time, window time.Duration) bool {
 	observedAt := timeOr(f.ObservedAt, now)
 	return f.Probe == ports.ProbeDead && !hasRecentActivity(activity, observedAt, window)
 }
