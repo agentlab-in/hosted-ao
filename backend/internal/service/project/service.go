@@ -13,29 +13,38 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-type manager struct {
+// Manager is the controller-facing contract for the /api/v1/projects surface.
+type Manager interface {
+	// List returns every registered project, including degraded entries
+	// (those whose config failed to load but whose registry entry survives).
+	List(ctx context.Context) ([]Summary, error)
+
+	// Get returns one project, discriminating ok vs degraded via GetResult.
+	Get(ctx context.Context, id domain.ProjectID) (GetResult, error)
+
+	// Add registers a new project from a git repository path.
+	Add(ctx context.Context, in AddInput) (Project, error)
+
+	// Remove unregisters a project, stopping its sessions and reclaiming
+	// managed workspaces.
+	Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error)
+}
+
+// Service implements project registration and lookup use-cases for controllers.
+type Service struct {
 	store Store
 }
 
-var _ Manager = (*manager)(nil)
+var _ Manager = (*Service)(nil)
 
-// NewManager returns a project Manager backed by the given Store, defaulting to
-// an in-memory store when store is nil.
-func NewManager(store Store) Manager {
-	if store == nil {
-		store = NewMemoryStore()
-	}
-	return &manager{store: store}
+// New returns a project service backed by the given durable store.
+func New(store Store) *Service {
+	return &Service{store: store}
 }
 
-// NewMemoryManager returns a project Manager backed by a fresh in-memory store,
-// for tests and ephemeral use.
-func NewMemoryManager() Manager {
-	return NewManager(NewMemoryStore())
-}
-
-func (m *manager) List(ctx context.Context) ([]Summary, error) {
-	projects, err := m.store.List(ctx)
+// List returns every active registered project.
+func (m *Service) List(ctx context.Context) ([]Summary, error) {
+	projects, err := m.store.ListProjects(ctx)
 	if err != nil {
 		return nil, internal("PROJECTS_LIST_FAILED", "Failed to load projects")
 	}
@@ -50,22 +59,24 @@ func (m *manager) List(ctx context.Context) ([]Summary, error) {
 	return out, nil
 }
 
-func (m *manager) Get(ctx context.Context, id domain.ProjectID) (GetResult, error) {
+// Get returns one active project by id.
+func (m *Service) Get(ctx context.Context, id domain.ProjectID) (GetResult, error) {
 	if err := validateProjectID(id); err != nil {
 		return GetResult{}, err
 	}
-	row, ok, err := m.store.Get(ctx, string(id))
+	row, ok, err := m.store.GetProject(ctx, string(id))
 	if err != nil {
 		return GetResult{}, internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	}
-	if !ok {
+	if !ok || !row.ArchivedAt.IsZero() {
 		return GetResult{}, notFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
 	p := projectFromRow(row)
 	return GetResult{Status: "ok", Project: &p}, nil
 }
 
-func (m *manager) Add(ctx context.Context, in AddInput) (Project, error) {
+// Add registers a local git repository as a project.
+func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	path, err := normalizePath(in.Path)
 	if err != nil {
 		return Project{}, err
@@ -90,7 +101,7 @@ func (m *manager) Add(ctx context.Context, in AddInput) (Project, error) {
 		name = string(id)
 	}
 
-	if existing, ok, err := m.store.FindByPath(ctx, path); err != nil {
+	if existing, ok, err := m.store.FindProjectByPath(ctx, path); err != nil {
 		return Project{}, internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	} else if ok {
 		return Project{}, conflict("PATH_ALREADY_REGISTERED", "A project at this path is already registered", map[string]any{
@@ -98,47 +109,33 @@ func (m *manager) Add(ctx context.Context, in AddInput) (Project, error) {
 			"suggestedProjectId": string(m.suggestID(ctx, id)),
 		})
 	}
-	if existing, ok, err := m.store.Get(ctx, string(id)); err != nil {
+	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {
 		return Project{}, internal("PROJECT_LOAD_FAILED", "Failed to load project")
-	} else if ok && existing.Path != path {
+	} else if ok && existing.ArchivedAt.IsZero() && existing.Path != path {
 		return Project{}, conflict("ID_ALREADY_REGISTERED", "A project with this id is already registered for a different path", map[string]any{
 			"existingProjectId":  existing.ID,
 			"suggestedProjectId": string(m.suggestID(ctx, id)),
 		})
 	}
 
-	row := Row{
+	row := domain.ProjectRecord{
 		ID:           string(id),
 		Path:         path,
 		DisplayName:  name,
 		RegisteredAt: time.Now(),
 	}
-	if err := m.store.Upsert(ctx, row); err != nil {
+	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, err
 	}
 	return projectFromRow(row), nil
 }
 
-func (m *manager) UpdateConfig(ctx context.Context, id domain.ProjectID, _ UpdateConfigInput) (Project, error) {
-	if err := validateProjectID(id); err != nil {
-		return Project{}, err
-	}
-	_, ok, err := m.store.Get(ctx, string(id))
-	if err != nil {
-		return Project{}, internal("PROJECT_LOAD_FAILED", "Failed to load project")
-	}
-	if !ok {
-		return Project{}, notFound("PROJECT_NOT_FOUND", "Unknown project")
-	}
-
-	return Project{}, notImplemented("PROJECT_CONFIG_NOT_IMPLEMENTED", "Project config patching is not available until config persistence is wired")
-}
-
-func (m *manager) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error) {
+// Remove archives a project registration.
+func (m *Service) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error) {
 	if err := validateProjectID(id); err != nil {
 		return RemoveResult{}, err
 	}
-	ok, err := m.store.Archive(ctx, string(id), time.Now())
+	ok, err := m.store.ArchiveProject(ctx, string(id), time.Now())
 	if err != nil {
 		return RemoveResult{}, internal("PROJECT_REMOVE_FAILED", "Failed to remove project")
 	}
@@ -148,36 +145,16 @@ func (m *manager) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult
 	return RemoveResult{ProjectID: id, RemovedStorageDir: false}, nil
 }
 
-func (m *manager) Repair(ctx context.Context, id domain.ProjectID) (Project, error) {
-	if err := validateProjectID(id); err != nil {
-		return Project{}, err
-	}
-	if _, ok, err := m.store.Get(ctx, string(id)); err != nil {
-		return Project{}, internal("PROJECT_LOAD_FAILED", "Failed to load project")
-	} else if !ok {
-		return Project{}, notFound("PROJECT_NOT_FOUND", "Unknown project")
-	}
-	return Project{}, badRequest("REPAIR_NOT_AVAILABLE", "Automatic repair is not available for this degraded config", nil)
-}
-
-func (m *manager) Reload(ctx context.Context) (ReloadResult, error) {
-	projects, err := m.store.List(ctx)
-	if err != nil {
-		return ReloadResult{}, internal("RELOAD_FAILED", "Failed to reload projects")
-	}
-	return ReloadResult{Reloaded: true, ProjectCount: len(projects), DegradedCount: 0}, nil
-}
-
-func (m *manager) suggestID(ctx context.Context, base domain.ProjectID) domain.ProjectID {
+func (m *Service) suggestID(ctx context.Context, base domain.ProjectID) domain.ProjectID {
 	for i := 1; ; i++ {
 		candidate := domain.ProjectID(string(base) + strconv.Itoa(i))
-		if _, ok, _ := m.store.Get(ctx, string(candidate)); !ok {
+		if _, ok, _ := m.store.GetProject(ctx, string(candidate)); !ok {
 			return candidate
 		}
 	}
 }
 
-func projectFromRow(row Row) Project {
+func projectFromRow(row domain.ProjectRecord) Project {
 	return Project{
 		ID:            domain.ProjectID(row.ID),
 		Name:          displayName(row),
@@ -187,7 +164,7 @@ func projectFromRow(row Row) Project {
 	}
 }
 
-func displayName(row Row) string {
+func displayName(row domain.ProjectRecord) string {
 	if strings.TrimSpace(row.DisplayName) != "" {
 		return row.DisplayName
 	}

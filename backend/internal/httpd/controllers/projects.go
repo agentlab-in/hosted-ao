@@ -5,10 +5,8 @@
 package controllers
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -16,26 +14,21 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	"github.com/aoagents/agent-orchestrator/backend/internal/project"
+	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
 // ProjectsController owns the /projects routes. The controller depends only on
-// project.Manager; nil keeps routes registered but returns OpenAPI-backed 501s.
+// projectsvc.Manager; nil keeps routes registered but returns OpenAPI-backed 501s.
 type ProjectsController struct {
-	Mgr project.Manager
+	Mgr projectsvc.Manager
 }
 
-// Register mounts the project routes on the supplied router. Route order
-// matters: /projects/reload must register before /projects/{id} for the POST
-// verb, otherwise chi would treat "reload" as an {id} match for repair.
+// Register mounts the project routes on the supplied router.
 func (c *ProjectsController) Register(r chi.Router) {
 	r.Get("/projects", c.list)
 	r.Post("/projects", c.add)
-	r.Post("/projects/reload", c.reload) // BEFORE /projects/{id}
 	r.Get("/projects/{id}", c.get)
-	r.Patch("/projects/{id}", c.updateConfig)
 	r.Delete("/projects/{id}", c.remove)
-	r.Post("/projects/{id}/repair", c.repair)
 }
 
 func (c *ProjectsController) list(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +41,10 @@ func (c *ProjectsController) list(w http.ResponseWriter, r *http.Request) {
 		writeProjectError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]any{"projects": projects})
+	if projects == nil {
+		projects = []projectsvc.Summary{}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListProjectsResponse{Projects: projects})
 }
 
 func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +52,7 @@ func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/projects")
 		return
 	}
-	var in project.AddInput
+	var in projectsvc.AddInput
 	if err := decodeJSON(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
@@ -66,7 +62,7 @@ func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {
 		writeProjectError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusCreated, map[string]any{"project": p})
+	envelope.WriteJSON(w, http.StatusCreated, ProjectResponse{Project: p})
 }
 
 func (c *ProjectsController) get(w http.ResponseWriter, r *http.Request) {
@@ -79,37 +75,12 @@ func (c *ProjectsController) get(w http.ResponseWriter, r *http.Request) {
 		writeProjectError(w, r, err)
 		return
 	}
-	if got.Status == "degraded" {
-		envelope.WriteJSON(w, http.StatusOK, map[string]any{"status": got.Status, "project": got.Degraded})
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]any{"status": got.Status, "project": got.Project})
-}
-
-func (c *ProjectsController) updateConfig(w http.ResponseWriter, r *http.Request) {
-	if c.Mgr == nil {
-		apispec.NotImplemented(w, r, "PATCH", "/api/v1/projects/{id}")
-		return
-	}
-	if frozen, err := containsFrozenIdentityField(r); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	} else if len(frozen) > 0 {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "IDENTITY_FROZEN", "Identity fields cannot be patched", map[string]any{"fields": frozen})
-		return
-	}
-
-	var patch project.UpdateConfigInput
-	if err := decodeJSON(r, &patch); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	}
-	p, err := c.Mgr.UpdateConfig(r.Context(), projectID(r), patch)
+	resp, err := newGetProjectResponse(got)
 	if err != nil {
-		writeProjectError(w, r, err)
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]any{"project": p})
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (c *ProjectsController) remove(w http.ResponseWriter, r *http.Request) {
@@ -125,32 +96,6 @@ func (c *ProjectsController) remove(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, result)
 }
 
-func (c *ProjectsController) repair(w http.ResponseWriter, r *http.Request) {
-	if c.Mgr == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/projects/{id}/repair")
-		return
-	}
-	p, err := c.Mgr.Repair(r.Context(), projectID(r))
-	if err != nil {
-		writeProjectError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]any{"project": p})
-}
-
-func (c *ProjectsController) reload(w http.ResponseWriter, r *http.Request) {
-	if c.Mgr == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/projects/reload")
-		return
-	}
-	result, err := c.Mgr.Reload(r.Context())
-	if err != nil {
-		writeProjectError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, result)
-}
-
 func projectID(r *http.Request) domain.ProjectID {
 	return domain.ProjectID(chi.URLParam(r, "id"))
 }
@@ -159,30 +104,10 @@ func decodeJSON(r *http.Request, out any) error {
 	return json.NewDecoder(r.Body).Decode(out)
 }
 
-func containsFrozenIdentityField(r *http.Request) ([]string, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, err
-	}
-	var frozen []string
-	for _, field := range []string{"projectId", "path", "repo", "defaultBranch"} {
-		if _, ok := raw[field]; ok {
-			frozen = append(frozen, field)
-		}
-	}
-	return frozen, nil
-}
-
-// writeProjectError maps a project.Error to its HTTP status, falling back to
-// 500 for an unrecognized kind or a non-project.Error.
+// writeProjectError maps a projectsvc.Error to its HTTP status, falling back to
+// 500 for an unrecognized kind or a non-projectsvc.Error.
 func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {
-	var pe *project.Error
+	var pe *projectsvc.Error
 	if errors.As(err, &pe) {
 		status := http.StatusInternalServerError
 		switch pe.Kind {

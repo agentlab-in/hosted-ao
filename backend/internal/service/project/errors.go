@@ -1,6 +1,6 @@
 package project
 
-// Error is the manager-level error shape controllers can translate into the
+// Error is the service-level error shape controllers translate into the
 // locked HTTP APIError envelope without knowing store internals.
 type Error struct {
 	Kind    string
@@ -30,10 +30,6 @@ func notFound(code, message string) *Error {
 
 func conflict(code, message string, details map[string]any) *Error {
 	return newError("conflict", code, message, details)
-}
-
-func notImplemented(code, message string) *Error {
-	return newError("not_implemented", code, message, nil)
 }
 
 func internal(code, message string) *Error {

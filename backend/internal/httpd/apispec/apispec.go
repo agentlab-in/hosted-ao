@@ -27,7 +27,8 @@ var openapiYAML []byte
 // preserves the YAML shape verbatim so the JSON we emit on 501 responses
 // matches the on-disk source.
 type Spec struct {
-	doc map[string]any
+	doc     map[string]any
+	rawYAML []byte
 }
 
 var (
@@ -61,7 +62,12 @@ func New(yamlBytes []byte) (*Spec, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("parse openapi: empty document")
 	}
-	return &Spec{doc: doc}, nil
+	return &Spec{doc: doc, rawYAML: yamlBytes}, nil
+}
+
+// YAML returns the raw YAML bytes this spec was built from.
+func (s *Spec) YAML() []byte {
+	return s.rawYAML
 }
 
 // Operation returns the spec slice for a single (method, path) pair, ready
