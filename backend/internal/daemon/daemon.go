@@ -62,7 +62,17 @@ func Run() error {
 	// liveness; the CDC broadcaster feeds the session-state channel. The manager
 	// is handed to httpd, which mounts it at /mux. Raw PTY bytes never flow
 	// through the CDC change_log — only session-state events do.
-	runtimeAdapter := zellij.New(zellij.Options{})
+	// zellij's default socket dir is too long on macOS for long session ids
+	// (see zellij.DefaultSocketDir); use a short, stable one and ensure it exists.
+	zellijSocketDir := zellij.DefaultSocketDir()
+	if zellijSocketDir != "" {
+		if err := os.MkdirAll(zellijSocketDir, 0o700); err != nil {
+			// Don't abort startup, but surface it: every spawn's zellij session
+			// would otherwise fail later with an opaque socket-bind error.
+			log.Warn("could not create zellij socket dir; spawns may fail", "dir", zellijSocketDir, "error", err)
+		}
+	}
+	runtimeAdapter := zellij.New(zellij.Options{SocketDir: zellijSocketDir})
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
 	defer termMgr.Close()
 

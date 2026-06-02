@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -130,5 +132,58 @@ func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	}
 	if svc == nil {
 		t.Fatal("startSession returned nil session service")
+	}
+}
+
+// TestProjectRepoResolver_ResolvesRegisteredProject asserts the DB-backed repo
+// resolver turns a registered project into its on-disk repo path (so spawns
+// materialise a worktree), and fails loudly for an unregistered project.
+func TestProjectRepoResolver_ResolvesRegisteredProject(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: "/repo/mer", RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := projectRepoResolver{store: store}
+	got, err := r.RepoPath("mer")
+	if err != nil {
+		t.Fatalf("RepoPath(mer): %v", err)
+	}
+	if got != "/repo/mer" {
+		t.Fatalf("RepoPath(mer) = %q, want /repo/mer", got)
+	}
+	_, err = r.RepoPath("nope")
+	if err == nil {
+		t.Fatal("expected an error for an unregistered project")
+	}
+	// Guard the sentinel wrapping so the HTTP 400 mapping can't silently regress.
+	if !errors.Is(err, sessionmanager.ErrProjectNotResolvable) {
+		t.Fatalf("unregistered-project error should wrap ErrProjectNotResolvable, got %v", err)
+	}
+}
+
+// TestDaemonZellijSocketDir_LeavesBudgetForSessionNames guards the fix for the
+// zellij "session name must be less than 0 characters" spawn failure: the
+// daemon's socket dir must be short enough that a max-length (48-char) session
+// name still fits the ~103-byte unix-domain-socket-path budget. zellij's long
+// $TMPDIR default (the bug) would fail this.
+func TestDaemonZellijSocketDir_LeavesBudgetForSessionNames(t *testing.T) {
+	dir := zellij.DefaultSocketDir()
+	if dir == "" {
+		t.Skip("zellij not used on this platform")
+	}
+	const (
+		unixSocketPathMax = 103 // sun_path budget zellij enforces on macOS
+		zellijOverhead    = 24  // zellij's version subdir + separators (generous)
+		maxSessionName    = 48  // zellijSessionName's cap
+	)
+	if budget := unixSocketPathMax - len(dir) - zellijOverhead; budget < maxSessionName {
+		t.Fatalf("zellij socket dir %q too long: %d bytes left for the session name, need >= %d", dir, budget, maxSessionName)
 	}
 }

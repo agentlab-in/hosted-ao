@@ -17,6 +17,9 @@ var (
 	ErrNotFound         = errors.New("session: not found")
 	ErrNotRestorable    = errors.New("session: not restorable (not terminal)")
 	ErrIncompleteHandle = errors.New("session: incomplete teardown handle")
+	// ErrProjectNotResolvable means the spawn's project has no usable repo
+	// (unregistered, archived, or missing a path). The API maps it to a 400.
+	ErrProjectNotResolvable = errors.New("session: project repo not resolvable")
 )
 
 // Env vars a spawned process reads to learn who it is.
@@ -101,7 +104,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	id := rec.ID
 
-	ws, err := m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: cfg.ProjectID, SessionID: id, Branch: cfg.Branch})
+	branch := cfg.Branch
+	if branch == "" {
+		// A fresh, unique branch per session: gitworktree can't add a worktree on
+		// a branch already checked out elsewhere (e.g. main), so default to one
+		// derived from the assigned session id.
+		branch = "ao/" + string(id)
+	}
+	ws, err := m.workspace.Create(ctx, ports.WorkspaceConfig{ProjectID: cfg.ProjectID, SessionID: id, Branch: branch})
 	if err != nil {
 		m.markSpawnFailedTerminated(ctx, id)
 		return domain.SessionRecord{}, fmt.Errorf("spawn %s: workspace: %w", id, err)
