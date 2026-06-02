@@ -66,19 +66,36 @@ func Run() error {
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
 	defer termMgr.Close()
 
-	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{Projects: projectsvc.New(store)})
+	// Bring up the Lifecycle Manager and the reaper first: it makes the session
+	// lifecycle write path live (reducer write -> store -> DB trigger ->
+	// change_log -> poller -> broadcaster) and gives startSession the shared LCM.
+	lcStack := startLifecycle(ctx, store, runtimeAdapter, log)
+
+	// Wire the controller-facing session service over the same store + LCM, the
+	// zellij runtime, a gitworktree workspace, and the per-session agent resolver
+	// (AO_AGENT default, validated here), then mount it on the API.
+	sessionSvc, err := startSession(cfg, runtimeAdapter, store, lcStack.LCM, log)
 	if err != nil {
 		stop()
+		lcStack.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
+		return fmt.Errorf("wire session service: %w", err)
+	}
+
+	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		Projects: projectsvc.New(store),
+		Sessions: sessionSvc,
+	})
+	if err != nil {
+		stop()
+		lcStack.Stop()
 		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
 		}
 		return err
 	}
-
-	// Bring up the Lifecycle Manager and the reaper. This makes the session
-	// lifecycle write path live end-to-end: reducer write -> store -> DB trigger
-	// -> change_log -> poller -> broadcaster.
-	lcStack := startLifecycle(ctx, store, runtimeAdapter, log)
 
 	runErr := srv.Run(ctx)
 

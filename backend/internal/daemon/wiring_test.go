@@ -2,11 +2,16 @@ package daemon
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/zellij"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -66,5 +71,64 @@ func TestWiring_WriteFlowsToBroadcaster(t *testing.T) {
 	}
 	if !sawSession {
 		t.Fatalf("expected a change_log event for %s to reach the broadcaster, got %d events", rec.ID, len(got))
+	}
+}
+
+// TestWiring_AgentResolverResolvesRealAdapters asserts buildAgentResolver wires a
+// real registry-backed per-session resolver: each harness resolves to the
+// matching registered adapter, an empty harness falls back to the AO_AGENT
+// default, and an unknown harness misses.
+func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resolver, err := buildAgentResolver("", log) // empty default → claude-code
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		harness domain.AgentHarness
+		wantID  string
+	}{
+		{domain.HarnessClaudeCode, "claude-code"},
+		{domain.HarnessCodex, "codex"},
+		{"", config.DefaultAgent}, // empty harness falls back to the AO_AGENT default
+	} {
+		agent, ok := resolver.Agent(tc.harness)
+		if !ok {
+			t.Fatalf("resolver has no agent for harness %q", tc.harness)
+		}
+		described, ok := agent.(adapters.Adapter)
+		if !ok {
+			t.Fatalf("agent for harness %q is %T, not a registered adapters.Adapter", tc.harness, agent)
+		}
+		if got := described.Manifest().ID; got != tc.wantID {
+			t.Fatalf("harness %q resolved to adapter %q, want %q", tc.harness, got, tc.wantID)
+		}
+	}
+	if _, ok := resolver.Agent("definitely-not-an-agent"); ok {
+		t.Fatal("unknown harness resolved to an agent; want a miss")
+	}
+}
+
+// TestWiring_StartSessionBuildsSessionService asserts the daemon's startSession
+// constructs a real controller-facing session service end to end (resolver +
+// gitworktree workspace + session manager over the shared store/LCM), which is
+// what gets mounted at httpd APIDeps.Sessions.
+func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	lcm := lifecycle.New(store, nil)
+	cfg := config.Config{DataDir: t.TempDir()}
+
+	svc, err := startSession(cfg, zellij.New(zellij.Options{}), store, lcm, log)
+	if err != nil {
+		t.Fatalf("startSession: %v", err)
+	}
+	if svc == nil {
+		t.Fatal("startSession returned nil session service")
 	}
 }

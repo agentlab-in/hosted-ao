@@ -102,7 +102,7 @@ func TestBuildLayoutExportsEnvAndKeepsPaneAlive(t *testing.T) {
 	}
 	defer func() { getenv = oldGetenv }()
 
-	got := buildLayout(ports.RuntimeConfig{WorkspacePath: "/tmp/ws", LaunchCommand: "ao run", Env: map[string]string{
+	got := buildLayout(ports.RuntimeConfig{WorkspacePath: "/tmp/ws", Argv: []string{"ao", "run"}, Env: map[string]string{
 		"AO_SESSION_ID": "sess-1",
 		"ODD":           "can't",
 		"PATH":          "/custom/bin:/usr/bin",
@@ -114,7 +114,7 @@ func TestBuildLayoutExportsEnvAndKeepsPaneAlive(t *testing.T) {
 		"export AO_SESSION_ID='sess-1';",
 		"export ODD='can'\\\\''t';",
 		"export PATH='/custom/bin:/usr/bin';",
-		"ao run; exec '/bin/zsh' -i",
+		"'ao' 'run'; exec '/bin/zsh' -i",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("layout missing %q in %q", want, got)
@@ -132,7 +132,7 @@ func TestBuildLayoutUsesPowerShellLaunchOnWindowsShells(t *testing.T) {
 	}
 	defer func() { getenv = oldGetenv }()
 
-	got := buildLayout(ports.RuntimeConfig{WorkspacePath: `C:\ws`, LaunchCommand: "Write-Host ready", Env: map[string]string{
+	got := buildLayout(ports.RuntimeConfig{WorkspacePath: `C:\ws`, Argv: []string{"Write-Host", "ready"}, Env: map[string]string{
 		"AO_SESSION_ID": "sess-1",
 	}}, `C:\Program Files\PowerShell\7\pwsh.exe`)
 
@@ -141,7 +141,7 @@ func TestBuildLayoutUsesPowerShellLaunchOnWindowsShells(t *testing.T) {
 		`args "-NoLogo" "-NoProfile" "-NoExit" "-Command"`,
 		"$env:AO_SESSION_ID = 'sess-1';",
 		"$env:PATH = ",
-		"Write-Host ready",
+		"& 'Write-Host' 'ready'",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("powershell layout missing %q in %q", want, got)
@@ -156,7 +156,7 @@ func TestBuildLayoutUsesCmdLaunchOnCmdShells(t *testing.T) {
 	}
 	defer func() { getenv = oldGetenv }()
 
-	got := buildLayout(ports.RuntimeConfig{WorkspacePath: `C:\ws`, LaunchCommand: "echo ready", Env: map[string]string{
+	got := buildLayout(ports.RuntimeConfig{WorkspacePath: `C:\ws`, Argv: []string{"echo", "ready"}, Env: map[string]string{
 		"AO_SESSION_ID": "sess-1",
 	}}, `C:\Windows\System32\cmd.exe`)
 
@@ -164,7 +164,7 @@ func TestBuildLayoutUsesCmdLaunchOnCmdShells(t *testing.T) {
 		`pane command="C:\\Windows\\System32\\cmd.exe" name="agent"`,
 		`args "/D" "/S" "/K"`,
 		`AO_SESSION_ID=sess-1`,
-		"echo ready",
+		`\"echo\" \"ready\"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("cmd layout missing %q in %q", want, got)
@@ -178,7 +178,7 @@ func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
 	_, err := r.Create(context.Background(), ports.RuntimeConfig{
 		SessionID:     "sess-1",
 		WorkspacePath: "/tmp/ws",
-		LaunchCommand: "echo ready",
+		Argv:          []string{"echo", "ready"},
 		Env:           map[string]string{"BAD KEY": "x"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid env key") {
@@ -194,7 +194,7 @@ func TestCreateStartsSessionAndDiscoversPane(t *testing.T) {
 	handle, err := r.Create(context.Background(), ports.RuntimeConfig{
 		SessionID:     "sess-1",
 		WorkspacePath: "/tmp/ws",
-		LaunchCommand: "echo ready",
+		Argv:          []string{"echo", "ready"},
 		Env:           map[string]string{"AO_SESSION_ID": "sess-1"},
 	})
 	if err != nil {

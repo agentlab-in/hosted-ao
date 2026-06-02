@@ -34,7 +34,7 @@ func TestSessionStreamsRealZellijPane(t *testing.T) {
 	handle, err := rt.Create(context.Background(), ports.RuntimeConfig{
 		SessionID:     domain.SessionID(name),
 		WorkspacePath: t.TempDir(),
-		LaunchCommand: "printf AO_READY\n",
+		Argv:          []string{"printf", "AO_READY\\n"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

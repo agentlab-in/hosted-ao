@@ -31,10 +31,13 @@ type Runtime interface {
 }
 
 // RuntimeConfig is the spec for launching a session's process in a Runtime.
+// Argv is the agent's launch command as discrete arguments; each Runtime
+// shell-quotes it for its own shell, so the command survives args with spaces
+// (e.g. a prompt) without the caller guessing the target shell's quoting.
 type RuntimeConfig struct {
 	SessionID     domain.SessionID
 	WorkspacePath string
-	LaunchCommand string
+	Argv          []string
 	Env           map[string]string
 }
 
@@ -44,20 +47,7 @@ type RuntimeHandle struct {
 	ID string
 }
 
-// Agent is the AI coding tool driving a session (claude-code, codex, …): it
-// supplies the launch/restore commands and the process environment.
-type Agent interface {
-	GetLaunchCommand(cfg AgentConfig) string
-	GetEnvironment(cfg AgentConfig) map[string]string
-	GetRestoreCommand(agentSessionID string) string
-}
-
-// AgentConfig is the per-session input to an Agent's command and environment.
-type AgentConfig struct {
-	SessionID     domain.SessionID
-	WorkspacePath string
-	Prompt        string
-}
+// The Agent port and its supporting types live in agent.go.
 
 // Workspace is the isolated checkout an agent works in (a git worktree or clone).
 type Workspace interface {

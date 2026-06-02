@@ -26,11 +26,30 @@ func (s *stubRuntime) IsAlive(context.Context, ports.RuntimeHandle) (bool, error
 
 type stubAgent struct{}
 
-func (stubAgent) GetLaunchCommand(ports.AgentConfig) string { return "launch" }
-func (stubAgent) GetEnvironment(ports.AgentConfig) map[string]string {
-	return map[string]string{"X": "1"}
+func (stubAgent) GetConfigSpec(context.Context) (ports.ConfigSpec, error) {
+	return ports.ConfigSpec{}, nil
 }
-func (stubAgent) GetRestoreCommand(id string) string { return "resume " + id }
+func (stubAgent) GetLaunchCommand(context.Context, ports.LaunchConfig) ([]string, error) {
+	return []string{"launch"}, nil
+}
+func (stubAgent) GetPromptDeliveryStrategy(context.Context, ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
+	return ports.PromptDeliveryInCommand, nil
+}
+func (stubAgent) GetAgentHooks(context.Context, ports.WorkspaceHookConfig) error { return nil }
+func (stubAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
+	if id := cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]; id != "" {
+		return []string{"resume", id}, true, nil
+	}
+	return nil, false, nil
+}
+func (stubAgent) SessionInfo(context.Context, ports.SessionRef) (ports.SessionInfo, bool, error) {
+	return ports.SessionInfo{}, false, nil
+}
+
+// stubAgents resolves every harness to the same stubAgent.
+type stubAgents struct{}
+
+func (stubAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return stubAgent{}, true }
 
 type stubWorkspace struct{ destroyed int }
 
@@ -78,7 +97,7 @@ func newStack(t *testing.T) *stack {
 	prm := prsvc.New(prsvc.Deps{Writer: store, Lifecycle: lcm})
 	rt := &stubRuntime{}
 	ws := &stubWorkspace{}
-	mgr := sessionmanager.New(sessionmanager.Deps{Runtime: rt, Agent: stubAgent{}, Workspace: ws, Store: store, Messenger: msg, Lifecycle: lcm})
+	mgr := sessionmanager.New(sessionmanager.Deps{Runtime: rt, Agents: stubAgents{}, Workspace: ws, Store: store, Messenger: msg, Lifecycle: lcm})
 	sm := sessionsvc.New(mgr, store)
 	return &stack{store: store, sm: sm, lcm: lcm, prm: prm, rt: rt, ws: ws, msg: msg}
 }
