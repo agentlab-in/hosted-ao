@@ -81,10 +81,15 @@ func Run() error {
 	// change_log -> poller -> broadcaster) and gives startSession the shared LCM.
 	lcStack := startLifecycle(ctx, store, runtimeAdapter, log)
 
+	// The agent messenger sends validated user input to the session's live
+	// zellij pane. Keep this path small until durable inbox semantics are needed.
+	messenger := newSessionMessenger(store, runtimeAdapter, log)
+
 	// Wire the controller-facing session service over the same store + LCM, the
-	// zellij runtime, a gitworktree workspace, and the per-session agent resolver
-	// (AO_AGENT default, validated here), then mount it on the API.
-	sessionSvc, err := startSession(cfg, runtimeAdapter, store, lcStack.LCM, log)
+	// zellij runtime, a gitworktree workspace, the per-session agent resolver
+	// (AO_AGENT default, validated here), and the agent messenger, then mount it
+	// on the API.
+	sessionSvc, err := startSession(cfg, runtimeAdapter, store, lcStack.LCM, messenger, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()

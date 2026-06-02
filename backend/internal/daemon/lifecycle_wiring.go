@@ -42,19 +42,11 @@ func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runt
 // passed to startLifecycle before calling Stop.
 func (l *lifecycleStack) Stop() { <-l.reaperDone }
 
-// noopMessenger is a stub ports.AgentMessenger: durable writes and notifications
-// work without it; only live agent nudges are absent until the runtime/agent
-// nudge path is wired.
-type noopMessenger struct{}
-
-func (noopMessenger) Send(context.Context, domain.SessionID, string) error { return nil }
-
 // startSession builds the controller-facing session service: a session manager
 // over the real zellij runtime, a per-session gitworktree workspace, the shared
-// store + LCM, and the per-session agent resolver (AO_AGENT default). The
-// Messenger is a stub until the live agent-nudge path lands. The returned
-// service is mounted at httpd APIDeps.Sessions.
-func startSession(cfg config.Config, runtime ports.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, log *slog.Logger) (*sessionsvc.Service, error) {
+// store + LCM, the per-session agent resolver (AO_AGENT default), and the
+// agent messenger. The returned service is mounted at httpd APIDeps.Sessions.
+func startSession(cfg config.Config, runtime ports.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, messenger ports.AgentMessenger, log *slog.Logger) (*sessionsvc.Service, error) {
 	agents, err := buildAgentResolver(cfg.Agent, log)
 	if err != nil {
 		return nil, err
@@ -76,11 +68,49 @@ func startSession(cfg config.Config, runtime ports.Runtime, store *sqlite.Store,
 		Agents:    agents,
 		Workspace: ws,
 		Store:     store,
-		Messenger: noopMessenger{},
+		Messenger: messenger,
 		Lifecycle: lcm,
 		DataDir:   cfg.DataDir,
 	})
 	return sessionsvc.New(mgr, store), nil
+}
+
+// runtimeMessageSender is the narrow part of the concrete runtime needed by
+// ao send. zellij.Runtime already implements this via SendMessage.
+type runtimeMessageSender interface {
+	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
+}
+
+// runtimeMessenger sends the user's message directly to the session's live
+// runtime pane. The HTTP controller has already validated and sanitized the
+// message body; this adapter only resolves the stored runtime handle.
+type runtimeMessenger struct {
+	store   *sqlite.Store
+	runtime runtimeMessageSender
+}
+
+func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrNotFound)
+	}
+	if rec.IsTerminated {
+		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrTerminated)
+	}
+	handleID := rec.Metadata.RuntimeHandleID
+	if handleID == "" {
+		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrIncompleteHandle)
+	}
+	return m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, message)
+}
+
+// newSessionMessenger assembles the per-daemon agent messenger. For now, ao
+// send is intentionally minimal: submit the message to the live runtime pane.
+func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger) ports.AgentMessenger {
+	return runtimeMessenger{store: store, runtime: runtime}
 }
 
 // buildAgentRegistry returns a registry populated with the agent adapters the
