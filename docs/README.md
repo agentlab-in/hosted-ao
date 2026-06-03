@@ -8,6 +8,15 @@ state, terminal streaming, and CDC/event infrastructure.
 Start with [architecture.md](architecture.md) for the current backend model and
 [cli/README.md](cli/README.md) for the CLI surface.
 
+## Reference docs
+
+| Doc | What it covers |
+|-----|----------------|
+| [architecture.md](architecture.md) | Current backend model, package layout, status derivation, persistence/CDC, and load-bearing rules. |
+| [cli/README.md](cli/README.md) | CLI commands and daemon control surface. |
+| [status.md](status.md) | Current implementation shape, build/test command, and next integration work. |
+| [stack.md](stack.md) | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1. |
+
 ## Mental model
 
 Persist durable facts, derive display status:
