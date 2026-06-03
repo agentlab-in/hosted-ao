@@ -12,9 +12,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
-	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 type fakeSessionService struct {
@@ -54,6 +54,22 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 	return s, nil
 }
 
+func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool) (domain.Session, error) {
+	if clean {
+		active := true
+		existing, err := f.List(ctx, sessionsvc.ListFilter{ProjectID: projectID, Active: &active, OrchestratorOnly: true})
+		if err != nil {
+			return domain.Session{}, err
+		}
+		for _, o := range existing {
+			if _, err := f.Kill(ctx, o.ID); err != nil {
+				return domain.Session{}, err
+			}
+		}
+	}
+	return f.Spawn(ctx, ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindOrchestrator})
+}
+
 func (f *fakeSessionService) Get(_ context.Context, id domain.SessionID) (domain.Session, error) {
 	return f.sessions[id], nil
 }
@@ -85,7 +101,7 @@ func (f *fakeSessionService) Cleanup(_ context.Context, project domain.ProjectID
 func (f *fakeSessionService) Rename(_ context.Context, id domain.SessionID, displayName string) error {
 	s, ok := f.sessions[id]
 	if !ok {
-		return sessionmanager.ErrNotFound
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	s.DisplayName = displayName
 	f.sessions[id] = s
@@ -100,14 +116,14 @@ func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message
 func newSessionTestServer(t *testing.T, svc *fakeSessionService) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(httpd.NewRouterWithAPI(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
 func TestSessionsRoutes_DefaultToStubsWithoutService(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(httpd.NewRouter(config.Config{}, log, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
 	body, status, headers := doRequest(t, srv, "GET", "/api/v1/sessions", "")

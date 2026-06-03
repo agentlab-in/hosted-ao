@@ -12,7 +12,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Sentinel errors returned by the Session Manager.
+// Sentinel errors returned by the Session Manager; callers match them with
+// errors.Is.
 var (
 	ErrNotFound         = errors.New("session: not found")
 	ErrNotRestorable    = errors.New("session: not restorable (not terminal)")

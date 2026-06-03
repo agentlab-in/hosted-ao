@@ -6,7 +6,6 @@ package controllers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -38,7 +37,7 @@ func (c *ProjectsController) list(w http.ResponseWriter, r *http.Request) {
 	}
 	projects, err := c.Mgr.List(r.Context())
 	if err != nil {
-		writeProjectError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	if projects == nil {
@@ -59,7 +58,7 @@ func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := c.Mgr.Add(r.Context(), in)
 	if err != nil {
-		writeProjectError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, ProjectResponse{Project: p})
@@ -72,7 +71,7 @@ func (c *ProjectsController) get(w http.ResponseWriter, r *http.Request) {
 	}
 	got, err := c.Mgr.Get(r.Context(), projectID(r))
 	if err != nil {
-		writeProjectError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	resp, err := newGetProjectResponse(got)
@@ -90,7 +89,7 @@ func (c *ProjectsController) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := c.Mgr.Remove(r.Context(), projectID(r))
 	if err != nil {
-		writeProjectError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, result)
@@ -102,28 +101,4 @@ func projectID(r *http.Request) domain.ProjectID {
 
 func decodeJSON(r *http.Request, out any) error {
 	return json.NewDecoder(r.Body).Decode(out)
-}
-
-// writeProjectError maps a projectsvc.Error to its HTTP status, falling back to
-// 500 for an unrecognized kind or a non-projectsvc.Error.
-func writeProjectError(w http.ResponseWriter, r *http.Request, err error) {
-	var pe *projectsvc.Error
-	if errors.As(err, &pe) {
-		status := http.StatusInternalServerError
-		switch pe.Kind {
-		case "bad_request":
-			status = http.StatusBadRequest
-		case "not_found":
-			status = http.StatusNotFound
-		case "conflict":
-			status = http.StatusConflict
-		case "not_implemented":
-			status = http.StatusNotImplemented
-		case "internal":
-			status = http.StatusInternalServerError
-		}
-		envelope.WriteAPIError(w, r, status, pe.Kind, pe.Code, pe.Message, pe.Details)
-		return
-	}
-	envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil)
 }

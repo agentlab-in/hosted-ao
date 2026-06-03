@@ -2,11 +2,13 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -28,11 +30,21 @@ type ListFilter struct {
 	Fresh            bool
 }
 
+// commander is the command-side surface Service delegates to: the
+// *sessionmanager.Manager in production, a fake in tests.
+type commander interface {
+	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, error)
+	Restore(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error)
+	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	Send(ctx context.Context, id domain.SessionID, message string) error
+	Cleanup(ctx context.Context, project domain.ProjectID) ([]domain.SessionID, error)
+}
+
 // Service is the controller-facing session service. It delegates command-side
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
-	manager *sessionmanager.Manager
+	manager commander
 	store   Store
 }
 
@@ -45,42 +57,63 @@ func New(manager *sessionmanager.Manager, store Store) *Service {
 func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, error) {
 	rec, err := s.manager.Spawn(ctx, cfg)
 	if err != nil {
-		return domain.Session{}, err
+		return domain.Session{}, toAPIError(err)
 	}
 	return s.toSession(ctx, rec)
+}
+
+// SpawnOrchestrator spawns an orchestrator session for a project. When clean is
+// true it first tears down any active orchestrator(s) for that project so the new
+// one is the only live coordinator — a business rule that belongs here, not in the
+// HTTP controller.
+func (s *Service) SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool) (domain.Session, error) {
+	if clean {
+		active := true
+		existing, err := s.List(ctx, ListFilter{ProjectID: projectID, Active: &active, OrchestratorOnly: true})
+		if err != nil {
+			return domain.Session{}, err
+		}
+		for _, orch := range existing {
+			if _, err := s.Kill(ctx, orch.ID); err != nil {
+				return domain.Session{}, err
+			}
+		}
+	}
+	return s.Spawn(ctx, ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindOrchestrator})
 }
 
 // Restore relaunches a terminated session and returns the API-facing read model.
 func (s *Service) Restore(ctx context.Context, id domain.SessionID) (domain.Session, error) {
 	rec, err := s.manager.Restore(ctx, id)
 	if err != nil {
-		return domain.Session{}, err
+		return domain.Session{}, toAPIError(err)
 	}
 	return s.toSession(ctx, rec)
 }
 
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
-	return s.manager.Kill(ctx, id)
+	freed, err := s.manager.Kill(ctx, id)
+	return freed, toAPIError(err)
 }
 
 // Send delegates agent messaging to the internal manager.
 func (s *Service) Send(ctx context.Context, id domain.SessionID, message string) error {
-	return s.manager.Send(ctx, id, message)
+	return toAPIError(s.manager.Send(ctx, id, message))
 }
 
 // Rename updates the user-facing session display name.
 func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName string) error {
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" {
-		return fmt.Errorf("rename %s: display name is required", id)
+		return apierr.Invalid("DISPLAY_NAME_REQUIRED", "Display name is required", nil)
 	}
 	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("rename %s: %w", id, err)
 	}
 	if !renamed {
-		return fmt.Errorf("rename %s: %w", id, sessionmanager.ErrNotFound)
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return nil
 }
@@ -138,16 +171,38 @@ func matchesSessionFilter(rec domain.SessionRecord, filter ListFilter) bool {
 	return true
 }
 
-// Get returns one session as an enriched display model, or sessionmanager.ErrNotFound if it is absent.
+// Get returns one session as an enriched display model, or an apierr.NotFound
+// (SESSION_NOT_FOUND) if it is absent.
 func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session, error) {
 	rec, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("get %s: %w", id, err)
 	}
 	if !ok {
-		return domain.Session{}, fmt.Errorf("get %s: %w", id, sessionmanager.ErrNotFound)
+		return domain.Session{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return s.toSession(ctx, rec)
+}
+
+// toAPIError maps the session engine's sentinel errors to their REST API
+// equivalents; an unrecognized error passes through and surfaces as a 500.
+func toAPIError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, sessionmanager.ErrNotFound):
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	case errors.Is(err, sessionmanager.ErrNotRestorable):
+		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
+	case errors.Is(err, sessionmanager.ErrTerminated):
+		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+	case errors.Is(err, sessionmanager.ErrIncompleteHandle):
+		return apierr.Conflict("SESSION_INCOMPLETE_HANDLE", "Session is missing runtime or workspace handles", nil)
+	case errors.Is(err, sessionmanager.ErrProjectNotResolvable):
+		return apierr.Invalid("PROJECT_NOT_RESOLVABLE", "Project is not registered or has no repo — register it with `ao project add`", nil)
+	default:
+		return err
+	}
 }
 
 func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (domain.Session, error) {

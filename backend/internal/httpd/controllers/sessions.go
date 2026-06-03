@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
-	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 const (
@@ -27,6 +26,7 @@ const (
 type SessionService interface {
 	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, error)
+	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Restore(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
@@ -68,7 +68,7 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions, err := c.Svc.List(r.Context(), filter)
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessions})
@@ -97,7 +97,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, Prompt: in.Prompt, AgentRules: in.AgentRules})
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SessionResponse{Session: sess})
@@ -110,7 +110,7 @@ func (c *SessionsController) get(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sess})
@@ -132,7 +132,7 @@ func (c *SessionsController) rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := c.Svc.Rename(r.Context(), sessionID(r), displayName); err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, RenameSessionResponse{OK: true, SessionID: sessionID(r), DisplayName: displayName})
@@ -145,7 +145,7 @@ func (c *SessionsController) restore(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := c.Svc.Restore(r.Context(), sessionID(r))
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, RestoreSessionResponse{OK: true, SessionID: sessionID(r), Session: sess})
@@ -158,7 +158,7 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 	}
 	freed, err := c.Svc.Kill(r.Context(), sessionID(r))
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: freed})
@@ -171,7 +171,7 @@ func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	cleaned, err := c.Svc.Cleanup(r.Context(), domain.ProjectID(r.URL.Query().Get("project")))
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, CleanupSessionsResponse{OK: true, Cleaned: cleaned})
@@ -197,7 +197,7 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	message := stripUnsafeControlChars(in.Message)
 	if err := c.Svc.Send(r.Context(), sessionID(r), message); err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
@@ -217,23 +217,9 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_ID_REQUIRED", "projectId is required", nil)
 		return
 	}
-	if in.Clean {
-		active := true
-		orchestrators, err := c.Svc.List(r.Context(), sessionsvc.ListFilter{ProjectID: in.ProjectID, Active: &active, OrchestratorOnly: true})
-		if err != nil {
-			writeSessionError(w, r, err)
-			return
-		}
-		for _, existing := range orchestrators {
-			if _, err := c.Svc.Kill(r.Context(), existing.ID); err != nil {
-				writeSessionError(w, r, err)
-				return
-			}
-		}
-	}
-	sess, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, Kind: domain.KindOrchestrator})
+	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean)
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{
@@ -248,7 +234,7 @@ func (c *SessionsController) listOrchestrators(w http.ResponseWriter, r *http.Re
 	}
 	sessions, err := c.Svc.List(r.Context(), sessionsvc.ListFilter{OrchestratorOnly: true})
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessions})
@@ -261,11 +247,11 @@ func (c *SessionsController) getOrchestrator(w http.ResponseWriter, r *http.Requ
 	}
 	sess, err := c.Svc.Get(r.Context(), orchestratorID(r))
 	if err != nil {
-		writeSessionError(w, r, err)
+		envelope.WriteError(w, r, err)
 		return
 	}
 	if sess.Kind != domain.KindOrchestrator {
-		writeSessionError(w, r, sessionmanager.ErrNotFound)
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Unknown session", nil)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sess})
@@ -313,21 +299,4 @@ func stripUnsafeControlChars(message string) string {
 		}
 		return r
 	}, message)
-}
-
-func writeSessionError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, sessionmanager.ErrNotFound):
-		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Unknown session", nil)
-	case errors.Is(err, sessionmanager.ErrNotRestorable):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
-	case errors.Is(err, sessionmanager.ErrTerminated):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_TERMINATED", "Session is terminated", nil)
-	case errors.Is(err, sessionmanager.ErrIncompleteHandle):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_INCOMPLETE_HANDLE", "Session is missing runtime or workspace handles", nil)
-	case errors.Is(err, sessionmanager.ErrProjectNotResolvable):
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_NOT_RESOLVABLE", "Project is not registered or has no repo — register it with `ao project add`", nil)
-	default:
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "SESSION_OPERATION_FAILED", "Session operation failed", nil)
-	}
 }
