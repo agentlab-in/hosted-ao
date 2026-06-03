@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,6 +16,7 @@ type Store interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error)
 	GetDisplayPRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, bool, error)
 }
 
@@ -64,6 +67,22 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 // Send delegates agent messaging to the internal manager.
 func (s *Service) Send(ctx context.Context, id domain.SessionID, message string) error {
 	return s.manager.Send(ctx, id, message)
+}
+
+// Rename updates the user-facing session display name.
+func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return fmt.Errorf("rename %s: display name is required", id)
+	}
+	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("rename %s: %w", id, err)
+	}
+	if !renamed {
+		return fmt.Errorf("rename %s: %w", id, sessionmanager.ErrNotFound)
+	}
+	return nil
 }
 
 // Cleanup delegates terminal workspace cleanup to the internal manager.
