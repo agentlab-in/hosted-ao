@@ -76,15 +76,17 @@ func Run() error {
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
 	defer termMgr.Close()
 
+	// The agent messenger sends validated user input to the session's live
+	// zellij pane. Keep this path small until durable inbox semantics are needed.
+	// Built before the Lifecycle Manager so the LCM can use it for SCM-driven
+	// agent nudges (CI failure, review feedback, merge conflict).
+	messenger := newSessionMessenger(store, runtimeAdapter, log)
+
 	// Bring up the Lifecycle Manager and the reaper first: it makes the session
 	// lifecycle write path live (reducer write -> store -> DB trigger ->
 	// change_log -> poller -> broadcaster) and gives startSession the shared LCM.
-	lcStack := startLifecycle(ctx, store, runtimeAdapter, log)
+	lcStack := startLifecycle(ctx, store, runtimeAdapter, messenger, log)
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, log)
-
-	// The agent messenger sends validated user input to the session's live
-	// zellij pane. Keep this path small until durable inbox semantics are needed.
-	messenger := newSessionMessenger(store, runtimeAdapter, log)
 
 	// Wire the controller-facing session service over the same store + LCM, the
 	// zellij runtime, a gitworktree workspace, the per-session agent resolver

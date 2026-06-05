@@ -254,6 +254,71 @@ func TestWiring_SessionMessengerRejectsTerminatedSession(t *testing.T) {
 	}
 }
 
+type captureMessenger struct {
+	msgs []capturedMessage
+}
+
+type capturedMessage struct {
+	id  domain.SessionID
+	msg string
+}
+
+func (c *captureMessenger) Send(_ context.Context, id domain.SessionID, msg string) error {
+	c.msgs = append(c.msgs, capturedMessage{id: id, msg: msg})
+	return nil
+}
+
+// TestWiring_StartLifecycleThreadsMessengerIntoLCM asserts startLifecycle
+// constructs the LCM with a real messenger by driving an SCM observation
+// through the wired stack and checking the messenger receives the CI-failure
+// nudge — a nil messenger here would silently drop the send inside sendOnce.
+func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel must run BEFORE Stop so the reaper goroutine's ctx.Done() fires;
+	// Stop is a no-op otherwise. Cleanup is LIFO, so register Stop first.
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "p", Kind: domain.KindWorker,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	messenger := &captureMessenger{}
+	stack := startLifecycle(ctx, store, zellij.New(zellij.Options{}), messenger, log)
+	t.Cleanup(stack.Stop)
+	t.Cleanup(cancel)
+
+	obs := ports.SCMObservation{
+		Fetched: true,
+		PR:      ports.SCMPRObservation{URL: "https://github.com/o/r/pull/1", Number: 1, HeadSHA: "c1"},
+		CI: ports.SCMCIObservation{
+			Summary:      string(domain.CIFailing),
+			HeadSHA:      "c1",
+			FailedChecks: []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckFailed), LogTail: "boom"}},
+		},
+	}
+	if err := stack.LCM.ApplySCMObservation(ctx, rec.ID, obs); err != nil {
+		t.Fatalf("ApplySCMObservation: %v", err)
+	}
+	if len(messenger.msgs) != 1 {
+		t.Fatalf("want one nudge to flow through the wired messenger, got %d", len(messenger.msgs))
+	}
+	if messenger.msgs[0].id != rec.ID {
+		t.Fatalf("nudge sent to %q, want %q", messenger.msgs[0].id, rec.ID)
+	}
+}
+
 // TestProjectRepoResolver_ResolvesRegisteredProject asserts the DB-backed repo
 // resolver turns a registered project into its on-disk repo path (so spawns
 // materialise a worktree), and fails loudly for an unregistered project.

@@ -34,8 +34,10 @@ type lifecycleStack struct {
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
 // reaper. The goroutine stops when ctx is cancelled; Stop waits for it to drain.
-func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runtime, logger *slog.Logger) *lifecycleStack {
-	lcm := lifecycle.New(store, nil)
+// The messenger is the per-daemon agent messenger the LCM uses to nudge agents
+// in response to SCM observations (CI failure, review feedback, merge conflict).
+func startLifecycle(ctx context.Context, store *sqlite.Store, runtime ports.Runtime, messenger ports.AgentMessenger, logger *slog.Logger) *lifecycleStack {
+	lcm := lifecycle.New(store, messenger)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
 	return &lifecycleStack{LCM: lcm, reaperDone: rp.Start(ctx)}
 }

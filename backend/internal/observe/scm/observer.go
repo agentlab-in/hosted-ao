@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ type Provider interface {
 type Store interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
+	UpsertProject(ctx context.Context, row domain.ProjectRecord) error
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error
@@ -446,6 +448,14 @@ func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, e
 			}
 			if !found || !p.ArchivedAt.IsZero() {
 				continue
+			}
+			if p.RepoOriginURL == "" && p.Path != "" {
+				if url := resolveGitOriginURL(p.Path); url != "" {
+					p.RepoOriginURL = url
+					if err := o.store.UpsertProject(ctx, p); err != nil {
+						o.logger.Warn("scm observer: backfill origin URL persist failed", "project", p.ID, "err", err)
+					}
+				}
 			}
 			projects[sess.ProjectID] = p
 			proj = p
@@ -1122,6 +1132,18 @@ func normalizePRState(draft, merged, closed bool) string {
 	default:
 		return string(domain.PRStateOpen)
 	}
+}
+
+// resolveGitOriginURL runs `git -C path remote get-url origin` and returns the
+// trimmed URL, or "" if the command fails (missing repo, no origin remote, etc).
+// The observer uses this to backfill projects that were registered before
+// project.Add resolved origin URLs at add time.
+func resolveGitOriginURL(path string) string {
+	out, err := exec.Command("git", "-C", path, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func scrubLine(s string) string {

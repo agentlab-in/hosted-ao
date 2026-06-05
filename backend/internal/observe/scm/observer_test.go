@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +68,16 @@ func (s *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	defer s.mu.Unlock()
 	p, ok := s.projects[id]
 	return p, ok, nil
+}
+
+func (s *fakeStore) UpsertProject(_ context.Context, row domain.ProjectRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projects == nil {
+		s.projects = map[string]domain.ProjectRecord{}
+	}
+	s.projects[row.ID] = row
+	return nil
 }
 
 func (s *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
@@ -829,5 +840,59 @@ func TestPoll_DuplicateTrackedPRKeepsFirstSession(t *testing.T) {
 	}
 	if store.writes[0].pr.SessionID != "p-1" {
 		t.Fatalf("duplicate owner overwrote first session: wrote session %s", store.writes[0].pr.SessionID)
+	}
+}
+
+// TestDiscoverSubjects_BackfillsRepoOriginURL asserts that a project row with
+// an empty RepoOriginURL but a real on-disk repo gets its origin filled in
+// during discovery and persisted, so the same project becomes observable
+// without re-running project add.
+func TestDiscoverSubjects_BackfillsRepoOriginURL(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "remote", "add", "origin", "https://github.com/o/r.git").CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v (%s)", err, out)
+	}
+
+	store := &fakeStore{
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}}, // empty RepoOriginURL
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	provider := &fakeProvider{}
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(0, 0).UTC())
+
+	if _, err := obs.discoverSubjects(context.Background()); err != nil {
+		t.Fatalf("discoverSubjects: %v", err)
+	}
+	if got := store.projects["p"].RepoOriginURL; got != "https://github.com/o/r.git" {
+		t.Fatalf("RepoOriginURL after backfill = %q, want https://github.com/o/r.git", got)
+	}
+}
+
+// TestDiscoverSubjects_NonGitPathDoesNotBackfill confirms the backfill is
+// best-effort: a non-git project path leaves RepoOriginURL empty without
+// erroring or persisting a stub, so the project is simply skipped.
+func TestDiscoverSubjects_NonGitPathDoesNotBackfill(t *testing.T) {
+	dir := t.TempDir()
+	store := &fakeStore{
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	obs := newTestObserver(store, &fakeProvider{}, &fakeLifecycle{}, time.Unix(0, 0).UTC())
+	subjects, err := obs.discoverSubjects(context.Background())
+	if err != nil {
+		t.Fatalf("discoverSubjects: %v", err)
+	}
+	if len(subjects) != 0 {
+		t.Fatalf("non-git project should be skipped, got %d subjects", len(subjects))
+	}
+	if got := store.projects["p"].RepoOriginURL; got != "" {
+		t.Fatalf("RepoOriginURL = %q, want empty (no persist on failed backfill)", got)
 	}
 }

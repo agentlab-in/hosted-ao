@@ -145,6 +145,50 @@ func TestManager_AddValidationAndConflicts(t *testing.T) {
 	wantCode(t, err, "ID_ALREADY_REGISTERED")
 }
 
+// gitRepoWithOrigin creates a real git repo with an `origin` remote pointing
+// at `originURL`. Used to assert project.Add captures the origin at add time.
+func gitRepoWithOrigin(t *testing.T, originURL string) string {
+	t.Helper()
+	dir := gitRepo(t)
+	if out, err := exec.Command("git", "-C", dir, "remote", "add", "origin", originURL).CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v (%s)", err, out)
+	}
+	return dir
+}
+
+func TestManager_AddPopulatesRepoOriginURL(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T) string
+		wantURL string
+	}{
+		{
+			name:    "git repo with origin populates url",
+			setup:   func(t *testing.T) string { return gitRepoWithOrigin(t, "https://github.com/o/r.git") },
+			wantURL: "https://github.com/o/r.git",
+		},
+		{
+			name:    "git repo without origin leaves url empty",
+			setup:   func(t *testing.T) string { return gitRepo(t) },
+			wantURL: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newManager(t)
+			path := tc.setup(t)
+			proj, err := m.Add(ctx, project.AddInput{Path: path, ProjectID: ptr("p")})
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			if proj.Repo != tc.wantURL {
+				t.Fatalf("Repo = %q, want %q", proj.Repo, tc.wantURL)
+			}
+		})
+	}
+}
+
 func TestManager_GetUpdateRemoveErrors(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
