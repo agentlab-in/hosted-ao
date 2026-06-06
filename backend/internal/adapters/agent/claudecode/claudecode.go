@@ -37,14 +37,6 @@ const (
 	// adapterID is the registry id and the value users pass to
 	// `ao spawn --agent`.
 	adapterID = "claude-code"
-
-	// Normalized session-metadata keys the Claude Code hooks persist into the
-	// AO session store and SessionInfo reads back. Shared vocabulary
-	// with the Codex adapter so the dashboard treats every agent uniformly.
-	// The native session id key lives in ports as MetadataKeyAgentSessionID
-	// because the Session Manager also reads it.
-	claudeTitleMetadataKey   = "title"
-	claudeSummaryMetadataKey = "summary"
 )
 
 // claudeSessionNamespace seeds the UUIDv5 derivation that maps an AO
@@ -220,8 +212,8 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	}
 	info := ports.SessionInfo{
 		AgentSessionID: session.Metadata[ports.MetadataKeyAgentSessionID],
-		Title:          session.Metadata[claudeTitleMetadataKey],
-		Summary:        session.Metadata[claudeSummaryMetadataKey],
+		Title:          session.Metadata[ports.MetadataKeyTitle],
+		Summary:        session.Metadata[ports.MetadataKeySummary],
 	}
 	if info.AgentSessionID == "" && info.Title == "" && info.Summary == "" {
 		return ports.SessionInfo{}, false, nil

@@ -144,6 +144,24 @@ func TestHooks_OpenCodeUserPromptReportsActive(t *testing.T) {
 	}
 }
 
+func TestHooks_RejectsMalformedSessionID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "../etc/passwd")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"reason":"logout"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "session-end")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capture.hits != 0 {
+		t.Errorf("expected no daemon call for an out-of-alphabet session id, got %d", capture.hits)
+	}
+}
+
 func TestHooks_NoSessionIDIsNoOp(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "")
 	cfg := setConfigEnv(t)

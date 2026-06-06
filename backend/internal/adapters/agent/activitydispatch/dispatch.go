@@ -1,6 +1,11 @@
 // Package activitydispatch is the single source of truth mapping the agent
 // token in `ao hooks <agent> <event>` onto the function that interprets that
 // agent's hook callbacks as an AO activity state.
+//
+// The hidden `ao hooks` CLI command dispatches a live callback through it. Every
+// adapter that installs `ao hooks <tok>` callbacks must have a deriver
+// registered here — otherwise the adapter writes callbacks that nothing on the
+// receiving side understands, so its activity is silently never reported.
 package activitydispatch
 
 import (
@@ -15,6 +20,7 @@ import (
 type DeriveFunc func(event string, payload []byte) (domain.ActivityState, bool)
 
 // Derivers maps the agent token in `ao hooks <agent> <event>` to its deriver.
+// Per-adapter PRs add their tokens here as they land.
 var Derivers = map[string]DeriveFunc{
 	"claude-code": claudecode.DeriveActivityState,
 	"codex":       codex.DeriveActivityState,
@@ -22,7 +28,8 @@ var Derivers = map[string]DeriveFunc{
 }
 
 // Derive looks up the deriver for an agent token and applies it. ok=false when
-// the token has no registered deriver or the event carries no activity signal.
+// the token has no registered deriver or the event carries no activity signal —
+// the caller reports nothing in either case.
 func Derive(agent, event string, payload []byte) (domain.ActivityState, bool) {
 	derive, found := Derivers[agent]
 	if !found {

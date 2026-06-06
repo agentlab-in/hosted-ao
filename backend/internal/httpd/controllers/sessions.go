@@ -37,7 +37,11 @@ type SessionService interface {
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
 }
 
-// ActivityRecorder applies an agent activity-state signal to a session.
+// ActivityRecorder applies an agent activity-state signal to a session. It is
+// satisfied directly by *lifecycle.Manager: an activity signal is a pure
+// lifecycle reduction (no runtime/workspace teardown), so it bypasses
+// SessionService rather than threading a no-op passthrough through the session
+// manager.
 type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
@@ -253,6 +257,10 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
 }
 
+// activity records an agent activity-state signal reported by an agent hook
+// (via `ao hooks <agent> <event>`). It funnels through the single
+// lifecycle.Manager so the reaper and hooks never race on the session's
+// activity/termination columns.
 func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 	if c.Activity == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/activity")

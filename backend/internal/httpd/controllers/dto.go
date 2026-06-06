@@ -121,7 +121,7 @@ type SpawnSessionRequest struct {
 	ProjectID  domain.ProjectID    `json:"projectId"`
 	IssueID    domain.IssueID      `json:"issueId,omitempty"`
 	Kind       domain.SessionKind  `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness    domain.AgentHarness `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode"`
+	Harness    domain.AgentHarness `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,kiro,kilocode,vibe,pi,autohand"`
 	Branch     string              `json:"branch,omitempty"`
 	Prompt     string              `json:"prompt,omitempty" maxLength:"4096"`
 	AgentRules string              `json:"agentRules,omitempty"`

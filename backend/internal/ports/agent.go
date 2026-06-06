@@ -49,6 +49,15 @@ type AgentResolver interface {
 // either side hard-coding the other's vocabulary.
 const MetadataKeyAgentSessionID = "agentSessionId"
 
+// MetadataKeyTitle and MetadataKeySummary are the SessionRef.Metadata keys
+// carrying a session's human title and one-line summary. They are the shared
+// vocabulary every adapter reports under, so the dashboard renders agents
+// uniformly.
+const (
+	MetadataKeyTitle   = "title"
+	MetadataKeySummary = "summary"
+)
+
 // AgentConfig holds values loaded from the selected agent's config section.
 // Agent adapters own validation for their custom keys.
 type AgentConfig map[string]any

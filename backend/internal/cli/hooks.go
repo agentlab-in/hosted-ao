@@ -6,12 +6,18 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 )
+
+// sessionIDPattern bounds the AO_SESSION_ID we will place in a request path to
+// the id alphabet the daemon issues. Validating the externally-set env value
+// before it reaches the loopback URL keeps it from steering the request.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // setActivityAPIRequest mirrors the daemon's SetActivityRequest body for
 // POST /api/v1/sessions/{id}/activity. The CLI keeps its own copy so it need
@@ -42,9 +48,10 @@ func newHooksCommand(ctx *commandContext) *cobra.Command {
 
 func (c *commandContext) runHook(ctx context.Context, agent, event string) error {
 	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
-	if sessionID == "" {
-		// Not an AO-managed session. Return before reading stdin so a manual
-		// invocation without a piped payload can't block on EOF.
+	if !sessionIDPattern.MatchString(sessionID) {
+		// Not an AO-managed session (unset/empty), or an id we won't put in a
+		// request path. Return before reading stdin so a manual invocation
+		// without a piped payload can't block on EOF.
 		return nil
 	}
 	payload, err := io.ReadAll(c.deps.In)

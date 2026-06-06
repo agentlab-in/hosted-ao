@@ -472,7 +472,7 @@ export interface components {
             agentRules?: string;
             branch?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "kiro" | "kilocode" | "vibe" | "pi" | "autohand";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";

@@ -19,11 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const (
-	codexTitleMetadataKey   = "title"
-	codexSummaryMetadataKey = "summary"
-)
-
 // Plugin is the Codex agent adapter. It is safe for concurrent use; the binary
 // path is resolved once and cached under binaryMu.
 type Plugin struct {
@@ -132,8 +127,8 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	}
 	info := ports.SessionInfo{
 		AgentSessionID: session.Metadata[ports.MetadataKeyAgentSessionID],
-		Title:          session.Metadata[codexTitleMetadataKey],
-		Summary:        session.Metadata[codexSummaryMetadataKey],
+		Title:          session.Metadata[ports.MetadataKeyTitle],
+		Summary:        session.Metadata[ports.MetadataKeySummary],
 	}
 	if info.AgentSessionID == "" && info.Title == "" && info.Summary == "" {
 		return ports.SessionInfo{}, false, nil

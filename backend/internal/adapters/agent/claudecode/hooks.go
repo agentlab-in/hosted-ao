@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -56,7 +57,8 @@ var claudeStartupMatcher = "startup"
 // activity-state signals back into AO's store (see DeriveActivityState).
 // Notification and SessionEnd carry no matcher: each installs once and fires
 // for every sub-type, and the handler filters on the payload's
-// notification_type / reason field.
+// notification_type / reason field — installing one command under multiple
+// matchers would trip the per-command dedup in claudeHookCommandExists.
 var claudeManagedHooks = []claudeHookSpec{
 	{Event: "SessionStart", Matcher: &claudeStartupMatcher, Command: claudeHookCommandPrefix + "session-start"},
 	{Event: "UserPromptSubmit", Command: claudeHookCommandPrefix + "user-prompt-submit"},
@@ -233,34 +235,10 @@ func writeClaudeSettings(settingsPath string, topLevel, rawHooks map[string]json
 		return fmt.Errorf("encode %s: %w", settingsPath, err)
 	}
 	data = append(data, '\n')
-	if err := atomicWriteFile(settingsPath, data, 0o600); err != nil {
+	if err := hookutil.AtomicWriteFile(settingsPath, data, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", settingsPath, err)
 	}
 	return nil
-}
-
-// atomicWriteFile writes data to path via a temp file in the same directory
-// followed by a rename, so a crash or signal mid-write can't leave a truncated
-// or empty file that Claude Code then fails to parse (silently disabling hooks).
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".ao-tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }
 
 // groupClaudeHooksByEvent groups the managed hook specs by their Claude event so

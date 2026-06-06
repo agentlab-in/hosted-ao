@@ -214,8 +214,8 @@ func TestGetAgentHooksInstallsClaudeHooks(t *testing.T) {
 	if m := matcherForCommand(config.Hooks["UserPromptSubmit"], "ao hooks claude-code user-prompt-submit"); m != nil {
 		t.Fatalf("UserPromptSubmit matcher = %v, want none", m)
 	}
-	// Notification and SessionEnd install with no matcher; the handler filters
-	// on the payload.
+	// Notification and SessionEnd install with no matcher (they fire for all
+	// sub-types; the handler filters on the payload).
 	if m := matcherForCommand(config.Hooks["Notification"], "ao hooks claude-code notification"); m != nil {
 		t.Fatalf("Notification matcher = %v, want none", m)
 	}
@@ -303,8 +303,8 @@ func TestSessionInfoReadsHookMetadata(t *testing.T) {
 		WorkspacePath: "/some/path",
 		Metadata: map[string]string{
 			ports.MetadataKeyAgentSessionID: "claude-native-1",
-			claudeTitleMetadataKey:          "Fix login redirect",
-			claudeSummaryMetadataKey:        "Updated the auth callback and tests.",
+			ports.MetadataKeyTitle:          "Fix login redirect",
+			ports.MetadataKeySummary:        "Updated the auth callback and tests.",
 			"ignored":                       "not returned",
 		},
 	})

@@ -10,6 +10,7 @@ import (
 
 	_ "embed"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -90,7 +91,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o750); err != nil {
 		return fmt.Errorf("opencode.GetAgentHooks: create plugin dir: %w", err)
 	}
-	if err := atomicWriteFile(pluginPath, []byte(opencodePluginSource), 0o600); err != nil {
+	if err := hookutil.AtomicWriteFile(pluginPath, []byte(opencodePluginSource), 0o600); err != nil {
 		return fmt.Errorf("opencode.GetAgentHooks: write plugin: %w", err)
 	}
 	return nil
@@ -154,32 +155,4 @@ func isAOManagedPlugin(path string) (bool, error) {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
 	return strings.Contains(string(data), opencodePluginSentinel), nil
-}
-
-// atomicWriteFile writes data to path via a temp file + rename, so a crash mid-
-// write can't leave a truncated plugin file that opencode then fails to import
-// (silently disabling activity reporting).
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".ao-tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }
