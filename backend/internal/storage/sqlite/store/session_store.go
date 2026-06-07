@@ -56,6 +56,80 @@ func (s *Store) RenameSession(ctx context.Context, id domain.SessionID, displayN
 	return rows > 0, nil
 }
 
+// DeleteSession removes a session row, but only if it is still in seed state
+// (no workspace, no runtime handle, no agent session id, no prompt, and not
+// already terminated). Rows that have observable spawn output are immutable
+// to preserve the no-resurrection guarantee — for those, callers fall back to
+// MarkTerminated (lifecycle.Manager) instead.
+//
+// The deletion runs in a transaction. It first probes seed state with
+// SessionIsSeed; only if that returns true does it clear the session's
+// change_log rows (required because change_log FKs sessions(id) without
+// ON DELETE CASCADE) and then delete the session row. For live or absent
+// sessions the transaction commits with no rows touched — critically, the
+// session_created / session_updated CDC events for live sessions are NOT
+// destroyed when callers (e.g. RollbackSpawn's delete-then-kill fallback)
+// invoke DeleteSession on a fully-spawned row.
+//
+// Returns deleted=true when a seed row was removed; deleted=false when the
+// session id did not match a seed row (either it never existed, or it had
+// already progressed past seed state). The latter case is benign — the caller
+// should fall back to MarkTerminated.
+func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin delete seed session: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.qw.WithTx(tx)
+
+	isSeed, err := q.SessionIsSeed(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("delete seed session: probe seed state for %s: %w", id, err)
+	}
+	if !isSeed {
+		// Commit the empty tx so we don't leak a transaction. Critically, do
+		// NOT touch change_log here — for a live session that contains real
+		// session_created / session_updated CDC events.
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("delete seed session: commit no-op: %w", err)
+		}
+		return false, nil
+	}
+
+	// Drop change_log rows for this session id first so the FK doesn't reject
+	// the session DELETE. We do not touch project-level events (session_id IS
+	// NULL) — those belong to the project, not this session. Both this DELETE
+	// and the session DELETE below run via raw ExecContext to sidestep sqlc
+	// 1.31's SQLite-parser bug, which strips trailing `?` placeholders and
+	// string literals from DELETE statements (see queries/changelog.sql and
+	// queries/sessions.sql for the documented workaround context).
+	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
+		return false, fmt.Errorf("delete seed session: clear change log for %s: %w", id, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+DELETE FROM sessions
+WHERE id = ?
+  AND is_terminated = 0
+  AND workspace_path = ''
+  AND runtime_handle_id = ''
+  AND agent_session_id = ''
+  AND prompt = ''`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete seed session %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete seed session %s: rows affected: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("delete seed session: commit: %w", err)
+	}
+	return n > 0, nil
+}
+
 // GetSession returns the full record for a session, or ok=false if absent.
 func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	row, err := s.qr.GetSession(ctx, id)

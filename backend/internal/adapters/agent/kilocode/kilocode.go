@@ -24,6 +24,7 @@ package kilocode
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -269,7 +270,7 @@ func ResolveKilocodeBinary(ctx context.Context) (string, error) {
 				return "", err
 			}
 		}
-		return "kilocode", nil
+		return "", fmt.Errorf("kilocode: %w", ports.ErrAgentBinaryNotFound)
 	}
 
 	if path, err := exec.LookPath("kilocode"); err == nil && path != "" {
@@ -297,7 +298,7 @@ func ResolveKilocodeBinary(ctx context.Context) (string, error) {
 		}
 	}
 
-	return "kilocode", nil
+	return "", fmt.Errorf("kilocode: %w", ports.ErrAgentBinaryNotFound)
 }
 
 func (p *Plugin) kilocodeBinary(ctx context.Context) (string, error) {
