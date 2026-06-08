@@ -81,6 +81,7 @@ import {
   resolveProbeDecision,
   type LifecycleDecision,
 } from "./lifecycle-status-decisions.js";
+import { dedupePrInfos } from "./utils/pr.js";
 import {
   buildCIFailureNotificationData,
   buildPRStateNotificationData,
@@ -320,7 +321,9 @@ function buildEventContext(
   session: Session | ReactionSessionContext,
   prEnrichmentCache: Map<string, PREnrichmentData>,
 ): EventContext {
-  const sessionPRs = "prs" in session && Array.isArray(session.prs) ? session.prs : (session.pr ? [session.pr] : []);
+  const sessionPRs = dedupePrInfos(
+    "prs" in session && Array.isArray(session.prs) ? session.prs : session.pr ? [session.pr] : [],
+  );
 
   const prs: EventContext["prs"] = sessionPRs.map((p) => {
     const cached = prEnrichmentCache.get(`${p.owner}/${p.repo}#${p.number}`);
@@ -508,6 +511,32 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
    */
   const prEnrichmentCache = new Map<string, PREnrichmentData>();
 
+  function normalizeSessionPRs(session: Session): PRInfo[] {
+    const candidatePRs = session.prs.length > 0 ? session.prs : session.pr ? [session.pr] : [];
+    const uniquePRs = dedupePrInfos(candidatePRs);
+    if (uniquePRs.length !== session.prs.length || session.pr !== (uniquePRs[0] ?? null)) {
+      session.prs = uniquePRs;
+      session.pr = uniquePRs[0] ?? null;
+    }
+    return uniquePRs;
+  }
+
+  function indexedPRMetadataCleanup(
+    session: Session,
+    prCount: number,
+  ): Partial<Record<string, string>> {
+    const updates: Partial<Record<string, string>> = {};
+    for (const key of Object.keys(session.metadata)) {
+      const match = key.match(/^(prEnrichment|prReviewComments)_(\d+)$/);
+      if (!match) continue;
+      const index = Number.parseInt(match[2], 10);
+      if (Number.isNaN(index) || index >= prCount) {
+        updates[key] = "";
+      }
+    }
+    return updates;
+  }
+
   function getPREnrichmentForSession(
     session: Session | ReactionSessionContext,
   ): PREnrichmentData | undefined {
@@ -555,10 +584,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         reposByPlugin.set(pluginKey, new Set());
       }
       reposByPlugin.get(pluginKey)!.add(project.repo);
-      if (session.prs.length === 0) continue;
+      const sessionPRs = normalizeSessionPRs(session);
+      if (sessionPRs.length === 0) continue;
       // Loop over all PRs in the session — supports multi-repo sessions
       // where an agent opened PRs on multiple repos.
-      for (const pr of session.prs) {
+      for (const pr of sessionPRs) {
         const actualPRRepo = `${pr.owner}/${pr.repo}`;
         if (actualPRRepo !== project.repo) {
           reposByPlugin.get(pluginKey)!.add(actualPRRepo);
@@ -690,13 +720,14 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         continue;
       // Skip detectPR only if we already have a PR on the configured project repo.
       // This allows detecting additional PRs on different repos (multi-repo support).
-      const trackedRepos = new Set(session.prs.map((p) => `${p.owner}/${p.repo}`));
+      const sessionPRs = normalizeSessionPRs(session);
+      const trackedRepos = new Set(sessionPRs.map((p) => `${p.owner}/${p.repo}`));
       const projectRepoForDetect = config.projects[session.projectId]?.repo;
       // primaryPR.branch is always the session branch (metadata doesn't store per-PR branches),
       // so use the lifecycle closed-state alone to allow re-detection after a PR is rejected.
       const primaryPRIsClosed = session.lifecycle.pr.state === "closed";
       if (
-        session.prs.length > 0 &&
+        sessionPRs.length > 0 &&
         projectRepoForDetect &&
         trackedRepos.has(projectRepoForDetect) &&
         !primaryPRIsClosed
@@ -720,7 +751,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
           // in the same session (e.g. agent opens PR #10 and PR #11 both on acme/main-app).
           // Only skip if we already have this exact PR number on this exact repo.
           // If the existing PR on the same repo is closed, replace it with the new one.
-          const alreadyTracked = session.prs.some(
+          const alreadyTracked = sessionPRs.some(
             (p) =>
               p.owner === detectedPR.owner &&
               p.repo === detectedPR.repo &&
@@ -741,10 +772,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
               )
               .concat(detectedPR);
           }
+          session.prs = dedupePrInfos(session.prs);
           // pr is always the primary (first) PR
           session.pr = session.prs[0] ?? detectedPR;
           const sessionsDir = getProjectSessionsDir(session.projectId);
-          const allPrUrls = session.prs.map((p) => p.url).join(",");
+          const allPrUrls = [...new Set(session.prs.map((p) => p.url))].join(",");
           updateMetadata(sessionsDir, session.id, {
             pr: session.pr.url,
             prs: allPrUrls,
@@ -798,10 +830,18 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
    */
   function persistPREnrichmentToMetadata(sessions: Session[]): void {
     for (const session of sessions) {
+      const sessionPRs = normalizeSessionPRs(session);
       if (!session.pr) continue;
       const project = config.projects[session.projectId];
       if (!project) continue;
       const sessionsDir = getProjectSessionsDir(session.projectId);
+      const cleanupUpdates = indexedPRMetadataCleanup(session, sessionPRs.length);
+      if (Object.keys(cleanupUpdates).length > 0) {
+        updateMetadata(sessionsDir, session.id, cleanupUpdates);
+        session.metadata = Object.fromEntries(
+          Object.entries(session.metadata).filter(([key]) => cleanupUpdates[key] === undefined),
+        );
+      }
 
       const prKey = `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`;
       const cached = prEnrichmentCache.get(prKey);
@@ -835,8 +875,8 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         }
       }
 
-      for (let i = 1; i < session.prs.length; i++) {
-        const secondaryPR = session.prs[i];
+      for (let i = 1; i < sessionPRs.length; i++) {
+        const secondaryPR = sessionPRs[i];
         if (!secondaryPR) continue;
         const secondaryKey = `${secondaryPR.owner}/${secondaryPR.repo}#${secondaryPR.number}`;
         const secondaryCached = prEnrichmentCache.get(secondaryKey);
@@ -1933,8 +1973,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
 
       // Persist per-PR review comment blobs for secondary PRs so the dashboard
       // can enrich them independently (prReviewComments_1, prReviewComments_2, …).
-      for (let i = 1; i < session.prs.length; i++) {
-        const secondaryPR = session.prs[i];
+      const sessionPRs = normalizeSessionPRs(session);
+      const cleanupUpdates = indexedPRMetadataCleanup(session, sessionPRs.length);
+      if (Object.keys(cleanupUpdates).length > 0) {
+        updateSessionMetadata(session, cleanupUpdates);
+      }
+      for (let i = 1; i < sessionPRs.length; i++) {
+        const secondaryPR = sessionPRs[i];
         if (!secondaryPR) continue;
         let secondaryThreads: ReviewComment[];
         let secondaryReviews: ReviewSummary[];

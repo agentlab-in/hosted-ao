@@ -20,7 +20,7 @@
 
 import { request } from "node:https";
 import type { ProjectConfig } from "@aoagents/ao-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import trackerLinear from "@aoagents/ao-plugin-tracker-linear";
 import { pollUntil, pollUntilEqual } from "./helpers/polling.js";
 
@@ -144,6 +144,13 @@ async function retryExternal<T>(operation: () => Promise<T>, attempts = 3): Prom
   throw lastError;
 }
 
+function isLinearAuthError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /(?:HTTP 401|AUTHENTICATION_ERROR|Authentication required|not authenticated)/i.test(
+    err.message,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -166,22 +173,30 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
   // Issue state tracked across tests (created in beforeAll, cleaned up in afterAll)
   let issueIdentifier: string; // e.g. "INT-1234"
   let issueUuid: string | undefined; // Linear internal UUID (needed for trash via direct API)
+  let setupSkipReason: string | undefined;
 
   // -------------------------------------------------------------------------
   // Setup — create a test issue
   // -------------------------------------------------------------------------
 
   beforeAll(async () => {
-    const result = await retryExternal(() =>
-      tracker.createIssue!(
-        {
-          title: `[AO Integration Test] ${new Date().toISOString()}`,
-          description: "Automated integration test issue. Safe to delete if found lingering.",
-          priority: 4, // Low
-        },
-        project,
-      ),
-    );
+    let result: Awaited<ReturnType<NonNullable<typeof tracker.createIssue>>>;
+    try {
+      result = await retryExternal(() =>
+        tracker.createIssue!(
+          {
+            title: `[AO Integration Test] ${new Date().toISOString()}`,
+            description: "Automated integration test issue. Safe to delete if found lingering.",
+            priority: 4, // Low
+          },
+          project,
+        ),
+      );
+    } catch (err) {
+      if (!isLinearAuthError(err)) throw err;
+      setupSkipReason = "Linear credentials are present but not authenticated";
+      return;
+    }
 
     issueIdentifier = result.id;
 
@@ -198,6 +213,12 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
       }
     }
   }, 120_000);
+
+  beforeEach((ctx) => {
+    if (setupSkipReason) {
+      ctx.skip(setupSkipReason);
+    }
+  });
 
   // -------------------------------------------------------------------------
   // Cleanup — archive the test issue so it doesn't clutter the board.

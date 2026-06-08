@@ -123,4 +123,24 @@ describe("sessionFromMetadata — multi-PR (issue #1821)", () => {
     expect(session.prs[1].owner).toBe("org-b");
     expect(session.prs[1].repo).toBe("repo-y");
   });
+
+  it("1.10 — duplicate prs entries are deduplicated by owner, repo, and number", () => {
+    const session = sessionFromMetadata(
+      "app-1",
+      {
+        prs: [
+          "https://github.com/acme/main/pull/10",
+          "https://github.com/acme/main/pull/10",
+          "https://github.com/acme/sub/pull/10",
+        ].join(","),
+        branch: "feat/pr-10",
+      },
+      baseOptions,
+    );
+    expect(session.prs.map((pr) => pr.url)).toEqual([
+      "https://github.com/acme/main/pull/10",
+      "https://github.com/acme/sub/pull/10",
+    ]);
+    expect(session.pr).toBe(session.prs[0]);
+  });
 });

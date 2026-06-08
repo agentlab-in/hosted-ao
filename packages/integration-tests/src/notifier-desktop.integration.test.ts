@@ -4,7 +4,7 @@
  * Mocks ONLY the I/O boundary: node:child_process and node:os.
  * Everything else runs for real: config parsing, escaping chains, formatting.
  */
-import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { NotifyAction } from "@aoagents/ao-core";
 import { makeEvent } from "./helpers/event-factory.js";
 
@@ -24,11 +24,17 @@ vi.mock("node:os", () => ({
   platform: vi.fn(() => "darwin"),
 }));
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { platform } from "node:os";
 
 const mockExecFile = execFile as unknown as Mock;
+const mockExecFileSync = execFileSync as unknown as Mock;
 const mockPlatform = platform as unknown as Mock;
+const originalProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setProcessPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", { value, configurable: true });
+}
 
 // Import the full plugin module — config parsing, escaping, formatting all run for real
 import desktopPlugin from "@aoagents/ao-plugin-notifier-desktop";
@@ -37,6 +43,12 @@ describe("notifier-desktop integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPlatform.mockReturnValue("darwin");
+    setProcessPlatform("darwin");
+    mockExecFileSync.mockImplementation(() => {
+      const error = new Error("not found") as NodeJS.ErrnoException;
+      error.code = "ENOENT";
+      throw error;
+    });
     mockExecFile.mockImplementation((..._args: unknown[]) => {
       // execFile is called as (cmd, args, cb) on darwin/linux and as
       // (cmd, args, opts, cb) on win32 — pick whichever trailing arg is the
@@ -46,6 +58,12 @@ describe("notifier-desktop integration", () => {
         | undefined;
       cb?.(null);
     });
+  });
+
+  afterEach(() => {
+    if (originalProcessPlatform) {
+      Object.defineProperty(process, "platform", originalProcessPlatform);
+    }
   });
 
   describe("config -> behavior flow", () => {
@@ -124,6 +142,7 @@ describe("notifier-desktop integration", () => {
 
     it("linux -> notify-send with title and message as separate args", async () => {
       mockPlatform.mockReturnValue("linux");
+      setProcessPlatform("linux");
       const notifier = desktopPlugin.create();
       await notifier.notify(makeEvent({ sessionId: "backend-1", message: "Test msg" }));
 
@@ -135,6 +154,7 @@ describe("notifier-desktop integration", () => {
 
     it("linux + urgent -> --urgency=critical before title", async () => {
       mockPlatform.mockReturnValue("linux");
+      setProcessPlatform("linux");
       const notifier = desktopPlugin.create();
       await notifier.notify(makeEvent({ priority: "urgent" }));
 
@@ -144,6 +164,7 @@ describe("notifier-desktop integration", () => {
 
     it("linux + info -> no --urgency flag", async () => {
       mockPlatform.mockReturnValue("linux");
+      setProcessPlatform("linux");
       const notifier = desktopPlugin.create();
       await notifier.notify(makeEvent({ priority: "info" }));
 
@@ -153,6 +174,7 @@ describe("notifier-desktop integration", () => {
 
     it("win32 -> powershell.exe with EncodedCommand toast XML", async () => {
       mockPlatform.mockReturnValue("win32");
+      setProcessPlatform("win32");
 
       const notifier = desktopPlugin.create();
       await notifier.notify(makeEvent({ message: "ci test" }));
@@ -172,6 +194,7 @@ describe("notifier-desktop integration", () => {
 
     it("unsupported platform -> no execFile, warns", async () => {
       mockPlatform.mockReturnValue("freebsd");
+      setProcessPlatform("freebsd");
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const notifier = desktopPlugin.create();
       await notifier.notify(makeEvent());
@@ -222,6 +245,7 @@ describe("notifier-desktop integration", () => {
 
     it("rejects when execFile fails on linux", async () => {
       mockPlatform.mockReturnValue("linux");
+      setProcessPlatform("linux");
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], cb: (err: Error | null) => void) => {
           cb(new Error("notify-send: not found"));

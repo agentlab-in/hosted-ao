@@ -10,7 +10,7 @@ import {
   resolveProbeDecision,
 } from "../lifecycle-status-decisions.js";
 import { createSessionManager } from "../session-manager.js";
-import { writeMetadata, readMetadataRaw } from "../metadata.js";
+import { updateMetadata, writeMetadata, readMetadataRaw } from "../metadata.js";
 import { readObservabilitySummary } from "../observability.js";
 import type {
   OrchestratorConfig,
@@ -904,6 +904,42 @@ describe("check (single session)", () => {
     expect(lm.getStates().get("app-1")).toBe("stuck");
   });
 
+  it("keeps prs metadata deduplicated across repeated detectPR polls", async () => {
+    const detectedPR = makePR({
+      owner: "aoagents",
+      repo: "ReverbCode",
+      number: 143,
+      url: "https://github.com/aoagents/ReverbCode/pull/143",
+    });
+    const mockSCM = createMockSCM({
+      detectPR: vi.fn().mockResolvedValue(detectedPR),
+    });
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      workspace: plugins.workspace,
+      scm: mockSCM,
+    });
+    writeMetadata(env.sessionsDir, "app-1", {
+      worktree: "/tmp",
+      branch: "feat/reverb-fix",
+      status: "working",
+      project: "my-app",
+      agent: "mock-agent",
+    } as SessionMetadata);
+    const realSessionManager = createSessionManager({ config, registry });
+    const lm = createLifecycleManager({ config, registry, sessionManager: realSessionManager });
+
+    for (let i = 0; i < 10; i += 1) {
+      await lm.check("app-1");
+    }
+
+    const meta = readMetadataRaw(env.sessionsDir, "app-1");
+    expect(meta?.["pr"]).toBe(detectedPR.url);
+    expect(meta?.["prs"]?.split(",")).toEqual([detectedPR.url]);
+    expect(mockSCM.detectPR).toHaveBeenCalledTimes(10);
+  });
+
   it("refreshes worker branch metadata from the current worktree HEAD before PR detection", async () => {
     const workspacePath = join(env.tmpDir, "worker-ws");
     const gitDir = join(env.tmpDir, "repo", ".git", "worktrees", "app-1");
@@ -1323,8 +1359,10 @@ describe("check (single session)", () => {
       // can race past the lifecycle list() call before adoption resolves.
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
-        if (vi.mocked(mockSessionManager.list).mock.calls.length >= 1) {
-          await new Promise((resolve) => setTimeout(resolve, 25));
+        const adoptedCount = [sessionA.branch, sessionB.branch].filter(
+          (branch) => branch === "shared-branch",
+        ).length;
+        if (vi.mocked(mockSessionManager.list).mock.calls.length >= 1 && adoptedCount > 0) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -4533,6 +4571,59 @@ describe("multi-PR state machine aggregation", () => {
       lm.stop();
 
       expect(lm.getStates().get("app-1")).not.toBe("merged");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("2.1b — enrichment metadata uses unique PRs and deletes duplicate-index orphans", async () => {
+    vi.useFakeTimers();
+    try {
+      const pr10 = makeMatchingPR({ number: 10, url: "https://github.com/org/my-app/pull/10" });
+      const mockSCM = createMockSCM({
+        enrichSessionsPRBatch: mockBatchEnrichmentPerPR({
+          "org/my-app#10": { state: "open", ciStatus: "passing", reviewDecision: "none" },
+        }),
+      });
+      const registry = createMockRegistry({
+        runtime: plugins.runtime,
+        agent: plugins.agent,
+        scm: mockSCM,
+      });
+      const session = makeSession({
+        id: "app-1",
+        status: "pr_open",
+        pr: pr10,
+        prs: [pr10, { ...pr10 }],
+        metadata: {
+          prEnrichment_1: "{\"state\":\"open\"}",
+          prReviewComments_1: "{\"unresolvedThreads\":0}",
+        },
+      });
+
+      const lm = setupPollCheck("app-1", {
+        session,
+        registry,
+        metaOverrides: {
+          pr: pr10.url,
+          prs: `${pr10.url},${pr10.url}`,
+          prEnrichment_1: "{\"state\":\"open\"}",
+          prReviewComments_1: "{\"unresolvedThreads\":0}",
+        },
+      });
+      updateMetadata(env.sessionsDir, "app-1", {
+        prEnrichment_1: "{\"state\":\"open\"}",
+        prReviewComments_1: "{\"unresolvedThreads\":0}",
+      });
+
+      lm.start(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      lm.stop();
+
+      const metadata = readMetadataRaw(env.sessionsDir, "app-1");
+      expect(metadata?.["prEnrichment"]).toBeDefined();
+      expect(metadata?.["prEnrichment_1"]).toBeUndefined();
+      expect(metadata?.["prReviewComments_1"]).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

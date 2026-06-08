@@ -10,7 +10,7 @@ import type {
 import { deriveLegacyStatus, parseCanonicalLifecycle } from "../lifecycle-state.js";
 import { createActivitySignal } from "../activity-signal.js";
 import { AGENT_REPORT_METADATA_KEYS } from "../agent-report.js";
-import { parsePrFromUrl } from "./pr.js";
+import { dedupePrInfos, parsePrFromUrl } from "./pr.js";
 import { safeJsonParse, validateStatus } from "./validation.js";
 
 interface SessionFromMetadataOptions {
@@ -85,11 +85,17 @@ export function sessionFromMetadata(
   // Old sessions only have a single "pr" field — wrap it for backwards compat.
   const prsRaw = meta["prs"];
   const lifecyclePrNumber = lifecycle.pr.number ?? null;
-  const prs: PRInfo[] = prsRaw
-    ? prsRaw.split(",").map((u, i) => buildPRInfo(u.trim(), i === 0 ? prIsDraft : false, i === 0 ? lifecyclePrNumber : null)).filter((p) => Boolean(p.url))
+  const parsedPrs: PRInfo[] = prsRaw
+    ? prsRaw
+        .split(",")
+        .map((u, i) =>
+          buildPRInfo(u.trim(), i === 0 ? prIsDraft : false, i === 0 ? lifecyclePrNumber : null),
+        )
+        .filter((p) => Boolean(p.url))
     : prUrl
       ? [buildPRInfo(prUrl, prIsDraft, lifecyclePrNumber)]
       : [];
+  const prs = dedupePrInfos(parsedPrs);
 
   return {
     id: sessionId,

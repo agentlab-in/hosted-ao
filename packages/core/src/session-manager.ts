@@ -92,6 +92,7 @@ import {
   normalizeOrchestratorSessionStrategy,
 } from "./orchestrator-session-strategy.js";
 import { sessionFromMetadata } from "./utils/session-from-metadata.js";
+import { dedupePrUrls } from "./utils/pr.js";
 import { safeJsonParse, validateStatus } from "./utils/validation.js";
 import { isGitBranchNameSafe } from "./utils.js";
 import { resolveAgentSelection, resolveAgentSelectionForSession } from "./agent-selection.js";
@@ -104,6 +105,7 @@ import {
 const execFileAsync = promisify(execFile);
 const OPENCODE_DISCOVERY_TIMEOUT_MS = 10_000;
 const OPENCODE_INTERACTIVE_DISCOVERY_TIMEOUT_MS = 10_000;
+const INDEXED_PR_METADATA_KEY_REGEX = /^(prEnrichment|prReviewComments)_\d+$/;
 // On Windows, execFile cannot resolve .cmd shim extensions without invoking the shell.
 // windowsHide:true suppresses the conhost popup that the shell would otherwise flash.
 const EXEC_SHELL_OPTION =
@@ -537,6 +539,57 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
   function invalidateCache(): void {
     sessionCache = null;
   }
+
+  function deduplicatePRStorageOnStartup(): void {
+    let migrated = false;
+
+    for (const [projectId] of Object.entries(config.projects)) {
+      const sessionsDir = getProjectSessionsDir(projectId);
+      if (!existsSync(sessionsDir)) continue;
+
+      for (const sessionName of listMetadata(sessionsDir)) {
+        const raw = readMetadataRaw(sessionsDir, sessionName);
+        if (!raw) continue;
+
+        const rawPrUrls = raw["prs"]
+          ? raw["prs"].split(",").map((url) => url.trim()).filter(Boolean)
+          : [];
+        const uniquePrUrls = dedupePrUrls(rawPrUrls);
+        const updates: Partial<Record<string, string>> = {};
+        if (rawPrUrls.length !== uniquePrUrls.length) {
+          updates["prs"] = uniquePrUrls.join(",");
+        }
+
+        let deletedIndexedKeyCount = 0;
+        for (const key of Object.keys(raw)) {
+          if (!INDEXED_PR_METADATA_KEY_REGEX.test(key)) continue;
+          updates[key] = "";
+          deletedIndexedKeyCount += 1;
+        }
+
+        if (Object.keys(updates).length === 0) continue;
+
+        updateMetadata(sessionsDir, sessionName, updates);
+        migrated = true;
+        recordActivityEvent({
+          projectId,
+          sessionId: sessionName,
+          source: "session-manager",
+          kind: "metadata.deduplicated",
+          summary: `deduplicated PR metadata: ${sessionName}`,
+          data: {
+            beforePrCount: rawPrUrls.length,
+            afterPrCount: uniquePrUrls.length,
+            deletedIndexedKeyCount,
+          },
+        });
+      }
+    }
+
+    if (migrated) invalidateCache();
+  }
+
+  deduplicatePRStorageOnStartup();
 
   function repairSessionAgentMetadataOnRead(
     sessionsDir: string,
@@ -3199,11 +3252,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // Stack: push claimed PR to front — it becomes primary (prs[0]) on next load.
     // Filter out duplicates, keep all other tracked PRs at the back.
     const existingPrs = raw["prs"] ?? raw["pr"] ?? "";
-    const otherPrs = existingPrs
-      .split(",")
-      .map((u) => u.trim())
-      .filter((u) => u && u !== pr.url)
-      .join(",");
+    const otherPrs = dedupePrUrls(
+      existingPrs.split(",").filter((u) => u.trim() !== pr.url),
+    ).join(",");
     const newPrs = otherPrs ? `${pr.url},${otherPrs}` : pr.url;
     // Clear stale positional enrichment blobs — claimPR reorders prs[] so
     // index-keyed blobs no longer match. Lifecycle poll rewrites them within ~30s.
