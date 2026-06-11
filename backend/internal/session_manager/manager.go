@@ -362,7 +362,8 @@ func (m *Manager) RollbackSpawn(ctx context.Context, id domain.SessionID) (delet
 
 // Kill records terminal intent with the LCM, then tears down the runtime and
 // workspace. A workspace teardown refused by the worktree-remove safety
-// (uncommitted work) surfaces as an error with freed=false and is never forced.
+// (uncommitted work) is never forced: the session still terminates and Kill
+// succeeds with freed=false, signalling the workspace was preserved.
 func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -383,6 +384,9 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		return false, fmt.Errorf("kill %s: runtime: %w", id, err)
 	}
 	if err := m.workspace.Destroy(ctx, ws); err != nil {
+		if errors.Is(err, ports.ErrWorkspaceDirty) {
+			return false, nil
+		}
 		return false, fmt.Errorf("kill %s: workspace: %w", id, err)
 	}
 	return true, nil
@@ -471,14 +475,28 @@ func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string)
 	return nil
 }
 
+// CleanupSkip reports one terminal session whose workspace was preserved
+// rather than reclaimed, and why.
+type CleanupSkip struct {
+	SessionID domain.SessionID
+	Reason    string
+}
+
+// CleanupResult reports what Cleanup reclaimed and what it preserved.
+type CleanupResult struct {
+	Cleaned []domain.SessionID
+	Skipped []CleanupSkip
+}
+
 // Cleanup reclaims the workspaces of terminal sessions in a project. A workspace
-// whose teardown is refused (uncommitted work) is skipped, never forced.
-func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) ([]domain.SessionID, error) {
+// whose teardown is refused (uncommitted work) is never forced; it is reported
+// in Skipped with the reason so the refusal is visible instead of silent.
+func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (CleanupResult, error) {
 	recs, err := m.cleanupRecords(ctx, project)
 	if err != nil {
-		return nil, fmt.Errorf("cleanup %s: %w", project, err)
+		return CleanupResult{}, fmt.Errorf("cleanup %s: %w", project, err)
 	}
-	cleaned := make([]domain.SessionID, 0, len(recs))
+	result := CleanupResult{Cleaned: make([]domain.SessionID, 0, len(recs)), Skipped: []CleanupSkip{}}
 	for _, rec := range recs {
 		if !rec.IsTerminated {
 			continue
@@ -491,11 +509,28 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) ([]doma
 			_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
 		}
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
-			continue // skipped: uncommitted work
+			if !errors.Is(err, ports.ErrWorkspaceDirty) {
+				// The public reason stays a fixed string (the raw error carries
+				// internal filesystem paths); the full cause lands here.
+				m.logger.Warn("cleanup: workspace teardown failed", "sessionID", rec.ID, "path", ws.Path, "error", err)
+			}
+			result.Skipped = append(result.Skipped, CleanupSkip{SessionID: rec.ID, Reason: cleanupSkipReason(err)})
+			continue
 		}
-		cleaned = append(cleaned, rec.ID)
+		result.Cleaned = append(result.Cleaned, rec.ID)
 	}
-	return cleaned, nil
+	return result, nil
+}
+
+// cleanupSkipReason renders a workspace teardown refusal as a short
+// user-facing reason for the cleanup report. Deliberately not the raw error:
+// it flows to the API response and CLI output, and teardown errors embed
+// internal filesystem paths.
+func cleanupSkipReason(err error) string {
+	if errors.Is(err, ports.ErrWorkspaceDirty) {
+		return "workspace has uncommitted changes"
+	}
+	return "workspace teardown failed"
 }
 
 func (m *Manager) cleanupRecords(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
