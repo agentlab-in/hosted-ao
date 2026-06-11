@@ -27,12 +27,7 @@ type SpawnWorkerModalProps = {
 	onOpenChange: (open: boolean) => void;
 	workspaces: WorkspaceSummary[];
 	defaultProjectId?: string;
-	onCreateTask: (input: {
-		projectId: string;
-		prompt: string;
-		branch?: string;
-		harness?: AgentProvider;
-	}) => Promise<void>;
+	onCreateTask: (input: { projectId: string; prompt: string; name?: string; harness?: AgentProvider }) => Promise<void>;
 };
 
 export function SpawnWorkerModal({
@@ -47,7 +42,6 @@ export function SpawnWorkerModal({
 	const [projectId, setProjectId] = useState(fallbackProjectId);
 	const [agent, setAgent] = useState<AgentProvider>("claude-code");
 	const [basedOn, setBasedOn] = useState<BasedOn>("Branch");
-	const [branch, setBranch] = useState("main");
 	const [tab, setTab] = useState<"Prompt" | "Workspace">("Prompt");
 	const [prompt, setPrompt] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -62,9 +56,6 @@ export function SpawnWorkerModal({
 	}, [open, fallbackProjectId]);
 
 	const selectedWorkspace = workspaces.find((workspace) => workspace.id === projectId) ?? workspaces[0];
-	const branchOptions = Array.from(
-		new Set(["main", ...(selectedWorkspace?.sessions.map((session) => session.branch).filter(Boolean) ?? [])]),
-	);
 	const nameValid = name === "" || NAME_RULE.test(name);
 	const canSubmit = prompt.trim().length > 0 && projectId !== "" && nameValid && !isSubmitting;
 
@@ -77,12 +68,11 @@ export function SpawnWorkerModal({
 			await onCreateTask({
 				projectId,
 				prompt: prompt.trim(),
-				branch: basedOn === "Branch" ? branch.trim() || undefined : undefined,
+				name: name || undefined,
 				harness: agent,
 			});
 			setName("");
 			setPrompt("");
-			setBranch("main");
 			onOpenChange(false);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Could not spawn worker");
@@ -169,19 +159,15 @@ export function SpawnWorkerModal({
 								</div>
 							</div>
 							<div className="p-2.5">
-								{basedOn === "Branch" ? (
-									<SelectControl
-										aria-label="Based on branch"
-										className="flex w-full"
-										onChange={setBranch}
-										value={branch}
-										options={branchOptions.map((option) => ({ value: option, label: option }))}
-									/>
-								) : (
-									<p className="px-1 py-1.5 text-[12.5px] text-passive">
-										{basedOn === "Issue" ? "Pick an issue to start from." : "Pick a pull request to start from."}
-									</p>
-								)}
+								<p className="px-1 py-1.5 text-[12.5px] text-passive">
+									{/* The API has no per-spawn base branch — the worker branches off the
+                      project's configured default branch in a fresh worktree. */}
+									{basedOn === "Branch"
+										? "Branches off the project's default branch in a fresh worktree."
+										: basedOn === "Issue"
+											? "Pick an issue to start from."
+											: "Pick a pull request to start from."}
+								</p>
 							</div>
 						</div>
 

@@ -24,6 +24,25 @@ function errorMessage(error: unknown) {
 	return error instanceof Error ? error.message : "Could not load projects";
 }
 
+/**
+ * openapi-fetch resolves non-2xx responses to a plain APIError envelope
+ * ({ code, error, message, ... }), not an Error — String() on it renders
+ * "[object Object]".
+ */
+function apiErrorMessage(error: unknown, fallback: string): string {
+	if (error instanceof Error) return error.message;
+	if (typeof error === "string" && error) return error;
+	if (error && typeof error === "object") {
+		const envelope = error as { message?: unknown; code?: unknown };
+		if (typeof envelope.message === "string" && envelope.message) {
+			return typeof envelope.code === "string" && envelope.code
+				? `${envelope.message} (${envelope.code})`
+				: envelope.message;
+		}
+	}
+	return fallback;
+}
+
 export function App({ routeSessionId, routeWorkspaceId }: AppProps) {
 	const queryClient = useQueryClient();
 	const {
@@ -106,7 +125,7 @@ export function App({ routeSessionId, routeWorkspaceId }: AppProps) {
 	const createProject = async (input: { path: string }) => {
 		const { data, error } = await apiClient.POST("/api/v1/projects", { body: { path: input.path } });
 
-		if (error) throw error;
+		if (error) throw new Error(apiErrorMessage(error, "Could not add project"));
 		if (!data?.project) throw new Error("Project creation returned no project");
 
 		const workspace: WorkspaceSummary = {
@@ -121,22 +140,35 @@ export function App({ routeSessionId, routeWorkspaceId }: AppProps) {
 		selectWorkspace(workspace.id);
 	};
 
-	const createTask = async (input: { projectId: string; prompt: string; branch?: string; harness?: AgentProvider }) => {
+	const createTask = async (input: { projectId: string; prompt: string; name?: string; harness?: AgentProvider }) => {
+		// No `branch` here: the API's branch field names the session's worktree
+		// branch (sending a checked-out branch like "main" 409s); the base branch
+		// comes from the project config.
 		const { data, error } = await apiClient.POST("/api/v1/sessions", {
 			body: {
 				projectId: input.projectId,
 				kind: "worker",
 				harness: input.harness,
 				prompt: input.prompt,
-				branch: input.branch || undefined,
 			},
 		});
 
 		if (error || !data?.session) {
-			throw new Error(error instanceof Error ? error.message : error ? String(error) : "No session returned");
+			throw new Error(apiErrorMessage(error, "No session returned"));
 		}
 
 		const session = data.session;
+
+		// Best-effort: the session is already running, so a failed rename should
+		// not surface as a failed spawn (retrying would create a duplicate).
+		let displayName: string | undefined;
+		if (input.name) {
+			const renamed = await apiClient.PATCH("/api/v1/sessions/{sessionId}", {
+				params: { path: { sessionId: session.id } },
+				body: { displayName: input.name },
+			});
+			displayName = renamed.data?.displayName;
+		}
 
 		updateWorkspaces((current) =>
 			current.map((item) =>
@@ -149,9 +181,9 @@ export function App({ routeSessionId, routeWorkspaceId }: AppProps) {
 									terminalHandleId: session.terminalHandleId,
 									workspaceId: item.id,
 									workspaceName: item.name,
-									title: input.prompt,
+									title: displayName ?? input.prompt,
 									provider: toAgentProvider(session.harness),
-									branch: input.branch ?? "",
+									branch: "",
 									status: toSessionStatus(session.status, session.isTerminated),
 									updatedAt: "now",
 								},

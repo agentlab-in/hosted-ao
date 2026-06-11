@@ -3,10 +3,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { useUiStore } from "./stores/ui-store";
 
-const { postMock, mockData } = vi.hoisted(() => ({
+const { postMock, patchMock, mockData } = vi.hoisted(() => ({
 	postMock: vi.fn(),
+	patchMock: vi.fn(),
 	mockData: {
 		projectsError: undefined as Error | undefined,
 		projects: [] as { id: string; name: string; path: string; sessionPrefix: string }[],
@@ -38,6 +40,7 @@ vi.mock("./lib/api-client", () => ({
 			return { data: undefined, error: new Error(`unexpected GET ${url}`) };
 		}),
 		POST: postMock,
+		PATCH: patchMock,
 	},
 }));
 
@@ -47,15 +50,19 @@ vi.mock("./components/TerminalPane", () => ({
 
 function renderApp() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	// TooltipProvider mirrors routes/__root.tsx, which wraps App in production.
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<App />
+			<TooltipProvider>
+				<App />
+			</TooltipProvider>
 		</QueryClientProvider>,
 	);
 }
 
 beforeEach(() => {
 	postMock.mockReset();
+	patchMock.mockReset();
 	mockData.projectsError = undefined;
 	mockData.projects = [];
 	mockData.sessions = [];
@@ -158,15 +165,51 @@ test("spawns a worker from the New worker modal", async () => {
 	await user.type(await screen.findByLabelText("Prompt"), "Make task creation work");
 	await user.click(screen.getByRole("button", { name: /Spawn worker/ }));
 
+	// No `branch` field: it names the worktree branch, and sending the default
+	// base ("main") makes the daemon 409 with BRANCH_CHECKED_OUT_ELSEWHERE.
 	expect(postMock).toHaveBeenCalledWith("/api/v1/sessions", {
 		body: {
 			projectId: "proj-1",
 			kind: "worker",
 			harness: "claude-code",
 			prompt: "Make task creation work",
-			branch: "main",
 		},
 	});
+	// No worker name given, so no rename round-trip.
+	expect(patchMock).not.toHaveBeenCalled();
+});
+
+test("renames the spawned worker when a name is given", async () => {
+	const user = userEvent.setup();
+	mockData.projects = [{ id: "proj-1", name: "my-app", path: "/home/me/my-app", sessionPrefix: "" }];
+	postMock.mockResolvedValueOnce({
+		data: {
+			session: {
+				id: "new-task",
+				projectId: "proj-1",
+				harness: "claude-code",
+				isTerminated: false,
+			},
+		},
+	});
+	patchMock.mockResolvedValueOnce({
+		data: { ok: true, sessionId: "new-task", displayName: "fix-login" },
+	});
+
+	renderApp();
+
+	await screen.findByRole("button", { name: "Select my-app" });
+
+	await user.click(screen.getByRole("button", { name: "New worker" }));
+	await user.type(await screen.findByLabelText("Worker name"), "fix-login");
+	await user.type(screen.getByLabelText("Prompt"), "Fix the login bug");
+	await user.click(screen.getByRole("button", { name: /Spawn worker/ }));
+
+	expect(patchMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+		params: { path: { sessionId: "new-task" } },
+		body: { displayName: "fix-login" },
+	});
+	expect(await screen.findByRole("button", { name: "fix-login" })).toBeInTheDocument();
 });
 
 test("surfaces an error when spawning fails", async () => {
@@ -188,8 +231,33 @@ test("surfaces an error when spawning fails", async () => {
 			kind: "worker",
 			harness: "claude-code",
 			prompt: "Failing task",
-			branch: "main",
 		},
 	});
 	expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
+});
+
+test("surfaces the daemon error envelope message, not [object Object]", async () => {
+	const user = userEvent.setup();
+	mockData.projects = [{ id: "proj-1", name: "my-app", path: "/home/me/my-app", sessionPrefix: "" }];
+	// openapi-fetch resolves non-2xx bodies as a plain APIError envelope.
+	postMock.mockResolvedValueOnce({
+		error: {
+			code: "BRANCH_CHECKED_OUT_ELSEWHERE",
+			error: "Conflict",
+			message: "main is checked out at /home/me/my-app",
+		},
+	});
+
+	renderApp();
+
+	await screen.findByRole("button", { name: "Select my-app" });
+
+	await user.click(screen.getByRole("button", { name: "New worker" }));
+	await user.type(await screen.findByLabelText("Prompt"), "Failing task");
+	await user.click(screen.getByRole("button", { name: /Spawn worker/ }));
+
+	expect(
+		await screen.findByText("main is checked out at /home/me/my-app (BRANCH_CHECKED_OUT_ELSEWHERE)"),
+	).toBeInTheDocument();
+	expect(screen.queryByText("[object Object]")).not.toBeInTheDocument();
 });

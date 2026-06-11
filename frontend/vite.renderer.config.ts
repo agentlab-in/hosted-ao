@@ -1,4 +1,6 @@
-import { defineConfig } from "vite";
+// defineConfig comes from vitest/config (a superset of vite's) so the `test`
+// block below typechecks; the produced config is a plain vite config object.
+import { defineConfig } from "vitest/config";
 import type { Plugin } from "vite";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
