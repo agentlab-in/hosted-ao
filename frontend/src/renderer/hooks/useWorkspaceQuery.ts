@@ -29,18 +29,24 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 				workspaceName: project.name,
 				title: session.displayName ?? session.issueId ?? session.id,
 				provider: toAgentProvider(session.harness),
-				branch: "",
+				kind: session.kind === "orchestrator" ? "orchestrator" : session.kind === "worker" ? "worker" : undefined,
+				branch: `session/${session.id}`,
 				status: toSessionStatus(session.status, session.isTerminated),
-				updatedAt: new Date(session.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+				createdAt: session.createdAt,
+				updatedAt: session.updatedAt,
 			})),
 	}));
 }
 
+// Shared so route loaders can prefetch via queryClient.ensureQueryData (paired
+// with the router's defaultPreload: "intent") and the hook reads the same cache.
+export const workspaceQueryOptions = {
+	queryKey: workspaceQueryKey,
+	queryFn: fetchWorkspaces,
+	retry: 1,
+	refetchInterval: 15_000,
+};
+
 export function useWorkspaceQuery() {
-	return useQuery({
-		queryKey: workspaceQueryKey,
-		queryFn: fetchWorkspaces,
-		retry: 1,
-		refetchInterval: 15_000,
-	});
+	return useQuery(workspaceQueryOptions);
 }
