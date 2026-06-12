@@ -28,7 +28,6 @@ import {
 	SidebarGroupLabel,
 	SidebarHeader,
 	SidebarMenu,
-	SidebarMenuAction,
 	SidebarMenuButton,
 	SidebarMenuItem,
 	SidebarMenuSub,
@@ -53,7 +52,6 @@ type SidebarProps = {
 	workspaceError?: string;
 	workspaces: WorkspaceSummary[];
 	onCreateProject: (input: { path: string }) => Promise<void>;
-	onNewWorker: (projectId: string) => void;
 };
 
 // Selection state comes from the URL: which project/session is active is the
@@ -95,7 +93,7 @@ function SessionDot({ session }: { session: WorkspaceSession }) {
 // _shell owns open state (synced to the ui-store) and `collapsible="icon"`
 // replaces the old hand-rolled CollapsedRail — the same tree restyles itself
 // via group-data-[collapsible=icon] into the 48px letter rail.
-export function Sidebar({ daemonStatus, workspaceError, workspaces, onCreateProject, onNewWorker }: SidebarProps) {
+export function Sidebar({ daemonStatus, workspaceError, workspaces, onCreateProject }: SidebarProps) {
 	const selection = useSelection();
 	const eventsConnection = useEventsConnection();
 	const { state } = useSidebar();
@@ -202,7 +200,6 @@ export function Sidebar({ daemonStatus, workspaceError, workspaces, onCreateProj
 										expanded={!collapsedIds.has(workspace.id)}
 										selection={selection}
 										onToggle={() => toggleCollapsed(workspace.id)}
-										onNewWorker={() => onNewWorker(workspace.id)}
 									/>
 								))}
 							</SidebarMenu>
@@ -305,13 +302,11 @@ function ProjectItem({
 	expanded,
 	selection,
 	onToggle,
-	onNewWorker,
 }: {
 	workspace: WorkspaceSummary;
 	expanded: boolean;
 	selection: Selection;
 	onToggle: () => void;
-	onNewWorker: () => void;
 }) {
 	const projectActive = selection.activeProjectId === workspace.id && !selection.activeSessionId;
 	// Live workers only: merged/terminated sessions leave the sidebar and stay
@@ -342,9 +337,6 @@ function ProjectItem({
 					"h-auto gap-[9px] rounded-[5px] px-1.5 py-[7px] text-[13px] font-medium text-muted-foreground transition-[padding]",
 					"hover:bg-interactive-hover hover:text-muted-foreground active:bg-interactive-hover active:text-muted-foreground",
 					"data-[active=true]:bg-interactive-active data-[active=true]:font-semibold data-[active=true]:text-foreground",
-					// The count badge sits in-flow (verbatim layout), so undo the
-					// variant's blanket action padding; hover makes room for the + only.
-					"group-has-data-[sidebar=menu-action]/menu-item:pr-1.5 group-hover/menu-item:pr-[34px]",
 					// Icon rail: the old 36px letter tile.
 					"group-data-[collapsible=icon]:size-9! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-lg group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:font-semibold",
 				)}
@@ -363,26 +355,6 @@ function ProjectItem({
 					{sessions.length}
 				</span>
 			</SidebarMenuButton>
-			{/* project-sidebar__proj-actions — reveal over the count slot on hover */}
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<SidebarMenuAction
-						showOnHover
-						aria-label={`New worker in ${workspace.name}`}
-						onClick={onNewWorker}
-						// No top override: the base's peer-data-[size=default]:top-1.5
-						// (6px) centers this 22px action in the 34px row. AO's 50%/
-						// translateY(-50%) can't be cloned here — the absolute context
-						// is the whole menu li including the expanded sessions list,
-						// so a percentage top centers on the group, not the row.
-						className="right-1.5 h-[22px] w-[22px] rounded-[5px] text-passive transition-opacity hover:bg-interactive-active hover:text-foreground"
-					>
-						<Plus className="h-[13px]! w-[13px]!" aria-hidden="true" />
-					</SidebarMenuAction>
-				</TooltipTrigger>
-				<TooltipContent>New worker in {workspace.name}</TooltipContent>
-			</Tooltip>
-
 			{/* project-sidebar__sessions. Divergence from AO (user decision
           2026-06-12): no left indent or tree guide line — every sidebar row
           (project or worker) spans the same full width. */}

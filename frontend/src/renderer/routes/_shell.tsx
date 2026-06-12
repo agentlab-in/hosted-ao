@@ -174,7 +174,6 @@ function ShellLayout() {
 					<Sidebar
 						daemonStatus={daemonStatus}
 						onCreateProject={createProject}
-						onNewWorker={openSpawn}
 						workspaceError={workspaceQuery.isError ? errorMessage(workspaceQuery.error) : undefined}
 						workspaces={workspaces}
 					/>
