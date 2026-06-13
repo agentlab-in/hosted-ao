@@ -265,7 +265,7 @@ select {
 
 .resize-handle:hover::after,
 body.is-resizing-x .resize-handle::after {
-	background: var(--color-accent);
+	background: var(--border);
 }
 
 body.is-resizing-x {
@@ -484,7 +484,6 @@ body.is-resizing-x [data-slot="sidebar-container"] {
 	flex-direction: column;
 	overflow: hidden;
 	background: var(--bg);
-	border-left: 1px solid var(--border);
 }
 
 .session-inspector__tabs {
@@ -573,7 +572,7 @@ body.is-resizing-x [data-slot="sidebar-container"] {
 .session-inspector__resize-handle:hover::after,
 .session-inspector__resize-handle:focus-visible::after,
 .session-inspector__resize-handle[data-separator="active"]::after {
-	background: var(--accent);
+	background: var(--border);
 }
 
 /* Collapse/expand animation for the inspector panel: rrp v4 drives panel

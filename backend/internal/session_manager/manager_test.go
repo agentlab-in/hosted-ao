@@ -634,6 +634,79 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing coordinator") {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
 	}
+
+	// A promptless orchestrator still needs a first turn: with the role in the
+	// system prompt only, an interactive agent would idle at an empty input box.
+	if agent.lastLaunch.Prompt != orchestratorKickoffPrompt {
+		t.Fatalf("prompt = %q, want kick-off prompt", agent.lastLaunch.Prompt)
+	}
+}
+
+// TestRestore_OrchestratorRederivesSystemPrompt: the system prompt is derived,
+// not persisted, so a restored orchestrator must get its role instructions
+// recomputed and handed to the agent's native resume command.
+func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, err := m.Restore(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(agent.lastRestore.SystemPrompt, "You are the human-facing coordinator for project mer") {
+		t.Fatalf("restore system prompt missing coordinator role:\n%s", agent.lastRestore.SystemPrompt)
+	}
+}
+
+// TestRestore_FallbackLaunchCarriesSystemPrompt: when the agent has no native
+// session to resume, the fresh-launch fallback must carry the re-derived
+// system prompt alongside the persisted task prompt.
+func TestRestore_FallbackLaunchCarriesSystemPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Prompt: "kick off"},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, err := m.Restore(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(agent.lastLaunch.SystemPrompt, "You are the human-facing coordinator for project mer") {
+		t.Fatalf("fallback launch system prompt missing coordinator role:\n%s", agent.lastLaunch.SystemPrompt)
+	}
+	if agent.lastLaunch.Prompt != "kick off" {
+		t.Fatalf("fallback launch prompt = %q, want persisted task prompt", agent.lastLaunch.Prompt)
+	}
+}
+
+// TestRestore_WorkerPointsAtCurrentOrchestrator: a restored worker's
+// coordination hint must reference the orchestrator active at restore time,
+// not the one from its original spawn.
+func TestRestore_WorkerPointsAtCurrentOrchestrator(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-9"] = domain.SessionRecord{ID: "mer-9", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, err := m.Restore(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(agent.lastRestore.SystemPrompt, `ao send --session mer-9`) {
+		t.Fatalf("restore system prompt missing current orchestrator contact:\n%s", agent.lastRestore.SystemPrompt)
+	}
 }
 
 // TestRestore_RefusesIncompleteHandle covers Bug 2: a terminated row whose
