@@ -168,6 +168,11 @@ func (a *recordingAgent) GetLaunchCommand(_ context.Context, cfg ports.LaunchCon
 func (a *recordingAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	a.lastConfig = cfg.Config
 	a.lastRestore = cfg
+	// Mirror real adapters: with no native agent-session id to resume, signal
+	// "cannot restore" so the manager falls back to a fresh launch.
+	if cfg.Session.Metadata[ports.MetadataKeyAgentSessionID] == "" {
+		return nil, false, nil
+	}
 	return []string{"resume"}, true, nil
 }
 
@@ -635,10 +640,10 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
 	}
 
-	// A promptless orchestrator still needs a first turn: with the role in the
-	// system prompt only, an interactive agent would idle at an empty input box.
-	if agent.lastLaunch.Prompt != orchestratorKickoffPrompt {
-		t.Fatalf("prompt = %q, want kick-off prompt", agent.lastLaunch.Prompt)
+	// A promptless orchestrator gets no auto-generated kickoff turn: spawning
+	// must deliver nothing to the agent, leaving it idle at an empty input box.
+	if agent.lastLaunch.Prompt != "" {
+		t.Fatalf("prompt = %q, want empty (no kickoff turn)", agent.lastLaunch.Prompt)
 	}
 }
 
