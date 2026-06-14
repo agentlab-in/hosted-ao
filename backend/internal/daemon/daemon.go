@@ -18,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
-	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
@@ -98,7 +97,7 @@ func Run() error {
 	// zellij runtime, a gitworktree workspace, the per-session agent resolver
 	// (AO_AGENT default, validated here), and the agent messenger, then mount it
 	// on the API.
-	sessionSvc, err := startSession(cfg, runtimeAdapter, store, lcStack.LCM, messenger, log)
+	sessionSvc, reviewSvc, err := startSession(cfg, runtimeAdapter, store, lcStack.LCM, messenger, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -111,7 +110,7 @@ func Run() error {
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Projects:           projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc}),
 		Sessions:           sessionSvc,
-		Reviews:            reviewsvc.NewInMemory(),
+		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		NotificationStream: notificationHub,
 		CDC:                store,
