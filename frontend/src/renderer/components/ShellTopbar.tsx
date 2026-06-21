@@ -33,6 +33,7 @@ const STATUS_PILL: Record<WorkerDisplayStatus, { label: string; tone: string; br
 	no_signal: { label: "No signal", tone: "var(--fg-muted)", breathe: false },
 	mergeable: { label: "Ready", tone: "var(--green)", breathe: false },
 	done: { label: "Done", tone: "var(--fg-muted)", breathe: false },
+	unknown: { label: "Unknown", tone: "var(--fg-muted)", breathe: false },
 };
 
 // The one app topbar (.dashboard-app-header), rendered by the shell layout
