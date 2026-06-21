@@ -1,6 +1,7 @@
 import {
 	app,
 	BrowserWindow,
+	clipboard,
 	dialog,
 	ipcMain,
 	net,
@@ -550,6 +551,13 @@ ipcMain.handle("app:chooseDirectory", async () => {
 	if (result.canceled) return null;
 	return result.filePaths[0] ?? null;
 });
+ipcMain.handle("clipboard:writeText", (_event, text: string) => {
+	clipboard.writeText(text, "clipboard");
+	if (process.platform === "linux") {
+		clipboard.writeText(text, "selection");
+	}
+});
+ipcMain.handle("clipboard:readText", () => clipboard.readText());
 
 ipcMain.handle("notifications:show", (_event, notification: { id: string; title: string; body?: string }) => {
 	if (!notification.id || !notification.title || !ElectronNotification.isSupported()) return;
