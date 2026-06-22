@@ -55,6 +55,7 @@ type BrowserWindowLike = {
 	};
 	getContentBounds: () => BrowserRect;
 	webContents: Pick<WebContents, "id" | "send">;
+	isDestroyed?: () => boolean;
 };
 
 type ShellLike = {
@@ -197,6 +198,10 @@ export function createBrowserViewHost(options: BrowserViewHostOptions): BrowserV
 		const entry = entries.get(viewId);
 		if (!entry) return;
 		entries.delete(viewId);
+		// When the window is already gone (dispose fired from mainWindow "closed"),
+		// Electron has torn down contentView and the child WebContentsViews. Touching
+		// them throws "Object has been destroyed", so just drop our reference.
+		if (options.mainWindow.isDestroyed?.()) return;
 		entry.view.setVisible?.(false);
 		entry.view.setBounds(OFFSCREEN_BOUNDS);
 		options.mainWindow.contentView.removeChildView?.(entry.view);

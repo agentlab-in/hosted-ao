@@ -105,6 +105,66 @@ describe("browser:clear", () => {
 	});
 });
 
+describe("dispose after the window is destroyed", () => {
+	it("does not touch contentView/views once the window reports destroyed", async () => {
+		const handlers = new Map<string, InvokeHandler>();
+		const view = {
+			webContents: {
+				canGoBack: () => false,
+				canGoForward: () => false,
+				getTitle: () => "",
+				getURL: () => "",
+				goBack: () => undefined,
+				goForward: () => undefined,
+				isLoading: () => false,
+				loadURL: async () => undefined,
+				on: () => undefined,
+				reload: () => undefined,
+				send: () => undefined,
+				setWindowOpenHandler: () => undefined,
+				stop: () => undefined,
+				// Real Electron throws "Object has been destroyed" here after close.
+				close: vi.fn(() => {
+					throw new Error("Object has been destroyed");
+				}),
+			},
+			setBounds: () => undefined,
+			setVisible: () => undefined,
+		};
+		let destroyed = false;
+		const removeChildView = vi.fn(() => {
+			throw new Error("Object has been destroyed");
+		});
+		const host = createBrowserViewHost({
+			mainWindow: {
+				contentView: { addChildView: () => undefined, removeChildView },
+				getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
+				webContents: { id: 1, send: () => undefined },
+				isDestroyed: () => destroyed,
+			} as never,
+			ipcMain: {
+				handle: (channel: string, fn: InvokeHandler) => handlers.set(channel, fn),
+				on: () => undefined,
+				removeHandler: () => undefined,
+				off: () => undefined,
+			} as never,
+			shell: { openExternal: async () => undefined },
+			WebContentsView: function () {
+				return view;
+			} as never,
+			annotatePreloadPath: "/preload.js",
+			rendererOrigin: "http://localhost:5173",
+		});
+		await (handlers.get("browser:ensure")!({ sender: { id: 1 } }, "sess-1") as Promise<unknown>);
+
+		destroyed = true; // window "closed" fired
+
+		expect(() => host.dispose()).not.toThrow();
+		expect(removeChildView).not.toHaveBeenCalled();
+		expect(view.webContents.close).not.toHaveBeenCalled();
+	});
+});
+
 describe("clampBoundsToWindow", () => {
 	it("rounds and clamps bounds to the window content area", () => {
 		expect(
