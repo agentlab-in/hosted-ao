@@ -42,6 +42,10 @@ const config: ForgeConfig = {
 			name: "@electron-forge/maker-deb",
 			config: {
 				options: {
+					// Must match packagerConfig.executableName; otherwise the deb
+					// maker looks for `agent-orchestrator-frontend` (the package name)
+					// and fails with "could not find the Electron app binary".
+					bin: "agent-orchestrator",
 					icon: "assets/icon.png",
 					maintainer: "Agent Orchestrator",
 					homepage: "https://github.com/aoagents/agent-orchestrator",
