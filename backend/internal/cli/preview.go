@@ -23,9 +23,14 @@ func newPreviewCommand(ctx *commandContext) *cobra.Command {
 		Use:   "preview [url]",
 		Short: "Open a URL (or the workspace's index.html) in the desktop browser panel for the current session",
 		Long: "Open a URL in the desktop browser panel for the current session.\n\n" +
-			"With no argument it opens the workspace's index.html. A workspace-relative path\n" +
-			"(e.g. ./dist/index.html) is served as a local file. Use `ao preview\n" +
-			"clear` to empty the panel.",
+			"With no argument it opens the workspace's static entry point, falling\n" +
+			"back to this session's existing preview target when no entry point exists.\n" +
+			"A local file can be opened by its absolute file:// URL\n" +
+			"(e.g. file:///home/me/proj/index.html). Use `ao preview clear` to empty the panel.",
+		Example: `  ao preview
+  ao preview file://$(pwd)/index.html
+  ao preview http://localhost:5173
+  ao preview clear`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var target string
