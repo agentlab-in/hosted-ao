@@ -36,6 +36,17 @@ import { createBrowserViewHost, type BrowserViewHost } from "./main/browser-view
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
+// Windows GUI/Squirrel launches have no attached console, so process.stdout and
+// process.stderr are dead pipes. The daemon-output console.log/console.error calls
+// below then fail with EPIPE, and with no "error" listener that surfaces as an
+// uncaught exception that crashes the main process. Swallow broken-pipe write
+// errors on the std streams: a dropped log line is harmless, the crash is not.
+const ignoreStdStreamError = (err: NodeJS.ErrnoException): void => {
+	if (err.code === "EPIPE") return;
+};
+process.stdout.on("error", ignoreStdStreamError);
+process.stderr.on("error", ignoreStdStreamError);
+
 // Must run before app ready so the About panel and default-menu role labels use it.
 app.setName("Agent Orchestrator");
 
