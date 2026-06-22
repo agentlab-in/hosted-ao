@@ -39,12 +39,12 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-      # The rpm maker needs rpmbuild, which ubuntu-latest does not ship.
-      - name: Install rpm tooling
-        run: sudo apt-get update && sudo apt-get install -y rpm
       - run: npm ci
-      - name: Build Linux artifacts (unsigned)
-        run: npm run make
+      - name: Build Linux .deb (unsigned)
+        # deb only: the rpm maker can't find its tooling on the runner, and a .deb
+        # is all we need to hand someone. `npm run make` keeps the premake daemon
+        # build; --targets restricts to the deb maker.
+        run: npm run make -- --targets @electron-forge/maker-deb
       - name: Publish to a 0.0.0-testing-<sha> prerelease
         shell: bash
         env:
