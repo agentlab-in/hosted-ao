@@ -1,181 +1,274 @@
-# Design System — Agent Orchestrator
+# Design System — ReverbCode
 
-> **This document supersedes the previous "Warm Terminal" system.** AO's design
-> language is **Mission Control**: a calm, high-signal control room for
-> supervising a fleet of autonomous agents. The earlier warm-neutral direction
-> (Geist Sans, amber/orange orchestrator CTA, brown-tinted surfaces) is retired.
-> This file is the single source of truth — there is no second package-level
-> `DESIGN.md`. Origin: the dashboard design-language exploration in
-> [`docs/design/dashboard-language.md`](docs/design/dashboard-language.md) and
-> its canonical mockups ([`kanban.html`](docs/design/mockups/kanban.html),
-> [`session.html`](docs/design/mockups/session.html)).
+> Source of truth for the ReverbCode desktop UI (Electron + React 19 + Tailwind v4
+>
+> - Radix/shadcn + xterm, in `frontend/src/renderer`). Read this before any visual
+>   or UI change. Created by `/design-consultation` on 2026-06-09.
+
+## ⚠️ Design direction — clone agent-orchestrator verbatim (SUPERSEDES emdash · 2026-06-10)
+
+By explicit user decision (2026-06-10), the renderer **clones the
+agent-orchestrator web app verbatim** in looks and design. This **supersedes the
+"match emdash" direction** documented in _Aesthetic Direction_ and the palette
+sections below — where they conflict, **agent-orchestrator wins**. Do not re-flag
+"this doesn't match emdash" in QA/review; flag divergence from **agent-orchestrator**.
+
+- **Reference (the user's own app):** `~/Projects/agent-orchestrator/packages/web/src`
+  — `app/globals.css`, `app/mc-board.css`, `app/mc-sidebar.css`,
+  `components/{ProjectSidebar,Dashboard,SessionCard,SessionDetailHeader,SessionInspector,StatusBadge}.tsx`.
+- **Palette (live in `frontend/src/renderer/styles.css` `:root`):** `--bg #0a0b0d`,
+  `--bg-1 #15171b`, `--fg #f4f5f7`, `--fg-muted #9ba1aa`, `--fg-passive #646a73`,
+  hairline white-alpha borders, accent `--accent #4d8dff`; status: working=orange
+  `#f59f4c`, needs-you=amber `#e8c14a`, mergeable=green `#74b98a`, fail=red `#ef6b6b`.
+  The sidebar rail is the cooler `#08090b`.
+- **Cloned surfaces:** the four-column gradient kanban board, the `ProjectSidebar`
+  (brand + project disclosure + nested session rows + Settings menu footer), the
+  session topbar (Kanban back button + identity + breathing `StatusBadge` pill), and
+  the shared `DashboardTopbar`/`DashboardSubhead` chrome (Coding/Reviews tabs · "N
+  working" pill · subhead) reused across board/review/PR/settings.
+- **Build with shadcn primitives** where a component fits (`components/ui/*`:
+  dropdown-menu, select, card, table, tooltip, …); agent-orchestrator's own
+  hand-rolled CSS components are structure/behaviour reference only.
+- The one carried-over divergence still holds: the **accent is refined blue**, and
+  the **terminal keeps its own palette**. Everything else tracks agent-orchestrator.
+- **Approved divergence (2026-06-10):** on macOS, a titlebar cluster (sidebar toggle +
+  back/forward history arrows, `TitlebarNav`) sits beside the traffic lights,
+  VS Code-style — the web reference has no window chrome, so no analogue exists.
+- **Approved divergence (2026-06-10):** the session inspector rail is fully
+  collapsible, built on the shadcn resizable primitive (`pnpm dlx shadcn add
+resizable`, react-resizable-panels v4 `collapsible` panel + imperative API,
+  user-requested). The panel animates to 0% via a flex-grow transition while the
+  content keeps a stable min-width (yyork-style, no mid-animation reflow). Toggled
+  by a `PanelRight` icon button in the session topbar and ⌘⇧B; open state + split
+  width persist. The AO reference keeps the rail always visible.
+- **Approved divergence (2026-06-12):** the shell topbar spans the full window
+  width and the sidebar is pinned below it (`top-14`), so the sidebar's right
+  border stops at the header instead of cutting through the macOS traffic-light
+  strip (user-requested). The AO reference keeps a full-height sidebar with the
+  header beside it. On macOS the header always pads past the lights + TitlebarNav
+  cluster (`.is-under-titlebar-nav`, 180px).
 
 ## Product Context
-- **What this is:** A web dashboard for supervising fleets of parallel AI coding agents. Each agent gets its own git worktree, branch, and PR. The dashboard is the operator's single pane of glass.
-- **Who it's for:** Developers running 10–30+ agents in parallel. It must stay calm and glanceable with 20+ agents running.
-- **Project type:** Next.js 15 (App Router) + React 19 + Tailwind v4. A kanban fleet board (home) and a per-session detail view.
 
-## Concept & Identity
+- **What this is:** ReverbCode is an Electron desktop app for supervising many parallel
+  AI coding-agent sessions, backed by a Go daemon (`backend/`). The `ao` CLI is the
+  thin client over the same daemon.
+- **Who it's for:** professional software engineers running multiple coding agents at
+  once who need to delegate, watch, intervene, and ship PRs.
+- **Space/peers:** agent orchestration / parallel-agent desktop tools. Closest peers:
+  **emdash** (the primary design reference), **PostHog Code**, Conductor.
+- **Project type:** dark-mode-primary desktop app; terminal-dense; keyboard-driven;
+  runs all day.
+- **The one memorable thing:** leverage and speed — "I'm more in control here than
+  babysitting N terminal tabs myself."
 
-**A calm, high-signal control room.** Linear-grade restraint, dense but humane.
-State is glanceable, not noisy.
+### Product flow (what the UI must serve)
 
-**The blue/orange split.** The mascot is the Claude Code character recolored
-**blue** — the *conductor*. This drives a deliberate two-color semantic split:
+ReverbCode is **orchestrator-led**, which is the one thing that differs from emdash
+(a flat list of independent sessions). Grounded in the daemon
+(`backend/internal/session_manager/manager.go`, `docs/architecture.md`):
 
-- **Blue = the orchestrator (AO itself / "you").** Brand, the single solid-fill
-  primary CTA (the **Orchestrator** button), active selection, focus, links.
-- **Orange = the agents being conducted.** The per-agent identity and the
-  **`working`** status — the one "an agent is alive right now" signal (a gently
-  breathing dot, the terminal cursor).
+- A **Project** is a registered git repo.
+- Per project there is **one active Orchestrator** session plus **N Worker** sessions.
+  Both are the same underlying "session" (durable facts: `activity_state`,
+  `is_terminated`, PR facts); they differ only by `Kind` (`KindOrchestrator` vs the
+  default worker). A project may run the orchestrator on a different agent than its workers.
+- The **Orchestrator is the human-facing coordinator**: you talk to it; it spawns
+  workers (`ao spawn`), messages them (`ao send`), tracks progress, and synthesizes
+  results. It avoids implementing unless necessary.
+- A **Worker is a normal agent session** — nothing special-cased. It runs one focused
+  task in an isolated git worktree + branch, with the agent CLI in a terminal as the
+  conversation, producing a diff → commit/push → PR. It escalates to the orchestrator
+  only for true blockers or cross-session coordination.
+- The daemon **observes** runtime + PR/CI/review facts and **derives** display status
+  at read time: `working`, `needs_input`, `ci_failed`, `changes_requested`,
+  `mergeable`, `approved`, `review_pending`, `pr_open`, `idle`, `terminated`, `merged`.
+  Never store display status; keep session facts small.
 
-Blue does not *replace* orange; they mean different things. The board reads as a
-blue conductor surrounded by orange agents.
+## Aesthetic Direction
 
-## Color discipline
+> **Superseded (2026-06-10):** see the _Design direction — clone agent-orchestrator
+> verbatim_ banner at the top. The emdash framing below is retained for history; the
+> live look tracks agent-orchestrator (same flat near-black / hairline family, so most
+> of this still reads true).
 
-**Color = meaning. Most states get none.** The UI is grayscale by default;
-color is rationed so it always signals something.
-
-| Token | Hex | Use |
-|-------|-----|-----|
-| Blue | `#4d8dff` | orchestrator / you — primary action, selection, focus, links (the *only* solid-fill button) |
-| Orange | `#f59f4c` | a working agent (status dot + terminal cursor) |
-| Amber | `#e8c14a` | needs-your-input / attention (incl. unresolved review comments, changes requested) |
-| Red | `#ef6b6b` | failing / stuck (CI failed, crashed, conflicts) |
-| Green | `#74b98a` | mergeable / passed / resolved |
-| Neutral grays | — | everything healthy & passive: in-review, idle, done, metadata |
-
-Diff add/remove green & red are permitted in their literal context (the Changes view).
-
-### Surfaces & lines (dark, cool neutral)
-
-The product is **dark-only mission control**. The dark theme is authoritative.
-
-| Token (literal) | Value | Maps to semantic token |
-|-----------------|-------|------------------------|
-| `--bg` | `#0a0b0d` | `--color-bg-base` (app base) |
-| `--bg-side` | `#08090b` | `--color-bg-sidebar` |
-| `--card` | `#15171b` | `--color-bg-surface` / `--color-bg-card` — **the only bordered surface** |
-| `--card-hover` | `#191b20` | `--color-bg-elevated` / `-elevated-hover` |
-| `--col` | `#0e0f12` | `--color-column-bg` (kanban trough) |
-| `--term` | `#0c0d10` | xterm background (terminal-themes.ts) |
-| `--line` | `rgba(255,255,255,0.06)` | `--color-border-subtle` / `-default` |
-| `--line-2` | `rgba(255,255,255,0.10)` | `--color-border-strong` |
-| `--t1 … --t4` | `#f4f5f7` `#9ba1aa` `#646a73` `#444951` | `--color-text-primary/secondary/tertiary/muted` |
-
-These literals live at the top of the `.dark` block in
-`packages/web/src/app/globals.css`; the existing `--color-*` semantic tokens
-**alias** them, so all consuming CSS keeps working. **Don't rename the semantic
-tokens** — add/alias and migrate.
+- **Direction:** match **emdash** exactly — flat, near-black, hairline-bordered,
+  utilitarian. Industrial control surface, calm chrome, the terminal as the center of gravity.
+- **Decoration level:** minimal. Type + 1px hairlines do all the work. No gradients,
+  glow, blobs, or emoji.
+- **Mood:** low-glare, dense, keyboard-native; signal-over-noise.
+- **Reference:** [emdash](https://github.com/generalaction/emdash) (primary, visual +
+  structural), [PostHog Code](https://github.com/PostHog/code) (secondary). Tokens
+  below were extracted from emdash's `src/renderer/index.css`.
+- **Deliberate tradeoff:** to _be_ emdash, we use the **system font stack** (not a
+  custom typeface) and emdash's neutral palette. We diverge in exactly one place: the
+  accent is ReverbCode's **refined blue**, not emdash's jade green. The terminal keeps
+  green (it is the agent CLI).
 
 ## Typography
 
-Self-hosted via `next/font/local` (`packages/web/src/fonts/`). **No external font CDN.**
+System fonts only, like emdash — no custom/Google fonts, zero font payload.
 
-- **UI = Schibsted Grotesk** (`--font-sans`). The product voice. Used for all
-  chrome: titles, labels, buttons, body. A distinctive grotesk — not Inter/system.
-- **Machine = JetBrains Mono** (`--font-mono`). Branches, IDs, PR numbers, costs,
-  timestamps, terminal — anything the machine emits.
-- **Numerals:** `tabular-nums` wherever numbers appear (counts, costs, tokens).
-- **Never render chrome in mono.** The sans/mono split is itself a design device:
-  product voice vs. machine voice.
+- **UI / body / display:** `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+Oxygen, Ubuntu, Cantarell, "Fira Sans", "Helvetica Neue", sans-serif` (San Francisco
+  on macOS).
+- **Mono / terminal / code / eyebrow labels:** `Menlo, Monaco, Consolas,
+"Liberation Mono", "Courier New", monospace`.
+- **Eyebrow labels** (section titles, dialog titles, the rail "PROJECTS" header):
+  mono, **uppercase**, `letter-spacing: .12–.14em`, `--foreground-passive`.
+- **Scale:** 14px base UI / sidebar (`text-sm`, weight 400) · 12px secondary + labels
+  (`text-xs`) · 13px code/mono/terminal · 11px tiny · 10px micro + badges · 9px sidebar
+  badge label. Buttons are `font-normal` (400), not bold.
 
-(Geist Sans is removed. JetBrains Mono is no longer used for display headlines.)
+## Color
 
-## Status as one system
+emdash's flat Radix-neutral near-black ramp carries the whole interface; color is rare
+and meaningful. Values are sRGB approximations of emdash's `color(display-p3 …)` tokens.
 
-A single semantic spectrum maps the canonical lifecycle to a `{tone, label}`
-pair and is used **everywhere** — kanban card badge, sidebar dot, session topbar
-pill. It lives in [`lib/status-spec.ts`](packages/web/src/lib/status-spec.ts)
-(`getStatusSpec`) and renders through
-[`StatusBadge`](packages/web/src/components/StatusBadge.tsx).
+### Dark (primary)
 
-| Tone | Color | Meaning |
-|------|-------|---------|
-| `working` | orange (breathing) | an agent is alive right now |
-| `input` | amber | needs your input |
-| `changes` | amber | changes requested |
-| `fail` | red | CI failed / stuck / crashed / conflicts |
-| `review` | neutral | in review / waiting on a reviewer |
-| `ready` / `merged` | green | mergeable / landed |
-| `neutral` | gray | idle / done / terminated |
+| Role                                 | Hex             |
+| ------------------------------------ | --------------- |
+| `--bg` canvas                        | `#111111`       |
+| `--bg-1` surface                     | `#191919`       |
+| `--bg-2` raised / hover / active row | `#222222`       |
+| `--bg-3`                             | `#2a2a2a`       |
+| `--fg` text                          | `#eeeeee`       |
+| `--fg-muted`                         | `#b4b4b4`       |
+| `--fg-passive`                       | `#6e6e6e`       |
+| `--border` hairline                  | `#3a3a3a`       |
+| `--border-1`                         | `#484848`       |
+| **`--accent` (blue)**                | **`#5b9dff`**   |
+| `--needs-you` / in-progress (amber)  | `#ffcc4a`       |
+| `--success` / mergeable (green)      | `#6cb16c`       |
+| terminal green                       | `#7bd88f`       |
+| `--error` (red)                      | `#d4544f`       |
+| text selection                       | `#3f8ef7` @ 35% |
+| terminal bg                          | `#161616`       |
 
-Tone is refined from the (tested) attention-level bucket so a card's badge never
-disagrees with the column it sits in.
+### Light (supported, not primary)
 
-## Layout patterns
+| Role                      | Hex                               |
+| ------------------------- | --------------------------------- |
+| canvas / surface / raised | `#fcfcfc` / `#ffffff` / `#ededee` |
+| text / muted / passive    | `#1a1a1a` / `#666666` / `#9a9a9a` |
+| border                    | `#e3e3e5`                         |
+| accent (blue)             | `#2563eb`                         |
+| amber / green / red       | `#9a6b00` / `#1a7f37` / `#c0392b` |
 
-### Fleet board (home) — `kanban.html`
-- **Lead with the fleet, not the terminal.** Answers "what are all my agents doing?" at a glance.
-- **Frameless columns:** lifecycle columns **Working → Needs you → In review →
-  Ready to merge** are borderless tinted troughs with a faint *per-column*
-  semantic top-glow. The **card is the only bordered surface** — no box-in-box.
-- **Compact cards:** status badge + id, task title (2-line clamp), branch, a thin
-  footer. Done/Terminated collapses at the bottom.
-- The sidebar always shows **all projects'** sessions; the board filters
-  client-side. The SSE refresh interval is **5s** (unchanged — C-14).
+### Accent rules
 
-### Session detail — `session.html`
-- **Framed terminal** as a real surface (header + viewport), flush to sidebar/topbar.
-  It is a **live xterm.js/PTY** — we do *not* style its content; we only set the
-  frame and the xterm.js `theme` object (background `--term`, orange cursor, blue
-  selection, a 16-color ANSI palette tied to the tokens — see `terminal-themes.ts`).
-  Claude Code's own input lives inside the terminal; there is no separate composer.
-- **Pluggable inspector rail** (a registered-view slot):
-  [`SessionInspector`](packages/web/src/components/SessionInspector.tsx) with views
-  **Summary · Changes · Browser**; adding more (Logs, Cost…) is just another entry.
-  - *Summary* is ordered by supervision value: **Pull request → Review comments →
-    Activity → Overview** (the PR card bundles PR + review comments).
-  - *Review comments* surface a soft-blue **Address** action (`askAgentToFix`) that
-    hands the comment — with its `file:line` — to the agent session to fix.
-  - *Browser* is reserved for a web-preview / Playwright plugin.
-- **Topbar:** `‹ Kanban` (back) · title + inline branch · **status pill** ·
-  notifications · **Kill** (trash) · **Orchestrator** (blue primary, org-chart icon).
+- **Blue** = the live edge only: primary buttons, the active/selected session, focus
+  rings. Never decorative.
+- **Amber** = an agent needs you (blocked / `needs_input` / `review_pending`).
+- **Green** = `mergeable`/success and terminal/agent CLI text.
+- **Red** = `ci_failed` / destructive.
+- These map 1:1 to the daemon's derived statuses.
 
-## Iconography & motion
-- **Line icons only** (Lucide-style, ~1.6px stroke, `currentColor`, inline SVG). **No emoji.**
-- **Motion is minimal & purposeful:** a slow CSS-only "breathe" pulse on the
-  working dot / terminal cursor (`@keyframes breathe`, 2.4s). No animation
-  libraries (C-07). All motion respects `prefers-reduced-motion: reduce`.
+### Status indicator (no text badges)
 
-## Web Implementation Rules
-- **Tokens over raw values.** Use the `--color-*` semantic tokens (or the literal
-  `--bg/--card/--t1…` palette) from `globals.css`. No hardcoded hex/rgba in components.
-- **No inline `style=`** for theme values (C-02). Tailwind utilities with
-  `var(--token)`, or a named class in `globals.css`.
-- **No external UI kits** (Radix, shadcn, Headless UI, …) (C-01).
-- **Tailwind vs CSS classes:** Tailwind for one-off layout/spacing; add a class in
-  `globals.css` when a pattern is theme-sensitive, uses pseudo-elements/gradients,
-  or repeats 3+ times.
-- **App Router only** (C-06). Component files ≤ 400 lines (C-04). Test files for
-  new/changed components (C-12).
-- **Dark theme is always preserved** (C-05). Light-mode tokens still exist for the
-  theme toggle but mission control is designed and tuned for dark.
+Session status is a single ~14px glyph in one fixed slot, never a text pill/badge:
 
-## Accessibility
-- **Focus indicators:** `outline: 2px solid var(--color-accent); outline-offset: 2px` on `:focus-visible`. Never `outline: none` without a visible replacement.
-- **Reduced motion:** `@media (prefers-reduced-motion: reduce)` disables animations/transitions. Non-negotiable.
-- **Color independence:** never encode meaning with color alone. Status badges always pair a colored dot with a text label.
-- **Contrast:** body text ≥ 4.5:1; UI/borders/icons ≥ 3:1. The text ramp `--t1…--t3` is for primary→labels on the `--bg`/`--card` surfaces; `--t4` is for faint/disabled only.
-- **Keyboard nav:** all interactive elements reachable via Tab; Escape closes popovers; logical order.
-- **ARIA labels** on all icon-only buttons.
+- **Working / active** → an animated spinner (accent).
+- **Has an open PR** → a PR icon, tinted by PR state: mergeable/approved green,
+  `ci_failed` red, review/`changes_requested` amber, plain `pr_open` muted.
+- **Otherwise** → a filled dot: `needs_input` amber (pulsing), idle/done muted gray.
 
-## Constraints
-- C-01: No new UI component libraries
-- C-02: No inline styles in new/modified code
-- C-04: Component files max 400 lines
-- C-05: Dark theme preserved
-- C-06: Next.js App Router only
-- C-07: No animation libraries (CSS-only motion)
-- C-12: Test files for new/changed components
-- C-14: SSE 5s interval unchanged
+Precedence: **working spinner > PR icon > dot**. Implemented as `StatusGlyph` in
+`components/SideRail.tsx`; used in the orchestrator's Workers list. (Worker rows in the
+left rail stay name-only — no glyph.)
+
+## Spacing
+
+- **Base unit:** 4px (Tailwind scale: 1=4, 1.5=6, 2=8, 3=12, 4=16, 5=20, 6=24).
+- **Density:** compact / desktop-tight.
+- **Control + row height:** `h-8` = 32px default; `h-7` = 28px small; `h-6` = 24px xs.
+- Inputs `px-2.5 py-1`; buttons `px-2.5`, gap 1–1.5.
+
+## Layout
+
+- **Approach:** fixed three-pane app shell, opens into the workbench (no marketing/dashboard home).
+- **Panes:** `[ rail 240px ] [ center 1fr ] [ side rail 316px ]`.
+- **Rail (240px), top → bottom:**
+  1. **Orchestrator anchor** — pinned, single, visually distinct (blue 2px left bar,
+     `--bg-2` fill, hub/`waypoints` icon, name "Orchestrator", a `5 agents · 2 need you`
+     mono summary). This is ReverbCode's one addition over emdash. Default landing view.
+  2. `PROJECTS` eyebrow label + a `+`.
+  3. Project rows (folder icon + name) with nested **worker rows beneath**. Each project
+     row has a hover-revealed **`+`** that opens the New-worker modal pre-scoped to that
+     project (distinct from the `PROJECTS` header `+`, which registers a repo).
+  4. **Footer:** `Search ⌘K`, `Settings ⌘,`. (No Library.)
+  5. **Account** row pinned at the very bottom.
+- **Worker rows are name-only.** Just the session name, truncated. Status, branch, diff,
+  and PR live in the panes and topbar, never in the row. Selection = `--bg-2` fill + a
+  2px blue left bar. (emdash itself shows a faint trailing timestamp; we omit it by choice.)
+- **Center = the conversation.** Orchestrator → its coordination terminal (delegate here;
+  composer reads "tell the orchestrator what to build"). Worker → the agent CLI terminal
+  (tabbed per agent, e.g. `claude-code (1)`), with a composer (model selector, worktree
+  path, `Accept edits`). The terminal **is** the conversation; no separate chat surface.
+- **Side rail (316px):** orchestrator → a quiet **Workers** list (name + project + derived
+  status). Worker → the **Git review rail**: `Changed N` → All files / Discard all / Stage
+  all → file rows (`+adds −dels`, stage toggle) → `Commit message` + `Description` →
+  **Commit & Push** (primary blue) → branch + `Create PR`.
+- **Border radius:** `sm` 4px (scrollbar) · `md` 6px (buttons, inputs, toggles) ·
+  `lg` 8px (rows, cards, panels) · `xl` 12px (modals) · `full` (badges/pills/dots).
+- **Icons:** **lucide** only. No emoji.
+
+### Topbar
+
+- **Left (both):** `project / session` breadcrumb + pin; for the orchestrator, a hub icon
+  - `Orchestrator`.
+- **Right — worker session:** a **PR/CI status pill** that is the action
+  (`PR #156 · mergeable` green / `CI failed` red / `review requested` amber /
+  `Open PR` when none) → **Changes / Files / Terminal** view toggles → **⋯ session menu**
+  (rename, restart, kill, claim PR — the `ao session …` commands).
+- **Right — orchestrator:** **+ New worker** → Terminal toggle → **⋯ menu**. No diff toggles.
+
+### Spawn-worker modal (mirrors emdash's Create Task)
+
+You mostly let the orchestrator spawn workers from its conversation; the manual paths
+(the topbar `+ New worker`, a project row's hover `+`, or `ao spawn`) open a modal that
+mirrors emdash exactly. Launching from a project row pre-fills the Project field:
+
+- Centered dialog, **12px radius**, `max-w` ~512px, `bg` canvas, `ring-1` at 10% fg,
+  fade + zoom-95 enter.
+- **Header:** eyebrow mono-uppercase title `New worker` + `×` close.
+- **Body** (`gap` 15–16px): a **borderless large name field** (18px, auto-focus, slug
+  rule "letters, numbers, hyphens") → **Project** selector → **Agent** selector
+  (claude-code / codex / opencode / …) → a **"Based on"** bordered card with a segmented
+  control `Branch · Issue · Pull Request` revealing a combobox → a **Prompt / Workspace**
+  tab where Prompt is the worker's initial task (textarea).
+- **Footer:** right-aligned single primary **`Spawn worker`** (blue) with a `⌘↵` keycap,
+  disabled until valid.
+
+## Motion
+
+- **Approach:** minimal-functional. The one expressive exception: a status dot/spinner
+  pulse on active/working sessions (opacity breathe) so "alive" is glanceable. Never
+  animate text or layout.
+- **Easing:** enter `ease-out`, exit `ease-in`, move `ease-in-out`.
+- **Duration:** micro 80ms · short 160ms · medium 240ms · status pulse 1.8s loop ·
+  modal enter ~150ms fade+zoom-95.
+
+## Implementation notes
+
+- The renderer (`frontend/src/renderer/styles.css`) currently uses **Inter** and a
+  grayscale-blue theme. Migrate to this system: drop the Inter `font-family`, adopt the
+  system stack, and replace the token values with the emdash neutral ramp + blue accent above.
+- Keep tokens as CSS custom properties under `:root` (dark) and `:root[data-theme="light"]`.
+- A faithful HTML reference of all of the above (both views + topbar + spawn modal,
+  light/dark) is saved under
+  `~/.gstack/projects/aoagents-agent-orchestrator/designs/design-system-20260609/`.
 
 ## Decisions Log
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-05-27 | **Mission Control supersedes Warm Terminal** | A single source of truth. The product is a calm control room for a fleet of agents; cool restraint + rationed color reads better at 20+ agents than warm decoration. |
-| 2026-05-27 | Blue = orchestrator/you, orange = working agent | The mascot is the blue conductor; orange is the Claude Code lineage. Two colors, two meanings — the product metaphor, visualized. |
-| 2026-05-27 | Schibsted Grotesk (UI) + JetBrains Mono (machine), self-hosted | A distinctive grotesk for the product voice; mono reserved for machine data. Self-hosted via `next/font/local` — no external font CDN. |
-| 2026-05-27 | One status system (`getStatusSpec` + `StatusBadge`) | Kanban badge, sidebar dot, and topbar pill all render from one spectrum so status never disagrees with itself. |
-| 2026-05-27 | The card is the only bordered surface | Frameless tinted columns with per-column glow; cards are flat `--card` with a hairline ring. No box-in-box nesting. |
+
+| Date       | Decision                                                               | Rationale                                                                                          |
+| ---------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 2026-06-09 | Match emdash's visual language exactly                                 | User direction; emdash is the demonstrated reference for this app's UI.                            |
+| 2026-06-09 | System font, not a custom typeface (e.g. Geist)                        | emdash uses the system stack; fidelity + native feel + zero font payload chosen over brand type.   |
+| 2026-06-09 | Refined **blue** accent, not emdash's jade green                       | User's explicit pick; blue for primary/active/focus, terminal stays green.                         |
+| 2026-06-09 | Single global **Orchestrator** anchor, orchestrator-first default view | The one real difference from emdash; orchestrator is the human-facing coordinator you delegate to. |
+| 2026-06-09 | **Name-only** worker rows                                              | User direction; status/branch/diff live in panes + topbar, not the row.                            |
+| 2026-06-09 | Removed **Library** from the rail footer                               | User direction; footer is Search + Settings only.                                                  |
+| 2026-06-09 | Topbar right = PR/CI pill + view toggles + ⋯ menu (worker)             | Surfaces the actionable PR/CI state from the daemon; emdash/PostHog Code precedent.                |
+| 2026-06-09 | Spawn modal mirrors emdash's Create Task                               | Consistency with the reference; mapped to `ao spawn` params.                                       |

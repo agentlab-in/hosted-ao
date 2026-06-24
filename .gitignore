@@ -1,71 +1,64 @@
+# Node / Electron
 node_modules/
+.pnpm/
 dist/
-.pnpm-store/
-.next/
-.next-dev/
-*.tsbuildinfo
-coverage/
-*.patch
-*-context.md
-packages/web/screenshots/
-.playwright-cli/
+out/
+build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Environment files (secrets)
-.env
-.env.local
-.env.*.local
-.env.production.local
-.env.development.local
-.env.test.local
-
-# Credentials and secrets
-*.key
-*.pem
-*.p12
-*.pfx
-*.cer
-*.crt
-*.der
-*.csr
-secrets.yaml
-secrets.yml
-credentials.json
-credentials.yaml
-*-credentials.*
-.secrets/
-.credentials/
-
-# API keys and tokens
-.token
-.api-key
-*-token.txt
-*-api-key.txt
-
-# Cloud provider credentials
-.aws/
-.gcloud/
-.azure/
-
-# SSH keys
-id_rsa
-id_dsa
-id_ecdsa
-id_ed25519
-*.ppk
-
-# Development symlinks (created per-worktree, not committed)
-.claude
-packages/web/agent-orchestrator.yaml
-
-# Local agent orchestrator config (may contain secrets)
+# Go
+.go/
+bin/
+*.test
+*.out
+vendor/
+# compiled daemon binary
+/backend/backend
 agent-orchestrator.yaml
 
-# Agent configuration and activity logs
-.claude/
-.opencode/
+# Backend runtime data artifacts (SQLite store + WAL, CDC event log).
+# Created at AO_DATA_DIR (outside the repo by default); ignored here so a
+# data dir pointed at the tree never gets committed.
+*.db
+*.db-shm
+*.db-wal
+session-events.jsonl
+session-events.jsonl.*
+
+# Agent Orchestrator local session state
 .ao/
 
-# OS-specific files
+# AO reviewer scratch output. The reviewer agent runs inside the worker's
+# worktree; its review writeup must never be committed onto the worker branch.
+/review.md
+
+# Environment
+.direnv/
+.env
+.env.*
+!.env.example
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
 .DS_Store
 Thumbs.db
-package-lock.json
+
+# Personal local overrides (not for the team)
+.envrc.local
+
+# electron-forge / vite build output
+.vite/
+dist-electron/
+# electron-builder debug dump, written to the cwd on every NSIS build
+builder-debug.yml
+
+# playwright artifacts
+frontend/test-results/
