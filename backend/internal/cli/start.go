@@ -75,8 +75,6 @@ func newStartCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-// TODO(spec §6.4): legacy first-boot import now belongs to the desktop app; standalone `ao import` still available.
-
 // runStart implements the spec §6.1 algorithm: resolve the installed app, fetch
 // it if absent, open it, then print the deprecation notice. It never blocks or
 // supervises the launched app.

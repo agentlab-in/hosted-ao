@@ -1,9 +1,15 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { APP_STATE_FILE_NAME, writeAppStateMarker, type AppStateMarker } from "./app-state";
+import {
+	APP_STATE_FILE_NAME,
+	writeAppStateMarker,
+	readMigrationState,
+	updateMigration,
+	type AppStateMarker,
+} from "./app-state";
 
 // The exact key set the Go reader (start.go `appState`) unmarshals.
 const GO_READER_KEYS = ["schemaVersion", "appPath", "version", "installedAt", "lastReconciledAt", "installSource"];
@@ -35,7 +41,7 @@ describe("writeAppStateMarker", () => {
 		});
 
 		const m = await readMarker(dir);
-		expect(m.schemaVersion).toBe(1);
+		expect(m.schemaVersion).toBe(2);
 		expect(m.appPath).toBe("/Applications/Agent Orchestrator.app");
 		expect(m.version).toBe("0.0.0");
 		expect(m.installedAt).toBe("2026-06-26T10:00:00.000Z");
@@ -124,5 +130,57 @@ describe("writeAppStateMarker", () => {
 
 		const m = await readMarker(nested);
 		expect(m.appPath).toBe("/Applications/Agent Orchestrator.app");
+	});
+});
+
+// ---- migration marker tests (B1) ----
+
+const fixedNow = () => new Date("2026-06-26T10:00:00.000Z");
+
+describe("migration marker", () => {
+	const dirs: string[] = [];
+	async function tmp() {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-appstate-"));
+		dirs.push(dir);
+		return dir;
+	}
+
+	afterEach(async () => {
+		await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+	});
+
+	it("readMigrationState defaults to pending when the file is absent", async () => {
+		expect(await readMigrationState(await tmp())).toEqual({ status: "pending" });
+	});
+
+	it("readMigrationState defaults to pending when the file is corrupt", async () => {
+		const dir = await tmp();
+		await writeFile(path.join(dir, APP_STATE_FILE_NAME), "{ not valid json", "utf8");
+		expect(await readMigrationState(dir)).toEqual({ status: "pending" });
+	});
+
+	it("updateMigration persists status without an existing marker", async () => {
+		const dir = await tmp();
+		await updateMigration({ stateDir: dir, migration: { status: "declined" }, now: fixedNow });
+		expect((await readMigrationState(dir)).status).toBe("declined");
+	});
+
+	it("a launch write preserves an existing migration block", async () => {
+		const dir = await tmp();
+		await updateMigration({ stateDir: dir, migration: { status: "completed" }, now: fixedNow });
+		await writeAppStateMarker({ stateDir: dir, appPath: "/A.app", version: "1.2.3", now: fixedNow });
+		const raw = JSON.parse(await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8"));
+		expect(raw.schemaVersion).toBe(2);
+		expect(raw.appPath).toBe("/A.app");
+		expect(raw.migration.status).toBe("completed");
+	});
+
+	it("updateMigration does not clobber launch fields", async () => {
+		const dir = await tmp();
+		await writeAppStateMarker({ stateDir: dir, appPath: "/A.app", version: "1.2.3", now: fixedNow });
+		await updateMigration({ stateDir: dir, migration: { status: "failed", error: "x" }, now: fixedNow });
+		const raw = JSON.parse(await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8"));
+		expect(raw.appPath).toBe("/A.app");
+		expect(raw.migration).toEqual({ status: "failed", error: "x" });
 	});
 });
