@@ -286,17 +286,16 @@ export function Sidebar({
 								<DropdownMenuShortcut>⌘K</DropdownMenuShortcut>
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
-							{selection.activeProjectId ? (
+							{selection.activeProjectId && (
 								<DropdownMenuItem onSelect={() => selection.goSettings(selection.activeProjectId!)}>
 									<Settings aria-hidden="true" />
 									Project settings
 								</DropdownMenuItem>
-							) : (
-								<DropdownMenuItem onSelect={selection.goGlobalSettings}>
-									<Settings aria-hidden="true" />
-									Global settings
-								</DropdownMenuItem>
 							)}
+							<DropdownMenuItem onSelect={selection.goGlobalSettings}>
+								<Settings aria-hidden="true" />
+								Global settings
+							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
 					<Tooltip>
@@ -347,17 +346,16 @@ export function Sidebar({
 								<DropdownMenuShortcut>⌘K</DropdownMenuShortcut>
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
-							{selection.activeProjectId ? (
+							{selection.activeProjectId && (
 								<DropdownMenuItem onSelect={() => selection.goSettings(selection.activeProjectId!)}>
 									<Settings aria-hidden="true" />
 									Project settings
 								</DropdownMenuItem>
-							) : (
-								<DropdownMenuItem onSelect={selection.goGlobalSettings}>
-									<Settings aria-hidden="true" />
-									Global settings
-								</DropdownMenuItem>
 							)}
+							<DropdownMenuItem onSelect={selection.goGlobalSettings}>
+								<Settings aria-hidden="true" />
+								Global settings
+							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
 					{!isMac && (

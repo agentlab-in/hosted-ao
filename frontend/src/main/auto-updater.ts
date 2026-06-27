@@ -1,8 +1,14 @@
 import { autoUpdater } from "electron-updater";
-import { dialog } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { readUpdateSettings, writeUpdateSettings, UPDATE_SETTINGS_FILE_NAME } from "./update-settings";
+import {
+	readUpdateSettings,
+	writeUpdateSettings,
+	UPDATE_SETTINGS_FILE_NAME,
+	type UpdateChannel,
+	type UpdateStatus,
+} from "./update-settings";
 
 // Default release repo, mirroring backend cli.releaseRepo. Override via env for
 // fork test builds (AO_RELEASE_REPO=owner/repo).
@@ -15,6 +21,50 @@ function repo(): { owner: string; name: string } {
 	return { owner: defOwner, name: defName };
 }
 
+// configureFeed points electron-updater at the GitHub Releases feed for the
+// chosen channel. Shared by the launch auto-check and the manual Settings flow.
+function configureFeed(channel: UpdateChannel): void {
+	const { owner, name } = repo();
+	autoUpdater.setFeedURL({ provider: "github", owner, repo: name });
+	autoUpdater.channel = channel; // "latest" | "nightly"
+	autoUpdater.allowDowngrade = true; // permits a nightly -> stable channel switch
+}
+
+let lastStatus: UpdateStatus = { state: "idle" };
+let eventsWired = false;
+
+// broadcast pushes the latest update status to every renderer window so the
+// Global Settings Updates section can reflect check/download progress live.
+function broadcast(status: UpdateStatus): void {
+	lastStatus = status;
+	for (const win of BrowserWindow.getAllWindows()) {
+		if (!win.isDestroyed()) win.webContents.send("updates:status", status);
+	}
+}
+
+// wireUpdaterEvents registers electron-updater listeners once and forwards each
+// to the renderer as an UpdateStatus. Idempotent: safe to call on every entry
+// point (launch auto-check and manual check).
+function wireUpdaterEvents(): void {
+	if (eventsWired) return;
+	eventsWired = true;
+	autoUpdater.on("checking-for-update", () => broadcast({ state: "checking" }));
+	autoUpdater.on("update-available", (info) => broadcast({ state: "available", version: info?.version }));
+	autoUpdater.on("update-not-available", () => broadcast({ state: "not-available" }));
+	autoUpdater.on("download-progress", (p) =>
+		broadcast({ state: "downloading", percent: Math.max(0, Math.min(100, Math.round(p?.percent ?? 0))) }),
+	);
+	autoUpdater.on("update-downloaded", (info) => broadcast({ state: "downloaded", version: info?.version }));
+	autoUpdater.on("error", (err) => {
+		// Never crash on update failure (offline, unsigned macOS, etc.).
+		broadcast({ state: "error", message: err?.message ?? String(err) });
+	});
+}
+
+export function getUpdateStatus(): UpdateStatus {
+	return lastStatus;
+}
+
 // startAutoUpdates configures electron-updater from the user's ~/.ao settings.
 // It is a thin shell: all policy (channel, opt-in) comes from update-settings.
 // Caller guards on app.isPackaged.
@@ -22,23 +72,60 @@ export async function startAutoUpdates(stateDir: string): Promise<void> {
 	const settings = await readUpdateSettings(stateDir);
 	if (!settings.enabled) return;
 
-	const { owner, name } = repo();
-	autoUpdater.setFeedURL({ provider: "github", owner, repo: name });
-	autoUpdater.channel = settings.channel; // "latest" | "nightly"
-	autoUpdater.allowDowngrade = true; // permits a nightly -> stable channel switch
+	wireUpdaterEvents();
+	configureFeed(settings.channel);
 	autoUpdater.autoDownload = true;
 	autoUpdater.autoInstallOnAppQuit = true;
-
-	autoUpdater.on("error", (err) => {
-		// Never crash on update failure (offline, unsigned macOS, etc.).
-		console.error("auto-update error:", err?.message ?? err);
-	});
 
 	try {
 		await autoUpdater.checkForUpdates();
 	} catch (err) {
 		console.error("auto-update check failed:", err);
 	}
+}
+
+// checkForUpdatesNow runs a manual update check regardless of the auto-update
+// opt-in, so a user who never enabled auto-updates can still pull the latest
+// build from Settings. It does NOT auto-download — the user clicks Update — and
+// reports progress via the broadcast status. Updates only work in the packaged,
+// signed app; in dev electron-updater has no feed, so surface that plainly.
+export async function checkForUpdatesNow(stateDir: string): Promise<void> {
+	wireUpdaterEvents();
+	if (!app.isPackaged) {
+		broadcast({ state: "unsupported", message: "Updates are only available in the installed app." });
+		return;
+	}
+	const settings = await readUpdateSettings(stateDir);
+	configureFeed(settings.channel);
+	autoUpdater.autoDownload = false;
+	autoUpdater.autoInstallOnAppQuit = true;
+	broadcast({ state: "checking" });
+	try {
+		await autoUpdater.checkForUpdates();
+	} catch (err) {
+		broadcast({ state: "error", message: (err as Error)?.message ?? "Update check failed" });
+	}
+}
+
+// downloadUpdateNow starts downloading the update found by checkForUpdatesNow.
+export async function downloadUpdateNow(): Promise<void> {
+	wireUpdaterEvents();
+	if (!app.isPackaged) {
+		broadcast({ state: "unsupported", message: "Updates are only available in the installed app." });
+		return;
+	}
+	try {
+		await autoUpdater.downloadUpdate();
+	} catch (err) {
+		broadcast({ state: "error", message: (err as Error)?.message ?? "Download failed" });
+	}
+}
+
+// quitAndInstallUpdate installs a downloaded update and relaunches. isSilent
+// false keeps the installer UI on Windows; isForceRunAfter relaunches the app.
+export function quitAndInstallUpdate(): void {
+	if (!app.isPackaged) return;
+	autoUpdater.quitAndInstall(false, true);
 }
 
 // ensureUpdatePrefs prompts once (first run, before any settings file exists)
