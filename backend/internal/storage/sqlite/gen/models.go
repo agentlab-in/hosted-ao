@@ -101,6 +101,16 @@ type PRComment struct {
 	IsBot     int64
 }
 
+type PRReview struct {
+	PRURL       string
+	ReviewID    string
+	Author      string
+	State       string
+	URL         string
+	IsBot       int64
+	SubmittedAt time.Time
+}
+
 type PRReviewThread struct {
 	PRURL        string
 	ThreadID     string

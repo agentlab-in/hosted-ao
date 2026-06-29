@@ -2371,10 +2371,14 @@ components:
       properties:
         count:
           type: integer
+        isBot:
+          type: boolean
         links:
           items:
             $ref: '#/components/schemas/SessionPRReviewCommentLink'
           type: array
+        reviewUrl:
+          type: string
         reviewerId:
           type: string
       required:

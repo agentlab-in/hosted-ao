@@ -25,6 +25,7 @@ type fakeStore struct {
 	pr       map[domain.SessionID]domain.PRFacts
 	projects map[string]domain.ProjectRecord
 	checks   map[string][]domain.PullRequestCheck
+	reviews  map[string][]domain.PullRequestReview
 	threads  map[string][]domain.PullRequestReviewThread
 	comments map[string][]domain.PullRequestComment
 	num      int
@@ -36,6 +37,7 @@ func newFakeStore() *fakeStore {
 		pr:       map[domain.SessionID]domain.PRFacts{},
 		projects: map[string]domain.ProjectRecord{},
 		checks:   map[string][]domain.PullRequestCheck{},
+		reviews:  map[string][]domain.PullRequestReview{},
 		threads:  map[string][]domain.PullRequestReviewThread{},
 		comments: map[string][]domain.PullRequestComment{},
 	}
@@ -116,6 +118,10 @@ func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID
 
 func (f *fakeStore) ListChecks(_ context.Context, prURL string) ([]domain.PullRequestCheck, error) {
 	return append([]domain.PullRequestCheck(nil), f.checks[prURL]...), nil
+}
+
+func (f *fakeStore) ListPRReviews(_ context.Context, prURL string) ([]domain.PullRequestReview, error) {
+	return append([]domain.PullRequestReview(nil), f.reviews[prURL]...), nil
 }
 
 func (f *fakeStore) ListPRReviewThreads(_ context.Context, prURL string) ([]domain.PullRequestReviewThread, error) {
@@ -622,7 +628,7 @@ type errorFreeClaimOutcome struct {
 	ports.ClaimOutcome
 }
 
-func (f fakePRClaimer) ClaimPR(context.Context, domain.PullRequest, []domain.PullRequestCheck, []domain.PullRequestReviewThread, []domain.PullRequestComment, ports.ReviewWriteMode, bool) (ports.ClaimOutcome, error) {
+func (f fakePRClaimer) ClaimPR(context.Context, domain.PullRequest, []domain.PullRequestCheck, []domain.PullRequestReview, []domain.PullRequestReviewThread, []domain.PullRequestComment, ports.ReviewWriteMode, bool) (ports.ClaimOutcome, error) {
 	return f.out.ClaimOutcome, f.err
 }
 
@@ -740,6 +746,9 @@ func TestListPRSummariesOmitsRawLogsAndReviewBodies(t *testing.T) {
 		{Name: "unit", Status: domain.PRCheckFailed, Conclusion: "failure", URL: "https://github.com/acme/repo/actions/runs/1", LogTail: "panic: secret"},
 		{Name: "lint", Status: domain.PRCheckPassed, Conclusion: "success", URL: "https://github.com/acme/repo/actions/runs/2"},
 	}
+	stList.reviews[prURL] = []domain.PullRequestReview{
+		{ID: "review-1", Author: "reviewer-a", State: domain.ReviewChangesRequest, URL: "https://github.com/acme/repo/pull/7#pullrequestreview-1", SubmittedAt: now.Add(-30 * time.Second)},
+	}
 	stList.comments[prURL] = []domain.PullRequestComment{
 		{Author: "reviewer-a", File: "main.go", Line: 12, Body: "raw body must stay private", URL: "https://github.com/acme/repo/pull/7#discussion_r1"},
 		{Author: "ci-bot", File: "main.go", Line: 13, Body: "bot body", URL: "https://github.com/acme/repo/pull/7#discussion_r2", IsBot: true},
@@ -765,6 +774,8 @@ func TestListPRSummariesOmitsRawLogsAndReviewBodies(t *testing.T) {
 	}
 	if reviewer := pr.Review.UnresolvedBy[0]; reviewer.ReviewerID != "reviewer-a" || reviewer.Count != 2 || len(reviewer.Links) != 2 {
 		t.Fatalf("reviewer = %+v", reviewer)
+	} else if reviewer.ReviewURL != "https://github.com/acme/repo/pull/7#pullrequestreview-1" {
+		t.Fatalf("review url = %q", reviewer.ReviewURL)
 	}
 	if pr.Mergeability.State != domain.MergeConflicting || len(pr.Mergeability.ConflictFiles) != 0 || !containsString(pr.Mergeability.Reasons, "conflicts") {
 		t.Fatalf("mergeability = %+v", pr.Mergeability)
