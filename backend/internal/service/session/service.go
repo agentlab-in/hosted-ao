@@ -481,6 +481,8 @@ func toAPIError(err error) error {
 		return apierr.Invalid("INVALID_BRANCH", err.Error(), nil)
 	case errors.Is(err, ports.ErrAgentBinaryNotFound):
 		return apierr.Invalid("AGENT_BINARY_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, ports.ErrRuntimePrerequisite):
+		return apierr.Invalid("RUNTIME_PREREQUISITE_MISSING", err.Error(), nil)
 	default:
 		return err
 	}

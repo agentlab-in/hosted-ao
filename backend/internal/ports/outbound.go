@@ -164,6 +164,9 @@ var (
 	// conflict markers for manual resolution. Adapters wrap this sentinel via
 	// fmt.Errorf so callers can match it with errors.Is.
 	ErrPreservedConflict = errors.New("workspace: preserved apply produced conflicts")
+	// ErrRuntimePrerequisite reports a missing host prerequisite for the selected
+	// runtime before a session can be created.
+	ErrRuntimePrerequisite = errors.New("runtime: prerequisite missing")
 )
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
