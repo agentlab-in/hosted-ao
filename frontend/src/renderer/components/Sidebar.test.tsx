@@ -4,12 +4,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
-import type { WorkspaceSummary } from "../types/workspace";
+import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 
-const { navigateMock, mockParams } = vi.hoisted(() => ({
+const { navigateMock, mockParams, renameSessionMock } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	mockParams: { projectId: undefined as string | undefined },
+	renameSessionMock: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -29,15 +32,30 @@ const workspace: WorkspaceSummary = {
 	sessions: [],
 };
 
+const session: WorkspaceSession = {
+	id: "proj-1-1",
+	workspaceId: "proj-1",
+	workspaceName: "Project One",
+	title: "fix login",
+	provider: "claude-code",
+	kind: "worker",
+	branch: "session/proj-1-1",
+	status: "working",
+	updatedAt: "2026-06-30T00:00:00Z",
+	prs: [],
+};
+
 type CreateProjectHandler = (input: { path: string; workerAgent: string; orchestratorAgent: string }) => Promise<void>;
 type RemoveProjectHandler = (projectId: string) => Promise<void>;
 
 function renderSidebar({
 	onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler,
 	onRemoveProject = vi.fn().mockResolvedValue(undefined) as RemoveProjectHandler,
+	workspaces = [workspace],
 }: {
 	onCreateProject?: CreateProjectHandler;
 	onRemoveProject?: RemoveProjectHandler;
+	workspaces?: WorkspaceSummary[];
 } = {}) {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -49,7 +67,7 @@ function renderSidebar({
 					daemonStatus={{ state: "running" }}
 					onCreateProject={onCreateProject}
 					onRemoveProject={onRemoveProject}
-					workspaces={[workspace]}
+					workspaces={workspaces}
 				/>
 			</SidebarProvider>
 		</QueryClientProvider>,
@@ -64,6 +82,7 @@ async function chooseOption(trigger: HTMLElement, optionName: string) {
 
 beforeEach(() => {
 	navigateMock.mockReset();
+	renameSessionMock.mockReset().mockResolvedValue(undefined);
 	mockParams.projectId = undefined;
 	vi.spyOn(window, "confirm").mockReturnValue(true);
 	vi.spyOn(window, "alert").mockImplementation(() => undefined);
@@ -159,6 +178,42 @@ describe("Sidebar", () => {
 		await user.click(await screen.findByRole("menuitem", { name: "Global settings" }));
 
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/settings" });
+	});
+
+	it("renames a session inline and persists via the daemon", async () => {
+		const user = userEvent.setup();
+		const workspaceWithSession = { ...workspace, sessions: [session] };
+		renderSidebar({ workspaces: [workspaceWithSession] });
+
+		await user.click(screen.getByLabelText("Rename fix login"));
+		const input = screen.getByLabelText("Rename fix login");
+		await user.clear(input);
+		await user.type(input, "polish login{Enter}");
+
+		await waitFor(() => expect(renameSessionMock).toHaveBeenCalledWith("proj-1-1", "polish login"));
+	});
+
+	it("caps the inline rename input at 20 characters", async () => {
+		const user = userEvent.setup();
+		const workspaceWithSession = { ...workspace, sessions: [session] };
+		renderSidebar({ workspaces: [workspaceWithSession] });
+
+		await user.click(screen.getByLabelText("Rename fix login"));
+		expect(screen.getByLabelText("Rename fix login")).toHaveAttribute("maxlength", "20");
+	});
+
+	it("cancels the inline rename on Escape without calling the daemon", async () => {
+		const user = userEvent.setup();
+		const workspaceWithSession = { ...workspace, sessions: [session] };
+		renderSidebar({ workspaces: [workspaceWithSession] });
+
+		await user.click(screen.getByLabelText("Rename fix login"));
+		const input = screen.getByLabelText("Rename fix login");
+		await user.clear(input);
+		await user.type(input, "discard me{Escape}");
+
+		expect(renameSessionMock).not.toHaveBeenCalled();
+		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 	});
 
 	it("always shows action icons and reserves padding for them", () => {
