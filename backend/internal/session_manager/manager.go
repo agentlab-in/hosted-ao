@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
 // Sentinel errors returned by the Session Manager; callers match them with
@@ -1000,7 +1001,21 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if base == "" {
 		return "", nil
 	}
-	return base + systemPromptGuard, nil
+	return base + m.aoSkillPointer() + systemPromptGuard, nil
+}
+
+// aoSkillPointer is appended to every agent system prompt. It points the agent
+// at the using-ao skill the daemon installs under the data dir, rather than
+// inlining the whole CLI catalog. The path is absolute so it resolves from any
+// project's worktree, not just the AO repo (the only place a repo-relative
+// skills/ path would exist). The skill file carries exact flags and examples,
+// so the standing prompt stays a short pointer rather than a command dump.
+func (m *Manager) aoSkillPointer() string {
+	dir := skillassets.Dir(m.dataDir)
+	skillFile := filepath.Join(dir, "SKILL.md")
+	commandsGlob := filepath.Join(dir, "commands", "*.md")
+	return "\n\n" + "## Using the ao CLI\n\n" +
+		"When you need to use the `ao` CLI, read `" + skillFile + "` first (and the relevant `" + commandsGlob + "`) for the full command catalog, flags, and examples."
 }
 
 func (m *Manager) activeOrchestratorSessionID(ctx context.Context, project domain.ProjectID) (domain.SessionID, bool, error) {
