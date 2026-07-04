@@ -173,7 +173,6 @@ For detailed architecture diagrams, data flows, and load-bearing rules, see [arc
 | [Architecture](docs/architecture.md)                     | System architecture, data flows, and load-bearing rules |
 | [Backend Code Structure](docs/backend-code-structure.md) | Package-by-package ownership and dependency rules       |
 | [AGENTS.md](AGENTS.md)                                   | Contributor and worker-agent contract                   |
-| [Agent Adapter Contract](docs/agent/README.md)           | Agent adapter interface and hook behavior               |
 
 ---
 
