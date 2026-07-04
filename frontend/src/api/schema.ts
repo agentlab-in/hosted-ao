@@ -746,6 +746,7 @@ export interface components {
             id: string;
             kind: string;
             name: string;
+            orchestratorAgent?: string;
             path: string;
             resolveError?: string;
             sessionPrefix: string;
