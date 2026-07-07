@@ -43,6 +43,10 @@ var (
 	// with the system prompt only). Workers without a task and without a native
 	// session id have nothing meaningful to restore.
 	ErrNotResumable = errors.New("session: nothing to resume from")
+	// ErrSwitchInProgress means an agent switch is already running for this
+	// session. The API maps it to a 409 so a double-submit does not race two
+	// teardown/relaunch cycles over one worktree.
+	ErrSwitchInProgress = errors.New("session: switch already in progress")
 )
 
 // Env vars a spawned process reads to learn who it is.
@@ -80,6 +84,7 @@ type Store interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
+	UpdateSession(ctx context.Context, rec domain.SessionRecord) error
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
@@ -256,7 +261,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSpawnSeedRow(ctx, id)
 		return domain.SessionRecord{}, fmt.Errorf("spawn %s: %w", id, err)
 	}
-	argv, err := agent.GetLaunchCommand(ctx, ports.LaunchConfig{
+	launchCfg := ports.LaunchConfig{
+		DataDir:       m.dataDir,
 		SessionID:     string(id),
 		WorkspacePath: ws.Path,
 		Kind:          cfg.Kind,
@@ -265,7 +271,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		IssueID:       string(cfg.IssueID),
 		Config:        agentConfig,
 		Permissions:   agentConfig.Permissions,
-	})
+	}
+	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
+	if err != nil {
+		m.destroySpawnWorkspace(ctx, ws, workspaceProject)
+		m.rollbackSpawnSeedRow(ctx, id)
+		return domain.SessionRecord{}, fmt.Errorf("spawn %s: prompt delivery: %w", id, err)
+	}
+	if delivery == ports.PromptDeliveryAfterStart {
+		launchCfg.Prompt = ""
+	}
+	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
 	if err != nil {
 		m.destroySpawnWorkspace(ctx, ws, workspaceProject)
 		m.rollbackSpawnSeedRow(ctx, id)
@@ -298,6 +314,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.destroySpawnWorkspace(ctx, ws, workspaceProject)
 		m.markSpawnFailedTerminated(ctx, id)
 		return domain.SessionRecord{}, fmt.Errorf("spawn %s: completed: %w", id, err)
+	}
+	if delivery == ports.PromptDeliveryAfterStart && prompt != "" {
+		if err := m.messenger.Send(ctx, id, prompt); err != nil {
+			_ = m.runtime.Destroy(ctx, handle)
+			m.destroySpawnWorkspace(ctx, ws, workspaceProject)
+			m.markSpawnFailedTerminatedWithoutWorkspace(ctx, id)
+			return domain.SessionRecord{}, fmt.Errorf("spawn %s: deliver prompt: %w", id, err)
+		}
 	}
 	return m.getRecord(ctx, id)
 }
@@ -379,10 +403,12 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 	if workspaceProject != nil {
 		if adapter, ok := m.workspace.(ports.WorkspaceProject); ok {
 			_ = adapter.DestroyWorkspaceProject(ctx, *workspaceProject)
+			_ = m.store.DeleteSessionWorktrees(ctx, ws.SessionID)
 			return
 		}
 	}
 	_ = m.workspace.Destroy(ctx, ws)
+	_ = m.store.DeleteSessionWorktrees(ctx, ws.SessionID)
 }
 
 // effectiveHarness resolves the harness for a spawn: an explicit harness wins;
@@ -444,6 +470,23 @@ func sessionPrefix(project domain.ProjectRecord) string {
 // rollbackSpawnSeedRow.
 func (m *Manager) markSpawnFailedTerminated(ctx context.Context, id domain.SessionID) {
 	_ = m.lcm.MarkTerminated(ctx, id)
+}
+
+// markSpawnFailedTerminatedWithoutWorkspace parks a spawn failure after the
+// runtime row had become observable, but clears launch handles for resources
+// that were destroyed during rollback. This keeps later restore/cleanup paths
+// from treating a removed worktree as reusable state.
+func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context, id domain.SessionID) {
+	m.markSpawnFailedTerminated(ctx, id)
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok {
+		return
+	}
+	rec.Metadata.Branch = ""
+	rec.Metadata.WorkspacePath = ""
+	rec.Metadata.RuntimeHandleID = ""
+	rec.Metadata.AgentSessionID = ""
+	_ = m.store.UpdateSession(ctx, rec)
 }
 
 // rollbackSpawnSeedRow best-effort removes the row of a spawn that failed
@@ -695,7 +738,7 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, agentConfig); err != nil {
 		return domain.SessionRecord{}, fmt.Errorf("restore %s: %w", rec.ID, err)
 	}
-	argv, err := restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata, systemPrompt, agentConfig, rec.Kind)
+	argv, delivery, err := restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata, systemPrompt, agentConfig, rec.Kind, m.dataDir)
 	if err != nil {
 		return domain.SessionRecord{}, fmt.Errorf("restore %s: %w", rec.ID, err)
 	}
@@ -712,6 +755,13 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
 		_ = m.runtime.Destroy(ctx, handle)
 		return domain.SessionRecord{}, fmt.Errorf("restore %s: completed: %w", rec.ID, err)
+	}
+	if delivery == ports.PromptDeliveryAfterStart && rec.Metadata.Prompt != "" {
+		if err := m.messenger.Send(ctx, rec.ID, rec.Metadata.Prompt); err != nil {
+			_ = m.runtime.Destroy(ctx, handle)
+			_ = m.lcm.MarkTerminated(ctx, rec.ID)
+			return domain.SessionRecord{}, fmt.Errorf("restore %s: deliver prompt: %w", rec.ID, err)
+		}
 	}
 	return m.getRecord(ctx, rec.ID)
 }
@@ -1796,7 +1846,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		return fmt.Errorf("install hooks: %w", err)
 	}
 	if pl, ok := agent.(preLauncher); ok {
-		if err := pl.PreLaunch(ctx, ports.LaunchConfig{SessionID: string(id), WorkspacePath: workspacePath}); err != nil {
+		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath}); err != nil {
 			return fmt.Errorf("pre-launch: %w", err)
 		}
 	}
@@ -1810,7 +1860,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 // a worker with no prompt and no native session id has nothing to restore from.
 // Orchestrators are promptless by design and always relaunch fresh with the
 // system prompt only.
-func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt string, agentConfig ports.AgentConfig, kind domain.SessionKind) ([]string, error) {
+func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string) ([]string, ports.PromptDeliveryStrategy, error) {
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
@@ -1818,19 +1868,22 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	}
 	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, SystemPrompt: systemPrompt, Config: agentConfig, Permissions: agentConfig.Permissions})
 	if err != nil {
-		return nil, fmt.Errorf("restore command: %w", err)
+		return nil, "", fmt.Errorf("restore command: %w", err)
 	}
 	if ok {
-		return cmd, nil
+		return cmd, ports.PromptDeliveryInCommand, nil
 	}
 	// Adapter cannot resume. A saved prompt is replayed fresh. An orchestrator is
 	// promptless by design and relaunches with the system prompt only. A promptless
 	// WORKER has no task and no session id to restore from: do not blank-relaunch it.
 	if meta.Prompt == "" && kind != domain.KindOrchestrator {
-		return nil, ErrNotResumable
+		return nil, "", ErrNotResumable
 	}
-	// Fall through to GetLaunchCommand (replays meta.Prompt; empty for an orchestrator).
-	argv, err := agent.GetLaunchCommand(ctx, ports.LaunchConfig{
+	// Fall through to a fresh launch. Command-delivered agents receive
+	// meta.Prompt in argv; after-start agents receive it via the messenger once
+	// the runtime is live.
+	launchCfg := ports.LaunchConfig{
+		DataDir:       dataDir,
 		SessionID:     string(id),
 		WorkspacePath: workspacePath,
 		Kind:          kind,
@@ -1838,11 +1891,19 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 		SystemPrompt:  systemPrompt,
 		Config:        agentConfig,
 		Permissions:   agentConfig.Permissions,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("launch command: %w", err)
 	}
-	return argv, nil
+	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("prompt delivery: %w", err)
+	}
+	if delivery == ports.PromptDeliveryAfterStart {
+		launchCfg.Prompt = ""
+	}
+	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("launch command: %w", err)
+	}
+	return argv, delivery, nil
 }
 
 // validateAgentBinary checks that argv[0] resolves via the manager's
