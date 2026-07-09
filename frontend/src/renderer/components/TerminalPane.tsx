@@ -120,7 +120,14 @@ function reviewerPreviewLines(session: WorkspaceSession | undefined): string[] {
 // Agents whose full-screen TUI keeps its own transcript and scrolls it only by
 // keyboard, ignoring SGR wheel reports. The terminal routes the wheel to
 // PageUp/PageDown for these (see XtermTerminal's paneScrollsByKeyboard).
-const KEYBOARD_SCROLL_PROVIDERS = new Set(["opencode"]);
+// kilocode is a fork of opencode and shares its TUI surface, so it scrolls the
+// same way.
+const KEYBOARD_SCROLL_PROVIDERS = new Set(["opencode", "kilocode"]);
+
+// Whether the given provider's TUI is one of the keyboard-scroll agents above.
+export function providerScrollsByKeyboard(provider?: string): boolean {
+	return provider ? KEYBOARD_SCROLL_PROVIDERS.has(provider) : false;
+}
 
 function bannerText(state: TerminalSessionState, error?: string): string | undefined {
 	if (state === "reattaching") return "Terminal disconnected — reattaching…";
@@ -231,7 +238,7 @@ function AttachedTerminal({ session, theme, daemonReady, terminalTarget, fontSiz
 					fontSize={fontSize}
 					onError={handleInitError}
 					onReady={handleReady}
-					paneScrollsByKeyboard={provider ? KEYBOARD_SCROLL_PROVIDERS.has(provider) : false}
+					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
 					theme={theme}
 				/>
 				{showEmptyState && (
