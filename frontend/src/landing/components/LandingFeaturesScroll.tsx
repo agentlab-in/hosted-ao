@@ -185,15 +185,24 @@ const FEATURE_META = [
 	{ eyebrow: "Local daemon", title: "Desktop and CLI share one brain.", accent: "A local daemon owns the loop." },
 ];
 
-export function LandingFeatures() {
+/** Pi.dev-style pinned scroll: mockup starts centered, shifts right as text reveals, then steps through features. */
+const INTRO_RATIO = 0.22;
+const FEATURE_COUNT = FEATURE_META.length;
+
+export function LandingFeaturesScroll() {
 	const [workerId, setWorkerId] = useState("codex");
 	const [orchestratorId, setOrchestratorId] = useState("claude-code");
 	const [workspaceId, setWorkspaceId] = useState("int-8");
 	const [feedbackId, setFeedbackId] = useState("pr-184");
 	const [active, setActive] = useState(0);
+	const [introComplete, setIntroComplete] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const pinRef = useRef<HTMLDivElement>(null);
+	const textColRef = useRef<HTMLDivElement>(null);
+	const mockColRef = useRef<HTMLDivElement>(null);
+	const dotsRef = useRef<HTMLDivElement>(null);
 	const activeRef = useRef(0);
+	const introCompleteRef = useRef(false);
 	const prevActiveRef = useRef(-1);
 
 	const worker = useMemo(() => primaryAgents.find((agent) => agent.id === workerId) ?? primaryAgents[0], [workerId]);
@@ -212,30 +221,101 @@ export function LandingFeatures() {
 
 	useGSAP(
 		() => {
-			// Desktop: pin the section so the viewport locks onto it, then advance
-			// through the four features (text + mockup crossfade) as you scroll, with a
-			// snap to each one. The pin owns a defined scroll region, so the layout and
-			// every trigger below stays stable. Mobile renders the features stacked.
+			// Desktop: pin while the mockup travels center → right, text fades in, then
+			// each feature crossfades. Mobile renders the features stacked.
 			const mm = gsap.matchMedia();
 
 			mm.add("(min-width: 1024px)", () => {
+				const textCol = textColRef.current;
+				const mockCol = mockColRef.current;
+				const dots = dotsRef.current;
+
+				if (textCol) gsap.set(textCol, { opacity: 0, x: -56, pointerEvents: "none" });
+				if (mockCol) gsap.set(mockCol, { left: "50%", right: "auto", xPercent: -50, yPercent: -50, top: "50%" });
+				if (dots) gsap.set(dots, { opacity: 0, y: 12 });
+
+				const snapPoints = [
+					0,
+					INTRO_RATIO,
+					...Array.from({ length: FEATURE_COUNT - 1 }, (_, i) => {
+						const featureSpan = 1 - INTRO_RATIO;
+						return INTRO_RATIO + (featureSpan * (i + 1)) / (FEATURE_COUNT - 1);
+					}),
+				];
+
 				const st = ScrollTrigger.create({
 					trigger: pinRef.current,
 					pin: true,
 					start: "top top",
-					// Short, snappy travel between features (~0.6 viewport each) instead
-					// of a full screen of scrolling per switch.
-					end: () => "+=" + window.innerHeight * 1.8,
+					end: () => "+=" + window.innerHeight * 3.4,
 					anticipatePin: 1,
 					invalidateOnRefresh: true,
+					scrub: 0.35,
 					snap: {
-						snapTo: [0, 1 / 3, 2 / 3, 1],
-						duration: { min: 0.25, max: 0.5 },
-						delay: 0.05,
+						snapTo: snapPoints,
+						duration: { min: 0.28, max: 0.55 },
+						delay: 0.04,
 						ease: "power2.inOut",
 					},
 					onUpdate: (self) => {
-						const idx = Math.min(3, Math.round(self.progress * 3));
+						const p = self.progress;
+						const introT = Math.min(1, p / INTRO_RATIO);
+						const easedIntro = gsap.parseEase("power3.out")(introT);
+
+						if (textCol) {
+							gsap.set(textCol, {
+								opacity: easedIntro,
+								x: (1 - easedIntro) * -56,
+								pointerEvents: easedIntro > 0.45 ? "auto" : "none",
+							});
+						}
+
+						if (mockCol) {
+							const scale = gsap.utils.interpolate(1.02, 1, easedIntro);
+							if (easedIntro >= 0.999) {
+								gsap.set(mockCol, {
+									left: "auto",
+									right: 0,
+									xPercent: 0,
+									yPercent: -50,
+									top: "50%",
+									scale: 1,
+								});
+							} else {
+								const leftPct = gsap.utils.interpolate(50, 44, easedIntro);
+								const xPct = gsap.utils.interpolate(-50, 0, easedIntro);
+								gsap.set(mockCol, {
+									left: `${leftPct}%`,
+									right: "auto",
+									xPercent: xPct,
+									yPercent: -50,
+									top: "50%",
+									scale,
+								});
+							}
+						}
+
+						if (dots) {
+							gsap.set(dots, { opacity: easedIntro, y: (1 - easedIntro) * 12 });
+						}
+
+						const introDone = p >= INTRO_RATIO - 0.001;
+						if (introDone !== introCompleteRef.current) {
+							introCompleteRef.current = introDone;
+							setIntroComplete(introDone);
+						}
+
+						if (p < INTRO_RATIO) {
+							if (activeRef.current !== 0) {
+								activeRef.current = 0;
+								setActive(0);
+							}
+							return;
+						}
+
+						const featureSpan = 1 - INTRO_RATIO;
+						const fp = (p - INTRO_RATIO) / featureSpan;
+						const idx = Math.min(FEATURE_COUNT - 1, Math.round(fp * (FEATURE_COUNT - 1)));
 						if (idx !== activeRef.current) {
 							activeRef.current = idx;
 							setActive(idx);
@@ -328,52 +408,81 @@ export function LandingFeatures() {
 	];
 
 	return (
-		<section ref={containerRef} id="features" data-testid="features-grid" className="relative">
-			{/* Desktop: pinned, snapping viewport - text + mockup crossfade per feature. */}
-			<div ref={pinRef} className="relative hidden h-screen items-center overflow-hidden lg:flex">
-				<div className="container-page w-full">
-					<div className="flex items-center gap-16 xl:gap-24">
-						<div className="relative min-h-[460px] w-[44%]">
-							{panels.map((panel, i) => (
-								<div
-									key={i}
-									aria-hidden={i !== active}
-									className="fp-panel absolute inset-0 flex flex-col justify-center will-change-[opacity,transform]"
-								>
-									{panel}
-								</div>
-							))}
+		<section ref={containerRef} id="features-scroll" data-testid="features-scroll" className="relative">
+			{/* Desktop: pinned pi-style scroll — mockup centered first, shifts right as text appears. */}
+			<div ref={pinRef} className="relative hidden h-screen overflow-hidden lg:block">
+				<div className="container-page flex h-full w-full flex-col pt-17">
+					<div className="flex shrink-0 items-center gap-4 px-1 pb-0">
+						<div className="h-px flex-1 bg-gradient-to-r from-transparent via-[color:var(--border-strong)] to-[color:var(--border-strong)]" />
+						<div className="whitespace-nowrap text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--fg-dim)]">
+							FEATURES
 						</div>
-						<div className="relative h-[600px] w-[56%]">
+						<div className="h-px flex-1 bg-gradient-to-r from-[color:var(--border-strong)] via-[color:var(--border-strong)] to-transparent" />
+					</div>
+
+					<div className="relative min-h-0 flex-1">
+						<div
+							ref={textColRef}
+							className="fp-text-col absolute inset-y-0 left-0 z-10 flex w-[44%] max-w-[44%] items-center pr-6 xl:pr-10 pb-20"
+							aria-hidden={!introComplete && active === 0}
+						>
+							<div className="relative min-h-[460px] w-full">
+								{panels.map((panel, i) => (
+									<div
+										key={i}
+										aria-hidden={i !== active}
+										className="fp-panel absolute inset-0 flex flex-col justify-center will-change-[opacity,transform]"
+									>
+										{panel}
+									</div>
+								))}
+							</div>
+						</div>
+
+						<div
+							ref={mockColRef}
+							className="fp-mock-col absolute top-1/2 z-10 h-[min(560px,72vh)] w-[56%] max-w-[56%] will-change-transform"
+						>
 							{mockups.map((mockup, i) => (
 								<div
 									key={i}
 									aria-hidden={i !== active}
-									className="fp-mock absolute inset-0 flex items-center will-change-[opacity,transform]"
+									className="fp-mock absolute inset-0 flex items-center justify-center will-change-[opacity,transform]"
 								>
 									{mockup}
 								</div>
 							))}
 						</div>
-					</div>
 
-					{/* Progress indicator for the four features. */}
-					<div className="mt-10 flex items-center gap-2">
-						{FEATURE_META.map((meta, i) => (
-							<span
-								key={meta.eyebrow}
-								className={`h-1.5 rounded-full transition-all duration-300 ${
-									i === active ? "w-8 bg-[color:var(--accent)]" : "w-1.5 bg-[color:var(--border-strong)]"
-								}`}
-							/>
-						))}
+						<div
+							ref={dotsRef}
+							className="absolute bottom-40 left-0 z-50 flex items-center gap-2"
+							aria-label="Feature progress"
+						>
+							{FEATURE_META.map((meta, i) => (
+								<span
+									key={meta.eyebrow}
+									className={`h-1.5 rounded-full transition-all duration-400 ${
+										i === active ? "w-8 bg-[color:var(--accent)]" : "w-1.5 bg-[color:var(--border-strong)]"
+									}`}
+								/>
+							))}
+						</div>
 					</div>
 				</div>
 			</div>
 
 			{/* Mobile / tablet: simple stacked list, each with its own scaled mockup. */}
-			<div className="container-page pb-20 lg:hidden">
-				<div className="mt-12 flex flex-col gap-20">
+			<div className="container-page pt-8 pb-16 lg:hidden">
+				<div className="gsap-reveal mx-auto flex max-w-[1200px] items-center gap-4 px-1 text-left">
+					<div className="h-px flex-1 bg-gradient-to-r from-transparent via-[color:var(--border-strong)] to-[color:var(--border-strong)]" />
+					<div className="whitespace-nowrap text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--fg-dim)]">
+						FEATURES
+					</div>
+					<div className="h-px flex-1 bg-gradient-to-r from-[color:var(--border-strong)] via-[color:var(--border-strong)] to-transparent" />
+				</div>
+
+				<div className="mt-8 flex flex-col gap-20">
 					{panels.map((panel, i) => (
 						<div key={i}>
 							{panel}
@@ -431,7 +540,7 @@ function AgentHarnessDemo({
 	const visibleAgents = primaryAgents.filter((agent) => ["claude-code", "codex", "cursor", "goose"].includes(agent.id));
 
 	return (
-		<article className="surface relative h-[520px] w-full overflow-hidden p-0">
+		<article className="surface relative w-full overflow-hidden p-0 lg:h-[520px]">
 			<div className="landing-card-header flex items-center justify-between px-5 py-3.5">
 				<div className="flex items-center gap-3">
 					<img src="/ao-logo-transparent.png" alt="" className="h-7 w-7 object-contain" />
@@ -445,7 +554,7 @@ function AgentHarnessDemo({
 				</div>
 			</div>
 
-			<div className="grid h-[calc(520px-69px)] gap-0 lg:grid-cols-[0.68fr_1fr]">
+			<div className="grid gap-0 lg:h-[calc(520px-69px)] lg:grid-cols-[0.68fr_1fr]">
 				<div className="flex min-h-0 flex-col border-b border-[color:var(--border)] p-4 lg:border-b-0 lg:border-r">
 					<div className="mb-3 grid gap-2 sm:grid-cols-2">
 						<AgentSelectLabel
