@@ -47,6 +47,14 @@ const api = {
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
 	},
+	window: {
+		setOverlay: (overlay: { color: string; symbolColor: string }) =>
+			ipcRenderer.invoke("window:setOverlay", overlay) as Promise<void>,
+	},
+	menu: {
+		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
+		notifyShellFocus: () => ipcRenderer.send("shell:focus"),
+	},
 	clipboard: {
 		writeText: (text: string) => ipcRenderer.invoke("clipboard:writeText", text) as Promise<void>,
 		readText: () => ipcRenderer.invoke("clipboard:readText") as Promise<string>,
