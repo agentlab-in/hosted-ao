@@ -1445,6 +1445,45 @@ paths:
       summary: List a worker's code-review runs
       tags:
       - reviews
+  /api/v1/sessions/{sessionId}/reviews/cancel:
+    post:
+      operationId: cancelReview
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelReviewResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel a running code review
+      tags:
+      - reviews
   /api/v1/sessions/{sessionId}/reviews/submit:
     post:
       operationId: submitReview
@@ -1729,6 +1768,18 @@ components:
       required:
       - id
       - label
+      type: object
+    CancelReviewResponse:
+      properties:
+        reviewerHandleId:
+          type: string
+        reviews:
+          items:
+            $ref: '#/components/schemas/PRReviewState'
+          type: array
+      required:
+      - reviewerHandleId
+      - reviews
       type: object
     ClaimPRRequest:
       properties:

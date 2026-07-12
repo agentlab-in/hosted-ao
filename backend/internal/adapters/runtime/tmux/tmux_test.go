@@ -95,6 +95,9 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := sendEnterArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Enter"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendEnterArgs = %#v, want %#v", got, want)
 	}
+	if got, want := sendInterruptArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "C-c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sendInterruptArgs = %#v, want %#v", got, want)
+	}
 	if got, want := capturePaneArgs("sess-1", 10), []string{"capture-pane", "-t", "sess-1", "-p", "-S", "-10"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capturePaneArgs = %#v, want %#v", got, want)
 	}
@@ -559,6 +562,16 @@ func TestSendMessageEnterSurvivesCallerCancel(t *testing.T) {
 	}
 	if got, want := fr.calls[1].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Enter args = %#v, want %#v", got, want)
+	}
+}
+
+func TestInterruptSendsCtrlC(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	if err := r.Interrupt(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if got, want := fr.calls[0].args, sendInterruptArgs("sess-1"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("interrupt args = %#v, want %#v", got, want)
 	}
 }
 

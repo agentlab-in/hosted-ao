@@ -75,6 +75,20 @@ func clientSendMessage(addr, message string) error {
 	return err
 }
 
+func clientSendInput(addr, input string) error {
+	conn, err := dialHost(addr, dialTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	frame, err := EncodeMessage(MsgTerminalInput, []byte(input))
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write(frame)
+	return err
+}
+
 // clientGetOutput sends MsgGetOutputReq and reads frames until MsgGetOutputRes.
 // Returns "" on timeout or connection failure (no error), matching the TS.
 // lines <= 0 is handled by the caller (runtime.go rejects it before calling).

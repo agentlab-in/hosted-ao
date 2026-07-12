@@ -246,6 +246,19 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	return nil
 }
 
+// Interrupt sends Ctrl-C to the foreground process without destroying the tmux
+// session, keeping the terminal available for inspection and reuse.
+func (r *Runtime) Interrupt(ctx context.Context, handle ports.RuntimeHandle) error {
+	id, err := handleID(handle)
+	if err != nil {
+		return err
+	}
+	if _, err := r.run(ctx, sendInterruptArgs(id)...); err != nil {
+		return fmt.Errorf("tmux runtime: interrupt session %s: %w", id, err)
+	}
+	return nil
+}
+
 // GetOutput returns the last `lines` lines of the session pane's captured
 // output.
 func (r *Runtime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {

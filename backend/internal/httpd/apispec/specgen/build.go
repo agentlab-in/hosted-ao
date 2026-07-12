@@ -195,6 +195,7 @@ var schemaNames = map[string]string{
 	"ControllersListReviewsResponse":   "ListReviewsResponse",
 	"ControllersReviewRunResponse":     "ReviewRunResponse",
 	"ControllersTriggerReviewResponse": "TriggerReviewResponse",
+	"ControllersCancelReviewResponse":  "CancelReviewResponse",
 	"ControllersSubmitReviewItem":      "SubmitReviewItem",
 	"ControllersSubmitReviewInput":     "SubmitReviewInput",
 	// domain review entities
@@ -477,6 +478,17 @@ func reviewOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.TriggerReviewResponse{}},
 				{http.StatusCreated, controllers.TriggerReviewResponse{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/reviews/cancel", id: "cancelReview", tag: "reviews",
+			summary:    "Cancel a running code review",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.CancelReviewResponse{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
