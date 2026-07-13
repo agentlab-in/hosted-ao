@@ -61,6 +61,9 @@ if (typeof window !== "undefined") {
 			openExternal: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 		},
+		terminal: {
+			saveDroppedFile: async () => "",
+		},
 		window: {
 			setOverlay: async () => undefined,
 		},

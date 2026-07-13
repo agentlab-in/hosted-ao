@@ -11,6 +11,9 @@ export const aoBridge: AoBridge =
 			},
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 		},
+		terminal: {
+			saveDroppedFile: async () => "",
+		},
 		window: {
 			setOverlay: async () => undefined,
 		},
