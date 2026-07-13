@@ -47,6 +47,8 @@ export type XtermTerminalProps = {
 	paneScrollsByKeyboard?: boolean;
 	/** Terminal construction failed; the owner decides how to surface it. */
 	onError?: (error: unknown) => void;
+	/** Called after a terminal hyperlink is opened in the OS browser. */
+	onLinkOpen?: (uri: string) => void;
 	/**
 	 * The terminal is open in the DOM and ready to be attached to a PTY. The
 	 * handle stays valid until unmount; cols/rows are live getters.
@@ -233,6 +235,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	useEffect(() => {
 		const host = hostRef.current;
 		if (!host) return undefined;
+		const activateLink = (_event: MouseEvent, uri: string) => {
+			window.open(uri, "_blank", "noopener");
+			callbacksRef.current.onLinkOpen?.(uri);
+		};
 
 		let term: Terminal;
 		try {
@@ -251,6 +257,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 					'ui-monospace, Menlo, Monaco, "Courier New", monospace',
 				fontSize: props.fontSize ?? TERMINAL_FONT_SIZE_DEFAULT,
 				lineHeight: 1.35,
+				linkHandler: { activate: activateLink },
 				// Agent TUIs leave SGR bold active while using ANSI black for
 				// separators; keep bold weight-only so black stays black.
 				drawBoldTextInBrightColors: false,
@@ -280,17 +287,13 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const unicode = new Unicode11Addon();
 		term.loadAddon(unicode);
 		term.unicode.activeVersion = "11";
-		// Open links in the OS browser. The default WebLinksAddon handler calls
+		// Open plain and OSC 8 links in the OS browser. The default handlers call
 		// window.open() with no URL and then assigns location.href, but the
 		// Electron main process denies every window.open and only forwards the URL
-		// passed to it (main.ts setWindowOpenHandler), so the default handler's
+		// passed to it (main.ts setWindowOpenHandler), so the default handlers'
 		// empty open is dropped and clicks silently no-op. Pass the matched URL to
 		// window.open directly so the main process routes it to shell.openExternal.
-		term.loadAddon(
-			new WebLinksAddon((_event, uri) => {
-				window.open(uri, "_blank", "noopener");
-			}),
-		);
+		term.loadAddon(new WebLinksAddon(activateLink));
 		term.loadAddon(new SearchAddon());
 
 		term.open(host);
