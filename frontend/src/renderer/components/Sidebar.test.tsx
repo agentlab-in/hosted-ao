@@ -873,6 +873,30 @@ describe("Sidebar", () => {
 		expect(workingDot).toHaveClass("animate-status-pulse", "bg-working");
 	});
 
+	it("renders a calm non-pulsing dot for idle activity even when the session is in the working zone", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-idle-activity",
+							title: "idle activity task",
+							status: "working",
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		const idleDot = screen.getByLabelText("Open idle activity task").querySelector('span[aria-hidden="true"]');
+		expect(idleDot).toHaveClass("bg-passive");
+		expect(idleDot).not.toHaveClass("animate-status-pulse");
+		expect(idleDot).not.toHaveClass("bg-working");
+	});
+
 	it("does not render the restart-to-update row unless an update is downloaded", async () => {
 		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
 		renderSidebar();
