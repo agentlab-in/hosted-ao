@@ -18,7 +18,6 @@ import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery
 import { NotificationCenter } from "./NotificationCenter";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyState";
 import { OrchestratorIcon } from "./icons";
-import { NewTaskDialog } from "./NewTaskDialog";
 import { TopbarButton, TopbarKillError } from "./TopbarButton";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
@@ -93,7 +92,6 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const workspace = projectId ? workspaces[0] : undefined;
 	const sessions = workspaces.flatMap((w) => workerSessions(w.sessions));
 	const orchestrator = projectId ? newestActiveOrchestrator(workspaces[0]?.sessions ?? []) : undefined;
-	const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
 	const [isSpawning, setIsSpawning] = useState(false);
 	const [spawnError, setSpawnError] = useState<string | null>(null);
 	const restartingProjectIds = useUiStore((state) => state.restartingProjectIds);
@@ -103,6 +101,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const isProjectRestarting = projectId ? restartingProjectIds.has(projectId) : false;
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
 	const visibleSpawnError = spawnError ?? orchestratorStartupError;
@@ -230,15 +229,6 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		});
 	};
 
-	const handleTaskCreated = async (sessionId: string) => {
-		if (!projectId) return;
-		await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-		void navigate({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId, sessionId },
-		});
-	};
-
 	const actions = projectId ? (
 		<>
 			{isLinux ? <NotificationCenter /> : null}
@@ -250,7 +240,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 			<TopbarButton
 				aria-label="New task"
 				disabled={isProjectRestarting}
-				onClick={() => setIsNewTaskOpen(true)}
+				onClick={() => projectId && requestNewTask(projectId)}
 				variant="accent"
 			>
 				<Plus className="size-icon-md" aria-hidden="true" />
@@ -311,7 +301,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 						hasOrchestrator={orchestrator !== undefined}
 						isSpawning={isSpawning}
 						isProjectRestarting={isProjectRestarting}
-						onNewTask={() => setIsNewTaskOpen(true)}
+						onNewTask={() => projectId && requestNewTask(projectId)}
 						onOpenOrchestrator={() => void openOrchestrator()}
 						spawnError={visibleSpawnError}
 					/>
@@ -369,12 +359,6 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 					)}
 				</div>
 			)}
-			<NewTaskDialog
-				open={isNewTaskOpen}
-				projectId={projectId}
-				onCreated={(sessionId) => void handleTaskCreated(sessionId)}
-				onOpenChange={setIsNewTaskOpen}
-			/>
 			{restoreUnavailableSession && (
 				<RestoreUnavailableDialog
 					open={true}

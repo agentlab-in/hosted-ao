@@ -525,6 +525,7 @@ function ProjectItem({
 	const [isSpawning, setIsSpawning] = useState(false);
 	const restartingProjectIds = useUiStore((state) => state.restartingProjectIds);
 	const isProjectRestarting = restartingProjectIds.has(workspace.id);
+	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	// Live workers only: merged/terminated sessions leave the sidebar and stay
 	// reachable through the board's Done / Terminated bar (SessionsBoard).
 	const sessions = workerSessions(workspace.sessions).filter(sessionIsActive);
@@ -671,6 +672,11 @@ function ProjectItem({
 						</button>
 					</DropdownMenuTrigger>
 					<DropdownMenuContent side="right" align="start" className="min-w-44">
+						<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id)}>
+							<Plus aria-hidden="true" />
+							New session
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
 						<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id)}>
 							<Settings aria-hidden="true" />
 							Project settings
@@ -900,8 +906,18 @@ function CreateProjectButton({
 	onCreateProject,
 	onInitializeProject,
 }: Pick<SidebarProps, "onCreateProject" | "onInitializeProject">) {
+	// This "+" is always mounted (the collapsed rail only CSS-hides it), so it
+	// owns the ⌘N "no project in scope" fallback via openSignal — no separate
+	// delegating component needed. The collapsed-only list item does not, to
+	// avoid a double open while both are mounted.
+	const createProjectNonce = useUiStore((state) => state.createProjectNonce);
 	return (
-		<CreateProjectFlow mode="choose" onCreateProject={onCreateProject} onInitializeProject={onInitializeProject}>
+		<CreateProjectFlow
+			mode="choose"
+			onCreateProject={onCreateProject}
+			onInitializeProject={onInitializeProject}
+			openSignal={createProjectNonce}
+		>
 			{({ disabled, choosePath, label }) => (
 				<Tooltip>
 					<TooltipTrigger asChild>
