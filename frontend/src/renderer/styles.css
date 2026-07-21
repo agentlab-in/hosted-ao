@@ -606,6 +606,11 @@ body.is-resizing-x [data-slot="sidebar-container"] {
 	.sidebar-expanded-chrome {
 		transition: none;
 	}
+
+	[data-slot="command-dialog-overlay"],
+	[data-slot="command-dialog-content"] {
+		animation: none;
+	}
 }
 
 /* ── Shell topbar (agent-orchestrator .dashboard-app-header) ──────────────

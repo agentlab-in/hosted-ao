@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { CommandPalette } from "../components/CommandPalette";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
@@ -409,6 +410,7 @@ function ShellLayout() {
 					projectId={replacementErrorProjectId}
 					workspaces={workspaces}
 				/>
+				<CommandPalette />
 			</div>
 		</ShellProvider>
 	);
