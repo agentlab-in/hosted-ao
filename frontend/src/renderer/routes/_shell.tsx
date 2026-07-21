@@ -19,7 +19,7 @@ import { addRendererExceptionStep, captureRendererEvent, captureRendererExceptio
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
-import { applyDocumentTheme, readStoredTheme, systemTheme } from "../lib/theme";
+import { applyDocumentTheme } from "../lib/theme";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
@@ -54,6 +54,14 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 	};
 }
 
+const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent);
+const isWindows =
+	typeof navigator !== "undefined" &&
+	/win/i.test(
+		(navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+			navigator.platform ??
+			"",
+	);
 const isLinux =
 	typeof navigator !== "undefined" &&
 	((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform)
@@ -72,7 +80,8 @@ function ShellLayout() {
 	const workspaces = workspaceQuery.data ?? [];
 	const daemonStatus = useDaemonStatus(queryClient);
 	const agentCatalogPortRef = useRef<number | undefined>(undefined);
-	const { theme, setTheme, isSidebarOpen, toggleSidebar } = useUiStore();
+	const { themePreference, resolvedTheme, isSidebarOpen, toggleSidebar } = useUiStore();
+	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const requestCreateProject = useUiStore((state) => state.requestCreateProject);
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
@@ -88,6 +97,9 @@ function ShellLayout() {
 	const isSessionRoute =
 		Boolean(matchRoute({ to: "/projects/$projectId/sessions/$sessionId", fuzzy: true })) ||
 		Boolean(matchRoute({ to: "/sessions/$sessionId", fuzzy: true }));
+	const isSettingsRoute =
+		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
+		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const orchestratorReplacementErrors = useUiStore((state) => state.orchestratorReplacementErrors);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
@@ -253,8 +265,8 @@ function ShellLayout() {
 	);
 
 	useEffect(() => {
-		applyDocumentTheme(theme);
-	}, [theme]);
+		applyDocumentTheme(resolvedTheme);
+	}, [resolvedTheme]);
 
 	useEffect(() => {
 		if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
@@ -266,15 +278,16 @@ function ShellLayout() {
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	}, [daemonStatus.port, daemonStatus.state, queryClient]);
 
-	// Follow OS appearance only until the user picks a theme explicitly.
+	// Follow OS appearance while the user keeps Theme on System — updates
+	// resolvedTheme (and thus React consumers) without writing light/dark to storage.
 	useEffect(() => {
-		if (readStoredTheme()) return;
+		if (themePreference !== "system") return;
 
 		const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
-		const handleChange = () => setTheme(systemTheme());
+		const handleChange = () => syncSystemTheme();
 		mediaQuery.addEventListener("change", handleChange);
 		return () => mediaQuery.removeEventListener("change", handleChange);
-	}, [setTheme]);
+	}, [themePreference, syncSystemTheme]);
 
 	// ⌘B lives in SidebarProvider (shadcn's built-in shortcut), which routes
 	// through onOpenChange back into the ui-store.
@@ -321,11 +334,11 @@ function ShellLayout() {
           header instead of cutting through the titlebar strip. The bar lives
           in the layout, not the screens, so the crumb and actions never shift
           when the outlet content swaps. */}
-			<div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
+			<div className="flex h-screen min-h-0 flex-col bg-sidebar text-foreground">
 				{/* Windows-only custom title bar (logo + File/Edit/View/… menu); paints
             the chrome the frameless window drops. Renders null on macOS/Linux. */}
 				<WindowTitlebar />
-				<ShellTopbar />
+				{!isSettingsRoute ? <ShellTopbar /> : null}
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
             call the store directly) stay in sync. --sidebar-width chains to
             the drag-resizable --ao-sidebar-w set on :root by useResizable. */}
@@ -340,9 +353,13 @@ function ShellLayout() {
 						} as CSSProperties
 					}
 				>
+					{/* macOS TitlebarNav and the Windows WindowTitlebar stay in the top band on
+            every route (including settings, where ShellTopbar is hidden), so the
+            sidebar must hang below that strip on those platforms. Linux only
+            offsets under the topbar on session routes. */}
 					<Sidebar
-						daemonStatus={daemonStatus}
-						underTopbar={isLinux ? isSessionRoute : true}
+						underTopbar={isMac || isWindows || (!isSettingsRoute && (isLinux ? isSessionRoute : true))}
+						topbarOffset={isWindows && isSettingsRoute ? "titlebar" : "toolbar"}
 						onCreateProject={createProject}
 						onInitializeProject={initializeProjectRepository}
 						onRemoveProject={removeProject}
