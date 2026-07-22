@@ -70,6 +70,9 @@ if (typeof window !== "undefined") {
 		window: {
 			setOverlay: async () => undefined,
 		},
+		theme: {
+			set: async () => undefined,
+		},
 		menu: {
 			action: async () => undefined,
 			notifyShellFocus: () => undefined,
