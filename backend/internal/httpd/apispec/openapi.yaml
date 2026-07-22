@@ -3203,6 +3203,7 @@ components:
           - vibe
           - pi
           - autohand
+          - fake
           type: string
         issueId:
           type: string
