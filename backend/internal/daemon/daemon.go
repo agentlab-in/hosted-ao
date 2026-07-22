@@ -169,6 +169,13 @@ func Run() error {
 	}
 	mc := &controllers.MobileController{Bridge: bs}
 
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink})
+
+	// Standalone shell terminals: user-opened shells with no agent session
+	// behind them. They reuse the same runtime adapter (and therefore the same
+	// terminal mux) as session panes, but keep their own ids, storage, and
+	// lifetime — see internal/service/shellterm.
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, log)
 	// Push-device registry: persisted phones that receive OS push notifications.
 	// A load failure must not block boot — degrade to no push rather than refusing
 	// to start the daemon. pushRegistry (interface) is assigned only when load
@@ -196,7 +203,7 @@ func Run() error {
 	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
-		Projects:           projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink}),
+		Projects:           projectSvc,
 		Agents:             agentSvc,
 		Sessions:           sessionSvc,
 		Reviews:            reviewSvc,
@@ -204,6 +211,12 @@ func Run() error {
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
+		ShellTerminals:     shellTermSvc,
+		CDC:                store,
+		Events:             cdcPipe.Broadcaster,
+		Activity:           lcStack.LCM,
+		Telemetry:          telemetrySink,
+		Mobile:             mc,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -211,11 +224,6 @@ func Run() error {
 				return sqlite.OpenReadOnly(ctx, dataDir)
 			},
 		}),
-		CDC:       store,
-		Events:    cdcPipe.Broadcaster,
-		Activity:  lcStack.LCM,
-		Telemetry: telemetrySink,
-		Mobile:    mc,
 	})
 	if err != nil {
 		stop()
