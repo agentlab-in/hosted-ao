@@ -177,6 +177,8 @@
 	--spacing-browser-min: var(--size-browser-min);
 	--spacing-dot-sm: var(--size-dot-sm);
 	--spacing-content-max: var(--size-content-max);
+	--spacing-flex-min: var(--size-flex-min);
+	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
@@ -350,7 +352,6 @@
 	border: 1px solid var(--color-border-strong);
 	background-color: var(--color-bg-primary);
 }
-
 @utility settings-row-bar {
 	display: flex;
 	height: var(--size-settings-row);
