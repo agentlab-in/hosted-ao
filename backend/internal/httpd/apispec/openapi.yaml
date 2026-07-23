@@ -2226,6 +2226,10 @@ components:
         id:
           type: string
         kind:
+          enum:
+          - single_repo
+          - workspace
+          - scratch
           type: string
         name:
           type: string
@@ -2665,6 +2669,10 @@ components:
         id:
           type: string
         kind:
+          enum:
+          - single_repo
+          - workspace
+          - scratch
           type: string
         name:
           type: string
@@ -2751,6 +2759,10 @@ components:
         id:
           type: string
         kind:
+          enum:
+          - single_repo
+          - workspace
+          - scratch
           type: string
         name:
           type: string

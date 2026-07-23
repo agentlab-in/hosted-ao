@@ -846,7 +846,8 @@ export interface components {
         };
         DegradedProject: {
             id: string;
-            kind: string;
+            /** @enum {string} */
+            kind: "single_repo" | "workspace" | "scratch";
             name: string;
             path: string;
             resolveError: string;
@@ -1013,7 +1014,8 @@ export interface components {
             config?: components["schemas"]["ProjectConfig"];
             defaultBranch: string;
             id: string;
-            kind: string;
+            /** @enum {string} */
+            kind: "single_repo" | "workspace" | "scratch";
             name: string;
             path: string;
             repo: string;
@@ -1047,7 +1049,8 @@ export interface components {
         };
         ProjectSummary: {
             id: string;
-            kind: string;
+            /** @enum {string} */
+            kind: "single_repo" | "workspace" | "scratch";
             name: string;
             orchestratorAgent?: string;
             path: string;

@@ -331,13 +331,13 @@ describe("SessionInspector Activity section", () => {
 			/>,
 		);
 
-		const worktreeRow = activitySection()
-			.getByText(/Created worktree/)
+		const workspaceRow = activitySection()
+			.getByText(/Created workspace/)
 			.closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-		const worktreeMarker = worktreeRow.querySelector("span[aria-hidden='true'].rounded-full") as HTMLElement;
-		expect(worktreeMarker.parentElement).toHaveClass("relative", "flex", "items-center");
-		expect(worktreeMarker).toHaveClass("top-1.5");
-		expect(worktreeMarker).not.toHaveClass("top-1/2", "-translate-y-1/2");
+		const workspaceMarker = workspaceRow.querySelector("span[aria-hidden='true'].rounded-full") as HTMLElement;
+		expect(workspaceMarker.parentElement).toHaveClass("relative", "flex", "items-center");
+		expect(workspaceMarker).toHaveClass("top-1.5");
+		expect(workspaceMarker).not.toHaveClass("top-1/2", "-translate-y-1/2");
 
 		const activityRow = activitySection()
 			.getByText("Idle")
@@ -347,7 +347,7 @@ describe("SessionInspector Activity section", () => {
 		expect(activityMarker).toHaveClass("top-1/2", "-translate-y-1/2");
 	});
 
-	it("keeps worktree, PR, and SCM context rows in the Activity timeline", () => {
+	it("keeps workspace, PR, and SCM context rows in the Activity timeline", () => {
 		renderWithQuery(
 			<SessionInspector
 				session={session([pr(7, "open", { ci: "failing", review: "changes_requested" })], {
@@ -357,7 +357,7 @@ describe("SessionInspector Activity section", () => {
 			/>,
 		);
 
-		expect(activitySection().getByText(/Created worktree/)).toBeInTheDocument();
+		expect(activitySection().getByText(/Created workspace/)).toBeInTheDocument();
 		expect(activitySection().getByText("Opened")).toBeInTheDocument();
 		expect(activitySection().getByText("PR #7")).toBeInTheDocument();
 		const activityRow = activitySection()
@@ -387,7 +387,7 @@ describe("SessionInspector Activity section", () => {
 			row.textContent?.replace(/\s+/g, " ").trim(),
 		);
 		expect(rows).toEqual([
-			"Created worktree & branch3h ago",
+			"Created workspace3h ago",
 			"Draft PR #42",
 			"Opened PR #41",
 			"Opened PR #40",
@@ -410,6 +410,13 @@ describe("SessionInspector tabs", () => {
 
 		expect(screen.getByText("Issue")).toBeInTheDocument();
 		expect(screen.getByText("github:acme/project-one#42")).toBeInTheDocument();
+	});
+
+	it("omits the branch overview row when the session has no branch", () => {
+		renderWithQuery(<SessionInspector session={session([], { branch: undefined })} />);
+
+		expect(screen.queryByText("Branch")).not.toBeInTheDocument();
+		expect(screen.queryByText("session/sess-1")).not.toBeInTheDocument();
 	});
 });
 

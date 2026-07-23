@@ -152,10 +152,12 @@ export function ShellTopbar() {
 					</div>
 				) : isSessionRoute ? (
 					<div className="flex min-w-0 items-center gap-3">
-						<div className="inline-flex min-w-0 items-center gap-1 font-mono text-2xs leading-none text-passive">
-							<GitBranch className="size-icon-2xs shrink-0" aria-hidden="true" />
-							<span className="truncate">{session?.branch || `session/${session?.id ?? ""}`}</span>
-						</div>
+						{session?.branch ? (
+							<div className="inline-flex min-w-0 items-center gap-1 font-mono text-2xs leading-none text-passive">
+								<GitBranch className="size-icon-2xs shrink-0" aria-hidden="true" />
+								<span className="truncate">{session.branch}</span>
+							</div>
+						) : null}
 						{session ? <SessionStatusPill session={session} /> : null}
 					</div>
 				) : (isProjectBoardRoute && boardActionsInPanel) ||

@@ -32,7 +32,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { useUiStore } from "../stores/ui-store";
-import type { WorkspaceSummary } from "../types/workspace";
+import { toProjectKind, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 
 export const Route = createFileRoute("/_shell")({
@@ -168,7 +168,7 @@ function ShellLayout() {
 			const workspace: WorkspaceSummary = {
 				id: data.project.id,
 				name: data.project.name,
-				kind: data.project.kind === "workspace" ? "workspace" : "single_repo",
+				kind: toProjectKind(data.project.kind),
 				path: data.project.path,
 				workspaceRepos: data.project.workspaceRepos,
 				type: "main",

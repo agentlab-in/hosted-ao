@@ -1572,6 +1572,38 @@ func TestRestore_ReopensTerminal(t *testing.T) {
 	}
 }
 
+func TestRestore_ScratchAllowsEmptyBranch(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
+	st.sessions["scratch-1"] = domain.SessionRecord{
+		ID:           "scratch-1",
+		ProjectID:    "scratch",
+		Kind:         domain.KindWorker,
+		Harness:      domain.HarnessClaudeCode,
+		IsTerminated: true,
+		Activity:     domain.Activity{State: domain.ActivityExited},
+		Metadata:     domain.SessionMetadata{WorkspacePath: "/ws/scratch-1", Prompt: "continue"},
+	}
+
+	res, err := m.RestoreWithMode(ctx, "scratch-1")
+	if err != nil {
+		t.Fatalf("Restore scratch: %v", err)
+	}
+	s := res.Session
+	if s.Metadata.Branch != "" {
+		t.Fatalf("scratch restore branch = %q, want empty", s.Metadata.Branch)
+	}
+	if ws.lastCfg.Branch != "" {
+		t.Fatalf("workspace restore branch = %q, want empty", ws.lastCfg.Branch)
+	}
+	if ws.lastCfg.Path != "/ws/scratch-1" {
+		t.Fatalf("workspace restore path = %q, want stored scratch workspace path", ws.lastCfg.Path)
+	}
+	if rt.created != 1 {
+		t.Fatalf("runtime created = %d, want 1", rt.created)
+	}
+}
+
 func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
@@ -3067,8 +3099,12 @@ func TestSpawn_ValidatesBinaryAfterEnvPrefix(t *testing.T) {
 	if _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	if !reflect.DeepEqual(lookedUp, []string{"tmux", "opencode"}) {
-		t.Fatalf("lookups = %#v, want tmux then opencode", lookedUp)
+	wantLookups := []string{"opencode"}
+	if runtime.GOOS != "windows" {
+		wantLookups = []string{"tmux", "opencode"}
+	}
+	if !reflect.DeepEqual(lookedUp, wantLookups) {
+		t.Fatalf("lookups = %#v, want %#v", lookedUp, wantLookups)
 	}
 	if rt.created != 1 {
 		t.Fatalf("runtime.Create calls = %d, want 1", rt.created)
@@ -3098,8 +3134,12 @@ func TestSpawn_RejectsMissingBinaryAfterEnvPrefix(t *testing.T) {
 	if !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("err = %v, want ports.ErrAgentBinaryNotFound", err)
 	}
-	if !reflect.DeepEqual(lookedUp, []string{"tmux", "opencode"}) {
-		t.Fatalf("lookups = %#v, want tmux then opencode", lookedUp)
+	wantLookups := []string{"opencode"}
+	if runtime.GOOS != "windows" {
+		wantLookups = []string{"tmux", "opencode"}
+	}
+	if !reflect.DeepEqual(lookedUp, wantLookups) {
+		t.Fatalf("lookups = %#v, want %#v", lookedUp, wantLookups)
 	}
 	if rt.created != 0 {
 		t.Fatal("runtime.Create must NOT run when the env-prefixed agent binary is missing")
@@ -3416,6 +3456,38 @@ func TestSpawn_KeepsExplicitBranch(t *testing.T) {
 	}
 }
 
+func TestSpawn_ScratchUsesBranchlessWorkspace(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
+
+	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "scratch", Kind: domain.KindWorker})
+	if err != nil {
+		t.Fatalf("Spawn scratch: %v", err)
+	}
+	if s.Metadata.Branch != "" {
+		t.Fatalf("scratch session branch = %q, want empty", s.Metadata.Branch)
+	}
+	if ws.lastCfg.Branch != "" || ws.lastCfg.BaseBranch != "" {
+		t.Fatalf("workspace branch/base = %q/%q, want empty", ws.lastCfg.Branch, ws.lastCfg.BaseBranch)
+	}
+	if rows := st.worktrees[s.ID]; len(rows) != 0 {
+		t.Fatalf("scratch spawn must not write session_worktrees rows, got %#v", rows)
+	}
+}
+
+func TestSpawn_ScratchRejectsExplicitBranchBeforeSessionRow(t *testing.T) {
+	m, st, _, _ := newManager()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
+
+	_, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "scratch", Kind: domain.KindWorker, Branch: "feature/x"})
+	if !errors.Is(err, ErrScratchBranchUnsupported) {
+		t.Fatalf("Spawn scratch explicit branch err = %v, want ErrScratchBranchUnsupported", err)
+	}
+	if len(st.sessions) != 0 {
+		t.Fatalf("scratch explicit branch must not create a session row, got %d rows", len(st.sessions))
+	}
+}
+
 // ---- SaveAndTeardownAll / RestoreAll tests ----
 
 // newLifecycleManager builds a manager wired with a recording workspace fake
@@ -3520,6 +3592,34 @@ func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 	}
 }
 
+func TestSaveAndTeardownAll_SkipsScratchSessions(t *testing.T) {
+	m, st, rt, ws := newLifecycleManager()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
+	st.sessions["scratch-1"] = domain.SessionRecord{
+		ID:        "scratch-1",
+		ProjectID: "scratch",
+		Kind:      domain.KindWorker,
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/scratch-1", RuntimeHandleID: "h1"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+
+	if err := m.SaveAndTeardownAll(ctx); err != nil {
+		t.Fatalf("SaveAndTeardownAll err = %v", err)
+	}
+	if st.sessions["scratch-1"].IsTerminated {
+		t.Fatal("scratch session must stay live during graceful shutdown")
+	}
+	if ws.stashCalls != 0 || len(ws.calls) != 0 {
+		t.Fatalf("scratch shutdown must not stash or force destroy, calls=%v stash=%d", ws.calls, ws.stashCalls)
+	}
+	if rt.destroyed != 0 {
+		t.Fatalf("runtime Destroy calls = %d, want 0", rt.destroyed)
+	}
+	if rows := st.worktrees["scratch-1"]; len(rows) != 0 {
+		t.Fatalf("scratch shutdown must not write restore markers, got %#v", rows)
+	}
+}
+
 func TestRetireForReplacementCapturesAndReleasesWorkspace(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	var sharedLog []string
@@ -3571,6 +3671,34 @@ func TestRetireForReplacementCapturesAndReleasesWorkspace(t *testing.T) {
 	}
 	if stashIdx >= forceIdx || forceIdx >= deleteIdx {
 		t.Fatalf("replacement retire must capture, force release, then clear restore marker; log=%v", sharedLog)
+	}
+}
+
+func TestRetireForReplacement_ScratchPreservesWorkspace(t *testing.T) {
+	m, st, rt, ws := newLifecycleManager()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
+	st.sessions["scratch-1"] = domain.SessionRecord{
+		ID:        "scratch-1",
+		ProjectID: "scratch",
+		Kind:      domain.KindOrchestrator,
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/scratch-1", RuntimeHandleID: "orch-handle"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+
+	if err := m.RetireForReplacement(ctx, "scratch-1"); err != nil {
+		t.Fatalf("RetireForReplacement err = %v", err)
+	}
+	if !st.sessions["scratch-1"].IsTerminated {
+		t.Fatal("scratch orchestrator must be marked terminated")
+	}
+	if rt.destroyed != 1 || rt.destroyedIDs[0] != "orch-handle" {
+		t.Fatalf("runtime destroyed = %d ids=%v, want orch-handle", rt.destroyed, rt.destroyedIDs)
+	}
+	if ws.stashCalls != 0 || len(ws.calls) != 0 {
+		t.Fatalf("scratch replacement must preserve workspace without stash/force destroy, calls=%v stash=%d", ws.calls, ws.stashCalls)
+	}
+	if rows := st.worktrees["scratch-1"]; len(rows) != 0 {
+		t.Fatalf("scratch replacement must not write restore markers, got %#v", rows)
 	}
 }
 
@@ -4613,6 +4741,45 @@ func TestReconcileLive_ProbeErrorIsNotDeath(t *testing.T) {
 	}
 	if rt.destroyed != 0 {
 		t.Fatalf("Destroy calls = %d, want 0 (probe error is not death)", rt.destroyed)
+	}
+}
+
+func TestReconcileLive_ScratchDeadRuntimeTerminatesWithoutWorkspaceTeardown(t *testing.T) {
+	st := newFakeStore()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
+	rt := &fakeRuntime{aliveByHandle: map[string]bool{}}
+	ws := &fakeWorkspace{stashRef: "refs/ao/preserved/scratch-1"}
+	lcm := &fakeLCM{store: st}
+	m := New(Deps{
+		Runtime:   rt,
+		Agents:    fakeAgents{},
+		Workspace: ws,
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: lcm,
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	rec := domain.SessionRecord{
+		ID:        "scratch-1",
+		ProjectID: "scratch",
+		Kind:      domain.KindWorker,
+		Harness:   domain.HarnessClaudeCode,
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/scratch-1", RuntimeHandleID: "dead"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+	st.sessions[rec.ID] = rec
+
+	if err := m.reconcileLive(ctx, rec); err != nil {
+		t.Fatalf("reconcileLive: %v", err)
+	}
+	if lcm.terminated["scratch-1"] != 1 {
+		t.Fatalf("MarkTerminated = %d, want 1", lcm.terminated["scratch-1"])
+	}
+	if ws.stashCalls != 0 || len(ws.calls) != 0 {
+		t.Fatalf("scratch reconcile must not stash or force destroy, calls=%v stash=%d", ws.calls, ws.stashCalls)
+	}
+	if rows := st.worktrees["scratch-1"]; len(rows) != 0 {
+		t.Fatalf("scratch reconcile must not write restore markers, got %#v", rows)
 	}
 }
 
