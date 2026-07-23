@@ -541,12 +541,16 @@ async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Pr
 function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): string | null {
 	if (launch.source === "dev") {
 		const cwdMatches = probe.workingDirectory ? samePath(probe.workingDirectory, launch.cwd) : false;
+		const startupCwdMatches = probe.startupWorkingDirectory
+			? samePath(probe.startupWorkingDirectory, launch.cwd)
+			: false;
 		const executableMatches = probe.executablePath ? pathInside(probe.executablePath, launch.cwd) : false;
-		if (!probe.workingDirectory && !probe.executablePath) {
+		if (!probe.workingDirectory && !probe.startupWorkingDirectory && !probe.executablePath) {
 			return "An older AO daemon is already running, but it does not report its checkout identity. Stop it and restart this app.";
 		}
-		if (!cwdMatches && !executableMatches) {
-			const actual = probe.workingDirectory ?? probe.executablePath ?? "an unknown location";
+		if (!cwdMatches && !startupCwdMatches && !executableMatches) {
+			const actual =
+				probe.startupWorkingDirectory ?? probe.workingDirectory ?? probe.executablePath ?? "an unknown location";
 			return `Another AO daemon is already running from ${actual}; expected this checkout at ${launch.cwd}. Stop the other daemon before using this checkout.`;
 		}
 		return null;
@@ -631,6 +635,7 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 		app.isPackaged,
 		process.resourcesPath,
 		app.getAppPath(),
+		os.homedir(),
 		process.platform,
 	);
 	if (!launch) return daemonStatus;
@@ -686,6 +691,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		app.isPackaged,
 		process.resourcesPath,
 		app.getAppPath(),
+		os.homedir(),
 		process.platform,
 	);
 	if (!launch) {
@@ -821,6 +827,22 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	}
 
 	setDaemonStatus({ state: "starting" });
+	if (launch.source === "bundled") {
+		try {
+			await mkdir(launch.cwd, { recursive: true, mode: 0o750 });
+		} catch (err) {
+			// A failure here (home unwritable, launch.cwd exists as a file) would
+			// otherwise reject out of startDaemonInner; boot calls this via
+			// `void startDaemon()`, so it would surface as an unhandled rejection
+			// and leave the UI stuck on "starting". Report it as a failure instead.
+			setDaemonStatus({
+				state: "error",
+				message: `Could not create the AO data directory at ${launch.cwd}: ${(err as Error).message}`,
+				code: "datadir_unwritable",
+			});
+			return daemonStatus;
+		}
+	}
 
 	// Capture the spawned handle locally so the async lifecycle listeners act only
 	// on THIS process. Without this, a stale exit from an already-stopped daemon
