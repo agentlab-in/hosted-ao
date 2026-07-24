@@ -30,7 +30,6 @@ export function SessionTerminationDialog({
 			onConfirm={onConfirm}
 			onOpenChange={onOpenChange}
 			open={open}
-			size="sm"
 			title={`Terminate ${session?.title ?? "session"}?`}
 		/>
 	);

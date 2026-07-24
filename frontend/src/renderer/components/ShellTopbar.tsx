@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { GitBranch, LayoutDashboard, PanelRightClose, PanelRightOpen, Plus, Square, Trash2 } from "lucide-react";
+import { GitBranch, LayoutDashboard, PanelRightClose, PanelRightOpen, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { NotificationCenter } from "./NotificationCenter";
 import {
 	findProjectOrchestrator,
@@ -288,52 +289,49 @@ export function TopbarKillButton({
 	orchestratorId?: string;
 	onKilled: (workspaceId: string, orchestratorId?: string) => void;
 }) {
-	const [confirming, setConfirming] = useState(false);
+	const [confirmOpen, setConfirmOpen] = useState(false);
 	const kill = useTerminateSession({
 		onSuccess: (terminatedSession) => {
-			setConfirming(false);
+			setConfirmOpen(false);
 			onKilled(terminatedSession.workspaceId, orchestratorId);
 		},
 	});
 	const error = kill.error instanceof Error ? kill.error.message : null;
 
-	if (confirming) {
-		return (
-			<div className="inline-flex items-center gap-1.5" style={noDragStyle}>
-				<TopbarButton
-					aria-label="Confirm kill"
-					disabled={kill.isPending}
-					onClick={() => kill.mutate(session)}
-					variant="killConfirm"
-				>
-					<Square className="size-icon-md" aria-hidden="true" />
-					{kill.isPending ? "Killing…" : "Confirm kill"}
-				</TopbarButton>
-				<TopbarButton disabled={kill.isPending} onClick={() => setConfirming(false)} variant="killCancel">
-					Cancel
-				</TopbarButton>
-				{error ? <TopbarKillError>{error}</TopbarKillError> : null}
-			</div>
-		);
-	}
-
 	return (
-		<TopbarButton
-			aria-label="Kill session"
-			onClick={() => {
-				kill.reset();
-				setConfirming(true);
-			}}
-			style={noDragStyle}
-			title="Kill session"
-			variant="kill"
-		>
-			<Trash2 className="size-icon-sm" aria-hidden="true" />
-			Kill
-		</TopbarButton>
+		<>
+			<TopbarButton
+				aria-label="Kill session"
+				onClick={() => {
+					kill.reset();
+					setConfirmOpen(true);
+				}}
+				style={noDragStyle}
+				title="Kill session"
+				variant="kill"
+			>
+				<Trash2 className="size-icon-sm" aria-hidden="true" />
+				Kill
+			</TopbarButton>
+			<ConfirmDialog
+				open={confirmOpen}
+				onOpenChange={(open) => {
+					if (!kill.isPending) setConfirmOpen(open);
+				}}
+				title="Kill session?"
+				description={`Are you sure you want to kill "${session.title}"? This stops the agent and tears down its workspace. This cannot be undone.`}
+				confirmLabel={kill.isPending ? "Killing..." : "Kill session"}
+				destructive
+				busy={kill.isPending}
+				error={error}
+				onConfirm={() => {
+					kill.reset();
+					kill.mutate(session);
+				}}
+			/>
+		</>
 	);
 }
-
 function SessionStatusPill({ session }: { session: WorkspaceSession }) {
 	const { label, tone, breathe } = getAgentActivityView(session.activity);
 	return <StatusPill label={label} tone={tone} breathe={breathe} leading="none" />;
