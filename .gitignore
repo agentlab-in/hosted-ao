@@ -86,6 +86,9 @@ e2e-artifacts/
 # Local pnpm artifacts
 pnpm-lock.yaml
 
+# Local linked worktrees
+.worktrees/
+
 # SSH keys for the hosted-AO test VMs (never commit)
 ao-shared-*
 *.pem
