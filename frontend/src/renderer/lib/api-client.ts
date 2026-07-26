@@ -1,6 +1,7 @@
 import createClient from "openapi-fetch";
 import type { paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
 
@@ -188,7 +189,8 @@ async function runtimeFetch(input: Request): Promise<Response> {
 
 		const url = new URL(input.url);
 		const target = new URL(url.pathname + url.search + url.hash, baseUrl);
-		if (target.href === input.url) {
+		const credentials = isRemoteDaemonBaseUrl(baseUrl) ? "include" : input.credentials;
+		if (target.href === input.url && credentials === input.credentials) {
 			return fetch(input);
 		}
 
@@ -204,7 +206,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 			headers: input.headers,
 			body,
 			signal: input.signal,
-			credentials: input.credentials,
+			credentials,
 			cache: input.cache,
 			redirect: input.redirect,
 			referrerPolicy: input.referrerPolicy,

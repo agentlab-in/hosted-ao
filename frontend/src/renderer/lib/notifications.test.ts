@@ -57,7 +57,7 @@ class EventSourceStub {
 	onerror: (() => void) | null = null;
 	listeners = new Map<string, (event: MessageEvent<string>) => void>();
 
-	constructor(url: string) {
+	constructor(url: string, readonly options?: EventSourceInit) {
 		this.url = url;
 		EventSourceStub.instances.push(this);
 	}
@@ -246,8 +246,20 @@ describe("createNotificationsTransport", () => {
 
 		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(EventSourceStub.instances[0].url).toBe("http://127.0.0.1:3001/api/v1/notifications/stream");
+		expect(EventSourceStub.instances[0].options).toEqual({ withCredentials: false });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: unreadNotificationsQueryKey });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: recentNotificationsQueryKey });
+	});
+
+	it("opens the remote notification stream with credentials", () => {
+		getApiBaseUrlMock.mockReturnValue("https://api.ao.agentlab.in");
+
+		createNotificationsTransport(queryClient()).connect();
+
+		expect(EventSourceStub.instances[0]).toMatchObject({
+			url: "https://api.ao.agentlab.in/api/v1/notifications/stream",
+			options: { withCredentials: true },
+		});
 	});
 
 	it("merges live notifications and shows one toast for a new id", () => {
