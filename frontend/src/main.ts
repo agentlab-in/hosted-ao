@@ -60,7 +60,7 @@ import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
-import { installRemoteDaemonCookie, remoteDaemonReadyStatus } from "./main/remote-daemon";
+import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -102,12 +102,12 @@ let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
-let remoteDaemonFailureStatus: DaemonStatus | null = null;
+let remoteDaemonConfigurationFailureStatus: DaemonStatus | null = null;
 const remoteDaemonConfig: RemoteDaemonConfig | null = (() => {
 	try {
 		return readRemoteDaemonConfig(process.env);
 	} catch {
-		remoteDaemonFailureStatus = {
+		remoteDaemonConfigurationFailureStatus = {
 			state: "error",
 			message: "Remote daemon configuration is invalid.",
 			code: "not_configured",
@@ -115,7 +115,8 @@ const remoteDaemonConfig: RemoteDaemonConfig | null = (() => {
 		return null;
 	}
 })();
-let daemonStatus: DaemonStatus = remoteDaemonFailureStatus ?? { state: "stopped" };
+const remoteDaemonLifecycle = createRemoteDaemonLifecycle(remoteDaemonConfig, remoteDaemonConfigurationFailureStatus);
+let daemonStatus: DaemonStatus = remoteDaemonLifecycle.currentStatus() ?? { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 // Held for the app lifetime. Dropping it (on any exit) triggers daemon self-stop.
@@ -633,13 +634,10 @@ async function inspectExistingDaemon(
 }
 
 async function refreshDaemonStatus(): Promise<DaemonStatus> {
-	if (remoteDaemonFailureStatus) {
-		return daemonStatus;
-	}
-	if (remoteDaemonConfig) {
-		setDaemonStatus(remoteDaemonReadyStatus(remoteDaemonConfig));
-		return daemonStatus;
-	}
+	return remoteDaemonLifecycle.refresh(refreshLocalDaemonStatus, setDaemonStatus);
+}
+
+async function refreshLocalDaemonStatus(): Promise<DaemonStatus> {
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -669,13 +667,10 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 }
 
 async function startDaemon(): Promise<DaemonStatus> {
-	if (remoteDaemonFailureStatus) {
-		return daemonStatus;
-	}
-	if (remoteDaemonConfig) {
-		setDaemonStatus(remoteDaemonReadyStatus(remoteDaemonConfig));
-		return daemonStatus;
-	}
+	return remoteDaemonLifecycle.start(startLocalDaemon, setDaemonStatus);
+}
+
+async function startLocalDaemon(): Promise<DaemonStatus> {
 	if (daemonStartPromise) {
 		return daemonStartPromise;
 	}
@@ -1081,13 +1076,10 @@ function killDaemon(child: ChildProcess): void {
 }
 
 function stopDaemon(): DaemonStatus {
-	if (remoteDaemonFailureStatus) {
-		return daemonStatus;
-	}
-	if (remoteDaemonConfig) {
-		setDaemonStatus(remoteDaemonReadyStatus(remoteDaemonConfig));
-		return daemonStatus;
-	}
+	return remoteDaemonLifecycle.stop(stopLocalDaemon, setDaemonStatus);
+}
+
+function stopLocalDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	if (!daemonProcess) {
@@ -1543,15 +1535,9 @@ app.whenReady().then(async () => {
 	registerRendererProtocol();
 	applyRuntimeAppIcon();
 	if (remoteDaemonConfig) {
-		try {
-			await installRemoteDaemonCookie(session.defaultSession.cookies, remoteDaemonConfig);
-		} catch {
-			remoteDaemonFailureStatus = {
-				state: "error",
-				message: "Could not configure remote daemon authentication.",
-				code: "not_configured",
-			};
-			setDaemonStatus(remoteDaemonFailureStatus);
+		const remoteStatus = await remoteDaemonLifecycle.installCookie(session.defaultSession.cookies);
+		if (remoteStatus) {
+			setDaemonStatus(remoteStatus);
 		}
 	}
 	createWindow();
