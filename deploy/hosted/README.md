@@ -16,7 +16,7 @@ same value as the local desktop's `AO_REMOTE_TOKEN`.
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 
 # VM: run the existing daemon only on loopback.
-AO_PORT=3001 ao start
+AO_PORT=3001 ao daemon
 
 # VM: load Caddy with AO_HOSTED_PAIR_TOKEN exported by its systemd EnvironmentFile.
 sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
@@ -28,9 +28,23 @@ AO_REMOTE_URL=https://api.ao.agentlab.in AO_REMOTE_TOKEN="$AO_HOSTED_PAIR_TOKEN"
 
 Do not put the generated secret in shell history, logs, or this repository. Its
 URL-safe form (`A-Z`, `a-z`, `0-9`, `-`, and `_`) is safe to use literally in
-the Caddy cookie-matching regular expression. The Caddy systemd service must
-read the environment file containing `AO_HOSTED_PAIR_TOKEN` and must retain
-access to its certificate storage so it can obtain and renew TLS certificates.
+the Caddy cookie-matching regular expression. Create `/etc/caddy/hosted-ao.env`
+with mode `600`, owned by `root`, containing
+`AO_HOSTED_PAIR_TOKEN=<generated-secret>`. Configure Caddy with this systemd
+drop-in:
+
+```ini
+# /etc/systemd/system/caddy.service.d/hosted-ao.conf
+[Service]
+EnvironmentFile=/etc/caddy/hosted-ao.env
+ExecStart=
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+```
+
+Then run `sudo systemctl daemon-reload && sudo systemctl restart caddy`. The
+`ExecStart` replacement deliberately removes Ubuntu's default `--environ` flag,
+which would otherwise write the pairing secret to Caddy's journal. Caddy still
+retains access to its certificate storage for TLS issuance and renewal.
 
 Create an A record for `api.ao.agentlab.in` that points to `YOUR_VM_PUBLIC_IP`.
 Allow TCP ports 80 and 443 through both the Azure NSG and the VM host firewall.
