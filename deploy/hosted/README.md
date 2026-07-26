@@ -19,7 +19,7 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 AO_PORT=3001 ao start
 
 # VM: load Caddy with AO_HOSTED_PAIR_TOKEN exported by its systemd EnvironmentFile.
-sudo caddy validate --config /etc/caddy/Caddyfile
+sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 
 # Mac: launch the desktop build in remote mode.
@@ -47,7 +47,7 @@ the Caddy service environment, validate the configuration without starting
 deployment services:
 
 ```bash
-sudo caddy validate --config /etc/caddy/Caddyfile
+sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
 ```
 
 Expected: Caddy reports that the configuration is valid. Do not print the
