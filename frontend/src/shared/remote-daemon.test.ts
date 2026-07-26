@@ -30,7 +30,9 @@ describe("readRemoteDaemonConfig", () => {
 		["http://api.ao.agentlab.in", "HTTP URLs"],
 		["https://api.ao.agentlab.in/path", "URL paths"],
 		["https://api.ao.agentlab.in?query=1", "query strings"],
+		["https://api.ao.agentlab.in?", "bare query delimiters"],
 		["https://api.ao.agentlab.in#fragment", "fragments"],
+		["https://api.ao.agentlab.in#", "bare fragment delimiters"],
 		["https://user:pass@api.ao.agentlab.in", "credentials"],
 	])("rejects %s (%s)", (url) => {
 		expect(() => readRemoteDaemonConfig({ AO_REMOTE_URL: url, AO_REMOTE_TOKEN: "token" }))

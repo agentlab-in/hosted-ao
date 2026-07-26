@@ -9,7 +9,7 @@ export function readRemoteDaemonConfig(env: Record<string, string | undefined>):
 	if (!rawURL || !token) throw new Error("AO_REMOTE_URL and AO_REMOTE_TOKEN must be set together");
 	if (!/^[A-Za-z0-9_-]+$/.test(token)) throw new Error("AO_REMOTE_TOKEN must be URL-safe base64");
 	const url = new URL(rawURL);
-	if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
+	if (url.protocol !== "https:" || url.pathname !== "/" || rawURL.includes("?") || rawURL.includes("#") || url.username || url.password) {
 		throw new Error("AO_REMOTE_URL must be an HTTPS origin without a path, query, fragment, or credentials");
 	}
 	return { baseUrl: url.origin, token };
