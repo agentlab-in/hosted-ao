@@ -8,7 +8,10 @@ api.ao.agentlab.in {
 		respond 404
 	}
 
-	@preflight method OPTIONS
+	@preflight {
+		method OPTIONS
+		header_regexp cors_preflight Access-Control-Request-Method .+
+	}
 	handle @preflight {
 		reverse_proxy 127.0.0.1:3001
 	}
