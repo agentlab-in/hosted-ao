@@ -3,7 +3,7 @@
 }
 
 api.ao.agentlab.in {
-	@paired header_regexp pairing Cookie "(^|;\\s*)ao_hosted_pair={env.AO_HOSTED_PAIR_TOKEN}(;|$)"
+	@paired header_regexp pairing Cookie "(^|;\\s*)ao_hosted_pair={$AO_HOSTED_PAIR_TOKEN}(;|$)"
 	handle @paired {
 		reverse_proxy 127.0.0.1:3001 {
 			flush_interval -1

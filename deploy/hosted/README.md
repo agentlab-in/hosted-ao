@@ -45,6 +45,8 @@ Then run `sudo systemctl daemon-reload && sudo systemctl restart caddy`. The
 `ExecStart` replacement deliberately removes Ubuntu's default `--environ` flag,
 which would otherwise write the pairing secret to Caddy's journal. Caddy still
 retains access to its certificate storage for TLS issuance and renewal.
+The supplied Caddyfile uses Caddy's `{$AO_HOSTED_PAIR_TOKEN}` parse-time
+substitution, which is required for the cookie regular-expression matcher.
 
 Create an A record for `api.ao.agentlab.in` that points to `YOUR_VM_PUBLIC_IP`.
 Allow TCP ports 80 and 443 through both the Azure NSG and the VM host firewall.
