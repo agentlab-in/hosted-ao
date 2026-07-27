@@ -14,12 +14,12 @@ describe("installRemoteDaemonCookie", () => {
 			url: "https://api.ao.agentlab.in",
 			name: "ao_hosted_pair",
 			value: "dGVzdF9wYWlyaW5nLXNlY3JldA",
-			domain: "api.ao.agentlab.in",
 			httpOnly: true,
 			secure: true,
 			sameSite: "no_restriction",
 			path: "/",
 		}));
+		expect(set.mock.calls[0]?.[0]).not.toHaveProperty("domain");
 	});
 
 	it("propagates cookie store failures", async () => {

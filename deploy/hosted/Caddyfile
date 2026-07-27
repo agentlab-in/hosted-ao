@@ -3,6 +3,16 @@
 }
 
 api.ao.agentlab.in {
+	@control path /shutdown /shutdown/* /internal/* /api/v1/mobile /api/v1/mobile/* /api/v1/dev /api/v1/dev/*
+	handle @control {
+		respond 404
+	}
+
+	@preflight method OPTIONS
+	handle @preflight {
+		reverse_proxy 127.0.0.1:3001
+	}
+
 	@paired header_regexp pairing Cookie "(^|;\\s*)ao_hosted_pair={$AO_HOSTED_PAIR_TOKEN}(;|$)"
 	handle @paired {
 		reverse_proxy 127.0.0.1:3001 {

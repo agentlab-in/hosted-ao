@@ -18,8 +18,8 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 # VM: run the existing daemon only on loopback.
 AO_PORT=3001 ao daemon
 
-# VM: load Caddy with AO_HOSTED_PAIR_TOKEN exported by its systemd EnvironmentFile.
-sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+# VM: validate with the same root-only environment file that systemd loads.
+sudo sh -c 'set -a; . /etc/caddy/hosted-ao.env; caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile'
 sudo systemctl reload caddy
 
 # Mac: launch the desktop build in remote mode.
@@ -63,7 +63,7 @@ the Caddy service environment, validate the configuration without starting
 deployment services:
 
 ```bash
-sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+sudo sh -c 'set -a; . /etc/caddy/hosted-ao.env; caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile'
 ```
 
 Expected: Caddy reports that the configuration is valid. Do not print the

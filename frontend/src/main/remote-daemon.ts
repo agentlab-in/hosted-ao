@@ -18,7 +18,6 @@ export async function installRemoteDaemonCookie(store: CookieStore, config: Remo
 		url: config.baseUrl,
 		name: REMOTE_PAIRING_COOKIE_NAME,
 		value: config.token,
-		domain: new URL(config.baseUrl).hostname,
 		path: "/",
 		secure: true,
 		httpOnly: true,
