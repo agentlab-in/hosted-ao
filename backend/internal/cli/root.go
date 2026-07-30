@@ -199,6 +199,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newOrchestratorCommand(ctx))
 	root.AddCommand(newPRCommand(ctx))
 	root.AddCommand(newReviewCommand(ctx))
+	root.AddCommand(newVMCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 
@@ -218,7 +219,10 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// something) even though a machine invokes them, so they are allowed
 	// through here; the per-command-path daily cap in httpd/router.go is what
 	// keeps their invocation frequency from reaching PostHog uncapped.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao agent-process", "ao agent-process supervise":
+	// "ao vm serve" is systemd-driven bootstrapping like "ao daemon", and it
+	// is also a long-running foreground process that must not depend on the
+	// loopback daemon it may be starting ahead of.
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao agent-process", "ao agent-process supervise", "ao vm serve":
 		return false
 	default:
 		return true
