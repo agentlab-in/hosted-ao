@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,13 @@ func TestCloneRepository_DestUnavailable(t *testing.T) {
 }
 
 func TestCloneRepository_DestStatUnavailable(t *testing.T) {
+	// This branch needs a directory whose permissions make Stat fail, which
+	// only Unix modes can express: Windows Chmod toggles a read-only bit that
+	// directories ignore, and root bypasses the check entirely. Without the
+	// guards the clone would proceed and reach for the network.
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions are not enforced this way on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions, so the stat cannot be made to fail")
 	}
