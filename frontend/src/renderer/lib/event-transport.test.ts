@@ -105,6 +105,30 @@ describe("createEventTransport", () => {
 		expect(EventSourceStub.instances).toHaveLength(1);
 	});
 
+	// The other half of the silent refresh, whose main-process half is pinned in
+	// main/machine-transport.test.ts: the refresh replaces the ao_gw_token cookie
+	// and emits no status at all, so nothing here re-points and the open stream is
+	// left running. A refresh that visibly reconnected every fifteen minutes would
+	// not be silent, and that is the failure nobody notices until a VM run.
+	it("a token refresh does not drop the open SSE stream", () => {
+		getApiBaseUrlMock.mockReturnValue("https://vm.example.com");
+		createEventTransport(fakeQueryClient()).connect();
+		const stream = EventSourceStub.instances[0];
+		stream.readyState = 1; // OPEN
+		stream.onopen?.();
+
+		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
+		const onBaseUrlChange = subscribeApiBaseUrlMock.mock.calls[0][0] as () => void;
+		// Everything a refresh could plausibly wake, with the base URL unchanged
+		// because the machine did not move.
+		onBaseUrlChange();
+		onStatusHandler();
+
+		expect(EventSourceStub.instances).toHaveLength(1);
+		expect(stream.closed).toBe(false);
+		expect(getEventsConnectionState()).toBe("connected");
+	});
+
 	it("closes the old connection and reconnects when the base URL changes", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		const first = EventSourceStub.instances[0];

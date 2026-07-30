@@ -77,9 +77,25 @@ export type AoMachinesControllerDeps = {
 	tokenSource?: ControlPlaneTokenSource;
 };
 
+/**
+ * The control-plane credential this process holds, handed out rather than
+ * rebuilt by the caller.
+ *
+ * There is exactly one ControlPlaneTokenSource per install, and that is load
+ * bearing: refresh tokens rotate on use, so a second source holding the same
+ * refresh token would race a rotation against this one and the loser would
+ * present an already-revoked token. See ao-control-token.ts.
+ */
+export type AoControlPlaneCredential = {
+	controlPlaneUrl: string;
+	token: ControlPlaneTokenSource;
+};
+
 export type AoMachinesController = {
 	/** Current known state. No network: the renderer can poll this freely. */
 	getState: () => AoMachinesState;
+	/** This process's one control-plane credential, or null when it cannot exist. */
+	credential: () => AoControlPlaneCredential | null;
 	/** List from the control plane and probe every machine's reachability. */
 	refresh: () => Promise<AoMachinesState>;
 	/** Make one machine active. Unknown ids are rejected rather than guessed. */
@@ -322,6 +338,7 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 
 	return {
 		getState: currentState,
+		credential: () => (tokenSource && !configError ? { controlPlaneUrl, token: tokenSource } : null),
 		refresh,
 
 		async select(machineId: string): Promise<AoMachinesState> {

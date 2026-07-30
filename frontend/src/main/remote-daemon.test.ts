@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AoMachine } from "../shared/ao-machines";
-import { machineDaemonStatus } from "../shared/remote-daemon";
+import { machineAuthFailedStatus, machineDaemonStatus } from "../shared/remote-daemon";
 import { createRemoteDaemonLifecycle, installRemoteDaemonCookie, remoteDaemonReadyStatus } from "./remote-daemon";
 
 const machine = (extra: Partial<AoMachine> = {}): AoMachine => ({
@@ -145,20 +145,36 @@ describe("an active registered machine", () => {
 		};
 	};
 
-	// TASK 13: this becomes "re-points the app at that machine's base URL", with a
-	// ready status carrying baseUrl, once the desktop can present a
-	// machine-audience token. Until then the app must not point at a machine it
-	// cannot authenticate to.
-	it("owns the app's daemon status without claiming a connection it cannot make", async () => {
+	it("re-points the app at that machine's base URL", async () => {
 		const lifecycle = createRemoteDaemonLifecycle(null, null, () => machineDaemonStatus(machine()));
 		const { localStart } = localCalls();
 
 		await expect(lifecycle.start(localStart, vi.fn())).resolves.toEqual({
-			state: "error",
-			code: "machine_transport_missing",
-			message: expect.stringContaining("cannot sign in to it yet"),
+			state: "ready",
+			baseUrl: "https://vm.example.com",
+			message: "Connected to ao-build-01",
 		});
 		expect(localStart).not.toHaveBeenCalled();
+	});
+
+	// A credential failure is still a status the remote lifecycle owns, so it
+	// cannot fall through to spawning a local daemon either.
+	it("never spawns a local daemon when it has no credential", async () => {
+		const lifecycle = createRemoteDaemonLifecycle(null, null, () =>
+			machineAuthFailedStatus(machine(), "This computer is signed out of AO."),
+		);
+		const { localRefresh, localStart, localStop, spawnLocalDaemon } = localCalls();
+		const setStatus = vi.fn();
+
+		const unauthorized = { state: "error", code: "machine_auth_failed" };
+		await expect(lifecycle.refresh(localRefresh, setStatus)).resolves.toMatchObject(unauthorized);
+		await expect(lifecycle.start(localStart, setStatus)).resolves.toMatchObject(unauthorized);
+		expect(lifecycle.stop(localStop, setStatus)).toMatchObject(unauthorized);
+
+		expect(localRefresh).not.toHaveBeenCalled();
+		expect(localStart).not.toHaveBeenCalled();
+		expect(localStop).not.toHaveBeenCalled();
+		expect(spawnLocalDaemon).not.toHaveBeenCalled();
 	});
 
 	// The hazard this guards: the app spawns a local daemon when it cannot reach

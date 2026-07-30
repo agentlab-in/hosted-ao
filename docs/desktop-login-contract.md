@@ -84,15 +84,26 @@ the desktop reaches for, and when.
 | --- | --- |
 | Sign in (above) | none, PKCE plus `state` |
 | `GET /api/v1/machines` | control-plane-audience access token, from `POST /api/v1/token` |
-| Talking to a chosen machine | machine-audience access token (task 13, batch 5) |
+| Talking to a chosen machine, REST | machine-audience access token in `Authorization: Bearer`, from `POST /api/v1/machines/{id}/token` |
+| Talking to a chosen machine, `/mux` and `GET /api/v1/events` | the same token, in the `ao_gw_token` cookie |
 
 Two consequences the desktop side owns:
 
 - **Sign-out discards every cached token, not just the file.**
   `frontend/src/main/ao-control-token.ts` caches a control-plane-audience access
-  token in memory, and `aoAccount:signOut` clears it alongside deleting
-  `ao-account.json`. When task 13 caches a machine-audience token, it clears there
-  too.
+  token in memory and `frontend/src/main/ao-machine-token.ts` caches a
+  machine-audience one. `aoAccount:signOut` clears both, and drops the
+  `ao_gw_token` cookie, alongside deleting `ao-account.json`.
+- **The cookie exists only because two browser APIs have no header.** The `/mux`
+  WebSocket handshake and `EventSource` cannot set `Authorization`, so the same
+  short-lived JWT travels in `ao_gw_token`, installed by the Electron main
+  process as `Secure`, `HttpOnly`, `SameSite=None`, host-only. `SameSite=None` is
+  required: `app://renderer` reaching `https://vm.example.com` is a cross-site
+  context. The gateway accepts the cookie on those two routes and nowhere else.
+- **The silent refresh emits no status.** Replacing the cookie value leaves an
+  already-open SSE stream and `/mux` session running, because the gateway reads
+  the credential at the handshake and at the SSE request and never again.
+  Publishing a status would re-point the renderer and visibly reconnect both.
 - **Every refresh exchange persists the rotated refresh token** through
   `writeStoredAccount`, before the access token it came with is handed to a caller.
   The presented token is already revoked by then, so losing the replacement would

@@ -241,6 +241,11 @@ const api = {
 		getState: () => ipcRenderer.invoke("aoMachines:getState") as Promise<AoMachinesState>,
 		refresh: () => ipcRenderer.invoke("aoMachines:refresh") as Promise<AoMachinesState>,
 		select: (machineId: string) => ipcRenderer.invoke("aoMachines:select", machineId) as Promise<AoMachinesState>,
+		// The Bearer credential for a REST call to the active machine's gateway,
+		// asked for per request so the renderer never has to reason about expiry.
+		// It is a fifteen minute token scoped to one machine; the refresh token it
+		// descends from never leaves the main process.
+		gatewayToken: () => ipcRenderer.invoke("aoMachines:gatewayToken") as Promise<string | null>,
 	},
 };
 

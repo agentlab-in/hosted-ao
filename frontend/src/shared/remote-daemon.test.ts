@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { AoMachine } from "./ao-machines";
-import { isRemoteDaemonBaseUrl, machineDaemonStatus, readRemoteDaemonConfig } from "./remote-daemon";
+import {
+	GATEWAY_COOKIE_NAME,
+	isRemoteDaemonBaseUrl,
+	machineAuthFailedStatus,
+	machineDaemonStatus,
+	readRemoteDaemonConfig,
+	REMOTE_PAIRING_COOKIE_NAME,
+} from "./remote-daemon";
 
 const machine = (extra: Partial<AoMachine> = {}): AoMachine => ({
 	id: "mch_1",
@@ -82,13 +89,39 @@ describe("machineDaemonStatus", () => {
 		expect(machineDaemonStatus(machine({ reachability: "unknown" })).baseUrl).toBeUndefined();
 	});
 
-	// The regression this guards: a "ready" status here sets the renderer's API
-	// base URL, and with no machine-audience token in this build every REST call
-	// and both EventSources would 401 under a UI that says Connected.
-	it("does not hand out a base URL for a reachable machine while there is no credential for it", () => {
-		const status = machineDaemonStatus(machine({ reachability: "online" }));
-		expect(status.state).not.toBe("ready");
-		expect(status.baseUrl).toBeUndefined();
-		expect(status.message).toContain("ao-build-01");
+	it("hands the reachable machine's base URL to the renderer", () => {
+		expect(machineDaemonStatus(machine({ reachability: "online" }))).toEqual({
+			state: "ready",
+			baseUrl: "https://vm.example.com",
+			message: "Connected to ao-build-01",
+		});
+	});
+
+	// The regression this guards: a "ready" status sets the renderer's API base
+	// URL, so a machine that has not answered, or is down, must not carry one.
+	// Only main/machine-transport.ts publishes the ready case, and only once a
+	// machine-audience token is held and the ao_gw_token cookie is installed.
+	it.each(["offline", "unknown"] as const)("does not hand out a base URL while reachability is %s", (reachability) => {
+		expect(machineDaemonStatus(machine({ reachability })).baseUrl).toBeUndefined();
+	});
+});
+
+describe("machineAuthFailedStatus", () => {
+	it("names the machine and the reason without handing out a base URL", () => {
+		expect(machineAuthFailedStatus(machine(), "This computer is signed out of AO.")).toEqual({
+			state: "error",
+			code: "machine_auth_failed",
+			message: "Could not sign in to ao-build-01. This computer is signed out of AO.",
+		});
+	});
+});
+
+describe("GATEWAY_COOKIE_NAME", () => {
+	// The gateway reads this exact name (gatewayCookieName in
+	// backend/internal/vmgateway/proxy.go). A rename on either side makes /mux and
+	// the SSE stream 401 with nothing to see on the client, so it is pinned here.
+	it("is the name the VM gateway reads, and is not the AO_REMOTE_URL pairing cookie", () => {
+		expect(GATEWAY_COOKIE_NAME).toBe("ao_gw_token");
+		expect(GATEWAY_COOKIE_NAME).not.toBe(REMOTE_PAIRING_COOKIE_NAME);
 	});
 });

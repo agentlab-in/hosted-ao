@@ -208,6 +208,7 @@ if (typeof window !== "undefined") {
 			getState: async () => signedOutAoMachines,
 			refresh: async () => signedOutAoMachines,
 			select: async () => signedOutAoMachines,
+			gatewayToken: async () => null,
 		},
 	};
 } // end if (typeof window !== "undefined")
