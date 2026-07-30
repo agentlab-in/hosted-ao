@@ -44,6 +44,25 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 		({ version, daemonState, daemonPort }) => {
 			const unsubscribe = () => () => undefined;
 			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
+			// This computer is machine zero and stays selectable with no account,
+			// which is what the renderer smoke suite sees.
+			const signedOutAoMachines = {
+				status: "signed-out" as const,
+				activeMachineId: "local",
+				machines: [
+					{
+						id: "local",
+						name: "This Mac",
+						baseUrl: "",
+						local: true,
+						createdAt: null,
+						lastSeen: null,
+						reachability: "online" as const,
+						harness: "unknown" as const,
+						harnessCommand: null,
+					},
+				],
+			};
 			const status: DaemonStatus =
 				daemonState === "ready" ? { state: "ready", port: daemonPort } : { state: daemonState };
 			const navState = (viewId: string) => ({
@@ -149,6 +168,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getState: async () => signedOutAoAccount,
 					signIn: async () => signedOutAoAccount,
 					signOut: async () => signedOutAoAccount,
+				},
+				machines: {
+					getState: async () => signedOutAoMachines,
+					refresh: async () => signedOutAoMachines,
+					select: async () => signedOutAoMachines,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
@@ -416,6 +440,25 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 
 			const unsubscribe = () => () => undefined;
 			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
+			// This computer is machine zero and stays selectable with no account,
+			// which is what the renderer smoke suite sees.
+			const signedOutAoMachines = {
+				status: "signed-out" as const,
+				activeMachineId: "local",
+				machines: [
+					{
+						id: "local",
+						name: "This Mac",
+						baseUrl: "",
+						local: true,
+						createdAt: null,
+						lastSeen: null,
+						reachability: "online" as const,
+						harness: "unknown" as const,
+						harnessCommand: null,
+					},
+				],
+			};
 			const status: DaemonStatus = { state: "ready", port: daemonPort };
 			const navState = (viewId: string, url = "", error?: string) => ({
 				viewId,
@@ -507,6 +550,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					getState: async () => signedOutAoAccount,
 					signIn: async () => signedOutAoAccount,
 					signOut: async () => signedOutAoAccount,
+				},
+				machines: {
+					getState: async () => signedOutAoMachines,
+					refresh: async () => signedOutAoMachines,
+					select: async () => signedOutAoMachines,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
