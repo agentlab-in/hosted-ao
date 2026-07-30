@@ -679,12 +679,19 @@ func validateScratchProjectConfig(cfg domain.ProjectConfig) error {
 // `git -C path remote get-url origin`. A missing remote, missing repo, or any
 // other git error returns an empty string — `project add` must not fail just
 // because no origin is configured (the SCM observer skips such projects).
+//
+// The result is passed through sanitizeOriginURL, because everything downstream
+// of this function is a place a credential must never reach: it is persisted to
+// projects.repo_origin_url, served as Project.Repo, and logged. This is the
+// single choke point for every RepoOriginURL assignment, so stripping here
+// covers both a credentialed AddInput.CloneURL (git records it verbatim as
+// origin) and a repo added by path whose own origin already carries one.
 func resolveGitOriginURL(path string) string {
 	out, err := aoprocess.Command("git", "-C", path, "remote", "get-url", "origin").Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return sanitizeOriginURL(strings.TrimSpace(string(out)))
 }
 
 // resolveDefaultBranch returns the repo's default branch, preferring the
