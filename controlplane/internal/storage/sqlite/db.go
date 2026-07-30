@@ -35,8 +35,12 @@ const pragmas = "?_pragma=journal_mode(WAL)" +
 // writer/reader split: there is no store layer yet to justify the split, and
 // this is a single-process service, so there is no concurrent Open() to
 // guard against with a migration mutex either.
+// The directory is created 0700, not 0750: controlplane.db holds Google
+// subjects, emails, and refresh-token hashes, and the EdDSA signing keys sit
+// in a subdirectory of the same tree, so nothing in it should be group
+// readable.
 func Open(dataDir string) (*sql.DB, error) {
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	dsn := "file:" + filepath.Join(dataDir, "controlplane.db") + pragmas

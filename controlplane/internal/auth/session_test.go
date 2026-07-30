@@ -3,6 +3,8 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -34,6 +36,24 @@ func TestLoadOrCreateSessionKey_PersistsAcrossCalls(t *testing.T) {
 	}
 	if string(first) != string(second) {
 		t.Fatal("loadOrCreateSessionKey() returned a different key on the second call, want the persisted one")
+	}
+}
+
+// Creating the data dir on demand must use the same 0700 as
+// storage/sqlite.Open: everything in it is sensitive, this key included.
+func TestLoadOrCreateSessionKey_CreatesDataDirMode0700(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "controlplane-data")
+
+	if _, err := loadOrCreateSessionKey(dir); err != nil {
+		t.Fatalf("loadOrCreateSessionKey() error: %v", err)
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat %s: %v", dir, err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("data dir mode = %o, want 0700", perm)
 	}
 }
 

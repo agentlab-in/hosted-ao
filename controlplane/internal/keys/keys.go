@@ -132,6 +132,15 @@ func (m *Manager) Active() (kid string, priv ed25519.PrivateKey) {
 // for tokens signed by the old active key to stop verifying (they are
 // short-lived per TOKEN_CONTRACT.md, so this is bounded by the access token
 // TTL plus the JWKS cache lifetime).
+//
+// The write order matters and is deliberate: next.json is written before
+// active.json, and memory is updated only after both succeed. Writing the
+// promoted key into active.json first would mean a failure on the second
+// write (disk full, EPERM) left the same key in both files, so the next Load
+// would publish a duplicate kid and lose the rotation slot entirely. In this
+// order a failed second write leaves active.json holding the still-valid old
+// active key, and the only casualty is the unused next key: signing keeps
+// working and the caller can retry.
 func (m *Manager) Rotate() error {
 	newNext, err := generate()
 	if err != nil {
@@ -141,11 +150,11 @@ func (m *Manager) Rotate() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := writeKeyPair(filepath.Join(m.dir, "active.json"), m.next); err != nil {
-		return fmt.Errorf("persist promoted active key: %w", err)
-	}
 	if err := writeKeyPair(filepath.Join(m.dir, "next.json"), newNext); err != nil {
 		return fmt.Errorf("persist new next key: %w", err)
+	}
+	if err := writeKeyPair(filepath.Join(m.dir, "active.json"), m.next); err != nil {
+		return fmt.Errorf("persist promoted active key: %w", err)
 	}
 
 	m.active = m.next

@@ -12,9 +12,11 @@ CREATE TABLE accounts (
 );
 
 -- machines holds one row per VM bound to an account via ao setup-vm. hostname
--- is the machine's public URL, used as both the JWT audience and the
--- reverse-proxy target. revoked_at, once set, ends the machine's ability to
--- verify tokens against it.
+-- is the machine's public URL, used as the reverse-proxy target. The JWT
+-- audience is machines.id, not this column: see TOKEN_CONTRACT.md, the issuer
+-- (internal/tokens/access.go), and the gateway verifier, which all use the
+-- machine id. revoked_at, once set, ends the machine's ability to verify
+-- tokens against it.
 CREATE TABLE machines (
     id          TEXT PRIMARY KEY,
     account_id  TEXT NOT NULL REFERENCES accounts (id),

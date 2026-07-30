@@ -19,7 +19,8 @@ standalone Go binary with no Caddy in front; hit it directly on
 
 Copy the example env file and fill in the two required Google OAuth values
 (see the "Operator setup: Google OAuth client" section of the spec doc for
-how to obtain them):
+how to obtain them). The example file already sets the third required
+variable, `DATA_DIR`:
 
 ```bash
 cp .env.example .env
@@ -32,12 +33,23 @@ Or export the variables directly:
 ```bash
 export AO_SH_G_CLIENT_ID=your-client-id
 export AO_SH_G_CLIENT_SECRET=your-client-secret
+export DATA_DIR=./data
 ```
 
-`LISTEN_ADDR` (default `127.0.0.1:8080`), `DATA_DIR` (default `./data`), and
-`PUBLIC_ORIGIN` (default `https://ao.agentlab.in`) are optional; see
+`DATA_DIR` is required and has no default, because the EdDSA signing keys live
+inside it: a working-directory-relative default would silently resolve
+elsewhere under a service manager that does not set `WorkingDirectory=`,
+generating a fresh key pair and rejecting every already-issued token until each
+VM's JWKS cache expires. Use an absolute path in a service unit. The service
+logs the resolved absolute data dir and the active `kid` at boot, so an
+unintended regeneration is visible.
+
+`LISTEN_ADDR` (default `127.0.0.1:8080`), `PUBLIC_ORIGIN` (default
+`https://ao.agentlab.in`, trailing slashes stripped), and `ACCESS_TOKEN_TTL`
+(default `15m`, must be between `10m` and `30m`) are optional; see
 `internal/config/config.go` for the full list. The service fails to start
-(`log.Fatal`) if either Google credential is missing.
+(`log.Fatal`) if a Google credential or `DATA_DIR` is missing, or if
+`ACCESS_TOKEN_TTL` is out of range.
 
 ## Run
 

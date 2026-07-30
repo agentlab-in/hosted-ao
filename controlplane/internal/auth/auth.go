@@ -54,10 +54,12 @@ func NewService(db *sql.DB, cfg config.Config) (*Service, error) {
 	}
 
 	return &Service{
-		db:            db,
-		clientID:      cfg.GoogleClientID,
-		clientSecret:  cfg.GoogleClientSecret,
-		redirectURI:   strings.TrimRight(cfg.PublicOrigin, "/") + "/auth/google/callback",
+		db:           db,
+		clientID:     cfg.GoogleClientID,
+		clientSecret: cfg.GoogleClientSecret,
+		// config.Load already strips any trailing slash from PublicOrigin, so
+		// this concatenation cannot produce a double slash.
+		redirectURI:   cfg.PublicOrigin + "/auth/google/callback",
 		endpoints:     defaultGoogleEndpoints,
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		sessionKey:    key,

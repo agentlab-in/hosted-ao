@@ -2,21 +2,71 @@
 
 This is the shared token contract for the control plane, the VM gateway
 (`ao vm serve`), and the desktop transport. It is defined once so the three
-can be built in parallel. It must stay in sync with the "Token contract"
-section of
-[`docs/superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md`](../docs/superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md),
-which it was copied from; if that section changes, update this file to match.
+can be built in parallel. It was copied from the "Token contract" section of
+[`docs/superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md`](../docs/superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md);
+where this file is more specific than that section, this file is the one to
+build against, and if that section changes, update this file to match.
 
 - Access token: JWT, EdDSA, `iss` = `https://ao.agentlab.in`, `sub` = account
-  id, `aud` = machine id, `exp` = 15 minutes, `iat`, `jti`.
-- Refresh token: opaque, high entropy, stored hashed in `refresh_tokens`, bound
-  to an account and a desktop install, long-lived, revocable.
-- Transport: `Authorization: Bearer <jwt>` for REST and SSE. Browsers cannot set
-  headers on a WebSocket handshake, so `/mux` continues to use a cookie, whose
-  value is the same short-lived JWT rather than a shared secret. The cookie is
-  Secure, HttpOnly, host-only, and installed by the Electron main process.
-- Verification on the VM: signature against cached JWKS, `iss`, `aud` equal to
-  this machine's id, `exp` with 60s skew tolerance, and `sub` equal to the
-  single account id in the machine's allowlist.
+  id, `aud` = machine id, `exp` = 15 minutes, `iat`, `jti`. The audience is
+  the machine id (`machines.id`), never the machine's hostname or public URL.
+- Access token lifetime: 15 minutes by default, configurable via
+  `ACCESS_TOKEN_TTL` but only within 10 to 30 minutes. Nothing checks an
+  access token against a revocation list, so the lifetime is the whole
+  revocation window; the control plane refuses to start outside that range.
+- Refresh token: opaque, high entropy, stored hashed in `refresh_tokens`,
+  bound to an account and a desktop install, revocable.
+- Refresh token lifetime: 90 days from issuance, and it **rotates on every
+  use**. Exchanging a refresh token revokes the presented one in the same
+  transaction that issues its replacement, so a refresh token is single-use
+  and a replayed one is rejected as revoked rather than honoured. The desktop
+  install must therefore persist the replacement it gets back on every
+  refresh, and the 90 days mostly bound how long an install may go without
+  contacting the control plane at all.
+
+## Transport
+
+- **`Authorization: Bearer <jwt>` for REST.** This is the only accepted
+  credential for every state-changing method and every route other than the
+  two below.
+- **Cookie for `/mux` (the terminal WebSocket) and for `GET /api/v1/events`
+  (SSE).** Browsers cannot set headers on either: the WebSocket handshake has
+  no header API, and `EventSource` has none either. Both therefore
+  authenticate with the cookie, whose value is the same short-lived JWT rather
+  than a shared secret.
+- The cookie is **deliberately not** accepted on any other route, and never on
+  a state-changing method. It is ambient, so widening it would leave the
+  gateway's CORS origin check as the only CSRF defence. New browser-reachable
+  routes that cannot send a header need an explicit decision here first, not a
+  quiet addition.
+
+### The `/mux` and SSE cookie
+
+- **Name: `ao_gw_token`.** Value: the current access token.
+- Attributes: `Secure`, `HttpOnly`, `SameSite=None`, host-only (no `Domain`),
+  `Path=/`.
+- `SameSite=None` is required, not optional. The renderer runs on the
+  `app://renderer` origin and talks to `https://vm.example.com`, which is a
+  cross-site context, so under the browser default (`Lax`) the cookie is not
+  attached to the WebSocket handshake or the `EventSource` request at all and
+  both fail 401 with nothing to see on the client. `SameSite=None` is only
+  honoured together with `Secure`, which is why the pair is stated together.
+- Installed by the Electron main process, which owns it: it must be refreshed
+  whenever the access token is, since it carries the same 15-minute
+  expiry as the token inside it.
+- The gateway strips both `Authorization` and this cookie before proxying to
+  the daemon, so the credential never reaches the daemon.
+
+## Verification on the VM
+
+- Signature against the cached JWKS, then `iss`, then `aud` equal to this
+  machine's id, then `exp` with 60s skew tolerance, then `sub` equal to the
+  single account id in the machine's allowlist. Signature first, claims after,
+  and a missing `exp` is a rejection rather than "no expiry".
+- `iss` and `aud` are compared byte for byte. The control plane strips any
+  trailing slash from `PUBLIC_ORIGIN` so the `iss` it mints matches the value
+  the gateway pins.
 - JWKS cache: 1 hour, with stale-if-error so a brief control-plane outage does
   not disconnect working users.
+- The JWKS publishes the active key plus the next-rotation key, so a verifier
+  caches the next key before it ever signs anything.

@@ -44,7 +44,9 @@ func loadOrCreateSessionKey(dataDir string) ([]byte, error) {
 		return nil, fmt.Errorf("read session key: %w", err)
 	}
 
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+	// 0700 to match storage/sqlite.Open: everything under the data dir is
+	// sensitive, including this key and the EdDSA signing keys.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
