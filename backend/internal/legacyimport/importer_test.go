@@ -3,6 +3,7 @@ package legacyimport
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,6 +160,43 @@ func TestLegacyConfigError_NilWhenAbsentOrEmpty(t *testing.T) {
 	}
 	if LegacyConfigError(context.Background(), filepath.Join(t.TempDir(), "nope")) != nil {
 		t.Fatal("LegacyConfigError on a missing root = non-nil, want nil")
+	}
+}
+
+// The default origin resolver (Options.RepoOriginURL left nil, which is how the
+// daemon and `ao import` call Run) must not persist a credential embedded in the
+// legacy repo's own origin remote. It used to read the URL raw, so a token in
+// .git/config landed in projects.repo_origin_url, from where it is served by
+// GET /api/v1/projects/{id} and logged. Issue #41.
+func TestRun_DefaultOriginResolverStripsCredential(t *testing.T) {
+	const secret = "ghp_SUPERSECRET"
+	repo := t.TempDir()
+	mustGit(t, "init", repo)
+	mustGit(t, "-C", repo, "remote", "add", "origin", "https://x-access-token:"+secret+"@github.com/acme/widgets.git")
+
+	root := filepath.Join(t.TempDir(), ".agent-orchestrator")
+	mustMkdir(t, filepath.Join(root, "projects", "alpha", "sessions"))
+	mustWrite(t, filepath.Join(root, "config.yaml"), "projects:\n  alpha:\n    path: "+repo+"\n")
+
+	store := newFakeStore()
+	// RepoOriginURL deliberately nil: this exercises the real resolver.
+	opts := Options{Root: root, Now: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
+	if _, err := Run(context.Background(), store, opts); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := store.projects["alpha"].RepoOriginURL
+	if strings.Contains(got, secret) {
+		t.Fatalf("imported repoOriginURL leaked the token: %q", got)
+	}
+	if got != "https://github.com/acme/widgets.git" {
+		t.Fatalf("imported repoOriginURL = %q, want https://github.com/acme/widgets.git", got)
+	}
+}
+
+func mustGit(t *testing.T, args ...string) {
+	t.Helper()
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v (%s)", args, err, out)
 	}
 }
 

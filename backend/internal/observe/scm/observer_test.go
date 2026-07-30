@@ -748,6 +748,43 @@ func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	}
 }
 
+// The origin-URL backfill runs on an ordinary poll with no user action, so it is
+// the one write that can persist a credential nobody handed to AO: the user set
+// up origin with a token themselves, after the project was added by path. The
+// backfill used to read the remote raw, putting the token in
+// projects.repo_origin_url, whence GET /api/v1/projects/{id} serves it and the
+// tracker intake warning logs it to journald. Issue #41.
+func TestPoll_BackfilledOriginURLStripsCredential(t *testing.T) {
+	const secret = "ghp_SUPERSECRET"
+	dir := t.TempDir()
+	mustGit(t, "init", dir)
+	mustGit(t, "-C", dir, "remote", "add", "origin", "https://x-access-token:"+secret+"@github.com/o/r.git")
+
+	store := &fakeStore{
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "ao/p-1/root"}}},
+		// No RepoOriginURL: exactly the row the backfill exists for.
+		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v1"}},
+		openPRs:      map[string][]ports.SCMPRObservation{},
+		observations: map[string]ports.SCMObservation{},
+	}
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := store.projects["p"].RepoOriginURL
+	if strings.Contains(got, secret) {
+		t.Fatalf("backfilled repoOriginURL leaked the token: %q", got)
+	}
+	if got != "https://github.com/o/r.git" {
+		t.Fatalf("backfilled repoOriginURL = %q, want https://github.com/o/r.git", got)
+	}
+}
+
 func mustGit(t *testing.T, args ...string) {
 	t.Helper()
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gitremote"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -175,7 +176,7 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 			ProjectID:     projectID,
 			Name:          name,
 			RelativePath:  filepath.ToSlash(name),
-			RepoOriginURL: resolveGitOriginURL(child),
+			RepoOriginURL: gitremote.OriginURL(child),
 			RegisteredAt:  registeredAt,
 		})
 	}
@@ -213,7 +214,7 @@ func validateWorkspaceChild(ctx context.Context, child string) error {
 			"suggestedFix": "Check out the repository's default branch (for example `main`) and retry.",
 		})
 	}
-	if origin := resolveGitOriginURL(child); origin == "" {
+	if origin := gitremote.OriginURL(child); origin == "" {
 		return apierr.Invalid("WORKSPACE_CHILD_ORIGIN_REQUIRED", "Workspace child repositories must have an origin remote configured", map[string]any{
 			"path":         child,
 			"suggestedFix": "Run `git remote add origin <url>` in the child repository, then retry.",

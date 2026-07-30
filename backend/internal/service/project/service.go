@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gitremote"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -251,7 +252,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 			return Project{}, err
 		}
 		row.Kind = domain.ProjectKindWorkspace
-		row.RepoOriginURL = resolveGitOriginURL(path)
+		row.RepoOriginURL = gitremote.OriginURL(path)
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
@@ -279,7 +280,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 			row.Config.DefaultBranch = branch
 		}
 	}
-	row.RepoOriginURL = resolveGitOriginURL(path)
+	row.RepoOriginURL = gitremote.OriginURL(path)
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register project")
 	}
@@ -673,25 +674,6 @@ func validateScratchProjectConfig(cfg domain.ProjectConfig) error {
 		return errors.New("scratch projects do not support reviewers")
 	}
 	return nil
-}
-
-// resolveGitOriginURL returns the project's `origin` remote URL via
-// `git -C path remote get-url origin`. A missing remote, missing repo, or any
-// other git error returns an empty string — `project add` must not fail just
-// because no origin is configured (the SCM observer skips such projects).
-//
-// The result is passed through sanitizeOriginURL, because everything downstream
-// of this function is a place a credential must never reach: it is persisted to
-// projects.repo_origin_url, served as Project.Repo, and logged. This is the
-// single choke point for every RepoOriginURL assignment, so stripping here
-// covers both a credentialed AddInput.CloneURL (git records it verbatim as
-// origin) and a repo added by path whose own origin already carries one.
-func resolveGitOriginURL(path string) string {
-	out, err := aoprocess.Command("git", "-C", path, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return ""
-	}
-	return sanitizeOriginURL(strings.TrimSpace(string(out)))
 }
 
 // resolveDefaultBranch returns the repo's default branch, preferring the

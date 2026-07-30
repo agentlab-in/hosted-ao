@@ -166,44 +166,6 @@ func parseCloneURL(raw string) (owner, repo string, err error) {
 	return owner, repo, nil
 }
 
-// sanitizeOriginURL removes any credential embedded in a git remote URL. A
-// client may legitimately POST `cloneUrl` as
-// `https://x-access-token:<token>@github.com/owner/repo.git`, which is how
-// non-interactive https git auth is normally expressed and what
-// GIT_TERMINAL_PROMPT=0 leaves as the practical option; git then records that
-// string verbatim as the repo's `origin`. The token has a job to do there, so
-// the clone's own .git/config keeps it, but it must not travel any further.
-// See resolveGitOriginURL.
-//
-// raw is returned unchanged when there is nothing to strip, when it does not
-// parse as a URL at all, and for the scp-like SSH shorthand
-// (git@host:owner/repo.git), which url.Parse rejects outright and whose
-// userinfo is an SSH login name rather than a secret.
-func sanitizeOriginURL(raw string) string {
-	if !strings.Contains(raw, "@") {
-		return raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.User == nil {
-		return raw
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "ssh", "git+ssh":
-		// An ssh:// URL's userinfo is the login name (`git`), which is not a
-		// secret and which the remote stops working without. Drop only a
-		// password, which has no legitimate use over SSH.
-		if _, hasPassword := u.User.Password(); !hasPassword {
-			return raw
-		}
-		u.User = url.User(u.User.Username())
-	default:
-		// Over http(s) the username alone is a credential too: a bare
-		// `https://<token>@github.com/...` authenticates with no password.
-		u.User = nil
-	}
-	return u.String()
-}
-
 func sanitizeDirComponent(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "." || s == ".." || !safeDirComponent.MatchString(s) {
