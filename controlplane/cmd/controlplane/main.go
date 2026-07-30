@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/server"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/storage/sqlite"
@@ -34,6 +35,12 @@ func main() {
 	defer db.Close()
 
 	mux := server.New(db)
+
+	authSvc, err := auth.NewService(db, cfg)
+	if err != nil {
+		log.Fatalf("init auth: %v", err)
+	}
+	authSvc.Register(mux)
 
 	// LISTEN_ADDR defaults to loopback (127.0.0.1:8080): this service sits
 	// behind Caddy on the same box, which terminates TLS and reverse-proxies
