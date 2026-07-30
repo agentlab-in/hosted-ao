@@ -284,3 +284,39 @@ test("a bad AO_CONTROL_URL is reported, never a silent fall back to production",
 	expect(state.status).toBe("error");
 	expect(state.error).toMatch(/AO_CONTROL_URL/);
 });
+
+// The hazard: a second ControlPlaneTokenSource built elsewhere in the main
+// process would hold the same refresh token and race a rotation against this
+// one, and the loser presents an already-revoked token. The machine transport
+// therefore takes this credential rather than building its own.
+test("hands out the one control-plane credential, not a second copy of it", () => {
+	const machines = controller(fakeFetch([machineRow()]));
+
+	expect(machines.credential()).toEqual({ controlPlaneUrl: "https://ao.agentlab.in", token: signedIn });
+});
+
+test("has no credential to hand out when AO_CONTROL_URL does not parse", () => {
+	const machines = createAoMachinesController({
+		stateDir,
+		env: { AO_CONTROL_URL: "not a url" },
+		safeStorage,
+		localMachineName: "This Mac",
+		onActiveChange: (machine) => active.push(machine),
+		fetchImpl: fakeFetch([]) as unknown as typeof fetch,
+	});
+
+	expect(machines.credential()).toBeNull();
+});
+
+test("has no credential to hand out when the ~/.ao state dir is unresolvable", () => {
+	const machines = createAoMachinesController({
+		stateDir: null,
+		env: {},
+		safeStorage,
+		localMachineName: "This Mac",
+		onActiveChange: (machine) => active.push(machine),
+		fetchImpl: fakeFetch([]) as unknown as typeof fetch,
+	});
+
+	expect(machines.credential()).toBeNull();
+});

@@ -19,9 +19,11 @@ import { readStoredAccount, writeStoredAccount, type SafeStorageLike } from "./a
  * concurrent callers share one exchange rather than racing two, where the
  * loser would have presented an already-revoked token.
  *
- * Not in scope here: the machine-audience token, the Bearer header on the
- * daemon's REST and SSE routes, the `/mux` cookie, and silent background
- * refresh. That is the remote transport, task 13.
+ * Not in scope here: the machine-audience token, the Bearer header on a
+ * machine's REST routes, the `/mux` and SSE cookie, and the silent background
+ * refresh. Those are ao-machine-token.ts and machine-transport.ts, which take
+ * the source built here rather than building a second one, because two sources
+ * would race a rotation of the same refresh token.
  */
 
 /** Refreshed this early before expiry, so a token never expires mid-request. */

@@ -14,9 +14,11 @@ export type DaemonFailureCode =
 	| "not_ready"
 	| "identity_mismatch"
 	| "datadir_unwritable"
-	// TASK 13 PLACEHOLDER: a registered machine is up but this build has no
-	// credential for it. Delete this with machineTransportMissingStatus.
-	| "machine_transport_missing";
+	// A registered machine is up, but no machine-audience access token could be
+	// obtained for it: this install is signed out, the control plane refused the
+	// sign-in, or the account no longer has that machine. See
+	// main/machine-transport.ts.
+	| "machine_auth_failed";
 
 export type DaemonStatus = {
 	state: "starting" | "ready" | "stopped" | "error";

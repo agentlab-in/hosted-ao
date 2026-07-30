@@ -173,6 +173,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getState: async () => signedOutAoMachines,
 					refresh: async () => signedOutAoMachines,
 					select: async () => signedOutAoMachines,
+					gatewayToken: async () => null,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
@@ -555,6 +556,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					getState: async () => signedOutAoMachines,
 					refresh: async () => signedOutAoMachines,
 					select: async () => signedOutAoMachines,
+					gatewayToken: async () => null,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;

@@ -41,7 +41,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
-import { machineDaemonStatus, readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
+import { machineAuthFailedStatus, readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import { KEYBOARD_SHORTCUTS_HELP_CHANNEL } from "./shared/shortcuts";
 import {
@@ -65,6 +65,7 @@ import type { AoMachine } from "./shared/ao-machines";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
 import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
+import { createMachineTransport, type MachineTransport } from "./main/machine-transport";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -1466,6 +1467,36 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
 	return aoMachinesController;
 }
 
+// The authenticated transport to the active machine's gateway: the Bearer token
+// the renderer attaches to REST calls, the ao_gw_token cookie /mux and the SSE
+// stream authenticate with, and the silent refresh that keeps both current.
+let machineTransportInstance: MachineTransport | null = null;
+function machineTransport(): MachineTransport | null {
+	if (machineTransportInstance) return machineTransportInstance;
+	// Null when no control-plane credential can exist in this install: no ~/.ao
+	// state dir, or an AO_CONTROL_URL that does not parse. The machines controller
+	// already reports that as its own error, so there is nothing to add here.
+	const credential = aoMachines().credential();
+	if (!credential) return null;
+	machineTransportInstance = createMachineTransport({
+		cookies: session.defaultSession.cookies,
+		controlPlaneUrl: credential.controlPlaneUrl,
+		controlToken: credential.token,
+		onStatus: (status) => {
+			activeMachineStatus = status;
+			void startDaemon();
+		},
+		// The control plane will not mint a token for the active machine, and it
+		// answers revoked, someone else's, and never-existed identically. The list
+		// is where that resolves: refresh() drops a machine that is gone from the
+		// list and falls back to this computer, which needs no account.
+		onMachineGone: () => {
+			void aoMachines().refresh();
+		},
+	});
+	return machineTransportInstance;
+}
+
 /**
  * Re-point the app at the machine that just became active.
  *
@@ -1474,15 +1505,34 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
  * status and the local start function is never called, whether the machine is
  * up or down. Selecting this computer clears it, and startDaemon() attaches to
  * or spawns the local daemon exactly as it always has.
+ *
+ * The transport, not this function, publishes the ready status that carries the
+ * machine's base URL, and only once it holds a token and has installed the
+ * gateway cookie.
  */
 function applyActiveMachine(machine: AoMachine | null): void {
-	activeMachineStatus = machine ? machineDaemonStatus(machine) : null;
+	// AO_REMOTE_URL is checked first in the lifecycle and wins outright, so the
+	// renderer is pointed at the env origin no matter what is selected here.
+	// Fetching a machine credential for a gateway nothing will call would be a
+	// pointless token request, and the env hatch keeps behaving exactly as before.
+	if (remoteDaemonConfig) return;
+	const transport = machineTransport();
+	if (transport) {
+		transport.setMachine(machine);
+		return;
+	}
+	activeMachineStatus = machine
+		? machineAuthFailedStatus(machine, "This computer cannot store an AO sign-in, so it has no credential to send.")
+		: null;
 	void startDaemon();
 }
 
 ipcMain.handle("aoMachines:getState", () => aoMachines().getState());
 ipcMain.handle("aoMachines:refresh", () => aoMachines().refresh());
 ipcMain.handle("aoMachines:select", (_event, machineId: string) => aoMachines().select(machineId));
+// Read from the already-built transport rather than machineTransport(), so a
+// local-only install never constructs one just to be told there is no token.
+ipcMain.handle("aoMachines:gatewayToken", () => machineTransportInstance?.token() ?? null);
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
 ipcMain.handle("updates:check", async (_event, options?: UpdateCheckOptions) => {
