@@ -273,9 +273,18 @@ to Google.
    `https://ao.agentlab.in/auth/google/callback` and
    `http://localhost:8080/auth/google/callback` for local development. Leave
    authorized JavaScript origins empty; this is a server-side code exchange.
-7. Supply the credentials to the control plane as `GOOGLE_CLIENT_ID` and
-   `GOOGLE_CLIENT_SECRET` by environment. They are never committed, and task 1's
-   skeleton must fail loudly at boot if either is missing.
+7. Supply the credentials to the control plane as `AO_SH_G_CLIENT_ID` and
+   `AO_SH_G_CLIENT_SECRET` by environment. They are never committed, and task 1's
+   skeleton must fail loudly at boot if either is missing. See
+   `controlplane/.env.example`.
+
+Status: **done.** The project, consent screen, and Web application client exist,
+publishing is in production, and the credentials are exported from
+`~/.zsh_secrets`. `ao.agentlab.in` resolves to the VM. Task 4 is unblocked.
+
+One operational caveat: `~/.zsh_secrets` is sourced from `~/.zshrc`, which runs
+for interactive shells only. A systemd unit for the control plane must supply
+the credentials through its own `EnvironmentFile`; it will not inherit them.
 
 Redirect URIs must match byte for byte, including the trailing path. Google
 rejects OAuth inside embedded webviews, which is why the desktop uses the system
