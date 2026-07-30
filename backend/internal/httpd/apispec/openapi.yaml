@@ -643,7 +643,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Register a new project from a git repository path
+      summary: Register a new project from a local git repository path, or by cloning
+        a cloneUrl
       tags:
       - projects
   /api/v1/projects/{id}:
@@ -2232,6 +2233,8 @@ components:
       properties:
         asWorkspace:
           type: boolean
+        cloneUrl:
+          type: string
         config:
           $ref: '#/components/schemas/ProjectConfig'
         name:
@@ -2244,8 +2247,6 @@ components:
           type:
           - "null"
           - string
-      required:
-      - path
       type: object
     AgentConfig:
       properties:

@@ -61,10 +61,14 @@ type Service struct {
 	clock          func() time.Time
 	telemetry      ports.EventSink
 	defaultHarness domain.AgentHarness
+	// reposRoot is where POST /projects clones land when CloneURL is set:
+	// <reposRoot>/<owner>-<repo>. Empty means cloning by URL is not configured.
+	reposRoot string
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
-	// subsequent mutation must be atomic from the perspective of concurrent callers.
+	// subsequent mutation (including a CloneURL clone) must be atomic from the
+	// perspective of concurrent callers.
 	addMu sync.Mutex
 }
 
@@ -81,6 +85,10 @@ type Deps struct {
 	Sessions       SessionTeardowner
 	Clock          func() time.Time
 	Telemetry      ports.EventSink
+	// ReposRoot is where POST /projects clones land when AddInput.CloneURL is
+	// set. Wired from the daemon's data dir (<DataDir>/repos) so it stays
+	// under ~/.ao and honours AO_DATA_DIR overrides.
+	ReposRoot string
 }
 
 // New returns a project service backed by the given durable store.
@@ -100,6 +108,7 @@ func NewWithDeps(d Deps) *Service {
 		clock:          d.Clock,
 		telemetry:      d.Telemetry,
 		defaultHarness: defaultHarness,
+		reposRoot:      d.ReposRoot,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -150,14 +159,34 @@ func (m *Service) Get(ctx context.Context, id domain.ProjectID) (GetResult, erro
 	return GetResult{Status: "ok", Project: &p}, nil
 }
 
-// Add registers a local git repository as a project.
+// Add registers a git repository as a project, either from a local Path or by
+// cloning a CloneURL first (the two are mutually exclusive).
 //
 // The whole method body is serialised by addMu because workspace registration
 // mutates the filesystem (git init, .gitignore, commits) between the conflict
 // check and the store write — two concurrent calls for the same path would both
-// pass FindProjectByPath and then race on those mutations.
+// pass FindProjectByPath and then race on those mutations. A CloneURL clone is
+// itself such a mutation (two concurrent adds of the same URL would otherwise
+// race on the same destination directory), so it runs inside the same lock.
 func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
-	path, err := normalizePath(in.Path)
+	rawPath := strings.TrimSpace(in.Path)
+	cloneURL := strings.TrimSpace(in.CloneURL)
+	if rawPath != "" && cloneURL != "" {
+		return Project{}, apierr.Invalid("PATH_AND_CLONE_URL_CONFLICT", "Provide either path or cloneUrl, not both", nil)
+	}
+
+	m.addMu.Lock()
+	defer m.addMu.Unlock()
+
+	if cloneURL != "" {
+		clonedPath, err := m.cloneRepository(ctx, cloneURL)
+		if err != nil {
+			return Project{}, err
+		}
+		rawPath = clonedPath
+	}
+
+	path, err := normalizePath(rawPath)
 	if err != nil {
 		return Project{}, err
 	}
@@ -168,9 +197,6 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if err := validateProjectID(id); err != nil {
 		return Project{}, err
 	}
-
-	m.addMu.Lock()
-	defer m.addMu.Unlock()
 
 	projectCountBefore, err := m.activeProjectCount(ctx)
 	if err != nil {

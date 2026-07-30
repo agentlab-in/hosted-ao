@@ -681,7 +681,7 @@ func projectOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/projects", id: "addProject", tag: "projects",
-			summary: "Register a new project from a git repository path",
+			summary: "Register a new project from a local git repository path, or by cloning a cloneUrl",
 			reqBody: projectsvc.AddInput{},
 			resps: []respUnit{
 				{http.StatusCreated, controllers.ProjectResponse{}},

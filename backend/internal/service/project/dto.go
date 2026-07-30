@@ -11,7 +11,13 @@ type GetResult struct {
 
 // AddInput is the body shape for POST /api/v1/projects.
 type AddInput struct {
-	Path        string                `json:"path"`
+	// Path is the local filesystem path to a git repository. Required unless
+	// CloneURL is set; the two are mutually exclusive.
+	Path string `json:"path,omitempty"`
+	// CloneURL is a git remote URL (https:// or ssh) to clone before
+	// registering the project. The daemon clones it into a managed directory
+	// under the AO data dir and uses that as the project path.
+	CloneURL    string                `json:"cloneUrl,omitempty"`
 	ProjectID   *string               `json:"projectId,omitempty"`
 	Name        *string               `json:"name,omitempty"`
 	Config      *domain.ProjectConfig `json:"config,omitempty"`
