@@ -142,6 +142,43 @@ func TestResolve_MachineFilePublicURLIsReducedToHostname(t *testing.T) {
 	}
 }
 
+// This side of the publicUrl contract drops a port and keeps listening on
+// DefaultHTTPSAddr; it does not carry the port into HTTPSAddr. That is only
+// safe because the control plane refuses to store an origin with a port in the
+// first place (normalizePublicURL in controlplane/internal/device/codes.go, and
+// its TestNormalizePublicURLRejectsPort). The two normalizers are in separate
+// Go modules and cannot import each other, so this test is the pin: if either
+// side's port handling is changed without the other, a test fails here instead
+// of a VM registering fine and then showing Offline forever, with nothing in
+// the gateway log, because the desktop is calling a port nothing listens on.
+func TestNormalizeDomain_PortIsDroppedNotCarried(t *testing.T) {
+	got, err := normalizeDomain("https://vm.example.com:8443", "test")
+	if err != nil {
+		t.Fatalf("normalizeDomain: %v", err)
+	}
+	if got != "vm.example.com" {
+		t.Errorf("normalizeDomain = %q, want the bare hostname vm.example.com", got)
+	}
+
+	path := writeMachineFile(t, MachineFile{
+		MachineID: "mf-machine",
+		AccountID: "mf-account",
+		PublicURL: "https://vm.example.com:8443",
+	})
+	cfg, err := Resolve(Options{MachineFile: path}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.HTTPSAddr != DefaultHTTPSAddr {
+		t.Errorf("HTTPSAddr = %q, want %q: the port in publicUrl is not carried into the listener", cfg.HTTPSAddr, DefaultHTTPSAddr)
+	}
+	// A bare host:port stays fatal, so the only way a port reaches the gateway
+	// is through a scheme-bearing origin the control plane will not store.
+	if _, err := normalizeDomain("vm.example.com:8443", "test"); err == nil {
+		t.Error("normalizeDomain(\"vm.example.com:8443\") = nil error, want a bare host:port rejected")
+	}
+}
+
 func TestResolve_UnusableDomainIsRejected(t *testing.T) {
 	for _, domain := range []string{
 		"https://",
