@@ -10,6 +10,7 @@ import {
 	nativeImage,
 	Notification as ElectronNotification,
 	protocol,
+	safeStorage,
 	session,
 	shell,
 	WebContentsView,
@@ -58,6 +59,7 @@ import { createBrowserViewHost, type BrowserViewHost } from "./main/browser-view
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { createAoAccountController } from "./main/ao-account";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
 import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
@@ -1405,6 +1407,28 @@ ipcMain.handle("updateSettings:set", async (_event, settings: UpdateSettings) =>
 
 ipcMain.handle("featureBuilds:list", () => listFeatureBuilds());
 ipcMain.handle("featureBuilds:getActive", () => getActiveFeatureBuild());
+
+// AO account sign-in. The stored refresh token lives beside the other ~/.ao state
+// files, encrypted with safeStorage. Local mode never consults this: it exists only
+// so a remote machine can be reached later (batches 4 and 5).
+let aoAccountController: ReturnType<typeof createAoAccountController> | null = null;
+function aoAccount(): ReturnType<typeof createAoAccountController> {
+	if (aoAccountController) return aoAccountController;
+	const runFile = runFilePath();
+	aoAccountController = createAoAccountController({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		env: process.env,
+		safeStorage,
+		// The system browser, never an embedded BrowserWindow: Google blocks OAuth in
+		// embedded webviews (RFC 8252 is the supported shape anyway).
+		openExternal: (url: string) => openAllowedAppExternalURL(url, shell),
+	});
+	return aoAccountController;
+}
+
+ipcMain.handle("aoAccount:getState", () => aoAccount().getState());
+ipcMain.handle("aoAccount:signIn", () => aoAccount().signIn());
+ipcMain.handle("aoAccount:signOut", () => aoAccount().signOut());
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
 ipcMain.handle("updates:check", async (_event, options?: UpdateCheckOptions) => {

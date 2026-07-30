@@ -1,5 +1,13 @@
 import type { AoBridge } from "../../preload";
+import type { AoAccountState } from "../../shared/ao-account";
+import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 export type { FeatureBuild } from "../../main/feature-builds";
+
+const BROWSER_PREVIEW_ACCOUNT_STATE: AoAccountState = {
+	status: "unavailable",
+	controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL,
+	error: "Signing in needs the desktop app; it is not available in browser preview.",
+};
 
 export const aoBridge: AoBridge =
 	window.ao ??
@@ -143,5 +151,12 @@ export const aoBridge: AoBridge =
 		featureBuilds: {
 			list: async () => [],
 			getActive: async () => null,
+		},
+		// Browser preview has no main process, so no keychain and no loopback listener.
+		// Report it as unavailable rather than offering a button that cannot work.
+		account: {
+			getState: async () => BROWSER_PREVIEW_ACCOUNT_STATE,
+			signIn: async () => BROWSER_PREVIEW_ACCOUNT_STATE,
+			signOut: async () => BROWSER_PREVIEW_ACCOUNT_STATE,
 		},
 	} satisfies AoBridge);

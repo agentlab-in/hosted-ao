@@ -190,11 +190,16 @@ test("renderer: route nav home to board to session detail and back @T0 @BRD", as
 // #2483 SET-001.
 test("renderer: global settings page renders all sections @T0 @SET", async ({ page }) => {
 	// The settings revamp (#2797) reduced the page to General + Updates + Get
-	// help; the Migration section no longer renders there, so "all sections"
-	// means these. Updates keeps its per-section hook; General/help are asserted
-	// by their user-visible headings.
+	// help; the Migration section no longer renders there. AO account sign-in
+	// (#25) added Account, so "all sections" means these four. Updates and
+	// Account keep per-section hooks; General/help are asserted by their
+	// user-visible headings.
 	await page.goto("/#/settings");
 	await expect(page.getByTestId("settings-page")).toBeVisible();
 	await expect(page.locator('[data-testid="settings-section"][data-section="updates"]')).toBeVisible();
+	await expect(page.locator('[data-testid="settings-section"][data-section="account"]')).toBeVisible();
+	// Local use never requires an account, so the fresh state is signed out and
+	// nothing here blocks the rest of the app.
+	await expect(page.getByTestId("ao-account-identity")).toHaveText("Not signed in");
 	await expect(page.getByRole("heading", { name: "Get help" })).toBeVisible();
 });

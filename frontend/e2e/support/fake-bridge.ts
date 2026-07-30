@@ -43,6 +43,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	await page.addInitScript(
 		({ version, daemonState, daemonPort }) => {
 			const unsubscribe = () => () => undefined;
+			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
 			const status: DaemonStatus =
 				daemonState === "ready" ? { state: "ready", port: daemonPort } : { state: daemonState };
 			const navState = (viewId: string) => ({
@@ -140,6 +141,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,
+				},
+				// AccountSection reads account.getState() on mount. Signed out is the honest
+				// shape here: the browser harness has no main process, so no OS keychain and
+				// no loopback listener.
+				account: {
+					getState: async () => signedOutAoAccount,
+					signIn: async () => signedOutAoAccount,
+					signOut: async () => signedOutAoAccount,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
@@ -406,6 +415,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			(window as unknown as { __aoFakeAgent: unknown }).__aoFakeAgent = controller;
 
 			const unsubscribe = () => () => undefined;
+			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
 			const status: DaemonStatus = { state: "ready", port: daemonPort };
 			const navState = (viewId: string, url = "", error?: string) => ({
 				viewId,
@@ -489,6 +499,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,
+				},
+				// AccountSection reads account.getState() on mount. Signed out is the honest
+				// shape here: the browser harness has no main process, so no OS keychain and
+				// no loopback listener.
+				account: {
+					getState: async () => signedOutAoAccount,
+					signIn: async () => signedOutAoAccount,
+					signOut: async () => signedOutAoAccount,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;

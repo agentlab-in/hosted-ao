@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Mail } from "lucide-react";
 import { ConnectMobileModal } from "./ConnectMobileModal";
+import { AccountSection } from "./settings/AccountSection";
 import { DeveloperModeSection } from "./settings/DeveloperModeSection";
 import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
 import { ReportProblemDialog } from "./settings/ReportProblemDialog";
@@ -21,6 +22,7 @@ export function GlobalSettingsForm() {
 			<SettingsPageShell>
 				<SettingsPanel onClose={() => navigate({ to: "/" })}>
 					<GeneralSettingsSection onConnectMobile={() => setMobileOpen(true)} />
+					<AccountSection />
 					<UpdatesSection />
 					<DeveloperModeSection />
 					<SettingsSection title="Get help">
