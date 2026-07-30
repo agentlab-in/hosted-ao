@@ -129,6 +129,10 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 			if len(args) == 1 && args[0] == "--version" {
 				return []byte(strings.TrimPrefix(name, "/bin/") + " 1.2.3\n"), nil
 			}
+			// The claude-auth readiness check probes the same binary.
+			if name == "/bin/claude" && strings.Join(args, " ") == "auth status --json" {
+				return []byte(`{"loggedIn":true,"authMethod":"claudeai","apiProvider":"firstParty"}`), nil
+			}
 			// The codex launch-flag canary probes the same binary.
 			if name == "/bin/codex" && len(args) > 0 && (args[0] == "--dangerously-bypass-hook-trust" || args[0] == "features") {
 				return []byte("ok\n"), nil
@@ -174,6 +178,153 @@ func TestDoctorWarnsWhenHarnessVersionFails(t *testing.T) {
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex")
 	if check.Level != doctorWarn || !strings.Contains(check.Message, "failed") {
 		t.Fatalf("codex check = %+v, want WARN version failure", check)
+	}
+}
+
+// claudeAuthFake answers the harness version probe and the claude-auth
+// readiness probe against a fake claude at /bin/claude.
+func claudeAuthFake(t *testing.T, statusOutput string, statusErr error) func(context.Context, string, ...string) ([]byte, error) {
+	t.Helper()
+	return func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "/bin/git":
+			return []byte("git version 2.43.0\n"), nil
+		case name == "/bin/claude" && strings.Join(args, " ") == "--version":
+			return []byte("2.1.220 (Claude Code)\n"), nil
+		case name == "/bin/claude" && strings.Join(args, " ") == "auth status --json":
+			return []byte(statusOutput), statusErr
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return nil, nil
+		}
+	}
+}
+
+func TestDoctorClaudeAuthPassesWhenSignedIn(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git", "claude": "/bin/claude"},
+		claudeAuthFake(t, `{"loggedIn":true,"authMethod":"claudeai","apiProvider":"firstParty"}`, nil))
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "claude-auth")
+	if check.Level != doctorPass {
+		t.Fatalf("claude-auth check = %+v, want PASS", check)
+	}
+	if !strings.Contains(check.Message, "signed in") || !strings.Contains(check.Message, "authMethod=claudeai") {
+		t.Errorf("claude-auth message = %q, want the auth method reported", check.Message)
+	}
+	if check.Remediation != "" {
+		t.Errorf("claude-auth remediation = %q, want empty when the check passes", check.Remediation)
+	}
+}
+
+// TestDoctorClaudeAuthWarnsWhenNotSignedIn is the state the desktop machine
+// card renders: a machine with the harness installed but no login must name
+// the exact command that fixes it rather than failing silently. The non-zero
+// exit is real: `claude auth status --json` exits 1 when not logged in and
+// still prints its JSON, so the output answers the question, not the exit code.
+func TestDoctorClaudeAuthWarnsWhenNotSignedIn(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git", "claude": "/bin/claude"},
+		claudeAuthFake(t, `{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}`, errors.New("exit status 1")))
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "claude-auth")
+	if check.Level != doctorWarn || !strings.Contains(check.Message, "not signed in") {
+		t.Fatalf("claude-auth check = %+v, want WARN not signed in", check)
+	}
+	if check.Remediation != "ao vm setup-harness claude" {
+		t.Errorf("claude-auth remediation = %q, want the setup-harness command", check.Remediation)
+	}
+}
+
+func TestDoctorClaudeAuthWarnsWhenHarnessMissing(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "claude-auth")
+	if check.Level != doctorWarn || !strings.Contains(check.Message, "not found in PATH") {
+		t.Fatalf("claude-auth check = %+v, want WARN missing binary", check)
+	}
+	if check.Remediation != "ao vm setup-harness claude" {
+		t.Errorf("claude-auth remediation = %q, want the setup-harness command", check.Remediation)
+	}
+}
+
+// TestDoctorClaudeAuthWarnsWhenProbeUnusable covers a claude release that no
+// longer answers `claude auth status --json`, and output that is not JSON at
+// all. Neither may crash doctor or be reported as signed in.
+func TestDoctorClaudeAuthWarnsWhenProbeUnusable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output string
+		err    error
+	}{
+		{name: "command fails", output: "error: unknown command 'auth'\n", err: errors.New("exit status 1")},
+		{name: "output is not json", output: "Logged in as octocat\n"},
+		{name: "output is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t, map[string]string{"git": "/bin/git", "claude": "/bin/claude"},
+				claudeAuthFake(t, tc.output, tc.err))
+
+			check := findDoctorCheck(t, c.runDoctor(context.Background()), "claude-auth")
+			if check.Level != doctorWarn || !strings.Contains(check.Message, "could not read harness auth state") {
+				t.Fatalf("claude-auth check = %+v, want WARN unreadable auth state", check)
+			}
+		})
+	}
+}
+
+// TestParseClaudeAuthStatusIgnoresSurroundingNoise pins the reason the probe
+// slices to the outermost braces: it runs through CombinedOutput, so a notice
+// on stderr must not make valid JSON unparseable.
+func TestParseClaudeAuthStatusIgnoresSurroundingNoise(t *testing.T) {
+	out := []byte("\x1b[33mA new version of Claude Code is available.\x1b[0m\n" +
+		`{"loggedIn":true,"authMethod":"apiKey","apiProvider":"firstParty"}` + "\n")
+	status, err := parseClaudeAuthStatus(out)
+	if err != nil {
+		t.Fatalf("parseClaudeAuthStatus: %v", err)
+	}
+	if !status.LoggedIn || status.AuthMethod != "apiKey" {
+		t.Fatalf("status = %+v, want loggedIn with authMethod=apiKey", status)
+	}
+	if got := status.describe(); got != "authMethod=apiKey apiProvider=firstParty" {
+		t.Errorf("describe = %q", got)
+	}
+}
+
+// TestDoctorJSONReportsClaudeAuthRemediation pins the shape the desktop reads:
+// a named check in `ao doctor --json` carrying a level and a remediation
+// command.
+func TestDoctorJSONReportsClaudeAuthRemediation(t *testing.T) {
+	setConfigEnv(t)
+	clearDoctorGitHubEnv(t)
+	deps := Deps{
+		LookPath:     func(string) (string, error) { return "", errors.New("missing") },
+		ProcessAlive: func(int) bool { return false },
+	}
+	stdout, _, _ := executeCLI(t, deps, "doctor", "--json")
+
+	var report doctorReport
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("unmarshal doctor --json: %v (output %q)", err, stdout)
+	}
+	var found *doctorCheck
+	for i := range report.Checks {
+		if report.Checks[i].Name == "claude-auth" {
+			found = &report.Checks[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no claude-auth check in %+v", report.Checks)
+	}
+	if found.Level != doctorWarn || found.Remediation != "ao vm setup-harness claude" {
+		t.Fatalf("claude-auth check = %+v, want WARN with the setup-harness remediation", *found)
+	}
+	if found.Section != doctorSectionAgents {
+		t.Errorf("claude-auth section = %q, want %q", found.Section, doctorSectionAgents)
 	}
 }
 

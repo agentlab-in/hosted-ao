@@ -70,6 +70,11 @@ type Deps struct {
 	LookPath           func(file string) (string, error)
 	CommandOutput      func(ctx context.Context, name string, args ...string) ([]byte, error)
 	CommandOutputInDir func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+	// RunInteractive hands this process's real terminal to another program and
+	// waits for it, rather than capturing its output. ao vm setup-harness needs
+	// it: the harness login prints a URL and waits for a code to be pasted
+	// back, which only works on a terminal a human is sitting at.
+	RunInteractive func(ctx context.Context, name string, args ...string) error
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -90,6 +95,7 @@ func DefaultDeps() Deps {
 		LookPath:             exec.LookPath,
 		CommandOutput:        commandOutput,
 		CommandOutputInDir:   commandOutputInDir,
+		RunInteractive:       runInteractive,
 		DoctorGitHubRESTBase: defaultDoctorGitHubRESTBase,
 		Now:                  time.Now,
 		Sleep:                time.Sleep,
@@ -98,6 +104,18 @@ func DefaultDeps() Deps {
 
 func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// runInteractive inherits the process's own stdio so the child owns the
+// terminal. It uses os/exec directly rather than the shared process helper
+// because that helper hides the child's window on Windows, which is wrong for
+// a program the user has to interact with.
+func runInteractive(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func commandOutputInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -137,6 +155,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.CommandOutputInDir == nil {
 		d.CommandOutputInDir = def.CommandOutputInDir
+	}
+	if d.RunInteractive == nil {
+		d.RunInteractive = def.RunInteractive
 	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
