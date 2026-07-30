@@ -905,6 +905,27 @@ func TestManager_AddPopulatesRepoOriginURL(t *testing.T) {
 			setup:   func(t *testing.T) string { return gitRepo(t) },
 			wantURL: "",
 		},
+		{
+			// The credential must not reach the persisted row, the API
+			// response, or the daemon log.
+			name: "credentialed https origin is stripped",
+			setup: func(t *testing.T) string {
+				return gitRepoWithOrigin(t, "https://x-access-token:ghp_SECRET@github.com/o/r.git")
+			},
+			wantURL: "https://github.com/o/r.git",
+		},
+		{
+			// An scp-like remote's userinfo is an SSH login name, not a
+			// secret, and the remote does not work without it.
+			name:    "scp-style origin is preserved verbatim",
+			setup:   func(t *testing.T) string { return gitRepoWithOrigin(t, "git@github.com:o/r.git") },
+			wantURL: "git@github.com:o/r.git",
+		},
+		{
+			name:    "ssh origin keeps its login name",
+			setup:   func(t *testing.T) string { return gitRepoWithOrigin(t, "ssh://git@github.com:2222/o/r.git") },
+			wantURL: "ssh://git@github.com:2222/o/r.git",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newManager(t)
@@ -970,6 +991,88 @@ func TestManager_AddClonesFromCloneURL(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(wantPath, ".git")); err != nil {
 		t.Fatalf("cloned repo missing .git: %v", err)
+	}
+}
+
+// TestManager_AddCloneURLCredentialIsNotPersisted is the M2 failure scenario end
+// to end: a client POSTs a cloneUrl carrying a PAT, which is the natural
+// non-interactive form and the only one that works under GIT_TERMINAL_PROMPT=0.
+// git records that string verbatim as `origin`, so the token must be stripped
+// before it reaches the projects row, the API response, or the daemon log.
+//
+// The repository is served over dumb git-HTTP from a loopback httptest server
+// (a plain file server over a real repo's .git directory, which is what
+// `git update-server-info` prepares), gated on HTTP basic auth so the clone only
+// succeeds if git actually uses the credential from the URL.
+func TestManager_AddCloneURLCredentialIsNotPersisted(t *testing.T) {
+	ctx := context.Background()
+	const (
+		user  = "x-access-token"
+		token = "ghp_TESTONLYTOKEN"
+	)
+	// Isolate from the developer's own git config and credential helpers.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	source := gitRepoNamed(t, "acme", "widgets")
+	if out, err := exec.Command("git", "-C", source, "update-server-info").CombinedOutput(); err != nil {
+		t.Fatalf("git update-server-info: %v (%s)", err, out)
+	}
+
+	var authenticated bool
+	files := http.StripPrefix("/acme/widgets.git", http.FileServer(http.Dir(filepath.Join(source, ".git"))))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != user || p != token {
+			w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		authenticated = true
+		files.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	reposRoot := t.TempDir()
+	m := newManagerWithReposRoot(t, reposRoot)
+	cloneURL := "http://" + user + ":" + token + "@" + srv.Listener.Addr().String() + "/acme/widgets.git"
+	wantRepo := "http://" + srv.Listener.Addr().String() + "/acme/widgets.git"
+
+	proj, err := m.Add(ctx, project.AddInput{CloneURL: cloneURL})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !authenticated {
+		t.Fatal("the clone never authenticated, so this test would pass even without the credential")
+	}
+	if strings.Contains(proj.Repo, token) {
+		t.Fatalf("Repo leaked the credential: %q", proj.Repo)
+	}
+	if proj.Repo != wantRepo {
+		t.Fatalf("Repo = %q, want %q", proj.Repo, wantRepo)
+	}
+
+	// And the same for the value that was written to the store, which is what
+	// GET /api/v1/projects/{id} and the tracker-intake log both read back.
+	got, err := m.Get(ctx, proj.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Project.Repo != wantRepo {
+		t.Fatalf("persisted Repo = %q, want %q", got.Project.Repo, wantRepo)
+	}
+
+	// Deliberate, documented scope of the fix: the credential stays in the
+	// clone's own .git/config, which is where git needs it for the fetches and
+	// pushes the project's session worktrees will do. Stripping it there would
+	// break the non-interactive flow a credentialed cloneUrl exists to enable.
+	// If that decision is ever revisited, update this assertion and the docs
+	// together rather than silently.
+	cfg, err := os.ReadFile(filepath.Join(reposRoot, "acme-widgets", ".git", "config"))
+	if err != nil {
+		t.Fatalf("read cloned .git/config: %v", err)
+	}
+	if !strings.Contains(string(cfg), token) {
+		t.Fatal("the clone's own .git/config no longer holds the credential; if that is intended, update the comment above and the PR-documented decision")
 	}
 }
 
