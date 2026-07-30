@@ -4,15 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - "controlplane/**"
-      - ".github/workflows/controlplane-go.yml"
 
 permissions:
   contents: read
 
 jobs:
-  build-test:
+  controlplane-build-test:
     runs-on: ubuntu-latest
     defaults:
       run:
