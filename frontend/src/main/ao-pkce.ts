@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * PKCE (RFC 7636) and authorization-request helpers for the desktop login flow.
@@ -57,7 +57,25 @@ export function buildAuthorizeUrl(input: AuthorizeUrlInput): string {
 	return url.toString();
 }
 
-export type CallbackResult = { code: string } | { error: string };
+export type CallbackResult =
+	| { code: string }
+	// The authorization server said no, and it proved it was answering our own
+	// request by carrying our `state`. This ends the sign-in.
+	| { error: string }
+	// Not our callback: wrong `state`, or a URL we could not read one out of. Says
+	// nothing about the sign-in in flight, so the caller must not end it on this.
+	| { mismatch: string };
+
+/** Timing-safe `state` comparison. Unequal lengths are a mismatch, cheaply. */
+function stateMatches(actual: string, expected: string): boolean {
+	if (!expected) return false;
+	// Byte lengths, not character counts: timingSafeEqual throws on a length
+	// mismatch, and a multibyte callback value can match in characters and not
+	// in bytes.
+	const got = Buffer.from(actual);
+	const want = Buffer.from(expected);
+	return got.length === want.length && timingSafeEqual(got, want);
+}
 
 /**
  * Validate a loopback callback. `state` is checked before anything else is read,
@@ -69,12 +87,11 @@ export function parseCallback(rawUrl: string, expectedState: string): CallbackRe
 	try {
 		params = new URL(rawUrl, "http://127.0.0.1").searchParams;
 	} catch {
-		return { error: "The sign-in callback URL was malformed." };
+		return { mismatch: "The sign-in callback URL was malformed." };
 	}
 
-	const state = params.get("state") ?? "";
-	if (!expectedState || state !== expectedState) {
-		return { error: "The sign-in callback did not match this request and was rejected." };
+	if (!stateMatches(params.get("state") ?? "", expectedState)) {
+		return { mismatch: "The sign-in callback did not match this request and was rejected." };
 	}
 
 	const oauthError = params.get("error");

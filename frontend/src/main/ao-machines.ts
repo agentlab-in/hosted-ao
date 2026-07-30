@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -130,7 +131,9 @@ async function writePersisted(stateDir: string, machine: PersistedMachine | null
 	const file: MachineFile = { version: SCHEMA_VERSION, machine };
 	// Atomic write, mirroring app-state.json and ao-account.json.
 	await mkdir(stateDir, { recursive: true, mode: 0o750 });
-	const tmp = path.join(stateDir, `.ao-machine-${process.pid}.json`);
+	// Random, not the pid: `mode` applies only on create, so a stale temp from a
+	// crashed run with the same pid would be reused with whatever mode it had.
+	const tmp = path.join(stateDir, `.ao-machine-${randomBytes(8).toString("hex")}.json`);
 	await writeFile(tmp, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
 	await rename(tmp, machineFilePath(stateDir));
 }
@@ -180,6 +183,14 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 	let active: AoMachine | null = null;
 	let status: AoMachinesStatus = "signed-out";
 	let lastError: string | null = null;
+
+	/**
+	 * Bumped by anything that decides what is active out of band, which today is
+	 * sign-out. A refresh that was already past `tokenSource.get()` when the user
+	 * signed out still holds a usable token and would otherwise finish by writing
+	 * ao-machine.json for an install that has no account left.
+	 */
+	let generation = 0;
 
 	function currentState(): AoMachinesState {
 		const local = localMachine(deps.localMachineName);
@@ -242,9 +253,11 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 		}
 	}
 
-	async function probeAll(): Promise<void> {
-		const results = await Promise.all(remote.map(probe));
-		remote = remote.map((machine, index) => ({ ...machine, reachability: results[index] }));
+	async function probeAll(superseded: () => boolean): Promise<void> {
+		const probed = remote;
+		const results = await Promise.all(probed.map(probe));
+		if (superseded()) return;
+		remote = probed.map((machine, index) => ({ ...machine, reachability: results[index] }));
 		if (!active) return;
 		const refreshed = remote.find((machine) => machine.id === active?.id);
 		if (!refreshed) return;
@@ -256,6 +269,9 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 	}
 
 	async function refresh(): Promise<AoMachinesState> {
+		const startedAt = generation;
+		const superseded = (): boolean => generation !== startedAt;
+
 		if (configError) {
 			status = "error";
 			lastError = configError;
@@ -270,6 +286,9 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 		lastError = null;
 		try {
 			const token = await tokenSource.get();
+			// Sign-out landed while this was in flight. Its answer describes an account
+			// that is gone, so it is dropped rather than written over the reset.
+			if (superseded()) return currentState();
 			if (!token) {
 				// Signed out. There is no way to reach a registered machine without an
 				// account, so fall back to this computer, which needs none.
@@ -278,7 +297,9 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 				await setActive(null);
 				return currentState();
 			}
-			remote = await fetchMachines(token);
+			const listed = await fetchMachines(token);
+			if (superseded()) return currentState();
+			remote = listed;
 			status = "ready";
 			const stillRegistered = active ? (remote.find((machine) => machine.id === active?.id) ?? null) : null;
 			// A revoked machine is absent from the list. Falling back to this
@@ -286,6 +307,7 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 			if (active && !stillRegistered) await setActive(null);
 			else if (stillRegistered) await setActive(stillRegistered);
 		} catch (err) {
+			if (superseded()) return currentState();
 			// The control plane is unreachable or refused the token. Keep the machine
 			// that is already active and let the probe below say whether it is up:
 			// a control-plane outage does not make a working machine unusable.
@@ -294,7 +316,7 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 			if (active && !remote.some((machine) => machine.id === active?.id)) remote = [active];
 		}
 
-		await probeAll();
+		await probeAll(superseded);
 		return currentState();
 	}
 
@@ -328,6 +350,7 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 		},
 
 		async reset(): Promise<void> {
+			generation += 1;
 			tokenSource?.clear();
 			remote = [];
 			status = "signed-out";

@@ -8,6 +8,8 @@ import {
 	type AoMachinesState,
 } from "../../shared/ao-machines";
 import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
+import { machineDaemonStatus } from "../../shared/remote-daemon";
+import type { DaemonStatus } from "../../shared/daemon-status";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 const BROWSER_PREVIEW_ACCOUNT_STATE: AoAccountState = {
@@ -62,6 +64,21 @@ const browserPreviewMachinesState = (): AoMachinesState => ({
 	activeMachineId: previewActiveMachineId,
 });
 
+/**
+ * What the app's daemon status would be for the machine picked in preview, from
+ * the same function the main process uses. Picking a registered machine here
+ * therefore shows the real not-ready state rather than a preview-only stand-in.
+ */
+const browserPreviewDaemonStatus = (): DaemonStatus => {
+	const active = BROWSER_PREVIEW_MACHINES.find((machine) => machine.id === previewActiveMachineId);
+	if (!active || active.local) {
+		return { state: "stopped", message: "Electron preload is not available in browser preview." };
+	}
+	return machineDaemonStatus(active);
+};
+
+const previewDaemonStatusListeners = new Set<(status: DaemonStatus) => void>();
+
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
@@ -104,13 +121,13 @@ export const aoBridge: AoBridge =
 			readText: async () => (navigator.clipboard?.readText ? navigator.clipboard.readText() : ""),
 		},
 		daemon: {
-			getStatus: async () => ({
-				state: "stopped",
-				message: "Electron preload is not available in browser preview.",
-			}),
+			getStatus: async () => browserPreviewDaemonStatus(),
 			start: async () => ({ state: "starting" }),
 			stop: async () => ({ state: "stopped" }),
-			onStatus: () => () => undefined,
+			onStatus: (listener: (status: DaemonStatus) => void) => {
+				previewDaemonStatusListeners.add(listener);
+				return () => previewDaemonStatusListeners.delete(listener);
+			},
 		},
 		telemetry: {
 			getBootstrap: async () => null,
@@ -217,6 +234,8 @@ export const aoBridge: AoBridge =
 			refresh: async () => browserPreviewMachinesState(),
 			select: async (machineId: string) => {
 				previewActiveMachineId = machineId;
+				const status = browserPreviewDaemonStatus();
+				previewDaemonStatusListeners.forEach((listener) => listener(status));
 				return browserPreviewMachinesState();
 			},
 		},

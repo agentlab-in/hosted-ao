@@ -119,6 +119,17 @@ describe("parseMachineOrigin", () => {
 			expect(parseMachineOrigin(raw)).toBeNull();
 		}
 	});
+
+	// Same rule as AO_CONTROL_URL. A machine row with an http public_url would
+	// otherwise become the app's API base URL over a readable network, and
+	// isRemoteDaemonBaseUrl would stop treating it as remote at the same time.
+	test("allows plain HTTP only for a gateway on this machine", () => {
+		expect(parseMachineOrigin("http://vm.example.com")).toBeNull();
+		expect(parseMachineOrigin("http://10.0.0.4:8080")).toBeNull();
+		expect(parseMachineOrigin("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+		expect(parseMachineOrigin("http://localhost:8080")).toBe("http://localhost:8080");
+		expect(parseMachineOrigin("http://[::1]:8080")).toBe("http://[::1]:8080");
+	});
 });
 
 describe("localMachine", () => {

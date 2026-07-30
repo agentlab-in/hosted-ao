@@ -1,5 +1,4 @@
 import { REMOTE_PAIRING_COOKIE_NAME, type RemoteDaemonConfig } from "../shared/remote-daemon";
-import { formatLastSeen, type AoMachine } from "../shared/ao-machines";
 import type { DaemonStatus } from "../shared/daemon-status";
 
 type CookieStore = {
@@ -28,32 +27,6 @@ export async function installRemoteDaemonCookie(store: CookieStore, config: Remo
 
 export function remoteDaemonReadyStatus(config: RemoteDaemonConfig): DaemonStatus {
 	return { state: "ready", baseUrl: config.baseUrl, message: "Connected to remote daemon" };
-}
-
-/**
- * The app's daemon status while a registered machine is the active one.
- *
- * An unreachable machine is an error status, not the absence of one, and that
- * is the whole point: createRemoteDaemonLifecycle only falls through to the
- * local daemon when there is no status here at all. A remote machine being
- * down therefore cannot spawn a local daemon, because the code path that
- * spawns one is never reached rather than being skipped by a condition.
- */
-export function machineDaemonStatus(machine: AoMachine): DaemonStatus {
-	if (machine.reachability === "offline") {
-		const seen = formatLastSeen(machine.lastSeen);
-		return {
-			state: "error",
-			code: "daemon_unreachable",
-			message: seen
-				? `${machine.name} is not reachable. Last seen ${seen}.`
-				: `${machine.name} is not reachable, and has never connected to AO.`,
-		};
-	}
-	if (machine.reachability === "unknown") {
-		return { state: "starting", message: `Connecting to ${machine.name}…` };
-	}
-	return { state: "ready", baseUrl: machine.baseUrl, message: `Connected to ${machine.name}` };
 }
 
 export function createRemoteDaemonLifecycle(

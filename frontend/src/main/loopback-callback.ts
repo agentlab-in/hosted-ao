@@ -24,10 +24,21 @@ export type LoopbackCallback = {
 	close: () => void;
 };
 
+/**
+ * The only text on this page that is not a literal is an OAuth error
+ * description, which comes from the authorization server, so it is escaped
+ * rather than interpolated raw.
+ */
+const escapeHtml = (raw: string): string =>
+	raw.replace(
+		/[&<>"']/g,
+		(char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char,
+	);
+
 const PAGE = (heading: string, body: string) =>
-	`<!doctype html><meta charset="utf-8"><title>${heading}</title>` +
+	`<!doctype html><meta charset="utf-8"><title>${escapeHtml(heading)}</title>` +
 	`<body style="font:15px system-ui;margin:14vh auto;max-width:26rem;text-align:center">` +
-	`<h1 style="font-size:1.1rem">${heading}</h1><p style="color:#666">${body}</p></body>`;
+	`<h1 style="font-size:1.1rem">${escapeHtml(heading)}</h1><p style="color:#666">${escapeHtml(body)}</p></body>`;
 
 function respond(res: ServerResponse, status: number, heading: string, body: string): void {
 	res.writeHead(status, { "content-type": "text/html; charset=utf-8", connection: "close" });
@@ -64,6 +75,15 @@ export async function startLoopbackCallback(
 			return;
 		}
 		const result = parseCallback(url, expectedState);
+		if ("mismatch" in result) {
+			// A hit that does not carry our `state` is not our browser: a prefetch, a
+			// scanner, a stale tab, or a page spraying the ephemeral range. It gets a
+			// 400 and nothing else, because ending the sign-in on it would let any of
+			// those abort every login attempt on this machine. The real callback is
+			// still awaited, until the timeout.
+			respond(res, 400, "Not this sign-in", result.mismatch);
+			return;
+		}
 		if ("error" in result) {
 			respond(res, 400, "Sign-in was rejected", result.error);
 			finish({ error: new Error(result.error) });
