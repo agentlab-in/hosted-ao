@@ -1,8 +1,17 @@
 import "@testing-library/jest-dom/vitest";
 import type { AoAccountState } from "../../shared/ao-account";
+import { LOCAL_MACHINE_ID, localMachine, type AoMachinesState } from "../../shared/ao-machines";
 import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 
 const signedOutAoAccount: AoAccountState = { status: "signed-out", controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL };
+
+// Signed out is the default everywhere in tests, and this computer is still the
+// active machine: local use never requires an account.
+const signedOutAoMachines: AoMachinesState = {
+	status: "signed-out",
+	machines: [localMachine("This Mac")],
+	activeMachineId: LOCAL_MACHINE_ID,
+};
 
 // Guard: src/main/** tests run in the Node.js environment (no DOM). vitest still
 // routes setupFiles here, so only install the DOM stubs when a DOM exists.
@@ -194,6 +203,11 @@ if (typeof window !== "undefined") {
 			getState: async () => signedOutAoAccount,
 			signIn: async () => signedOutAoAccount,
 			signOut: async () => signedOutAoAccount,
+		},
+		machines: {
+			getState: async () => signedOutAoMachines,
+			refresh: async () => signedOutAoMachines,
+			select: async () => signedOutAoMachines,
 		},
 	};
 } // end if (typeof window !== "undefined")

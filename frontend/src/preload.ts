@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL } from "./shared/shortcuts";
 import type { BrowserNavState, BrowserRect } from "./main/browser-view-host";
 import type { AoAccountState } from "./shared/ao-account";
+import type { AoMachinesState } from "./shared/ao-machines";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
@@ -232,6 +233,14 @@ const api = {
 		getState: () => ipcRenderer.invoke("aoAccount:getState") as Promise<AoAccountState>,
 		signIn: () => ipcRenderer.invoke("aoAccount:signIn") as Promise<AoAccountState>,
 		signOut: () => ipcRenderer.invoke("aoAccount:signOut") as Promise<AoAccountState>,
+	},
+	// The machine list and the picker. No URL and no token is ever typed into
+	// the app, so there is nothing here that takes either: the renderer picks an
+	// id out of a list the main process fetched.
+	machines: {
+		getState: () => ipcRenderer.invoke("aoMachines:getState") as Promise<AoMachinesState>,
+		refresh: () => ipcRenderer.invoke("aoMachines:refresh") as Promise<AoMachinesState>,
+		select: (machineId: string) => ipcRenderer.invoke("aoMachines:select", machineId) as Promise<AoMachinesState>,
 	},
 };
 

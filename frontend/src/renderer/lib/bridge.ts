@@ -1,5 +1,12 @@
 import type { AoBridge } from "../../preload";
 import type { AoAccountState } from "../../shared/ao-account";
+import {
+	HARNESS_SETUP_COMMAND,
+	LOCAL_MACHINE_ID,
+	localMachine,
+	type AoMachine,
+	type AoMachinesState,
+} from "../../shared/ao-machines";
 import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 export type { FeatureBuild } from "../../main/feature-builds";
 
@@ -8,6 +15,52 @@ const BROWSER_PREVIEW_ACCOUNT_STATE: AoAccountState = {
 	controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL,
 	error: "Signing in needs the desktop app; it is not available in browser preview.",
 };
+
+// Browser preview has no main process, so the machine list cannot be fetched.
+// These stand in for it, and they are also what `ao preview` renders when the
+// machine picker is being reviewed: this computer, a registered machine with no
+// agent harness, and a machine that is down.
+const previewRemoteMachine = (machine: Partial<AoMachine> & Pick<AoMachine, "id" | "name" | "baseUrl">): AoMachine => ({
+	local: false,
+	createdAt: null,
+	lastSeen: null,
+	reachability: "online",
+	harness: "unknown",
+	harnessCommand: null,
+	...machine,
+});
+
+const BROWSER_PREVIEW_MACHINES: AoMachine[] = [
+	localMachine("This Mac"),
+	previewRemoteMachine({
+		id: "mch_ready",
+		name: "ao-build-01",
+		baseUrl: "https://vm.example.com",
+		harness: "ready",
+	}),
+	previewRemoteMachine({
+		id: "mch_no_harness",
+		name: "ao-scratch",
+		baseUrl: "https://scratch.example.com",
+		harness: "missing",
+		harnessCommand: HARNESS_SETUP_COMMAND,
+	}),
+	previewRemoteMachine({
+		id: "mch_offline",
+		name: "ao-eu-west",
+		baseUrl: "https://eu-west.example.com",
+		reachability: "offline",
+		lastSeen: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+	}),
+];
+
+let previewActiveMachineId = LOCAL_MACHINE_ID;
+
+const browserPreviewMachinesState = (): AoMachinesState => ({
+	status: "ready",
+	machines: BROWSER_PREVIEW_MACHINES,
+	activeMachineId: previewActiveMachineId,
+});
 
 export const aoBridge: AoBridge =
 	window.ao ??
@@ -158,5 +211,13 @@ export const aoBridge: AoBridge =
 			getState: async () => BROWSER_PREVIEW_ACCOUNT_STATE,
 			signIn: async () => BROWSER_PREVIEW_ACCOUNT_STATE,
 			signOut: async () => BROWSER_PREVIEW_ACCOUNT_STATE,
+		},
+		machines: {
+			getState: async () => browserPreviewMachinesState(),
+			refresh: async () => browserPreviewMachinesState(),
+			select: async (machineId: string) => {
+				previewActiveMachineId = machineId;
+				return browserPreviewMachinesState();
+			},
 		},
 	} satisfies AoBridge);
