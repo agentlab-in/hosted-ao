@@ -10,14 +10,32 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
-// gatewayCookieName carries the JWT for the /mux WebSocket upgrade, since
-// browsers cannot set an Authorization header on a WebSocket handshake. Set
-// by the Electron main process, per TOKEN_CONTRACT.md's transport rule.
+// gatewayCookieName carries the JWT for the two routes a browser cannot
+// attach an Authorization header to: the /mux WebSocket handshake and the
+// EventSource stream on eventsPath. Set by the Electron main process, per
+// TOKEN_CONTRACT.md's transport rule.
 const gatewayCookieName = "ao_gw_token"
 
 // muxPath is the terminal-mux WebSocket route: the one route whose token
 // travels in gatewayCookieName instead of the Authorization header.
 const muxPath = "/mux"
+
+// eventsPath is the daemon's SSE stream. The renderer opens it with the
+// browser EventSource API, which has no way to set a request header at all,
+// so this is the second and last route where the cookie may authenticate.
+const eventsPath = "/api/v1/events"
+
+// upstreamCORSHeaders are the response headers the daemon sets for itself
+// (internal/httpd/cors.go) and that the gateway must own instead. See
+// dropUpstreamCORS.
+var upstreamCORSHeaders = []string{
+	"Access-Control-Allow-Origin",
+	"Access-Control-Allow-Credentials",
+	"Access-Control-Allow-Methods",
+	"Access-Control-Allow-Headers",
+	"Access-Control-Max-Age",
+	"Access-Control-Allow-Private-Network",
+}
 
 // blockedAPIPrefixes are never proxied even though they sit under the
 // otherwise-allowed /api/v1 prefix: Connect Mobile control and developer
@@ -68,13 +86,40 @@ func newReverseProxy(target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
 	proxy.Director = func(r *http.Request) {
 		director(r)
 		stripCredentials(r)
+		stripForwardedFor(r)
 	}
+	proxy.ModifyResponse = dropUpstreamCORS
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Warn("vm gateway: proxy error", "err", err, "path", r.URL.Path)
 		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "DAEMON_UNREACHABLE",
 			"the local daemon is not reachable", nil)
 	}
 	return proxy
+}
+
+// dropUpstreamCORS removes the CORS headers the daemon set for itself before
+// they are merged into the gateway's own response. The forwarded request
+// still carries the renderer's Origin, which the daemon also allows, so
+// without this both sides answer: httputil.ReverseProxy copies upstream
+// headers with Add, not Set, so the client would receive
+// "Access-Control-Allow-Origin: app://renderer, app://renderer" and every
+// browser rejects a multi-valued one outright. corsGate is the single owner
+// of these headers on the public listener.
+func dropUpstreamCORS(res *http.Response) error {
+	for _, h := range upstreamCORSHeaders {
+		res.Header.Del(h)
+	}
+	return nil
+}
+
+// stripForwardedFor drops the client's own claim about who it is, so that
+// httputil.ReverseProxy's own X-Forwarded-For append (which runs after the
+// director) starts from the real peer address rather than extending an
+// attacker-supplied chain. The daemon runs middleware.RealIP behind us and
+// trusts both headers.
+func stripForwardedFor(r *http.Request) {
+	r.Header.Del("X-Real-IP")
+	r.Header.Del("X-Forwarded-For")
 }
 
 func stripCredentials(r *http.Request) {
@@ -161,18 +206,18 @@ func requireToken(jwks *JWKSCache, verify VerifyOptions, log *slog.Logger) func(
 	}
 }
 
-// extractToken reads the bearer token per TOKEN_CONTRACT.md's transport
-// rule: Authorization: Bearer <jwt> everywhere except /mux, whose WebSocket
-// handshake a browser cannot attach a header to, so it travels in
-// gatewayCookieName instead. The raw token is returned only to be handed
-// straight to VerifyToken; it must never be logged.
+// extractToken reads the token per TOKEN_CONTRACT.md's transport rule:
+// Authorization: Bearer <jwt> everywhere, plus the gatewayCookieName cookie
+// on the two routes whose browser API cannot send a header (see
+// cookieAuthAllowed). The cookie is tried first on those routes and the
+// header is still accepted there, so a non-browser client (the CLI, a test
+// harness) can open /mux or the event stream too. The raw token is returned
+// only to be handed straight to VerifyToken; it must never be logged.
 func extractToken(r *http.Request) (string, bool) {
-	if r.URL.Path == muxPath {
-		c, err := r.Cookie(gatewayCookieName)
-		if err != nil || c.Value == "" {
-			return "", false
+	if cookieAuthAllowed(r) {
+		if c, err := r.Cookie(gatewayCookieName); err == nil && c.Value != "" {
+			return c.Value, true
 		}
-		return c.Value, true
 	}
 	const prefix = "Bearer "
 	auth := r.Header.Get("Authorization")
@@ -184,6 +229,21 @@ func extractToken(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return tok, true
+}
+
+// cookieAuthAllowed reports whether the ambient gatewayCookieName cookie may
+// authenticate this request. Exactly two routes qualify, both because the
+// browser API the renderer must use cannot carry a header: the /mux
+// WebSocket handshake, and GET on the SSE stream, which the renderer opens
+// with EventSource. Everything else stays header-only deliberately. The
+// cookie is attached by the browser to any request to this host, so
+// accepting it on a state-changing method would leave corsGate as the sole
+// CSRF defence.
+func cookieAuthAllowed(r *http.Request) bool {
+	if r.URL.Path == muxPath {
+		return true
+	}
+	return r.Method == http.MethodGet && r.URL.Path == eventsPath
 }
 
 func unauthorized(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +289,14 @@ func corsGate(allowedOrigins []string) func(http.Handler) http.Handler {
 			h.Set("Access-Control-Allow-Credentials", "true")
 
 			if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+				// Answer a preflight only for a route that actually exists
+				// here. corsGate runs before denyByDefault, so without this
+				// a 204 would confirm the existence of a route every real
+				// method 404s.
+				if !isProxyablePath(r.URL.Path) {
+					notFoundJSON(w, r)
+					return
+				}
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
 				if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
 					h.Set("Access-Control-Allow-Headers", reqHeaders)
