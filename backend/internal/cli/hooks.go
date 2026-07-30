@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/doctor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -27,7 +28,9 @@ const (
 	// hooksLogName is the file under AO_DATA_DIR where hook delivery failures
 	// are appended. Agent hook runners swallow stderr, so without a durable
 	// sink a dead activity feed (e.g. an unreachable daemon) stays invisible.
-	hooksLogName = "hooks.log"
+	// The name lives in internal/doctor because doctor's hooks-log check reads
+	// this file and must never drift from the writer.
+	hooksLogName = doctor.HooksLogName
 	// maxHooksLogBytes caps hooks.log: an append against a file already past
 	// the cap truncates it first, so a persistently failing hook cannot grow
 	// the file without bound.

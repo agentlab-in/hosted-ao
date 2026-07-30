@@ -2,71 +2,20 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
-	"runtime"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/doctor"
 )
 
-type doctorLevel string
-
-const (
-	doctorPass doctorLevel = "PASS"
-	doctorWarn doctorLevel = "WARN"
-	doctorFail doctorLevel = "FAIL"
-)
-
-type doctorCheck struct {
-	Level   doctorLevel `json:"level"`
-	Section string      `json:"section,omitempty"`
-	Name    string      `json:"name"`
-	Message string      `json:"message"`
-	// Remediation is the one command that fixes this check, when a single
-	// command does. It exists so a consumer of `ao doctor --json` (the
-	// desktop's machine card) can show exactly what to run instead of parsing
-	// it back out of Message. Empty when there is no single command to name.
-	Remediation string `json:"remediation,omitempty"`
-}
-
+// doctorReport is the `ao doctor --json` document. The checks themselves come
+// from internal/doctor, which the daemon's GET /api/v1/doctor also calls; only
+// the framing (ok/failures counts, text grouping) is the CLI's.
 type doctorReport struct {
-	OK       bool          `json:"ok"`
-	Failures int           `json:"failures"`
-	Checks   []doctorCheck `json:"checks"`
-}
-
-const (
-	doctorSectionCore           = "Core"
-	doctorSectionTools          = "Tools"
-	doctorSectionAgents         = "Agent harnesses"
-	doctorSectionGitHub         = "GitHub"
-	minGitVersion               = "2.25.0"
-	githubDoctorUserAgent       = "ao-agent-orchestrator/doctor"
-	defaultDoctorGitHubRESTBase = "https://api.github.com"
-)
-
-type harnessProbe struct {
-	Name       string
-	BinaryName string
-	VersionArg string
-}
-
-var doctorHarnesses = []harnessProbe{
-	{Name: "claude-code", BinaryName: "claude", VersionArg: "--version"},
-	{Name: "codex", BinaryName: "codex", VersionArg: "--version"},
+	OK       bool           `json:"ok"`
+	Failures int            `json:"failures"`
+	Checks   []doctor.Check `json:"checks"`
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
@@ -79,7 +28,7 @@ func newDoctorCommand(ctx *commandContext) *cobra.Command {
 			checks := ctx.runDoctor(cmd.Context())
 			failures := 0
 			for _, check := range checks {
-				if check.Level == doctorFail {
+				if check.Level == doctor.Fail {
 					failures++
 				}
 			}
@@ -106,7 +55,7 @@ func newDoctorCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-func writeDoctorText(cmd *cobra.Command, checks []doctorCheck) error {
+func writeDoctorText(cmd *cobra.Command, checks []doctor.Check) error {
 	var lastSection string
 	for _, check := range checks {
 		if check.Section != "" && check.Section != lastSection {
@@ -127,529 +76,50 @@ func writeDoctorText(cmd *cobra.Command, checks []doctorCheck) error {
 	return nil
 }
 
-func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
-	checks := []doctorCheck{}
+func (c *commandContext) runDoctor(ctx context.Context) []doctor.Check {
+	return doctor.Run(ctx, c.doctorDeps())
+}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return append(checks, doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "config", Message: err.Error()})
+// doctorDeps hands the shared check runner the CLI's own injectable side
+// effects, so `ao doctor` stays testable through Deps and the checks stay in
+// one place.
+func (c *commandContext) doctorDeps() doctor.Deps {
+	return doctor.Deps{
+		LookPath:       c.deps.LookPath,
+		CommandOutput:  c.deps.CommandOutput,
+		Executable:     c.deps.Executable,
+		HTTPClient:     c.deps.HTTPClient,
+		GitHubRESTBase: c.deps.DoctorGitHubRESTBase,
+		DaemonCheck:    c.doctorDaemonCheck,
 	}
-	checks = append(checks, doctorCheck{
-		Level: doctorPass, Section: doctorSectionCore, Name: "config",
-		Message: fmt.Sprintf("runFile=%s dataDir=%s port=%d", cfg.RunFilePath, cfg.DataDir, cfg.Port),
-	})
+}
 
-	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
-		checks = append(checks, doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "data-dir", Message: err.Error()})
-	} else {
-		checks = append(checks,
-			doctorCheck{Level: doctorPass, Section: doctorSectionCore, Name: "data-dir", Message: cfg.DataDir},
-			checkDataDirWritable(cfg.DataDir),
-		)
-	}
-
-	checks = append(checks, checkStore(cfg.DataDir), checkHooksLog(cfg.DataDir, time.Now()))
-
+// doctorDaemonCheck is the CLI's answer to "is the daemon up": the same
+// run-file plus health-probe inspection `ao status` reports. The daemon's own
+// HTTP route answers this differently, which is why the check is injected
+// rather than living in internal/doctor.
+func (c *commandContext) doctorDaemonCheck(ctx context.Context) doctor.Check {
 	st, err := c.inspectDaemon(ctx)
 	if err != nil {
-		checks = append(checks, doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "daemon", Message: err.Error()})
-	} else {
-		level := doctorPass
-		switch st.State {
-		case stateStale, stateNotReady:
-			level = doctorWarn
-		case stateUnhealthy:
-			level = doctorFail
-		}
-		msg := string(st.State)
-		if st.PID != 0 {
-			msg = fmt.Sprintf("%s pid=%d port=%d", msg, st.PID, st.Port)
-		}
-		if st.Error != "" {
-			msg += " (" + st.Error + ")"
-		}
-		checks = append(checks, doctorCheck{Level: level, Section: doctorSectionCore, Name: "daemon", Message: msg})
+		return doctor.Check{Level: doctor.Fail, Section: doctor.SectionCore, Name: "daemon", Message: err.Error()}
 	}
-
-	checks = append(checks,
-		c.checkGit(ctx),
-		c.checkTerminalRuntime(ctx),
-		c.checkAOBinary(),
-	)
-	for _, harness := range doctorHarnesses {
-		checks = append(checks, c.checkHarness(ctx, harness))
+	level := doctor.Pass
+	switch st.State {
+	case stateStale, stateNotReady:
+		level = doctor.Warn
+	case stateUnhealthy:
+		level = doctor.Fail
 	}
-	checks = append(checks, c.checkClaudeAuth(ctx), c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx))
-	return checks
+	msg := string(st.State)
+	if st.PID != 0 {
+		msg = fmt.Sprintf("%s pid=%d port=%d", msg, st.PID, st.Port)
+	}
+	if st.Error != "" {
+		msg += " (" + st.Error + ")"
+	}
+	return doctor.Check{Level: level, Section: doctor.SectionCore, Name: "daemon", Message: msg}
 }
 
-// checkClaudeAuth reports whether the claude harness has finished its own
-// login on this machine. `claude auth status --json` is the harness's own
-// machine-readable answer, so this reports the harness's state rather than
-// guessing at where its credentials live (a keychain entry on macOS, a file
-// elsewhere, or an environment variable). It is the readiness signal the
-// desktop reads for a machine card: a machine that is registered but has no
-// harness configured shows Remediation instead of failing silently.
-//
-// A missing login is a WARN, never a FAIL: plenty of machines run AO with a
-// different harness, or with none, and `ao doctor` must still exit 0 there.
-func (c *commandContext) checkClaudeAuth(ctx context.Context) doctorCheck {
-	const name = "claude-auth"
-	setupCmd := "ao vm setup-harness " + claudeHarnessName
-	warn := func(message string) doctorCheck {
-		return doctorCheck{
-			Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-			Message: message, Remediation: setupCmd,
-		}
-	}
-
-	path, err := c.deps.LookPath(claudeHarnessName)
-	if err != nil || path == "" {
-		return warn(fmt.Sprintf("claude not found in PATH; install the Claude Code CLI, then run `%s`", setupCmd))
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	probe := strings.Join(claudeAuthStatusArgs, " ")
-	out, cmdErr := c.deps.CommandOutput(reqCtx, path, claudeAuthStatusArgs...)
-	// `claude auth status` exits non-zero when the harness is not logged in and
-	// still prints its JSON, so the output is what answers the question. A
-	// non-zero exit only matters when there is no parseable answer in it.
-	status, parseErr := parseClaudeAuthStatus(out)
-	if parseErr != nil {
-		reason := parseErr
-		if cmdErr != nil {
-			reason = cmdErr
-		}
-		return warn(fmt.Sprintf("could not read harness auth state (`claude %s`: %v); log in with `%s`", probe, reason, setupCmd))
-	}
-	if !status.LoggedIn {
-		return warn(fmt.Sprintf("%s is installed but not signed in; run `%s`", path, setupCmd))
-	}
-	return doctorCheck{
-		Level: doctorPass, Section: doctorSectionAgents, Name: name,
-		Message: fmt.Sprintf("%s is signed in (%s)", path, status.describe()),
-	}
-}
-
-type claudeAuthStatus struct {
-	LoggedIn    bool   `json:"loggedIn"`
-	AuthMethod  string `json:"authMethod"`
-	APIProvider string `json:"apiProvider"`
-}
-
-func (s claudeAuthStatus) describe() string {
-	method := strings.TrimSpace(s.AuthMethod)
-	if method == "" {
-		method = "unknown"
-	}
-	if provider := strings.TrimSpace(s.APIProvider); provider != "" {
-		return fmt.Sprintf("authMethod=%s apiProvider=%s", method, provider)
-	}
-	return "authMethod=" + method
-}
-
-// parseClaudeAuthStatus reads the JSON object out of `claude auth status
-// --json` output. It slices to the outermost braces first because the probe
-// runs through CombinedOutput, so an unrelated notice on stderr (an update
-// banner, a deprecation warning) would otherwise make valid JSON unparseable.
-func parseClaudeAuthStatus(out []byte) (claudeAuthStatus, error) {
-	clean := ansiRE.ReplaceAllString(string(out), "")
-	start, end := strings.Index(clean, "{"), strings.LastIndex(clean, "}")
-	if start < 0 || end < start {
-		return claudeAuthStatus{}, fmt.Errorf("no JSON object in output %q", strings.TrimSpace(clean))
-	}
-	var status claudeAuthStatus
-	if err := json.Unmarshal([]byte(clean[start:end+1]), &status); err != nil {
-		return claudeAuthStatus{}, err
-	}
-	return status, nil
-}
-
-// checkStore inspects the SQLite store WITHOUT opening or migrating it. The
-// daemon is the sole writer and migrator of the database (architecture.md §7);
-// the CLI must never run migrations or open a second writer against a database
-// a live daemon may already own. Migrations are validated by the daemon at
-// startup and surfaced through /readyz, so doctor only confirms whether the
-// database file exists yet.
-func checkStore(dataDir string) doctorCheck {
-	dbPath := filepath.Join(dataDir, "ao.db")
-	info, err := os.Stat(dbPath)
-	switch {
-	case err == nil:
-		return doctorCheck{
-			Level: doctorPass, Section: doctorSectionCore, Name: "sqlite",
-			Message: fmt.Sprintf("%s (%d bytes); migrations are applied by the daemon at startup", dbPath, info.Size()),
-		}
-	case errors.Is(err, fs.ErrNotExist):
-		return doctorCheck{
-			Level: doctorWarn, Section: doctorSectionCore, Name: "sqlite",
-			Message: "database not created yet; run `ao start` to initialize and migrate it",
-		}
-	default:
-		return doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "sqlite", Message: err.Error()}
-	}
-}
-
-func checkDataDirWritable(dataDir string) doctorCheck {
-	f, err := os.CreateTemp(dataDir, ".ao-doctor-write-*")
-	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "data-dir-write", Message: err.Error()}
-	}
-	name := f.Name()
-	if _, err := f.WriteString("ok\n"); err != nil {
-		_ = f.Close()
-		_ = os.Remove(name)
-		return doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "data-dir-write", Message: err.Error()}
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(name)
-		return doctorCheck{Level: doctorFail, Section: doctorSectionCore, Name: "data-dir-write", Message: err.Error()}
-	}
-	if err := os.Remove(name); err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionCore, Name: "data-dir-write", Message: fmt.Sprintf("write probe succeeded but cleanup failed: %v", err)}
-	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionCore, Name: "data-dir-write", Message: "write probe succeeded"}
-}
-
-// checkAOBinary verifies the `ao` that workspace hooks would invoke. Agent
-// adapters install hook commands as a bare `ao hooks <agent> <event>`, so an
-// `ao` earlier on PATH that is not this binary (e.g. a legacy CLI without the
-// hooks command) fails every callback and silently kills activity tracking.
-// The daemon pins PATH inside the sessions it spawns, so a mismatch here is a
-// warning about every other context (manual runs, foreign panes), not a hard
-// failure.
-func (c *commandContext) checkAOBinary() doctorCheck {
-	const name = "ao-binary"
-	self, err := c.deps.Executable()
-	if err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: fmt.Sprintf("could not resolve the running executable: %v", err)}
-	}
-	onPath, err := c.deps.LookPath("ao")
-	if err != nil || onPath == "" {
-		return doctorCheck{
-			Level: doctorWarn, Section: doctorSectionTools, Name: name,
-			Message: "ao not found in PATH; workspace hooks invoke `ao hooks <agent> <event>` (daemon-spawned sessions pin PATH to the daemon binary and are unaffected)",
-		}
-	}
-	if sameBinary(self, onPath) {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: name, Message: fmt.Sprintf("ao in PATH is this binary (%s)", onPath)}
-	}
-	return doctorCheck{
-		Level: doctorWarn, Section: doctorSectionTools, Name: name,
-		Message: fmt.Sprintf("ao in PATH is %s, not this binary (%s); workspace hooks run `ao hooks` and a foreign ao breaks activity tracking outside daemon-spawned sessions", onPath, self),
-	}
-}
-
-// sameBinary reports whether two paths name the same file, tolerating symlinks
-// via os.SameFile and falling back to cleaned-path equality when either stat
-// fails.
-func sameBinary(a, b string) bool {
-	ai, aErr := os.Stat(a)
-	bi, bErr := os.Stat(b)
-	if aErr == nil && bErr == nil {
-		return os.SameFile(ai, bi)
-	}
-	return filepath.Clean(a) == filepath.Clean(b)
-}
-
-func (c *commandContext) checkGit(ctx context.Context) doctorCheck {
-	path, err := c.deps.LookPath("git")
-	if err != nil || path == "" {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionTools, Name: "git", Message: "not found in PATH"}
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	out, err := c.deps.CommandOutput(reqCtx, path, "--version")
-	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s: %v", path, err)}
-	}
-	version, err := parseGitVersion(string(out))
-	if err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version unknown: %s)", path, firstOutputLine(out))}
-	}
-	cmp, err := compareDottedVersion(version, minGitVersion)
-	if err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version unknown: %s)", path, firstOutputLine(out))}
-	}
-	if cmp < 0 {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; AO expects >= %s for worktrees)", path, version, minGitVersion)}
-	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; supports worktrees)", path, version)}
-}
-
-// checkTerminalRuntime checks the runtime multiplexer used on this platform:
-// tmux on Darwin/Linux, ConPTY (built-in) on Windows.
-func (c *commandContext) checkTerminalRuntime(ctx context.Context) doctorCheck {
-	if runtime.GOOS == "windows" {
-		return doctorCheck{
-			Level:   doctorPass,
-			Section: doctorSectionTools,
-			Name:    "conpty",
-			Message: "ConPTY (built-in): no external terminal multiplexer required on Windows",
-		}
-	}
-	return c.checkTmux(ctx)
-}
-
-func (c *commandContext) checkTmux(ctx context.Context) doctorCheck {
-	path, err := c.deps.LookPath("tmux")
-	if err != nil || path == "" {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "tmux", Message: "not found in PATH; required on macOS/Linux to start sessions"}
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	out, err := c.deps.CommandOutput(reqCtx, path, "-V")
-	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionTools, Name: "tmux", Message: fmt.Sprintf("%s: %v", path, err)}
-	}
-	version := firstOutputLine(out)
-	if version == "" {
-		version = "version unknown"
-	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: "tmux", Message: fmt.Sprintf("%s (%s)", path, version)}
-}
-
-// checkHooksLog surfaces recent agent hook delivery failures. `ao hooks`
-// callbacks deliberately swallow errors (a hook must never break the user's
-// agent), so $AO_DATA_DIR/hooks.log is the only place a dead activity feed
-// becomes visible. Lines start with an RFC3339 timestamp (see appendHooksLog).
-func checkHooksLog(dataDir string, now time.Time) doctorCheck {
-	const name = "hooks-log"
-	path := filepath.Join(dataDir, hooksLogName)
-	data, err := os.ReadFile(path) //nolint:gosec // path rooted in AO's own data dir
-	if errors.Is(err, fs.ErrNotExist) {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionCore, Name: name, Message: "no hook delivery failures recorded"}
-	}
-	if err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionCore, Name: name, Message: err.Error()}
-	}
-
-	recent := 0
-	latest := ""
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		stamp, _, ok := strings.Cut(line, " ")
-		if !ok {
-			continue
-		}
-		ts, err := time.Parse(time.RFC3339, stamp)
-		if err != nil || now.Sub(ts) > 24*time.Hour {
-			continue
-		}
-		recent++
-		latest = line
-	}
-	if recent == 0 {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionCore, Name: name, Message: fmt.Sprintf("no hook delivery failures in the last 24h (%s)", path)}
-	}
-	return doctorCheck{
-		Level: doctorWarn, Section: doctorSectionCore, Name: name,
-		Message: fmt.Sprintf("%d hook delivery failure(s) in the last 24h — activity tracking may be degraded; latest: %s (full log: %s)", recent, latest, path),
-	}
-}
-
-func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe) doctorCheck {
-	path, err := c.deps.LookPath(harness.BinaryName)
-	if err != nil || path == "" {
-		return doctorCheck{
-			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
-			Message: fmt.Sprintf("%s not found in PATH", harness.BinaryName),
-		}
-	}
-	if harness.VersionArg == "" {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s", harness.BinaryName, path)}
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	out, err := c.deps.CommandOutput(reqCtx, path, harness.VersionArg)
-	if err != nil {
-		return doctorCheck{
-			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
-			Message: fmt.Sprintf("%s resolves to %s, but `%s %s` failed: %v", harness.BinaryName, path, harness.BinaryName, harness.VersionArg, err),
-		}
-	}
-	version := firstOutputLine(out)
-	if version == "" {
-		version = "version output was empty"
-	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s (%s)", harness.BinaryName, path, version)}
-}
-
-// checkCodexLaunchFlags smoke-tests AO's codex launch surface against the
-// installed binary: the hook-trust bypass flag and the `-c` session-flag
-// config AO injects at spawn (activity hooks, worktree trust, nudge
-// suppression). Codex has no stable hook-config contract, so a codex upgrade
-// can silently break activity tracking; this canary turns that breakage into
-// a doctor warning. The probes come from the codex adapter itself so they
-// cannot drift from the real spawn argv.
-func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck {
-	const name = "codex-launch-flags"
-	path, err := c.deps.LookPath("codex")
-	if err != nil || path == "" {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex not found in PATH"}
-	}
-	for _, probe := range codex.DoctorLaunchProbes() {
-		reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		out, err := c.deps.CommandOutput(reqCtx, path, probe...)
-		cancel()
-		if err != nil {
-			return doctorCheck{
-				Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-				Message: fmt.Sprintf("codex rejected AO's launch flags (`codex %s`: %v) — codex sessions may spawn without activity hooks; a codex CLI update likely changed its flag/config surface", strings.Join(probe, " "), err),
-			}
-		}
-		if strings.Contains(string(out), "unknown configuration field") {
-			return doctorCheck{
-				Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-				Message: fmt.Sprintf("codex no longer recognizes one of AO's config overrides (%s) — codex sessions may spawn without activity hooks", firstOutputLine(out)),
-			}
-		}
-	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "codex accepts AO's hook/trust launch flags"}
-}
-
-func (c *commandContext) checkGitHubToken(ctx context.Context) doctorCheck {
-	token, source, err := c.githubToken(ctx)
-	if err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionGitHub, Name: "github-token", Message: err.Error()}
-	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(c.deps.DoctorGitHubRESTBase, "/")+"/user", http.NoBody)
-	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitHub, Name: "github-token", Message: err.Error()}
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", githubDoctorUserAgent)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.deps.HTTPClient.Do(req)
-	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitHub, Name: "github-token", Message: fmt.Sprintf("%s token validation failed: %v", source, err)}
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitHub, Name: "github-token", Message: fmt.Sprintf("%s token rejected by GitHub (HTTP %d)", source, resp.StatusCode)}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionGitHub, Name: "github-token", Message: fmt.Sprintf("%s token probe returned HTTP %d", source, resp.StatusCode)}
-	}
-
-	var user struct {
-		Login string `json:"login"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitHub, Name: "github-token", Message: fmt.Sprintf("%s token probe decode failed: %v", source, err)}
-	}
-	login := user.Login
-	if login == "" {
-		login = "unknown user"
-	}
-	scopes := strings.TrimSpace(resp.Header.Get("X-OAuth-Scopes"))
-	scopeMsg := "scopes unavailable"
-	if scopes != "" {
-		scopeMsg = "scopes: " + scopes
-	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionGitHub, Name: "github-token", Message: fmt.Sprintf("%s token valid for %s (%s)", source, login, scopeMsg)}
-}
-
-func (c *commandContext) githubToken(ctx context.Context) (token, source string, err error) {
-	for _, name := range []string{"AO_GITHUB_TOKEN", "GITHUB_TOKEN"} {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return v, name, nil
-		}
-	}
-	path, lookErr := c.deps.LookPath("gh")
-	if lookErr != nil || path == "" {
-		return "", "", errors.New("no GitHub token found (set AO_GITHUB_TOKEN/GITHUB_TOKEN or run `gh auth login`)")
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	out, cmdErr := c.deps.CommandOutput(reqCtx, path, "auth", "token")
-	if cmdErr != nil {
-		return "", "", fmt.Errorf("gh is installed but no token was available (`gh auth token` failed: %w)", cmdErr)
-	}
-	token = strings.TrimSpace(string(out))
-	if token == "" {
-		return "", "", errors.New("gh is installed but returned an empty auth token")
-	}
-	return token, "gh", nil
-}
-
-var (
-	ansiRE       = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
-	gitVersionRE = regexp.MustCompile(`(?i)\bgit version\s+(\d+(?:\.\d+){1,3})`)
-)
-
-func parseGitVersion(out string) (string, error) {
-	clean := ansiRE.ReplaceAllString(out, "")
-	m := gitVersionRE.FindStringSubmatch(clean)
-	if len(m) < 2 {
-		return "", fmt.Errorf("parse git version from %q", strings.TrimSpace(clean))
-	}
-	return m[1], nil
-}
-
-func firstOutputLine(out []byte) string {
-	clean := strings.TrimSpace(ansiRE.ReplaceAllString(string(out), ""))
-	if clean == "" {
-		return ""
-	}
-	line := strings.SplitN(clean, "\n", 2)[0]
-	return strings.TrimSpace(line)
-}
-
-func compareDottedVersion(a, b string) (int, error) {
-	ap, err := dottedVersionParts(a)
-	if err != nil {
-		return 0, err
-	}
-	bp, err := dottedVersionParts(b)
-	if err != nil {
-		return 0, err
-	}
-	maxLen := len(ap)
-	if len(bp) > maxLen {
-		maxLen = len(bp)
-	}
-	for i := 0; i < maxLen; i++ {
-		var av, bv int
-		if i < len(ap) {
-			av = ap[i]
-		}
-		if i < len(bp) {
-			bv = bp[i]
-		}
-		switch {
-		case av < bv:
-			return -1, nil
-		case av > bv:
-			return 1, nil
-		}
-	}
-	return 0, nil
-}
-
-func dottedVersionParts(s string) ([]int, error) {
-	raw := strings.Split(s, ".")
-	parts := make([]int, 0, len(raw))
-	for _, part := range raw {
-		if part == "" {
-			return nil, fmt.Errorf("empty version segment in %q", s)
-		}
-		n, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("parse version segment %q in %q: %w", part, s, err)
-		}
-		parts = append(parts, n)
-	}
-	return parts, nil
-}
+// firstOutputLine is the shared version-probe formatter, kept under its
+// original CLI name for the VM preflight that also uses it.
+func firstOutputLine(out []byte) string { return doctor.FirstOutputLine(out) }
