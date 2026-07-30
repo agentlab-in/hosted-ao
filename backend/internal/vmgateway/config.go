@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,9 @@ const (
 // built by Resolve.
 type Config struct {
 	// Domain is the single hostname this gateway serves and the only one
-	// autocert will ever request a certificate for.
+	// autocert will ever request a certificate for. Always a bare hostname:
+	// machine.json's publicUrl is a full origin and Resolve reduces it, see
+	// normalizeDomain.
 	Domain string
 	// MachineID is this machine's id, checked against the token's `aud`.
 	MachineID string
@@ -116,6 +119,12 @@ func Resolve(opts Options, dataDir string) (Config, error) {
 	cfg.Domain = firstNonEmpty(opts.Domain, os.Getenv("AO_VM_DOMAIN"))
 	cfg.MachineID = firstNonEmpty(opts.MachineID, os.Getenv("AO_VM_MACHINE_ID"))
 	cfg.AccountID = firstNonEmpty(opts.AccountID, os.Getenv("AO_VM_ACCOUNT_ID"))
+	// domainSource names where Domain came from so a rejected value points at
+	// the file or the flag the operator actually has to fix.
+	domainSource := "--domain or AO_VM_DOMAIN"
+	if cfg.Domain == "" {
+		domainSource = fmt.Sprintf("publicUrl in %s", machineFilePath)
+	}
 	if mf != nil {
 		cfg.Domain = firstNonEmpty(cfg.Domain, mf.PublicURL)
 		cfg.MachineID = firstNonEmpty(cfg.MachineID, mf.MachineID)
@@ -150,11 +159,41 @@ func Resolve(opts Options, dataDir string) (Config, error) {
 		return Config{}, fmt.Errorf("ao vm serve: missing required configuration: %s (%s)", strings.Join(missing, ", "), hint)
 	}
 
+	domain, err := normalizeDomain(cfg.Domain, domainSource)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Domain = domain
+
 	if _, _, err := net.SplitHostPort(cfg.DaemonAddr); err != nil {
 		return Config{}, fmt.Errorf("invalid daemon address %q: %w", cfg.DaemonAddr, err)
 	}
 
 	return cfg, nil
+}
+
+// normalizeDomain reduces a configured domain to the bare hostname
+// autocert.HostWhitelist requires. machine.json's publicUrl is a full origin
+// ("https://vm.example.com"), which the desktop and the control plane both
+// want, but HostWhitelist runs its argument through idna.Lookup.ToASCII and,
+// per its own documentation, silently ignores anything that fails. A scheme
+// or a slash therefore leaves the whitelist empty, so no certificate is ever
+// issued and every TLS handshake fails while the gateway logs a clean
+// start. Reject here, loudly, at boot, whatever cannot be reduced to a
+// hostname.
+func normalizeDomain(domain, source string) (string, error) {
+	domain = strings.TrimSpace(domain)
+	if strings.Contains(domain, "://") {
+		u, err := url.Parse(domain)
+		if err != nil || u.Hostname() == "" {
+			return "", fmt.Errorf("invalid public url %q (from %s): expected an origin like https://vm.example.com", domain, source)
+		}
+		domain = u.Hostname()
+	}
+	if domain == "" || strings.ContainsAny(domain, ":/") {
+		return "", fmt.Errorf("invalid domain %q (from %s): expected a bare hostname like vm.example.com", domain, source)
+	}
+	return domain, nil
 }
 
 func defaultMachineFilePath() (string, error) {
