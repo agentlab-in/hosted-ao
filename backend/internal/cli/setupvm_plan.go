@@ -870,13 +870,18 @@ func renderSetupSummary(p setupPlan, gatewayStarted bool, warnings []string) str
 
 	if !p.Bound {
 		fmt.Fprintf(&b, "\n  %d. This machine is not bound to an AO account, so the gateway is installed and\n", next())
-		b.WriteString("     enabled but not serving. Binding is not part of this build yet. Once it writes\n")
-		fmt.Fprintf(&b, "     %s, the gateway needs a restart to read it, because\n", p.MachineFile)
-		b.WriteString("     `ao vm serve` reads that file once at startup:\n")
+		b.WriteString("     enabled but not serving. Run setup again to retry the binding, which is the\n")
+		b.WriteString("     only step still outstanding; everything above it is already done:\n")
+		fmt.Fprintf(&b, "       sudo ao setup-vm --domain %s\n", p.Domain)
+		fmt.Fprintf(&b, "     Once that writes %s, the gateway needs a restart to\n", p.MachineFile)
+		b.WriteString("     read it, because `ao vm serve` reads that file once at startup:\n")
 		fmt.Fprintf(&b, "       sudo systemctl start %s\n", setupVMGatewayUnit)
 	} else {
-		fmt.Fprintf(&b, "\n  %d. This machine is already bound (%s). If you re-bind it, restart\n", next(), p.MachineFile)
-		b.WriteString("     the gateway so it re-reads the file:\n")
+		fmt.Fprintf(&b, "\n  %d. This machine is already bound (%s), and ao setup-vm restarted\n", next(), p.MachineFile)
+		fmt.Fprintf(&b, "     %s so it has read that binding. Check it at any time:\n", setupVMGatewayUnit)
+		b.WriteString("       ao whoami\n")
+		b.WriteString("     If you ever change that file by hand, restart the gateway yourself, because\n")
+		b.WriteString("     `ao vm serve` reads it once at startup:\n")
 		fmt.Fprintf(&b, "       sudo systemctl restart %s\n", setupVMGatewayUnit)
 	}
 
@@ -930,6 +935,9 @@ func renderSetupDryRun(p setupPlan, warnings []string) string {
 		fmt.Fprintf(&b, "\n--- %s ---\n", slashPath(setupVMUnitDir, unit.name))
 		b.WriteString(unit.content)
 	}
+	b.WriteString("\nA real run also binds this machine to an AO account over a device code, which\n")
+	b.WriteString("needs a browser and a human to approve it, and then writes the machine file\n")
+	b.WriteString("above and restarts the gateway so it reads it.\n")
 	b.WriteString("\nRun the same command without --dry-run to apply this.\n")
 	return b.String()
 }
