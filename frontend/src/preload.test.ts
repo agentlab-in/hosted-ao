@@ -92,3 +92,16 @@ describe("preload application shortcut bridges", () => {
 		expect(electronMocks.off).toHaveBeenCalledWith(channel, wrapped);
 	});
 });
+
+describe("preload AO account bridge", () => {
+	it.each([
+		["aoAccount:getState", () => exposedBridge().account.getState()],
+		["aoAccount:signIn", () => exposedBridge().account.signIn()],
+		["aoAccount:signOut", () => exposedBridge().account.signOut()],
+	] as const)("invokes %s", async (channel, call) => {
+		// The main-process handler names are the contract here; a typo on either side
+		// would only ever surface at runtime.
+		await call();
+		expect(electronMocks.invoke).toHaveBeenCalledWith(channel);
+	});
+});

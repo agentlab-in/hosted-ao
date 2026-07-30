@@ -1,4 +1,8 @@
 import "@testing-library/jest-dom/vitest";
+import type { AoAccountState } from "../../shared/ao-account";
+import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
+
+const signedOutAoAccount: AoAccountState = { status: "signed-out", controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL };
 
 // Guard: src/main/** tests run in the Node.js environment (no DOM). vitest still
 // routes setupFiles here, so only install the DOM stubs when a DOM exists.
@@ -185,6 +189,11 @@ if (typeof window !== "undefined") {
 		featureBuilds: {
 			list: async () => [],
 			getActive: async () => null,
+		},
+		account: {
+			getState: async () => signedOutAoAccount,
+			signIn: async () => signedOutAoAccount,
+			signOut: async () => signedOutAoAccount,
 		},
 	};
 } // end if (typeof window !== "undefined")
