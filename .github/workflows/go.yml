@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - "backend/**"
-      - "frontend/src/api/schema.ts"
-      - "package.json"
-      - ".github/workflows/go.yml"
 
 permissions:
   contents: read
