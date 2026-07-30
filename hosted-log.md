@@ -1,4 +1,21 @@
-# Hosted AO log — 2026-07-27
+# Hosted AO log, 2026-07-27
+
+> **Superseded in intent, not yet replaced in fact (noted 2026-07-30).** This log records the
+> single shared pairing-secret deployment, which was the whole hosted story on 2026-07-27.
+> Hosted AO v1 (accounts, registered machines, per-machine tokens, `ao setup-vm` and
+> `ao vm serve`) replaces it, and 12 of its 15 spec tasks are merged on `develop`. **None of
+> that has run on a VM yet**, so nothing below has been re-verified against it and nothing
+> below has been overwritten with results that have not happened.
+>
+> Spec task 14 owns the replacement: run the full accounts flow on a clean Ubuntu LTS VM,
+> then write up what was actually verified. That write-up must cover, at minimum, ACME
+> issuing a certificate for the machine's domain, the RFC 8628 device flow completing against
+> real DNS, `machine.json` written and read back by the gateway, the desktop reaching the
+> machine over the gateway with a machine-audience token, and `/mux` over WSS with the
+> `ao_gw_token` cookie. Until then, treat this file as the record of the old path.
+>
+> See [`docs/hosted-ao-v1-build-log.md`](docs/hosted-ao-v1-build-log.md) and
+> [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Outcome
 
@@ -43,6 +60,7 @@ The Electron app can run locally against the VM-backed AO daemon.
 ## Current limits
 
 - This is a single shared pairing-secret setup: no accounts, roles, or tenant
-  isolation yet.
+  isolation yet. Hosted AO v1 adds all three; it is not deployed here.
 - Browser-preview proxying is intentionally out of scope.
-- Keep future implementation work on this fork's `main` branch.
+- Implementation work now happens on `develop`, not `main`, and this repository
+  is no longer a fork.
