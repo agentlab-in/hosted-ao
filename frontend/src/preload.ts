@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL } from "./shared/shortcuts";
 import type { BrowserNavState, BrowserRect } from "./main/browser-view-host";
+import type { AoAccountState } from "./shared/ao-account";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
@@ -223,6 +224,14 @@ const api = {
 	featureBuilds: {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
+	},
+	// AO account sign-in. The renderer only ever sees identity and status: the
+	// refresh token stays in the main process, encrypted on disk, and the whole
+	// PKCE exchange happens there too.
+	account: {
+		getState: () => ipcRenderer.invoke("aoAccount:getState") as Promise<AoAccountState>,
+		signIn: () => ipcRenderer.invoke("aoAccount:signIn") as Promise<AoAccountState>,
+		signOut: () => ipcRenderer.invoke("aoAccount:signOut") as Promise<AoAccountState>,
 	},
 };
 
