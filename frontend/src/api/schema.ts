@@ -288,7 +288,7 @@ export interface paths {
         /** List all registered projects (active + degraded) */
         get: operations["listProjects"];
         put?: never;
-        /** Register a new project from a git repository path */
+        /** Register a new project from a local git repository path, or by cloning a cloneUrl */
         post: operations["addProject"];
         delete?: never;
         options?: never;
@@ -812,9 +812,10 @@ export interface components {
         };
         AddProjectInput: {
             asWorkspace?: boolean;
+            cloneUrl?: string;
             config?: components["schemas"]["ProjectConfig"];
             name?: null | string;
-            path: string;
+            path?: string;
             projectId?: null | string;
         };
         AgentConfig: {

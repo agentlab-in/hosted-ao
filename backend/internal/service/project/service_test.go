@@ -3,6 +3,8 @@ package project_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -916,6 +918,116 @@ func TestManager_AddPopulatesRepoOriginURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newManagerWithReposRoot is newManager plus a configured clone destination
+// root, needed by any test that adds a project via AddInput.CloneURL.
+func newManagerWithReposRoot(t *testing.T, reposRoot string) project.Manager {
+	t.Helper()
+	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return project.NewWithDeps(project.Deps{Store: store, ReposRoot: reposRoot})
+}
+
+// gitRepoNamed creates a real git repository at <t.TempDir()>/owner/repo, so
+// tests can build a predictable clone URL and assert the exact <owner>-<repo>
+// destination name and default project id.
+func gitRepoNamed(t *testing.T, owner, repo string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), owner, repo)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-b", "main", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git unavailable: %v (%s)", err, out)
+	}
+	commitEmpty(t, dir)
+	return dir
+}
+
+func TestManager_AddClonesFromCloneURL(t *testing.T) {
+	ctx := context.Background()
+	reposRoot := t.TempDir()
+	m := newManagerWithReposRoot(t, reposRoot)
+
+	source := gitRepoNamed(t, "acme", "widgets")
+	cloneURL := "file://" + filepath.ToSlash(source)
+
+	proj, err := m.Add(ctx, project.AddInput{CloneURL: cloneURL})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	wantPath := filepath.Join(reposRoot, "acme-widgets")
+	if proj.ID != "acme-widgets" {
+		t.Fatalf("ID = %q, want acme-widgets", proj.ID)
+	}
+	if proj.Path != wantPath {
+		t.Fatalf("Path = %q, want %q", proj.Path, wantPath)
+	}
+	if _, err := os.Stat(filepath.Join(wantPath, ".git")); err != nil {
+		t.Fatalf("cloned repo missing .git: %v", err)
+	}
+}
+
+func TestManager_AddCloneAuthFailureRemediation(t *testing.T) {
+	ctx := context.Background()
+	reposRoot := t.TempDir()
+	// Isolate from the host machine's global git config and any cached
+	// credential helpers so this never accidentally succeeds (or fails
+	// differently) on a developer's own laptop.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// A bare 401 is exactly what an unauthenticated git-over-HTTP clone gets
+	// from a host that requires credentials; with GIT_TERMINAL_PROMPT=0 git
+	// fails immediately instead of hanging on a prompt. This is a loopback
+	// httptest server, not a real network call.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+
+	m := newManagerWithReposRoot(t, reposRoot)
+	cloneURL := srv.URL + "/acme/widgets.git"
+
+	_, err := m.Add(ctx, project.AddInput{CloneURL: cloneURL})
+	wantCode(t, err, "CLONE_AUTH_FAILED")
+
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v, want *apierr.Error", err)
+	}
+	if strings.Contains(apiErr.Message, "fatal:") || strings.Contains(apiErr.Message, srv.URL) {
+		t.Fatalf("remediation message leaked raw git output: %q", apiErr.Message)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(reposRoot, "acme-widgets")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected failed clone destination to be cleaned up, stat err = %v", statErr)
+	}
+}
+
+func TestManager_AddCloneURLValidation(t *testing.T) {
+	ctx := context.Background()
+	reposRoot := t.TempDir()
+	m := newManagerWithReposRoot(t, reposRoot)
+
+	_, err := m.Add(ctx, project.AddInput{Path: t.TempDir(), CloneURL: "https://example.com/o/r.git"})
+	wantCode(t, err, "PATH_AND_CLONE_URL_CONFLICT")
+
+	_, err = m.Add(ctx, project.AddInput{CloneURL: "not-a-git-url"})
+	wantCode(t, err, "CLONE_URL_INVALID")
+
+	source := gitRepoNamed(t, "acme", "widgets")
+	if err := os.MkdirAll(filepath.Join(reposRoot, "acme-widgets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Add(ctx, project.AddInput{CloneURL: "file://" + filepath.ToSlash(source)})
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
 }
 
 func TestManager_GetUpdateRemoveErrors(t *testing.T) {
