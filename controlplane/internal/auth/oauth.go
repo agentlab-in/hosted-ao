@@ -80,9 +80,21 @@ func sanitizeNext(next string) string {
 	return next
 }
 
+// flowCookieParts is how many "|" separated fields the flow cookie payload
+// carries: state, verifier, expiry, next.
+const flowCookieParts = 4
+
+// setFlowCookie packs the flow state into the signed ao_oauth_flow cookie.
+//
+// Next goes last because it is the only field that can contain a "|": it is a
+// caller-supplied path, and one caller builds it from a URL an attacker can
+// influence (the device page's ?user_code=). Putting it last lets the split on
+// the way back stop counting after three separators and keep the rest verbatim,
+// instead of a crafted link producing five parts and failing sign-in at the
+// callback with no explanation.
 func (s *Service) setFlowCookie(w http.ResponseWriter, f flowState) {
 	exp := time.Now().Add(flowTTL)
-	payload := strings.Join([]string{f.State, f.Verifier, f.Next, strconv.FormatInt(exp.Unix(), 10)}, "|")
+	payload := strings.Join([]string{f.State, f.Verifier, strconv.FormatInt(exp.Unix(), 10), f.Next}, "|")
 	http.SetCookie(w, &http.Cookie{
 		Name:     flowCookieName,
 		Value:    s.signedCookieValue(payload),
@@ -117,18 +129,21 @@ func (s *Service) flowFromRequest(r *http.Request) (flowState, bool) {
 	if !ok {
 		return flowState{}, false
 	}
-	parts := strings.Split(payload, "|")
-	if len(parts) != 4 {
+	// SplitN, not Split: the last field is Next, which may legitimately
+	// contain a "|". The signature above already proved this payload is ours,
+	// so the only question here is how to read it, not whether to trust it.
+	parts := strings.SplitN(payload, "|", flowCookieParts)
+	if len(parts) != flowCookieParts {
 		return flowState{}, false
 	}
-	exp, err := strconv.ParseInt(parts[3], 10, 64)
+	exp, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil {
 		return flowState{}, false
 	}
 	if time.Now().Unix() > exp {
 		return flowState{}, false
 	}
-	return flowState{State: parts[0], Verifier: parts[1], Next: parts[2]}, true
+	return flowState{State: parts[0], Verifier: parts[1], Next: parts[3]}, true
 }
 
 func (s *Service) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {

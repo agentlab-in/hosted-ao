@@ -24,10 +24,23 @@ var migrationsFS embed.FS
 // pragmas are applied on every connection open. WAL + NORMAL lets readers run
 // concurrently with the writer; busy_timeout absorbs brief writer contention;
 // foreign_keys enforces the accounts/machines/refresh_tokens references.
+//
+// _txlock=immediate makes every read-write transaction take the write lock at
+// BEGIN instead of upgrading at its first write. Every transaction in this
+// service is read-then-write (refresh token rotation, device code approval,
+// poll), and SQLite does not run the busy handler for a read-to-write upgrade
+// whose snapshot has gone stale, so under a deferred BEGIN the losing side of a
+// race gets SQLITE_BUSY straight back and the busy_timeout above never applies.
+// That surfaced as the loser being told server_error, retrying with a token the
+// winner had already revoked, and signing the operator out, when the correct
+// answer was the ordinary invalid_grant. An immediate BEGIN turns the race back
+// into a wait the timeout absorbs, after which the loser reads the committed
+// state and returns the right error.
 const pragmas = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=foreign_keys(ON)" +
-	"&_pragma=synchronous(NORMAL)"
+	"&_pragma=synchronous(NORMAL)" +
+	"&_txlock=immediate"
 
 // Open opens (creating if absent) the SQLite database under dataDir, runs
 // pending goose migrations, and returns the *sql.DB. Unlike the desktop

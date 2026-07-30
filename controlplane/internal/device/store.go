@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,8 +26,9 @@ var (
 	// code was never issued or because a human mistyped it.
 	errCodeNotFound = errors.New("device code not found")
 	// errCodeExpired means the row exists but is past expires_at. Expiry is
-	// enforced on every read here, not merely displayed on the page, because
-	// nothing sweeps the table.
+	// enforced on every read here, not merely displayed on the page: the sweep
+	// on the create path is a size bound, not the expiry mechanism, so a row
+	// that outlives its expiry until the next sweep is still refused.
 	errCodeExpired = errors.New("device code expired")
 	// errCodeNotPending means the row was already approved, denied, or marked
 	// expired. It is what stops a device code being approved twice, including
@@ -50,8 +53,13 @@ func (s *Service) createDeviceCode(ctx context.Context, name, publicURL string, 
 		return "", "", err
 	}
 
+	s.sweepExpired(ctx, now)
+
 	// user_code is UNIQUE, so a collision with a code that is still in the
-	// table is possible, if unlikely. Redraw rather than failing the request.
+	// table is possible, if unlikely. Redraw rather than failing the request,
+	// but only for that one error: retrying a SQLITE_BUSY or a broken schema
+	// four more times just wastes inserts and then reports the last failure
+	// instead of the first.
 	for attempt := 0; attempt < maxCodeGenerationAttempts; attempt++ {
 		userCode, err = newUserCode()
 		if err != nil {
@@ -66,8 +74,40 @@ func (s *Service) createDeviceCode(ctx context.Context, name, publicURL string, 
 		if err == nil {
 			return deviceCode, userCode, nil
 		}
+		if !isUserCodeCollision(err) {
+			return "", "", fmt.Errorf("insert device code: %w", err)
+		}
 	}
 	return "", "", fmt.Errorf("insert device code: %w", err)
+}
+
+// isUserCodeCollision reports whether err is the UNIQUE violation on
+// device_codes.user_code, the one insert failure worth redrawing the code for.
+//
+// It matches on the constraint text rather than a driver error code so this
+// package does not have to import the SQLite driver to name one integer. The
+// column name is in the message, so this cannot be confused with a UNIQUE
+// violation on device_code or on another table.
+func isUserCodeCollision(err error) bool {
+	return err != nil &&
+		strings.Contains(err.Error(), "UNIQUE constraint failed") &&
+		strings.Contains(err.Error(), "device_codes.user_code")
+}
+
+// sweepExpired deletes device_codes rows that are past their expiry. It runs
+// on the create path because that is the only unauthenticated write here, so
+// it is where the table grows, and one DELETE over an indexed comparison is
+// cheaper than the row it is about to insert.
+//
+// An expired row carries nothing: every read path already rejects one, so
+// deleting it changes no answer this service gives, and the machines row an
+// approval created lives in a separate table the sweep does not touch. A
+// failure is logged and swallowed, because a sweep that did not run must not
+// fail the request that triggered it.
+func (s *Service) sweepExpired(ctx context.Context, now time.Time) {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM device_codes WHERE expires_at < ?`, now); err != nil {
+		log.Printf("device: sweep expired device codes: %v", err)
+	}
 }
 
 // lookupPending returns the pending, unexpired row for a typed user code, so

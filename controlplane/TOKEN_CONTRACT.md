@@ -55,6 +55,12 @@ plane and it already publishes that origin everywhere.
 - **Machine audience:** from the RFC 8628 device flow, at the end of
   `ao setup-vm`. The polling response carries the machine id, the account id,
   and the public URL, which is what `~/.ao/machine.json` is written from.
+- **`publicUrl` is a full origin on the control-plane side** (`https://vm.example.com`,
+  scheme included, no path and no trailing slash, and `http` only for a loopback
+  host) **and is reduced to a bare hostname on the gateway side**, where
+  `ao vm serve` feeds it to the certificate whitelist. Neither side accepts the
+  other's form, so a value that is not a clean origin is rejected at
+  registration rather than stored and failed on at certificate time.
 - **Control-plane audience:** by exchanging a refresh token at
   `POST /api/v1/token` (`grant_type=refresh_token`), which rotates the refresh
   token in the same response.

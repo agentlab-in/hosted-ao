@@ -206,6 +206,32 @@ func TestLoginFlow_UpsertsAccountAndIssuesSession(t *testing.T) {
 	}
 }
 
+// TestLoginFlow_NextSurvivesTheFlowCookieSeparator pins the round trip for a
+// next that contains the character the flow cookie payload is joined on. The
+// device page builds next from r.URL.RequestURI(), which carries a
+// caller-supplied ?user_code=, so a crafted link used to send a signed-out
+// operator into a sign-in that always failed at the callback with no
+// explanation. Denial only, but silent and reachable from a link.
+func TestLoginFlow_NextSurvivesTheFlowCookieSeparator(t *testing.T) {
+	tokenHandler, userinfoHandler := fakeGoogleHandlers(t, "google-subject-1", "operator@example.test")
+	s, _ := newTestServiceWithGoogle(t, tokenHandler, userinfoHandler)
+
+	for _, next := range []string{
+		"/device?user_code=A|B",
+		"/device?user_code=|||",
+		"/device",
+	} {
+		resp := runLoginFlow(t, s, next)
+		if resp.StatusCode != http.StatusFound {
+			t.Errorf("callback for next %q: status = %d, want 302", next, resp.StatusCode)
+			continue
+		}
+		if loc := resp.Header.Get("Location"); loc != next {
+			t.Errorf("callback for next %q redirected to %q, want the requested target", next, loc)
+		}
+	}
+}
+
 func TestLoginFlow_SecondLoginSameSubjectReusesAccountAndUpdatesEmail(t *testing.T) {
 	tokenHandler1, userinfoHandler1 := fakeGoogleHandlers(t, "google-subject-1", "old@example.test")
 	s, srv := newTestServiceWithGoogle(t, tokenHandler1, userinfoHandler1)
