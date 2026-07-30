@@ -221,6 +221,11 @@ type setupPreflight struct {
 	ResolvedIPs []string
 	ResolveErr  error
 
+	// TargetUser is who both units would run as: SUDO_USER when the command was
+	// run through sudo, otherwise the login user. Root is refused, because the
+	// daemon runs agent sessions, git, and gh.
+	TargetUser string
+
 	Ports []setupPortProbe
 	Reach setupReachability
 	// GatewayActive is whether this machine's own gateway unit is already
@@ -257,6 +262,12 @@ func evaluatePreflight(pf setupPreflight) (problems []setupProblem, warnings []s
 		warnings = append(warnings, unverifiedReachabilityDetail(pf)+
 			"\n  This is the one thing setup cannot check for you and cannot fix. If the ports are"+
 			"\n  closed, the gateway will never get a certificate."+
+			// The local probe is not a substitute either: it binds loopback, so a
+			// listener bound to this machine's public address alone never shows up
+			// in it and `ao vm serve` would still lose the wildcard bind later.
+			"\n  Preflight only bound "+portList(setupVMPorts)+" on 127.0.0.1, which is enough to catch a"+
+			"\n  missing privilege or a wildcard listener, but not one bound to this machine's public"+
+			"\n  address alone."+
 			"\n"+strings.Join(prefixLines(firewallRemediation(pf.Cloud, pf.Domain, setupVMPorts), "  "), "\n"))
 	}
 	return problems, warnings
@@ -278,6 +289,14 @@ func unverifiedReachabilityDetail(pf setupPreflight) string {
 }
 
 func checkSetupPrivilege(pf setupPreflight) *setupProblem {
+	// A root target user is a privilege problem, not a path problem, so it is
+	// reported here: preflight stops before the first mutation, which keeps the
+	// "nothing on this machine was changed" guarantee. buildSetupPlan rejects it
+	// again for anything that reaches it another way.
+	if isRootSetupIdentity(pf.TargetUser) {
+		problem := rootSetupUserProblem(pf.Domain)
+		return &problem
+	}
 	if pf.UID == 0 {
 		return nil
 	}
@@ -307,6 +326,42 @@ func checkSetupPrivilege(pf setupPreflight) *setupProblem {
 	return nil
 }
 
+// isRootSetupIdentity reports whether a user or group name is the superuser.
+// Only the name is available at this point, which is enough: this runs on the
+// Ubuntu box the platform gate already checked for, where uid 0 is root.
+func isRootSetupIdentity(name string) bool {
+	return strings.TrimSpace(name) == "root"
+}
+
+// rootSetupUserProblem is the single wording for a root target user, shared by
+// the preflight check and buildSetupPlan so the two can never disagree about
+// why it is refused or how to fix it.
+func rootSetupUserProblem(domain string) setupProblem {
+	rerun := "ao setup-vm --domain " + domain
+	if strings.TrimSpace(domain) == "" {
+		rerun = "ao setup-vm --domain <your domain>"
+	}
+	return setupProblem{
+		Check: "target user",
+		Detail: "both systemd units would run as root, and the daemon runs your agent sessions, git, " +
+			"and gh, so it must not be root",
+		Remediation: []string{
+			"This machine's login user is root, which is the default on DigitalOcean and Hetzner,",
+			"and it is also what sudo -i and sudo su - leave behind. There is no unprivileged user",
+			"to hand the agents to, so create one and run setup again as that user:",
+			"  adduser --disabled-password --gecos \"\" ao",
+			"  usermod -aG sudo ao",
+			"  echo 'ao ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-ao && chmod 0440 /etc/sudoers.d/90-ao",
+			"  sudo -u ao sudo " + rerun,
+			"If this machine already has a human user, log in as them and run this instead:",
+			"  sudo " + rerun,
+			"Either way SUDO_USER then names the human who owns the machine, and that is who both",
+			"units run as. The gateway still reaches :80 and :443, through CAP_NET_BIND_SERVICE",
+			"rather than through privilege.",
+		},
+	}
+}
+
 func checkSetupDNS(pf setupPreflight) *setupProblem {
 	if pf.PublicIPErr != nil {
 		return &setupProblem{
@@ -329,7 +384,7 @@ func checkSetupDNS(pf setupPreflight) *setupProblem {
 		}
 	}
 	for _, ip := range pf.ResolvedIPs {
-		if ip == pf.PublicIP {
+		if sameSetupIP(ip, pf.PublicIP) {
 			return nil
 		}
 	}
@@ -339,6 +394,17 @@ func checkSetupDNS(pf setupPreflight) *setupProblem {
 			pf.Domain, strings.Join(pf.ResolvedIPs, ", "), pf.PublicIP),
 		Remediation: dnsRemediation(pf.Domain, pf.PublicIP, pf.ResolvedIPs),
 	}
+}
+
+// sameSetupIP compares two addresses as addresses rather than as strings, so a
+// non-canonical answer such as 2001:0DB8::1 matches the 2001:db8::1 a resolver
+// hands back and preflight does not report a DNS mismatch that does not exist.
+func sameSetupIP(a, b string) bool {
+	ipA, ipB := net.ParseIP(strings.TrimSpace(a)), net.ParseIP(strings.TrimSpace(b))
+	if ipA == nil || ipB == nil {
+		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+	}
+	return ipA.Equal(ipB)
 }
 
 func dnsRemediation(domain, publicIP string, resolved []string) []string {
@@ -360,6 +426,17 @@ func dnsRemediation(domain, publicIP string, resolved []string) []string {
 		"The gateway gets its certificate over ACME, which only succeeds once the domain resolves",
 		"to this machine, so this has to be right before setup can finish.",
 	)
+	if len(resolved) > 0 {
+		// A dual-stack box can be reported as a mismatch against a record that is
+		// perfectly correct for the other family: whichever address this machine
+		// was seen at is the one preflight compares. Naming the right one by hand
+		// is the escape hatch, and it is the same flag the undiscoverable case uses.
+		lines = append(lines,
+			"If this machine has more than one public address and the record above is already right,",
+			"name the address that record points at and run setup again:",
+			"  ao setup-vm --domain "+domain+" --public-ip "+resolved[0],
+		)
+	}
 	return lines
 }
 
@@ -619,6 +696,15 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 	if strings.TrimSpace(in.User) == "" {
 		return setupPlan{}, fmt.Errorf("no target user for the systemd units")
 	}
+	// The invariant systemdUnit documents: User and Group are never root. The
+	// preflight check refuses this earlier and with the full remediation; this is
+	// the pure guard that makes the invariant true for every caller.
+	if isRootSetupIdentity(in.User) || isRootSetupIdentity(in.Group) {
+		return setupPlan{}, fmt.Errorf(
+			"refusing to install units that run as root: %s\n%s",
+			rootSetupUserProblem(in.Domain).Detail,
+			strings.Join(prefixLines(rootSetupUserProblem(in.Domain).Remediation, "  "), "\n"))
+	}
 	if !isLinuxAbs(in.Home) {
 		return setupPlan{}, fmt.Errorf("home directory %q for user %s is not an absolute path", in.Home, in.User)
 	}
@@ -660,10 +746,31 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 		}
 		*override.dest = value
 	}
+	// machine.json is the one file the gateway must be able to read as an
+	// unprivileged user, and the install only creates and chowns directories
+	// inside ~/.ao. An AO_MACHINE_FILE pointing outside it would be written into
+	// a parent this run created as root, mode 0700, which the gateway user cannot
+	// traverse: it would then refuse to start on a machine that had just been
+	// bound successfully.
+	if !insideSetupDir(plan.AODir, plan.MachineFile) {
+		return setupPlan{}, fmt.Errorf(
+			"AO_MACHINE_FILE=%q is outside %s. All AO state lives under ~/.ao, and the gateway runs as "+
+				"%s, so a machine file anywhere else is one it cannot read; unset it or point it inside %s",
+			plan.MachineFile, plan.AODir, plan.User, plan.AODir)
+	}
 	// Matches vmgateway's own default so the unit is explicit about a path the
 	// gateway would otherwise derive on its own.
 	plan.CertDir = slashPath(plan.DataDir, "vm-gateway", "certs")
 	return plan, nil
+}
+
+// insideSetupDir reports whether p is dir or below it, comparing whole path
+// components so /home/ubuntu/.aoelsewhere is not read as being inside
+// /home/ubuntu/.ao. Both are Linux paths for the target box, so path is right
+// here and filepath is not.
+func insideSetupDir(dir, p string) bool {
+	dir, p = path.Clean(dir), path.Clean(p)
+	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
 // slashPath joins Linux paths regardless of the OS this command was compiled
@@ -713,12 +820,25 @@ type systemdUnit struct {
 	// AmbientCaps lets a non-root service bind a privileged port without
 	// running as root.
 	AmbientCaps []string
-	Comment     []string
+	// Restart is the systemd restart policy, defaulting to on-failure. The
+	// gateway holds no session state and overrides it to always, so a clean
+	// exit still comes back; the daemon supervises live agent sessions, so its
+	// deliberate exits are left alone.
+	Restart string
+	Comment []string
 }
 
-// renderSystemdUnit writes a unit file. Environment and WorkingDirectory
-// values are always quoted: systemd splits on whitespace otherwise, and a home
-// directory with a space in it would silently produce a broken unit.
+// renderSystemdUnit writes a unit file.
+//
+// Environment= values are quoted, and that is deliberate: it is parsed as a
+// list of words, so systemd splits it on whitespace and does unquote it.
+// WorkingDirectory= is the opposite case and must never be quoted. It is a
+// single value that systemd hands straight to
+// path_simplify_and_warn(PATH_CHECK_ABSOLUTE|PATH_CHECK_FATAL) with no
+// unquoting, so a leading double quote is not an absolute path, the parse
+// handler returns -ENOEXEC, and the whole unit refuses to load rather than
+// ignoring one setting. A space needs no escaping there for the same reason the
+// quoting was wrong: the setting takes the rest of the line as one path.
 func renderSystemdUnit(u systemdUnit) string {
 	var b strings.Builder
 	for _, line := range u.Comment {
@@ -734,12 +854,19 @@ func renderSystemdUnit(u systemdUnit) string {
 	if len(u.After) > 0 {
 		fmt.Fprintf(&b, "After=%s\n", strings.Join(u.After, " "))
 	}
+	// systemd's default start rate limit is 5 starts in 10 seconds, and with
+	// RestartSec=5 a unit that fails at boot burns that budget in 30 seconds and
+	// enters failed, where nothing retries it until a human runs
+	// systemctl reset-failed. A gateway that cannot bind :443 for the first half
+	// minute after boot, or that hits one transient ACME error, would stop for
+	// good on an unattended VM. Turning the limit off keeps systemd retrying.
+	b.WriteString("StartLimitIntervalSec=0\n")
 
 	b.WriteString("\n[Service]\n")
 	b.WriteString("Type=simple\n")
 	fmt.Fprintf(&b, "User=%s\n", u.User)
 	fmt.Fprintf(&b, "Group=%s\n", u.Group)
-	fmt.Fprintf(&b, "WorkingDirectory=%q\n", u.WorkingDir)
+	fmt.Fprintf(&b, "WorkingDirectory=%s\n", u.WorkingDir)
 	for _, kv := range u.Env {
 		fmt.Fprintf(&b, "Environment=%q\n", kv[0]+"="+kv[1])
 	}
@@ -749,7 +876,11 @@ func renderSystemdUnit(u systemdUnit) string {
 		fmt.Fprintf(&b, "CapabilityBoundingSet=%s\n", strings.Join(u.AmbientCaps, " "))
 		b.WriteString("NoNewPrivileges=yes\n")
 	}
-	b.WriteString("Restart=on-failure\n")
+	restart := u.Restart
+	if restart == "" {
+		restart = "on-failure"
+	}
+	fmt.Fprintf(&b, "Restart=%s\n", restart)
 	b.WriteString("RestartSec=5\n")
 	b.WriteString("KillSignal=SIGTERM\n")
 	b.WriteString("TimeoutStopSec=30\n")
@@ -832,6 +963,10 @@ func renderGatewayUnit(p setupPlan) string {
 		Env:         env,
 		ExecStart:   p.BinaryPath + " vm serve",
 		AmbientCaps: []string{"CAP_NET_BIND_SERVICE"},
+		// The gateway holds no session state, and a stopped gateway is a machine
+		// that shows Offline in the desktop for no visible reason, so every exit
+		// earns a restart.
+		Restart: "always",
 	})
 }
 
@@ -839,10 +974,19 @@ func renderGatewayUnit(p setupPlan) string {
 // The closing summary
 // ---------------------------------------------------------------------------
 
+// setupUnitStates is what `systemctl is-active` said about each unit after it
+// was started. Both units are Type=simple, so a successful `systemctl start`
+// proves only that a process was forked; the summary must not report a unit as
+// running on that alone.
+type setupUnitStates struct {
+	DaemonRunning  bool
+	GatewayRunning bool
+}
+
 // renderSetupSummary is the last thing ao setup-vm prints. It reports the
 // machine as installed but not ready, and names every remaining step with the
 // exact command, rather than implying the machine is done.
-func renderSetupSummary(p setupPlan, gatewayStarted bool, warnings []string) string {
+func renderSetupSummary(p setupPlan, units setupUnitStates, warnings []string) string {
 	var b strings.Builder
 	b.WriteString("\nao setup-vm finished. This machine is installed, but not yet ready to use.\n")
 
@@ -850,10 +994,17 @@ func renderSetupSummary(p setupPlan, gatewayStarted bool, warnings []string) str
 	fmt.Fprintf(&b, "  ao binary        %s\n", p.BinaryPath)
 	fmt.Fprintf(&b, "  packages         %s\n", strings.Join(p.Packages, ", "))
 	fmt.Fprintf(&b, "  state directory  %s (owned by %s)\n", p.AODir, p.User)
-	fmt.Fprintf(&b, "  daemon unit      %s (enabled, running, loopback only)\n", slashPath(setupVMUnitDir, setupVMDaemonUnit))
+	daemonState := "enabled, running, loopback only"
+	if !units.DaemonRunning {
+		daemonState = "enabled, but not running: see the warnings below"
+	}
+	fmt.Fprintf(&b, "  daemon unit      %s (%s)\n", slashPath(setupVMUnitDir, setupVMDaemonUnit), daemonState)
 	gatewayState := "enabled, not started: this machine is not bound yet"
-	if gatewayStarted {
+	switch {
+	case units.GatewayRunning:
 		gatewayState = "enabled, running"
+	case p.Bound:
+		gatewayState = "enabled, but not running: see the warnings below"
 	}
 	fmt.Fprintf(&b, "  gateway unit     %s (%s)\n", slashPath(setupVMUnitDir, setupVMGatewayUnit), gatewayState)
 
@@ -878,7 +1029,7 @@ func renderSetupSummary(p setupPlan, gatewayStarted bool, warnings []string) str
 		fmt.Fprintf(&b, "       sudo systemctl start %s\n", setupVMGatewayUnit)
 	} else {
 		fmt.Fprintf(&b, "\n  %d. This machine is already bound (%s), and ao setup-vm restarted\n", next(), p.MachineFile)
-		fmt.Fprintf(&b, "     %s so it has read that binding. Check it at any time:\n", setupVMGatewayUnit)
+		fmt.Fprintf(&b, "     %s so it reads that binding. Check it at any time:\n", setupVMGatewayUnit)
 		b.WriteString("       ao whoami\n")
 		b.WriteString("     If you ever change that file by hand, restart the gateway yourself, because\n")
 		b.WriteString("     `ao vm serve` reads it once at startup:\n")
@@ -893,6 +1044,22 @@ func renderSetupSummary(p setupPlan, gatewayStarted bool, warnings []string) str
 	fmt.Fprintf(&b, "\n  %d. No git credentials on this machine, so private repositories cannot be cloned.\n", next())
 	b.WriteString("     gh is installed; authenticate it once:\n")
 	b.WriteString("       gh auth login\n")
+
+	// Nothing in the run proves 80 and 443 are reachable from the internet: a
+	// cloud firewall is invisible from inside the box, and the certificate is
+	// only ordered on the first TLS handshake, so a blocked port shows up much
+	// later as a machine that is Offline for no stated reason. This is a step the
+	// operator has to run, not a warning, so it is numbered like the rest.
+	fmt.Fprintf(&b, "\n  %d. Nobody has confirmed %s are reachable from the internet. setup-vm cannot\n",
+		next(), portList(setupVMPorts))
+	b.WriteString("     check that from this machine, because a cloud firewall is invisible from inside\n")
+	b.WriteString("     the box. Run these two from any machine that is not this one, your laptop for\n")
+	b.WriteString("     example:\n")
+	fmt.Fprintf(&b, "       nc -vz %s 80\n", p.Domain)
+	fmt.Fprintf(&b, "       nc -vz %s 443\n", p.Domain)
+	b.WriteString("     If either one refuses or times out, open the port in your cloud provider's\n")
+	b.WriteString("     firewall and in ufw. Until both answer, the gateway never gets a certificate,\n")
+	b.WriteString("     because Let's Encrypt validates over :80.\n")
 
 	b.WriteString("\nCheck this machine at any time:\n")
 	b.WriteString("  ao doctor\n")

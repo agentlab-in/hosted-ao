@@ -138,7 +138,10 @@ func (c *commandContext) bindSetupVM(ctx context.Context, out io.Writer, plan se
 	if err := c.runSetupPrivileged(ctx, "systemctl", "restart", setupVMGatewayUnit); err != nil {
 		return fmt.Errorf("restart %s so it reads the new binding: %w", setupVMGatewayUnit, err)
 	}
-	_, err = fmt.Fprintf(out, "==> %s restarted, so it has read the new binding\n", setupVMGatewayUnit)
+	// Whether it came back up is checked by the caller, which owns the summary:
+	// the unit is Type=simple, so this restart returning 0 says only that a
+	// process was forked.
+	_, err = fmt.Fprintf(out, "==> %s restarted so it reads the new binding\n", setupVMGatewayUnit)
 	return err
 }
 
@@ -180,8 +183,7 @@ func (c *commandContext) pollForBinding(ctx context.Context, base string, auth d
 		// Waiting first is deliberate: a code cannot have been approved in the
 		// instant it was issued, and RFC 8628 section 3.4 has the client wait
 		// the interval before every request, including the first.
-		c.deps.Sleep(interval)
-		if err := ctx.Err(); err != nil {
+		if err := c.sleepUntilCancelled(ctx, interval); err != nil {
 			return vmgateway.MachineFile{}, err
 		}
 		if c.deps.Now().After(deadline) {
@@ -217,6 +219,25 @@ func (c *commandContext) pollForBinding(ctx context.Context, base string, auth d
 		default:
 			return vmgateway.MachineFile{}, fmt.Errorf("the AO control plane refused the device code: %w", err)
 		}
+	}
+}
+
+// sleepUntilCancelled waits d, or returns as soon as ctx is cancelled. The poll
+// interval is server-supplied and reaches 60 seconds after slow_down backoff, so
+// waiting it out before noticing a Ctrl-C is a minute of a terminal that looks
+// hung. deps.Sleep is injected (the tests drive a fake clock through it) so it is
+// raced rather than replaced by a timer; the goroutine ends when the sleep does.
+func (c *commandContext) sleepUntilCancelled(ctx context.Context, d time.Duration) error {
+	done := make(chan struct{})
+	go func() {
+		c.deps.Sleep(d)
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return ctx.Err()
 	}
 }
 
