@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/api"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/device"
@@ -60,11 +61,15 @@ func main() {
 	}
 	authSvc.Register(mux)
 
-	// The device flow mints access tokens through this Issuer, so the `aud`
-	// on every token a bound machine is shown is machines.id, per
-	// TOKEN_CONTRACT.md.
+	// One Issuer mints both audiences: machines.id for a token a VM gateway
+	// will verify, and cfg.PublicOrigin for a token this service's own API
+	// will. See TOKEN_CONTRACT.md, "The two audiences".
 	issuer := tokens.NewIssuer(km, db, cfg.PublicOrigin, cfg.AccessTokenTTL)
-	deviceSvc, err := device.NewService(db, issuer, authSvc, cfg.PublicOrigin)
+
+	apiSvc := api.NewService(issuer)
+	apiSvc.Register(mux)
+
+	deviceSvc, err := device.NewService(db, issuer, authSvc, apiSvc.Authenticate, cfg.PublicOrigin)
 	if err != nil {
 		log.Fatalf("init device flow: %v", err)
 	}

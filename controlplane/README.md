@@ -111,20 +111,29 @@ device flow for a public URL an account has already bound reuses the existing
 machine row, so `ao setup-vm` stays re-runnable without changing the machine
 id or duplicating the box in the machine list.
 
-## Machines API
+## Control plane API
+
+Every `/api/v1` route takes one credential: an access token whose `aud` is the
+control plane's own origin. A machine-audience token is rejected, and so is a
+refresh token, which is presented only at the token endpoint. See
+`TOKEN_CONTRACT.md`, "The two audiences".
 
 ```bash
-curl -s http://127.0.0.1:8080/api/v1/machines -H 'Authorization: Bearer <refresh token>'
+# Exchange a refresh token. The refresh token rotates, so persist the
+# replacement: the one presented here is already revoked.
+curl -s http://127.0.0.1:8080/api/v1/token \
+  -d grant_type=refresh_token -d refresh_token=...
+# {"access_token":"...","token_type":"Bearer","expires_in":900,"refresh_token":"..."}
+
+curl -s http://127.0.0.1:8080/api/v1/machines -H 'Authorization: Bearer <access token>'
 # {"machines":[{"id":"...","name":"prod vm","public_url":"https://vm.example.com",
 #               "created_at":"...","last_seen":null}]}
 ```
 
-The credential is either the account's opaque refresh token or the browser
-session cookie. It is not an access token: the access tokens in
-`TOKEN_CONTRACT.md` are addressed to one machine (`aud` = `machines.id`) and
-are verified by that machine's gateway, so a desktop install that has just
-signed in and has no machine yet holds no token addressed to anything.
-Listing does not rotate the refresh token; only exchanging one does.
+`internal/api` owns both the token endpoint and the authenticator; a feature
+package registering an `/api/v1` route takes that authenticator as a value
+(see `device.NewService`), so which credential the API accepts is one
+substitution rather than an edit per route.
 
 ## Test
 

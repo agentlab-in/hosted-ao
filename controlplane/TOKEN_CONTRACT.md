@@ -8,8 +8,10 @@ where this file is more specific than that section, this file is the one to
 build against, and if that section changes, update this file to match.
 
 - Access token: JWT, EdDSA, `iss` = `https://ao.agentlab.in`, `sub` = account
-  id, `aud` = machine id, `exp` = 15 minutes, `iat`, `jti`. The audience is
-  the machine id (`machines.id`), never the machine's hostname or public URL.
+  id, `exp` = 15 minutes, `iat`, `jti`, and an `aud` that is either a machine
+  id or the control plane's own origin. See "The two audiences" below. When
+  the audience is a machine it is the machine id (`machines.id`), never the
+  machine's hostname or public URL.
 - Access token lifetime: 15 minutes by default, configurable via
   `ACCESS_TOKEN_TTL` but only within 10 to 30 minutes. Nothing checks an
   access token against a revocation list, so the lifetime is the whole
@@ -23,6 +25,47 @@ build against, and if that section changes, update this file to match.
   install must therefore persist the replacement it gets back on every
   refresh, and the 90 days mostly bound how long an install may go without
   contacting the control plane at all.
+
+## The two audiences
+
+There are exactly two access token audiences. They differ only in `aud`, and
+they are **not interchangeable in either direction**.
+
+| `aud`                       | Means                          | Verified by                    |
+| --------------------------- | ------------------------------ | ------------------------------ |
+| `machines.id`               | "call that machine's gateway"  | `ao vm serve` on that VM       |
+| `https://ao.agentlab.in`    | "call the control plane's API" | the control plane itself       |
+
+The control-plane audience is the control plane's own origin, the same string
+as `iss`, rather than a separate identifier: there is exactly one control
+plane and it already publishes that origin everywhere.
+
+- A **control-plane token replayed against a VM** fails that gateway's `aud`
+  check against its own machine id, and a **machine token presented to the
+  control plane API** fails the control plane's. Neither rejection needs any
+  coordination between the two services beyond this table. Both are the
+  security property, not a bug to accommodate.
+- Everything else is identical: same EdDSA signing key and JWKS, same `iss`,
+  same 15 minute default lifetime, same `sub`, `iat`, and `jti`.
+- A verifier compares `aud` byte for byte against the single value it accepts.
+  Neither side accepts a list, a wildcard, or a missing `aud`.
+
+### How each is obtained
+
+- **Machine audience:** from the RFC 8628 device flow, at the end of
+  `ao setup-vm`. The polling response carries the machine id, the account id,
+  and the public URL, which is what `~/.ao/machine.json` is written from.
+- **Control-plane audience:** by exchanging a refresh token at
+  `POST /api/v1/token` (`grant_type=refresh_token`), which rotates the refresh
+  token in the same response.
+
+### Where a refresh token may be presented
+
+A refresh token goes to the token endpoint and **nowhere else**. It is never a
+credential for a resource route, on either service. It is long-lived and
+high-value, so sending it on ordinary API calls would spread 90 days of
+account access across logs, proxies, and crash reports, where a short-lived
+access token would have leaked 15 minutes.
 
 ## Transport
 

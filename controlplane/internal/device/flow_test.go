@@ -1,7 +1,6 @@
 package device
 
 import (
-	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/api"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/storage/sqlite"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/tokens"
@@ -28,6 +28,13 @@ const (
 	signInHeader = "X-Test-Account"
 )
 
+// oauthError is the error body the device endpoints and the machines API
+// share, written by api.WriteError.
+type oauthError struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
 // testSessions stands in for auth.Service on the sessions interface.
 type testSessions struct{}
 
@@ -41,6 +48,7 @@ type harness struct {
 	svc *Service
 	mux *http.ServeMux
 	db  *sql.DB
+	km  *keys.Manager
 }
 
 func newHarness(t *testing.T) *harness {
@@ -66,14 +74,15 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("keys.Load() unexpected error: %v", err)
 	}
 
-	svc, err := NewService(db, tokens.NewIssuer(km, db, testOrigin, 15*time.Minute), testSessions{}, testOrigin)
+	issuer := tokens.NewIssuer(km, db, testOrigin, 15*time.Minute)
+	svc, err := NewService(db, issuer, testSessions{}, api.NewService(issuer).Authenticate, testOrigin)
 	if err != nil {
 		t.Fatalf("NewService() unexpected error: %v", err)
 	}
 	mux := http.NewServeMux()
 	svc.Register(mux)
 
-	return &harness{t: t, svc: svc, mux: mux, db: db}
+	return &harness{t: t, svc: svc, mux: mux, db: db, km: km}
 }
 
 // do sends a request through the registered mux. account, when non-empty,
@@ -118,7 +127,7 @@ func (h *harness) requestCode(publicURL, name string) deviceCodeResponse {
 
 // poll runs one device access token request and returns the recorder plus the
 // decoded body, whichever shape it has.
-func (h *harness) poll(deviceCode string) (*httptest.ResponseRecorder, tokenResponse, errorResponse) {
+func (h *harness) poll(deviceCode string) (*httptest.ResponseRecorder, tokenResponse, oauthError) {
 	h.t.Helper()
 
 	rec := h.do(http.MethodPost, "/device/token", "", url.Values{
@@ -127,7 +136,7 @@ func (h *harness) poll(deviceCode string) (*httptest.ResponseRecorder, tokenResp
 	})
 	var (
 		ok      tokenResponse
-		failure errorResponse
+		failure oauthError
 	)
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &ok); err != nil {
@@ -363,7 +372,7 @@ func TestPoll_MissingDeviceCodeOrWrongGrantTypeIsRejected(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("poll with the wrong grant_type: status = %d, want 400", rec.Code)
 	}
-	var failure errorResponse
+	var failure oauthError
 	_ = json.Unmarshal(rec.Body.Bytes(), &failure)
 	if failure.Error != errUnsupportedGrantType {
 		t.Errorf("error = %q, want unsupported_grant_type", failure.Error)
@@ -663,94 +672,12 @@ func assertNoMachines(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestListMachines_ScopedToTheCallerAndRequiresACredential(t *testing.T) {
-	h := newHarness(t)
-
-	issued := h.requestCode(testPublicURL, "prod vm")
-	if rec := h.approve(issued.UserCode, accountA); rec.Code != http.StatusOK {
-		t.Fatalf("approval status = %d, want 200", rec.Code)
-	}
-
-	// No credential at all.
-	rec := h.do(http.MethodGet, "/api/v1/machines", "", nil)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("unauthenticated list status = %d, want 401", rec.Code)
-	}
-	if got := rec.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
-		t.Errorf("WWW-Authenticate = %q, want a Bearer challenge", got)
-	}
-
-	// The signed-in browser session.
-	listed := h.listMachines(accountA, "")
-	if len(listed) != 1 {
-		t.Fatalf("account A sees %d machines, want 1", len(listed))
-	}
-	if listed[0].Name != "prod vm" || listed[0].PublicURL != testPublicURL {
-		t.Errorf("machine = %+v, want prod vm at %s", listed[0], testPublicURL)
-	}
-	if listed[0].LastSeen != nil {
-		t.Errorf("last_seen = %v, want null on a machine that has never checked in", listed[0].LastSeen)
-	}
-
-	// Another account's machines are not visible.
-	if listed := h.listMachines(accountB, ""); len(listed) != 0 {
-		t.Errorf("account B sees %d of account A's machines, want 0", len(listed))
-	}
-}
-
-func TestListMachines_AcceptsARefreshTokenAndRejectsARevokedOne(t *testing.T) {
-	h := newHarness(t)
-
-	issued := h.requestCode(testPublicURL, "prod vm")
-	if rec := h.approve(issued.UserCode, accountA); rec.Code != http.StatusOK {
-		t.Fatalf("approval status = %d, want 200", rec.Code)
-	}
-
-	ctx := context.Background()
-	refresh, err := h.svc.issuer.IssueRefreshToken(ctx, accountA, "install-1")
-	if err != nil {
-		t.Fatalf("IssueRefreshToken() unexpected error: %v", err)
-	}
-
-	if listed := h.listMachines("", refresh); len(listed) != 1 {
-		t.Fatalf("bearer list returned %d machines, want 1", len(listed))
-	}
-
-	// Listing must not have consumed the token: only an exchange rotates it.
-	if listed := h.listMachines("", refresh); len(listed) != 1 {
-		t.Errorf("second bearer list returned %d machines, want 1: listing must not rotate the token", len(listed))
-	}
-
-	// A revoked credential stops working, and so does a made-up one.
-	if err := h.svc.issuer.RevokeRefreshToken(ctx, refresh); err != nil {
-		t.Fatalf("RevokeRefreshToken() unexpected error: %v", err)
-	}
-	for _, token := range []string{refresh, "not-a-real-token"} {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/machines", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		rec := httptest.NewRecorder()
-		h.mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("list with token %q: status = %d, want 401", token, rec.Code)
-		}
-	}
-}
-
-// listMachines calls the API with either a session account or a bearer token
-// and returns the decoded list.
-func (h *harness) listMachines(account, bearer string) []machine {
+// listMachines calls the machines API with a bearer token and returns the
+// decoded list.
+func (h *harness) listMachines(bearer string) []machine {
 	h.t.Helper()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/machines", nil)
-	if account != "" {
-		req.Header.Set(signInHeader, account)
-	}
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	rec := httptest.NewRecorder()
-	h.mux.ServeHTTP(rec, req)
-
+	rec := h.listMachinesRaw(bearer)
 	if rec.Code != http.StatusOK {
 		h.t.Fatalf("GET /api/v1/machines status = %d, want 200, body: %s", rec.Code, rec.Body)
 	}

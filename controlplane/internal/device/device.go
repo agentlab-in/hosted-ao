@@ -49,12 +49,20 @@ type sessions interface {
 	AccountFromRequest(r *http.Request) (accountID string, ok bool)
 }
 
+// APIAuthenticator resolves the account behind a control plane API request,
+// or reports false. api.Service.Authenticate is the implementation in
+// production; taking it as a value keeps the credential the machines API
+// accepts a one-line substitution rather than something threaded through this
+// package.
+type APIAuthenticator func(r *http.Request) (accountID string, ok bool)
+
 // Service owns the device flow endpoints, the two browser pages, and the
 // machine registry API.
 type Service struct {
 	db       *sql.DB
 	issuer   *tokens.Issuer
 	sessions sessions
+	apiAuth  APIAuthenticator
 
 	// publicOrigin is this control plane's origin, already stripped of any
 	// trailing slash by config.Load. It builds the verification URI the VM
@@ -67,8 +75,9 @@ type Service struct {
 
 // NewService builds the device flow Service. issuer mints the access token
 // returned to a polling client once its code is approved; sessions identifies
-// the signed-in operator on the browser pages.
-func NewService(db *sql.DB, issuer *tokens.Issuer, s sessions, publicOrigin string) (*Service, error) {
+// the signed-in operator on the browser pages; apiAuth identifies the caller
+// of the machines API.
+func NewService(db *sql.DB, issuer *tokens.Issuer, s sessions, apiAuth APIAuthenticator, publicOrigin string) (*Service, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse device templates: %w", err)
@@ -77,6 +86,7 @@ func NewService(db *sql.DB, issuer *tokens.Issuer, s sessions, publicOrigin stri
 		db:           db,
 		issuer:       issuer,
 		sessions:     s,
+		apiAuth:      apiAuth,
 		publicOrigin: publicOrigin,
 		tmpl:         tmpl,
 		attempts:     newAttemptLimiter(),

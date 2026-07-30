@@ -126,6 +126,23 @@ func (m *Manager) Active() (kid string, priv ed25519.PrivateKey) {
 	return m.active.KID, m.active.PrivateKey
 }
 
+// PublicKey returns the public key for kid, if kid is one of the two this
+// manager publishes in JWKS. The next-rotation key is resolvable as well as
+// the active one, so a token signed just before a rotation still verifies
+// here for as long as JWKS advertises the key that signed it.
+func (m *Manager) PublicKey(kid string) (ed25519.PublicKey, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	switch kid {
+	case m.active.KID:
+		return m.active.PublicKey, true
+	case m.next.KID:
+		return m.next.PublicKey, true
+	default:
+		return nil, false
+	}
+}
+
 // Rotate promotes the next key to active and generates a fresh next key,
 // persisting both to disk. The previously active key is discarded and no
 // longer published in JWKS, so callers should only rotate when it is safe
