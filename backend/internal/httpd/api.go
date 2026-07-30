@@ -51,6 +51,7 @@ type API struct {
 	imports       *controllers.ImportController
 	shellTerms    *controllers.ShellTerminalsController
 	dev           *controllers.DevController
+	doctor        *controllers.DoctorController
 	events        *EventsController
 }
 
@@ -77,7 +78,11 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		dev:           &controllers.DevController{Import: deps.DevImport},
-		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
+		// The doctor route has no service behind it: it probes the machine
+		// this daemon runs on, so it is always available rather than 501 on a
+		// missing dependency.
+		doctor: &controllers.DoctorController{},
+		events: &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
 }
 
@@ -105,6 +110,7 @@ func (a *API) Register(root chi.Router) {
 			a.imports.Register(r)
 			a.shellTerms.Register(r)
 			a.dev.Register(r)
+			a.doctor.Register(r)
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.

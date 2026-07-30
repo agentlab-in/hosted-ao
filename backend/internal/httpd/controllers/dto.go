@@ -775,3 +775,25 @@ type UnregisterPushDeviceResponse struct {
 	Token   string `json:"token"`
 	Deleted bool   `json:"deleted"`
 }
+
+// DoctorReportResponse is the body of GET /api/v1/doctor: the same health
+// checks `ao doctor` runs, so the desktop can read a remote machine's
+// readiness through the VM gateway.
+type DoctorReportResponse struct {
+	OK       bool                  `json:"ok" description:"True when no check failed. WARN checks (a missing optional tool, a harness that is not signed in) do not clear it."`
+	Failures int                   `json:"failures" description:"Number of FAIL checks."`
+	Checks   []DoctorCheckResponse `json:"checks" description:"Every check, in report order."`
+}
+
+// DoctorCheckResponse is one check in a doctor report. It is a deliberate
+// projection of the internal check rather than that type serialized directly:
+// this body crosses the network to a desktop client, so it carries check
+// names, outcomes, and fix commands, and messages are rewritten to hide the
+// machine's home directory layout (see redactHomePaths).
+type DoctorCheckResponse struct {
+	Level       string `json:"level" enum:"PASS,WARN,FAIL" description:"Check outcome. FAIL means the machine is broken; WARN means degraded."`
+	Section     string `json:"section,omitempty" description:"Report grouping, e.g. Core, Tools, Agent harnesses, GitHub."`
+	Name        string `json:"name" description:"Stable check id, e.g. claude-auth."`
+	Message     string `json:"message" description:"Human-readable outcome for this check."`
+	Remediation string `json:"remediation,omitempty" description:"The single command that fixes this check, e.g. ao vm setup-harness claude. Empty when no single command applies."`
+}
