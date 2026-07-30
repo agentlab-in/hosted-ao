@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 )
 
 const (
@@ -22,6 +23,11 @@ const (
 	DefaultDataDir = "./data"
 	// DefaultPublicOrigin is the origin used when PUBLIC_ORIGIN is unset.
 	DefaultPublicOrigin = "https://ao.agentlab.in"
+	// DefaultAccessTokenTTL is the access token lifetime used when
+	// ACCESS_TOKEN_TTL is unset. The spec allows this to move between 10 and
+	// 30 minutes after measuring refresh chatter, which is why it is
+	// configurable rather than hardcoded in the tokens package.
+	DefaultAccessTokenTTL = 15 * time.Minute
 )
 
 // Config is the fully resolved control plane configuration. It is immutable
@@ -41,6 +47,8 @@ type Config struct {
 	// GoogleClientSecret is the OAuth web client secret. Required; Load
 	// fails if it is empty.
 	GoogleClientSecret string
+	// AccessTokenTTL is the lifetime of issued access tokens.
+	AccessTokenTTL time.Duration
 }
 
 // Load resolves configuration from the environment, applying defaults for
@@ -54,13 +62,15 @@ type Config struct {
 //	LISTEN_ADDR            bind address                (default 127.0.0.1:8080)
 //	DATA_DIR               SQLite data directory       (default ./data)
 //	PUBLIC_ORIGIN          public origin for redirect URIs and the iss claim (default https://ao.agentlab.in)
+//	ACCESS_TOKEN_TTL       access token lifetime, a Go duration (default 15m)
 //	AO_SH_G_CLIENT_ID      Google OAuth client id      (required)
 //	AO_SH_G_CLIENT_SECRET  Google OAuth client secret  (required)
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddr:   DefaultListenAddr,
-		DataDir:      DefaultDataDir,
-		PublicOrigin: DefaultPublicOrigin,
+		ListenAddr:     DefaultListenAddr,
+		DataDir:        DefaultDataDir,
+		PublicOrigin:   DefaultPublicOrigin,
+		AccessTokenTTL: DefaultAccessTokenTTL,
 	}
 
 	if raw := os.Getenv("LISTEN_ADDR"); raw != "" {
@@ -76,6 +86,14 @@ func Load() (Config, error) {
 
 	if raw := os.Getenv("PUBLIC_ORIGIN"); raw != "" {
 		cfg.PublicOrigin = raw
+	}
+
+	if raw := os.Getenv("ACCESS_TOKEN_TTL"); raw != "" {
+		ttl, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid ACCESS_TOKEN_TTL %q: %w", raw, err)
+		}
+		cfg.AccessTokenTTL = ttl
 	}
 
 	cfg.GoogleClientID = os.Getenv("AO_SH_G_CLIENT_ID")

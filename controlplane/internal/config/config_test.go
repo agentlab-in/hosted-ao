@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoad_MissingGoogleCredentials(t *testing.T) {
@@ -64,6 +65,9 @@ func TestLoad_DefaultsAppliedWhenCredentialsSet(t *testing.T) {
 	}
 	if cfg.PublicOrigin != DefaultPublicOrigin {
 		t.Errorf("PublicOrigin = %q, want default %q", cfg.PublicOrigin, DefaultPublicOrigin)
+	}
+	if cfg.AccessTokenTTL != DefaultAccessTokenTTL {
+		t.Errorf("AccessTokenTTL = %v, want default %v", cfg.AccessTokenTTL, DefaultAccessTokenTTL)
 	}
 	if cfg.GoogleClientID != "client-id" {
 		t.Errorf("GoogleClientID = %q, want %q", cfg.GoogleClientID, "client-id")
@@ -128,5 +132,33 @@ func TestLoad_DataDirAndPublicOriginOverrideHonored(t *testing.T) {
 	}
 	if cfg.PublicOrigin != "https://example.test" {
 		t.Errorf("PublicOrigin = %q, want %q", cfg.PublicOrigin, "https://example.test")
+	}
+}
+
+func TestLoad_AccessTokenTTLOverrideHonored(t *testing.T) {
+	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
+	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	t.Setenv("ACCESS_TOKEN_TTL", "30m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.AccessTokenTTL != 30*time.Minute {
+		t.Errorf("AccessTokenTTL = %v, want 30m", cfg.AccessTokenTTL)
+	}
+}
+
+func TestLoad_InvalidAccessTokenTTLRejected(t *testing.T) {
+	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
+	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	t.Setenv("ACCESS_TOKEN_TTL", "not-a-duration")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() = nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "ACCESS_TOKEN_TTL") {
+		t.Fatalf("Load() error = %q, want it to mention ACCESS_TOKEN_TTL", err.Error())
 	}
 }

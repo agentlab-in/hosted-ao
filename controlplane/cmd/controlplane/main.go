@@ -15,6 +15,7 @@ import (
 
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/server"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/storage/sqlite"
 )
@@ -34,7 +35,12 @@ func main() {
 	}
 	defer db.Close()
 
-	mux := server.New(db)
+	km, err := keys.Load(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("load signing keys: %v", err)
+	}
+
+	mux := server.New(db, km)
 
 	authSvc, err := auth.NewService(db, cfg)
 	if err != nil {

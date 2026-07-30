@@ -5,13 +5,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
 )
 
-// New builds the control plane's HTTP handler, registering /healthz. Later
-// batches add the OAuth, JWKS, and device-flow routes to the same mux.
-func New(db *sql.DB) *http.ServeMux {
+// New builds the control plane's HTTP handler, registering /healthz and the
+// JWKS endpoint. Later batches add the OAuth and device-flow routes to the
+// same mux.
+func New(db *sql.DB, km *keys.Manager) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(db))
+	keys.Register(mux, km)
 	return mux
 }
 
