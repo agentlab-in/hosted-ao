@@ -221,6 +221,66 @@ and is defined once so the three can be built in parallel.
   base selection and credential attachment, not the client protocol, exactly as
   the phase 1 design established.
 
+## Naming and provenance
+
+This repository is a personal adaptation of the open-source Agent Orchestrator,
+not the official project, and it will carry significant features that upstream
+does not have. Upstream is Apache 2.0, so the fork and these additions are fine;
+the constraint is honest representation, not licensing.
+
+The product name is not chosen yet. `<PRODUCT_NAME>` is used below as a
+placeholder. It must be a name this fork owns, and it must not be "Agent
+Orchestrator".
+
+The name is user-visible in exactly three places, all copy, none of them
+structural:
+
+1. The Google consent screen application name, which every user sees at sign-in.
+2. The control-plane sign-in page title.
+3. The `agentlab-in/hosted-ao` repository description, which is currently still
+   the inherited upstream text.
+
+The CLI verbs stay as they are: `ao setup-vm`, `ao whoami`, `ao vm serve`. It is
+the same forked binary, those strings make no brand claim, and renaming them
+would be churn.
+
+## Operator setup: Google OAuth client
+
+A human must do this once, in the Google Cloud console. `gcloud` cannot create a
+general-purpose OAuth client; its only OAuth client commands are for IAP and
+require an internal org audience. This blocks task 4 and nothing else.
+
+Only **one** client is needed. The desktop app never talks to Google: it runs its
+PKCE loopback flow against the control plane, and only the control plane speaks
+to Google.
+
+1. Create a dedicated Google Cloud project, `ao-controlplane`, so consent screen
+   and quota stay separate from anything else.
+2. Verify `agentlab.in` in Google Search Console by DNS TXT record. The consent
+   screen requires authorized domains to be verified, and this is the step that
+   commonly blocks people, so do it first.
+3. Configure the OAuth consent screen: External user type, app name
+   `<PRODUCT_NAME>`, support and developer contact emails, authorized domain
+   `agentlab.in`.
+4. Scopes: `openid`, `email`, `profile` only. These are non-sensitive, so no
+   verification and no security audit is required. A single sensitive scope would
+   drag this into Google review.
+5. Publishing status: publish to production. Allowed immediately with only those
+   three scopes. Leaving it in Testing caps sign-in at 100 manually-added test
+   users.
+6. Create an OAuth client ID of type **Web application**, named
+   `ao-controlplane`, with authorized redirect URIs
+   `https://ao.agentlab.in/auth/google/callback` and
+   `http://localhost:8080/auth/google/callback` for local development. Leave
+   authorized JavaScript origins empty; this is a server-side code exchange.
+7. Supply the credentials to the control plane as `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET` by environment. They are never committed, and task 1's
+   skeleton must fail loudly at boot if either is missing.
+
+Redirect URIs must match byte for byte, including the trailing path. Google
+rejects OAuth inside embedded webviews, which is why the desktop uses the system
+browser.
+
 ## Open decisions deferred to build time
 
 - Access token lifetime may move between 10 and 30 minutes after measuring
