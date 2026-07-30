@@ -253,6 +253,7 @@ func TestGateway_Mux_AcceptsCookieOrHeader(t *testing.T) {
 	tg.daemonCalls = nil
 
 	req = httptest.NewRequest(http.MethodGet, muxPath, nil)
+	req.Header.Set("Origin", testOrigin) // a WebSocket handshake always carries one
 	req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: token})
 	rec = httptest.NewRecorder()
 	tg.handler.ServeHTTP(rec, req)
@@ -307,6 +308,7 @@ func TestGateway_UpstreamCORSHeaders_NotDuplicated(t *testing.T) {
 func TestGateway_Events_AcceptsCookie(t *testing.T) {
 	tg := newTestGateway(t)
 	req := httptest.NewRequest(http.MethodGet, eventsPath, nil)
+	req.Header.Set("Origin", testOrigin) // EventSource always sends one
 	req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: tg.validToken(t)})
 	rec := httptest.NewRecorder()
 
@@ -349,6 +351,46 @@ func TestGateway_Cookie_RejectedOnEveryOtherRoute(t *testing.T) {
 	}
 	if len(tg.daemonCalls) != 0 {
 		t.Errorf("a cookie-only request must never reach the daemon, got %d calls", len(tg.daemonCalls))
+	}
+}
+
+// TestGateway_Cookie_RejectedWithoutOrigin closes corsGate's one hole: it lets
+// a request with no Origin through untouched, and the gateway cookie is
+// SameSite=None, so the browser attaches it cross-site. Without this, a
+// hostile page's `new Image().src = "https://vm.example.com/api/v1/events"`
+// (an image load sends no Origin) is an authenticated SSE stream held open on
+// the daemon, and the same shape reaches /mux. Every browser API that can
+// legitimately reach these two routes sends an Origin; a non-browser client
+// uses the Authorization header, which this does not touch.
+func TestGateway_Cookie_RejectedWithoutOrigin(t *testing.T) {
+	tg := newTestGateway(t)
+	token := tg.validToken(t)
+
+	for _, path := range []string{eventsPath, muxPath} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: token})
+			rec := httptest.NewRecorder()
+
+			tg.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401: the ambient cookie must not authenticate a request with no Origin", rec.Code)
+			}
+		})
+	}
+	if len(tg.daemonCalls) != 0 {
+		t.Errorf("an originless cookie request must never reach the daemon, got %d calls", len(tg.daemonCalls))
+	}
+
+	// The header path is what non-browser clients use, and it must be
+	// unaffected: no Origin, no cookie, still 200.
+	req := httptest.NewRequest(http.MethodGet, eventsPath, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s with only an Authorization header: status = %d, want 200", eventsPath, rec.Code)
 	}
 }
 
