@@ -40,6 +40,16 @@ func main() {
 		log.Fatalf("load signing keys: %v", err)
 	}
 
+	// Log the resolved absolute data dir and the active kid on every boot.
+	// The signing keys live under the data dir, so if a deployment change ever
+	// points the service at a different path, keys.Load silently generates a
+	// fresh pair and every issued token starts failing verification until each
+	// VM's JWKS cache expires. A kid that changed unexpectedly across a restart
+	// is the one signal that makes that diagnosable.
+	activeKID, _ := km.Active()
+	log.Printf("data dir %s, active signing kid %s, access token ttl %v, public origin %s",
+		cfg.DataDir, activeKID, cfg.AccessTokenTTL, cfg.PublicOrigin)
+
 	mux := server.New(db, km)
 
 	authSvc, err := auth.NewService(db, cfg)

@@ -1,10 +1,20 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// setRequired sets every variable Load requires, so each test only has to
+// supply the one it is exercising.
+func setRequired(t *testing.T) {
+	t.Helper()
+	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
+	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	t.Setenv("DATA_DIR", t.TempDir())
+}
 
 func TestLoad_MissingGoogleCredentials(t *testing.T) {
 	tests := []struct {
@@ -35,6 +45,7 @@ func TestLoad_MissingGoogleCredentials(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DATA_DIR", t.TempDir())
 			t.Setenv("AO_SH_G_CLIENT_ID", tt.clientID)
 			t.Setenv("AO_SH_G_CLIENT_SECRET", tt.secret)
 
@@ -49,9 +60,42 @@ func TestLoad_MissingGoogleCredentials(t *testing.T) {
 	}
 }
 
-func TestLoad_DefaultsAppliedWhenCredentialsSet(t *testing.T) {
+func TestLoad_MissingDataDir(t *testing.T) {
 	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
 	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	t.Setenv("DATA_DIR", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with DATA_DIR unset = nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "DATA_DIR") {
+		t.Fatalf("Load() error = %q, want it to mention DATA_DIR", err.Error())
+	}
+}
+
+// A relative DATA_DIR must not stay relative: the EdDSA signing keys live
+// inside it, and a service manager that does not set WorkingDirectory would
+// otherwise resolve it somewhere else and silently generate a fresh key pair.
+func TestLoad_DataDirResolvedToAbsolutePath(t *testing.T) {
+	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
+	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	t.Setenv("DATA_DIR", "./data")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if !filepath.IsAbs(cfg.DataDir) {
+		t.Fatalf("DataDir = %q, want an absolute path", cfg.DataDir)
+	}
+	if filepath.Base(cfg.DataDir) != "data" {
+		t.Errorf("DataDir = %q, want it to end in %q", cfg.DataDir, "data")
+	}
+}
+
+func TestLoad_DefaultsAppliedWhenCredentialsSet(t *testing.T) {
+	setRequired(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -59,9 +103,6 @@ func TestLoad_DefaultsAppliedWhenCredentialsSet(t *testing.T) {
 	}
 	if cfg.ListenAddr != DefaultListenAddr {
 		t.Errorf("ListenAddr = %q, want default %q", cfg.ListenAddr, DefaultListenAddr)
-	}
-	if cfg.DataDir != DefaultDataDir {
-		t.Errorf("DataDir = %q, want default %q", cfg.DataDir, DefaultDataDir)
 	}
 	if cfg.PublicOrigin != DefaultPublicOrigin {
 		t.Errorf("PublicOrigin = %q, want default %q", cfg.PublicOrigin, DefaultPublicOrigin)
@@ -78,8 +119,7 @@ func TestLoad_DefaultsAppliedWhenCredentialsSet(t *testing.T) {
 }
 
 func TestLoad_ListenAddrOverrideHonored(t *testing.T) {
-	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
-	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	setRequired(t)
 	t.Setenv("LISTEN_ADDR", "0.0.0.0:9090")
 
 	cfg, err := Load()
@@ -102,8 +142,7 @@ func TestLoad_InvalidListenAddrRejected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
-			t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+			setRequired(t)
 			t.Setenv("LISTEN_ADDR", tt.addr)
 
 			_, err := Load()
@@ -118,8 +157,7 @@ func TestLoad_InvalidListenAddrRejected(t *testing.T) {
 }
 
 func TestLoad_DataDirAndPublicOriginOverrideHonored(t *testing.T) {
-	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
-	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	setRequired(t)
 	t.Setenv("DATA_DIR", "/tmp/cp-data")
 	t.Setenv("PUBLIC_ORIGIN", "https://example.test")
 
@@ -135,23 +173,59 @@ func TestLoad_DataDirAndPublicOriginOverrideHonored(t *testing.T) {
 	}
 }
 
-func TestLoad_AccessTokenTTLOverrideHonored(t *testing.T) {
-	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
-	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
-	t.Setenv("ACCESS_TOKEN_TTL", "30m")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() unexpected error: %v", err)
+// A trailing slash on PUBLIC_ORIGIN must not survive into the config: it ends
+// up in the `iss` claim, which the VM gateway pins and compares with !=, so
+// one extra byte would reject every token on every VM.
+func TestLoad_PublicOriginTrailingSlashesStripped(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "one slash", raw: "https://ao.agentlab.in/", want: "https://ao.agentlab.in"},
+		{name: "several slashes", raw: "https://ao.agentlab.in///", want: "https://ao.agentlab.in"},
+		{name: "already clean", raw: "https://ao.agentlab.in", want: "https://ao.agentlab.in"},
 	}
-	if cfg.AccessTokenTTL != 30*time.Minute {
-		t.Errorf("AccessTokenTTL = %v, want 30m", cfg.AccessTokenTTL)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv("PUBLIC_ORIGIN", tt.raw)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			if cfg.PublicOrigin != tt.want {
+				t.Errorf("PublicOrigin = %q, want %q", cfg.PublicOrigin, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_AccessTokenTTLOverrideHonored(t *testing.T) {
+	for _, raw := range []string{"10m", "15m", "30m"} {
+		t.Run(raw, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv("ACCESS_TOKEN_TTL", raw)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() unexpected error: %v", err)
+			}
+			want, err := time.ParseDuration(raw)
+			if err != nil {
+				t.Fatalf("ParseDuration(%q): %v", raw, err)
+			}
+			if cfg.AccessTokenTTL != want {
+				t.Errorf("AccessTokenTTL = %v, want %v", cfg.AccessTokenTTL, want)
+			}
+		})
 	}
 }
 
 func TestLoad_InvalidAccessTokenTTLRejected(t *testing.T) {
-	t.Setenv("AO_SH_G_CLIENT_ID", "client-id")
-	t.Setenv("AO_SH_G_CLIENT_SECRET", "client-secret")
+	setRequired(t)
 	t.Setenv("ACCESS_TOKEN_TTL", "not-a-duration")
 
 	_, err := Load()
@@ -160,5 +234,37 @@ func TestLoad_InvalidAccessTokenTTLRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ACCESS_TOKEN_TTL") {
 		t.Fatalf("Load() error = %q, want it to mention ACCESS_TOKEN_TTL", err.Error())
+	}
+}
+
+// An access token is never checked against a revocation list, so its TTL is
+// the whole revocation window. Anything outside the range the spec allows has
+// to fail at boot rather than quietly minting long-lived tokens.
+func TestLoad_OutOfRangeAccessTokenTTLRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		ttl  string
+	}{
+		{name: "well below the minimum", ttl: "30s"},
+		{name: "just below the minimum", ttl: "9m59s"},
+		{name: "just above the maximum", ttl: "30m1s"},
+		{name: "fat fingered hours for minutes", ttl: "720h"},
+		{name: "zero", ttl: "0s"},
+		{name: "negative", ttl: "-15m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv("ACCESS_TOKEN_TTL", tt.ttl)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load() with ACCESS_TOKEN_TTL=%q = nil error, want error", tt.ttl)
+			}
+			if !strings.Contains(err.Error(), "ACCESS_TOKEN_TTL") {
+				t.Fatalf("Load() error = %q, want it to mention ACCESS_TOKEN_TTL", err.Error())
+			}
+		})
 	}
 }

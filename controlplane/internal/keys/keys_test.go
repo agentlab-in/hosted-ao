@@ -113,6 +113,59 @@ func TestRotate_PromotesNextAndGeneratesFreshNext(t *testing.T) {
 	}
 }
 
+// Rotate writes two files. If the second write fails, the promoted key must
+// not already be sitting in active.json, or a restart would read the same key
+// from both files, publish a duplicate kid in JWKS, and lose the rotation slot
+// with no way to tell from either side.
+func TestRotate_FailedSecondWriteLeavesActiveAndNextDistinct(t *testing.T) {
+	dir := t.TempDir()
+	m, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	origActive, origNext := m.active.KID, m.next.KID
+
+	// Make exactly one of the two writes fail, by putting a directory where
+	// Rotate wants to write a file. os.WriteFile cannot overwrite a directory
+	// even as root, so this does not depend on the test user's privileges.
+	failing := filepath.Join(dir, "keys", "next.json")
+	if err := os.Remove(failing); err != nil {
+		t.Fatalf("remove %s: %v", failing, err)
+	}
+	if err := os.Mkdir(failing, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", failing, err)
+	}
+
+	if err := m.Rotate(); err == nil {
+		t.Fatal("Rotate() = nil error, want the injected write failure")
+	}
+
+	onDisk := readKeyPair(t, filepath.Join(dir, "keys", "active.json"))
+	if onDisk.KID == origNext {
+		t.Errorf("active.json holds the promoted next key %q after a failed Rotate(): a restart would publish a duplicate kid", origNext)
+	}
+	if onDisk.KID != origActive {
+		t.Errorf("active.json kid = %q, want the untouched original active kid %q", onDisk.KID, origActive)
+	}
+	if m.active.KID != origActive || m.next.KID != origNext {
+		t.Errorf("in-memory keys changed after a failed Rotate(): active %q, next %q, want %q and %q",
+			m.active.KID, m.next.KID, origActive, origNext)
+	}
+}
+
+func readKeyPair(t *testing.T, path string) keyPair {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var kp keyPair
+	if err := json.Unmarshal(raw, &kp); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return kp
+}
+
 func TestJWKS_PublishesActiveAndNextPublicKeysOnly(t *testing.T) {
 	m, err := Load(t.TempDir())
 	if err != nil {
