@@ -260,3 +260,40 @@ func TestJWKSCache_FailsClosedWithoutEverSucceeding(t *testing.T) {
 		t.Fatal("expected an error: no cached keyset exists and the fetch failed, so verification must fail closed")
 	}
 }
+
+// TestJWKSCache_RefreshSurvivesTheTriggeringRequest pins that the refresh runs
+// on its own context. The keyset belongs to the whole gateway, so a client that
+// hangs up mid-refresh must not cancel the fetch: doing so records a 30 second
+// failureBackoff against a control plane that is perfectly healthy, and on a
+// cold start fails that request closed for no reason.
+func TestJWKSCache_RefreshSurvivesTheTriggeringRequest(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(nil)
+	cancelled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Hang until the caller's context is gone, then answer normally. A
+		// fetch running on that context would already have failed by here.
+		<-cancelled
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksBody(t, testKid, pub))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := NewJWKSCache(srv.URL, srv.Client())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cancel()
+		close(cancelled)
+	}()
+
+	ks, err := cache.Get(ctx)
+	<-done
+	if err != nil {
+		t.Fatalf("Get: %v, want the refresh to outlive the cancelled request", err)
+	}
+	if len(ks.candidates(testKid)) != 1 {
+		t.Fatal("expected the fetched key to be usable")
+	}
+}

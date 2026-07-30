@@ -590,3 +590,95 @@ func writeHooksLogLines(t *testing.T, dataDir string, lines ...string) {
 		t.Fatal(err)
 	}
 }
+
+// TestClaudeAuthProbeGetsItsOwnBudget is the readiness signal not lying. The
+// generic probeTimeout is sized for `git --version`; `claude auth status
+// --json` is a Node CLI cold start, which on a 1 vCPU VM routinely takes
+// longer and may touch the network. Timing out there produces a WARN the
+// desktop maps to "harness missing", so a correctly signed-in machine would
+// report as unconfigured and send the user back to setup.
+func TestClaudeAuthProbeGetsItsOwnBudget(t *testing.T) {
+	setConfigEnv(t)
+	budgets := map[string]time.Duration{}
+	deps := testDeps(t, map[string]string{"git": "/bin/git", "claude": "/bin/claude"},
+		func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatalf("probe %s %v ran with no deadline at all", name, args)
+			}
+			budgets[name+" "+strings.Join(args, " ")] = time.Until(deadline)
+			switch {
+			case name == "/bin/git":
+				return []byte("git version 2.43.0\n"), nil
+			case strings.Join(args, " ") == "--version":
+				return []byte("2.1.220 (Claude Code)\n"), nil
+			default:
+				return []byte(`{"loggedIn":true,"authMethod":"claudeai"}`), nil
+			}
+		})
+
+	if check := findCheck(t, Run(context.Background(), deps), "claude-auth"); check.Level != Pass {
+		t.Fatalf("claude-auth check = %+v, want PASS", check)
+	}
+
+	authBudget := budgets["/bin/claude auth status --json"]
+	if authBudget <= probeTimeout {
+		t.Errorf("claude auth probe budget = %s, want more than the generic probe timeout %s", authBudget, probeTimeout)
+	}
+	if authBudget > harnessAuthTimeout {
+		t.Errorf("claude auth probe budget = %s, want at most %s", authBudget, harnessAuthTimeout)
+	}
+	// The cheap local probes keep the small budget: a slow harness is no
+	// reason to let `git --version` hang the report.
+	if gitBudget := budgets["/bin/git --version"]; gitBudget > probeTimeout {
+		t.Errorf("git probe budget = %s, want the generic probe timeout %s", gitBudget, probeTimeout)
+	}
+}
+
+// TestParseClaudeAuthStatusTruncatesEchoedOutput: this error becomes the check
+// Message, which GET /api/v1/doctor serves, so whatever a future claude release
+// prints on a zero-exit non-JSON path must not be echoed wholesale.
+func TestParseClaudeAuthStatusTruncatesEchoedOutput(t *testing.T) {
+	noise := strings.Repeat("x", 5000)
+	_, err := parseClaudeAuthStatus([]byte(noise))
+	if err == nil {
+		t.Fatal("expected an error: there is no JSON object in the output")
+	}
+	if len(err.Error()) > maxProbeOutputInMessage+100 {
+		t.Fatalf("error is %d bytes, want the echoed output truncated near %d", len(err.Error()), maxProbeOutputInMessage)
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error = %q, want it to say the output was truncated", err.Error())
+	}
+}
+
+// TestGitHubTokenPassKeepsIdentityLocal: `ao doctor` on the machine names the
+// account and the token's scopes, because that is the useful local answer. The
+// HTTP projection gets PublicMessage, which answers only "is the token good":
+// the login is the GitHub identity this machine acts as, and the scope list is
+// the exact capability of the credential sitting on it.
+func TestGitHubTokenPassKeepsIdentityLocal(t *testing.T) {
+	setConfigEnv(t)
+	srv := githubServer(t, http.StatusOK, `{"login":"octocat"}`, "repo, workflow, read:org")
+	deps := testDeps(t, map[string]string{"git": "/bin/git"}, gitOnly)
+	t.Setenv("AO_GITHUB_TOKEN", "env-token")
+	deps.HTTPClient = srv.Client()
+	deps.GitHubRESTBase = srv.URL
+
+	check := findCheck(t, Run(context.Background(), deps), "github-token")
+	if check.Level != Pass {
+		t.Fatalf("github-token check = %+v, want PASS", check)
+	}
+	if !strings.Contains(check.Message, "octocat") || !strings.Contains(check.Message, "repo, workflow, read:org") {
+		t.Errorf("local message = %q, want the login and scopes kept for `ao doctor`", check.Message)
+	}
+	if check.PublicMessage == "" {
+		t.Fatal("public message is empty, so the HTTP route would serve the login and scopes")
+	}
+	if strings.Contains(check.PublicMessage, "octocat") || strings.Contains(check.PublicMessage, "read:org") {
+		t.Errorf("public message = %q, want neither the login nor the scope list", check.PublicMessage)
+	}
+	if !strings.Contains(check.PublicMessage, "AO_GITHUB_TOKEN") {
+		t.Errorf("public message = %q, want it to still name which credential answered", check.PublicMessage)
+	}
+}

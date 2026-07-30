@@ -98,7 +98,7 @@ type Options struct {
 func Resolve(opts Options, dataDir string) (Config, error) {
 	machineFilePath := firstNonEmpty(opts.MachineFile, os.Getenv("AO_MACHINE_FILE"))
 	if machineFilePath == "" {
-		p, err := defaultMachineFilePath()
+		p, err := DefaultMachineFilePath()
 		if err != nil {
 			return Config{}, err
 		}
@@ -196,7 +196,24 @@ func normalizeDomain(domain, source string) (string, error) {
 	return domain, nil
 }
 
-func defaultMachineFilePath() (string, error) {
+// DefaultMachineFilePath is where machine.json lives when AO_MACHINE_FILE and
+// --machine-file are both unset: ~/.ao/machine.json, the AO home directory,
+// NOT the AO_DATA_DIR-resolved data dir that CertDir above uses.
+//
+// That asymmetry is deliberate, and it is the answer to a review finding that
+// read it as a bug. AO_DATA_DIR moves durable data (the SQLite database, the
+// ACME cert cache). machine.json is this machine's binding identity and sits
+// beside running.json, which has the same shape: pinned to ~/.ao and moved
+// only by its own override (AO_RUN_FILE there, AO_MACHINE_FILE here). Deriving
+// it from the data dir instead would move the file the gateway reads without
+// moving the file `ao setup-vm` writes (setupPlan.MachineFile is
+// <home>/.ao/machine.json regardless of AO_DATA_DIR), so an operator who set
+// AO_DATA_DIR would get a gateway looking in a place nothing ever writes.
+//
+// It is exported so `ao whoami` resolves the same path from the same line of
+// code: the two must name the same file, or whoami confidently reports a
+// binding the gateway never sees.
+func DefaultMachineFilePath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve machine file path: %w", err)

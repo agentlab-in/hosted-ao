@@ -133,7 +133,15 @@ func (c *JWKSCache) Get(ctx context.Context) (*KeySet, error) {
 	c.refreshing = true
 	c.mu.Unlock()
 
-	fresh, err := c.fetch(ctx)
+	// Detached from the triggering request: the keyset is the whole gateway's,
+	// not this caller's. A client that hangs up mid-refresh would otherwise
+	// cancel the fetch every other request is about to depend on, which on a
+	// warm cache records a 30 second failureBackoff against a control plane
+	// that is perfectly healthy, and on a cold start fails that request closed.
+	// The HTTP client's own timeout is what bounds it instead.
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.fetchTimeout())
+	fresh, err := c.fetch(fetchCtx)
+	cancel()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -151,6 +159,16 @@ func (c *JWKSCache) Get(ctx context.Context) (*KeySet, error) {
 	c.keys = fresh
 	c.fetchedAt = c.now()
 	return c.keys, nil
+}
+
+// fetchTimeout bounds a detached refresh. It mirrors the HTTP client's own
+// timeout so an injected client without one (a test's, or a caller that set
+// Timeout: 0) still cannot leave a fetch running indefinitely.
+func (c *JWKSCache) fetchTimeout() time.Duration {
+	if c.client != nil && c.client.Timeout > 0 {
+		return c.client.Timeout
+	}
+	return 10 * time.Second
 }
 
 func (c *JWKSCache) fetch(ctx context.Context) (*KeySet, error) {

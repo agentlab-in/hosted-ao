@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -235,4 +236,49 @@ func TestReadMachineFile_Malformed(t *testing.T) {
 	if _, err := ReadMachineFile(path); err == nil {
 		t.Fatal("expected an error for malformed JSON")
 	}
+}
+
+// TestDefaultMachineFilePath_IsHomeNotDataDir pins the asymmetry with CertDir
+// above, which a review read as a bug: AO_DATA_DIR moves durable data, while
+// machine.json is binding identity pinned to ~/.ao and moved only by
+// AO_MACHINE_FILE. `ao setup-vm` writes <home>/.ao/machine.json whatever
+// AO_DATA_DIR says, so deriving the read path from the data dir would point the
+// gateway at a file nothing ever writes. `ao whoami` resolves through this same
+// function so the two can never drift.
+func TestDefaultMachineFilePath_IsHomeNotDataDir(t *testing.T) {
+	home := t.TempDir()
+	setHomeEnv(t, home)
+
+	got, err := DefaultMachineFilePath()
+	if err != nil {
+		t.Fatalf("DefaultMachineFilePath: %v", err)
+	}
+	if want := filepath.Join(home, ".ao", "machine.json"); got != want {
+		t.Fatalf("DefaultMachineFilePath = %q, want %q", got, want)
+	}
+
+	// A data dir somewhere else entirely must not move it.
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	cfg, err := Resolve(Options{
+		Domain: "vm.example.com", MachineID: "machine-1", AccountID: "account-1",
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.Domain != "vm.example.com" {
+		t.Fatalf("Domain = %q", cfg.Domain)
+	}
+	after, err := DefaultMachineFilePath()
+	if err != nil || after != got {
+		t.Fatalf("DefaultMachineFilePath = %q (err %v), want it unchanged at %q", after, err, got)
+	}
+}
+
+func setHomeEnv(t *testing.T, home string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+		return
+	}
+	t.Setenv("HOME", home)
 }
