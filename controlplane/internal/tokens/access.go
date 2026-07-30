@@ -41,6 +41,14 @@ func NewIssuer(km *keys.Manager, db *sql.DB, issuerURL string, accessTTL time.Du
 	return &Issuer{keys: km, db: db, issuer: issuerURL, accessTTL: accessTTL}
 }
 
+// AccessTokenTTL is the lifetime of the access tokens this Issuer mints. It
+// is exposed so a caller returning a token to a client can report the same
+// `expires_in` the token's own `exp` encodes, rather than keeping a second
+// copy of the configured TTL that can drift from it.
+func (i *Issuer) AccessTokenTTL() time.Duration {
+	return i.accessTTL
+}
+
 type accessClaims struct {
 	Iss string `json:"iss"`
 	Sub string `json:"sub"`
@@ -75,10 +83,11 @@ type jwtHeader struct {
 }
 
 // signEdDSA builds and signs a compact JWT: base64url(header) + "." +
-// base64url(payload) + "." + base64url(signature). Verification happens
-// downstream (the VM gateway, against cached JWKS), so this package only
-// ever needs to construct and sign, not parse, which is why it does not
-// depend on a JWT library.
+// base64url(payload) + "." + base64url(signature). Machine-audience tokens
+// are verified downstream (the VM gateway, against cached JWKS); the only
+// tokens this package parses are the control-plane-audience ones it is itself
+// the resource server for, in controlplane.go. Both halves are small enough
+// against a single algorithm that neither needs a JWT library.
 func signEdDSA(kid string, priv ed25519.PrivateKey, claims any) (string, error) {
 	header, err := json.Marshal(jwtHeader{Alg: "EdDSA", Kid: kid, Typ: "JWT"})
 	if err != nil {

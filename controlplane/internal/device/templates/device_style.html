@@ -1,0 +1,105 @@
+{{/*
+  Shared styling for the three device flow pages, kept in step with
+  internal/auth/templates/signin.html so sign-in and approval look like one
+  service. Inline rather than a served stylesheet: the control plane has no
+  static file route, and adding one for a single sheet is not worth it.
+*/}}
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0b0d12;
+    color: #e6e8eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+  }
+  .card {
+    background: #151821;
+    border: 1px solid #262b36;
+    border-radius: 12px;
+    padding: 2.5rem;
+    width: 360px;
+    text-align: center;
+  }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0 0 1rem;
+  }
+  p.hint {
+    color: #9aa4b2;
+    font-size: 0.875rem;
+    margin: 0 0 1.25rem;
+  }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  input.code {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    background: #0b0d12;
+    border: 1px solid #262b36;
+    border-radius: 8px;
+    color: #e6e8eb;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 1.25rem;
+    letter-spacing: 0.15em;
+    padding: 0.75rem 1rem;
+    text-align: center;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+  }
+  input.code:focus {
+    outline: none;
+    border-color: #3b82f6;
+  }
+  .button {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    background: #3b82f6;
+    border: 1px solid #3b82f6;
+    color: #fff;
+    text-decoration: none;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .button:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+  .button.secondary {
+    background: transparent;
+    border-color: #262b36;
+    color: #9aa4b2;
+    margin-top: 0.75rem;
+  }
+  .button.secondary:hover {
+    background: #1b1f2a;
+    border-color: #384152;
+    color: #e6e8eb;
+  }
+  p.error {
+    color: #f87171;
+    font-size: 0.875rem;
+    margin: 0 0 1rem;
+  }
+  dl.details {
+    text-align: left;
+    margin: 0 0 1.25rem;
+    font-size: 0.875rem;
+  }
+  dl.details dt {
+    color: #9aa4b2;
+    margin-top: 0.75rem;
+  }
+  dl.details dd {
+    margin: 0.15rem 0 0;
+    word-break: break-all;
+  }
+</style>

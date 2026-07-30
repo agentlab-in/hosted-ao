@@ -13,11 +13,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/api"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/device"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/server"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/storage/sqlite"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/tokens"
 )
 
 // shutdownTimeout bounds graceful shutdown after SIGINT/SIGTERM.
@@ -57,6 +60,20 @@ func main() {
 		log.Fatalf("init auth: %v", err)
 	}
 	authSvc.Register(mux)
+
+	// One Issuer mints both audiences: machines.id for a token a VM gateway
+	// will verify, and cfg.PublicOrigin for a token this service's own API
+	// will. See TOKEN_CONTRACT.md, "The two audiences".
+	issuer := tokens.NewIssuer(km, db, cfg.PublicOrigin, cfg.AccessTokenTTL)
+
+	apiSvc := api.NewService(issuer)
+	apiSvc.Register(mux)
+
+	deviceSvc, err := device.NewService(db, issuer, authSvc, apiSvc.Authenticate, cfg.PublicOrigin)
+	if err != nil {
+		log.Fatalf("init device flow: %v", err)
+	}
+	deviceSvc.Register(mux)
 
 	// LISTEN_ADDR defaults to loopback (127.0.0.1:8080): this service sits
 	// behind Caddy on the same box, which terminates TLS and reverse-proxies
