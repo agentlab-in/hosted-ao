@@ -54,12 +54,53 @@ func (s *Service) handleEnterCodePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// sameOrigin reports whether a browser POST came from this control plane's
+// own pages, writing the rejection page itself when it did not.
+//
+// Origin is the check rather than a CSRF token because browsers send it on
+// every POST, the Service already knows the one origin it serves, and a token
+// would need the sessions interface extended to hand out a signing key. A
+// missing Origin is allowed through: a non-browser client (curl, `ao`, a test)
+// sends none, and every browser that would carry the ambient session cookie
+// does send one.
+func (s *Service) sameOrigin(w http.ResponseWriter, r *http.Request) bool {
+	if o := r.Header.Get("Origin"); o != "" && o != s.publicOrigin {
+		s.renderEnterPage(w, http.StatusForbidden, enterPageData{
+			Error: "That request did not come from this page.",
+		})
+		return false
+	}
+	return true
+}
+
+// allowAttempt records one user-code attempt against accountID and reports
+// whether it is within the allowance, writing the rejection page itself when
+// it is not.
+//
+// Both browser POSTs go through it, not just the enter-code page: they both
+// take a user_code out of a form, and the one that binds a machine to this
+// account is the one worth guessing against, so metering only the other one
+// meters nothing.
+func (s *Service) allowAttempt(w http.ResponseWriter, accountID, userCode string) bool {
+	if s.attempts.allow(accountID) {
+		return true
+	}
+	s.renderEnterPage(w, http.StatusTooManyRequests, enterPageData{
+		UserCode: formatUserCode(userCode),
+		Error:    "Too many attempts. Wait a minute and try again.",
+	})
+	return false
+}
+
 // handleSubmitCode looks up the typed code and, if it is live, renders the
 // confirmation page. It never approves: approval is a separate POST, so
 // following a verification_uri_complete link cannot bind a machine by itself.
 func (s *Service) handleSubmitCode(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := s.requireAccount(w, r, verificationPath)
 	if !ok {
+		return
+	}
+	if !s.sameOrigin(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -73,11 +114,7 @@ func (s *Service) handleSubmitCode(w http.ResponseWriter, r *http.Request) {
 	// A user code is short enough to guess given enough tries, so the page is
 	// rate limited per signed-in account. The check runs before the lookup so
 	// a burst of wrong codes cannot be used to time the database either.
-	if !s.attempts.allow(accountID) {
-		s.renderEnterPage(w, http.StatusTooManyRequests, enterPageData{
-			UserCode: formatUserCode(userCode),
-			Error:    "Too many attempts. Wait a minute and try again.",
-		})
+	if !s.allowAttempt(w, accountID, userCode) {
 		return
 	}
 
@@ -110,12 +147,20 @@ func (s *Service) handleSubmitCode(w http.ResponseWriter, r *http.Request) {
 // handleDecision is the approval confirmation: it binds the code to the
 // signed-in account and registers the machine, or denies the request.
 //
-// The session cookie is SameSite=Lax, which browsers do not attach to a
-// cross-site POST, so a third-party page cannot drive this form on a
-// signed-in operator's behalf.
+// This is the state-changing half of the flow and the only place a guessed
+// user_code is worth anything, so it carries the same two controls the
+// enter-code page does: an Origin check and the per-account attempt limiter.
+//
+// The session cookie's SameSite=Lax is not the defence on its own. SameSite is
+// scoped to the registrable domain, not the origin, so any other host under
+// the control plane's own domain is same-site and its cross-origin POST would
+// still carry the cookie. sameOrigin is what closes that.
 func (s *Service) handleDecision(w http.ResponseWriter, r *http.Request) {
 	accountID, ok := s.requireAccount(w, r, verificationPath)
 	if !ok {
+		return
+	}
+	if !s.sameOrigin(w, r) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -125,6 +170,13 @@ func (s *Service) handleDecision(w http.ResponseWriter, r *http.Request) {
 
 	userCode := normalizeUserCode(r.PostForm.Get("user_code"))
 	now := time.Now().UTC()
+
+	// Both actions are metered, not just approve: deny is the same unmetered
+	// primitive against the same code space, and a hit silently kills someone
+	// else's setup.
+	if !s.allowAttempt(w, accountID, userCode) {
+		return
+	}
 
 	if r.PostForm.Get("action") == "deny" {
 		if err := s.deny(r.Context(), userCode); err != nil && !errors.Is(err, errCodeNotPending) {

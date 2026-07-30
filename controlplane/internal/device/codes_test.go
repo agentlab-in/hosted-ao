@@ -84,7 +84,11 @@ func TestNormalizePublicURL(t *testing.T) {
 		{"vm.example.com", "https://vm.example.com"},
 		{"https://VM.Example.COM", "https://vm.example.com"},
 		{"  https://vm.example.com  ", "https://vm.example.com"},
+		// http is the local-development affordance, so it is accepted for a
+		// loopback host and nothing else.
 		{"http://127.0.0.1:8443", "http://127.0.0.1:8443"},
+		{"http://localhost:8443", "http://localhost:8443"},
+		{"http://[::1]:8443", "http://[::1]:8443"},
 	}
 	for _, tt := range ok {
 		got, err := normalizePublicURL(tt.raw)
@@ -108,10 +112,33 @@ func TestNormalizePublicURL(t *testing.T) {
 		"https://vm.example.com?x=1",
 		"https://vm.example.com#frag",
 		"https://",
+		// Plaintext for a routable host: the desktop would send the bearer
+		// token and the Secure gateway cookie to it in the clear, and
+		// `ao vm serve` only ever listens on TLS, so the registration would
+		// succeed and produce a machine that cannot work.
+		"http://vm.example.com",
+		"http://vm.example.com:8443",
+		"http://203.0.113.10",
+		"http://localhost.evil.example.com",
 	}
 	for _, raw := range bad {
 		if got, err := normalizePublicURL(raw); err == nil {
 			t.Errorf("normalizePublicURL(%q) = %q, want an error", raw, got)
+		}
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	for _, host := range []string{"localhost", "LocalHost", "127.0.0.1", "127.0.0.2", "::1"} {
+		if !isLoopbackHost(host) {
+			t.Errorf("isLoopbackHost(%q) = false, want true", host)
+		}
+	}
+	// "localhost." and a name that merely ends in localhost are other people's
+	// hosts, and 0.0.0.0 is not loopback.
+	for _, host := range []string{"", "vm.example.com", "notlocalhost", "localhost.example.com", "0.0.0.0", "8.8.8.8"} {
+		if isLoopbackHost(host) {
+			t.Errorf("isLoopbackHost(%q) = true, want false", host)
 		}
 	}
 }

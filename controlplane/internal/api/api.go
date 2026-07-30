@@ -144,15 +144,26 @@ func Unauthorized(w http.ResponseWriter) {
 	WriteError(w, http.StatusUnauthorized, "invalid_token", "a valid access token is required")
 }
 
+// MaxBodyBytes caps the request body every endpoint here reads through
+// ReadParams. Nothing this API accepts is large: the biggest field is a
+// base64url refresh token. The cap applies to both body shapes, because
+// net/http's own default is 10 MiB and the one unauthenticated endpoint
+// (POST /device/code) writes a permanent row per request.
+const MaxBodyBytes = 1 << 16
+
 // ReadParams accepts either a form-encoded body, which is what the OAuth
 // specs use, or a JSON object, which is what a Go or Electron client is more
 // likely to send. Both are read into url.Values so handlers do not care which
 // arrived. A JSON value that is not a string is ignored rather than
 // stringified, so a client cannot smuggle a number or an object into a field.
+//
+// Both branches cap the body at MaxBodyBytes. An over-long body surfaces as an
+// error here, which every caller turns into a 400.
 func ReadParams(w http.ResponseWriter, r *http.Request) (url.Values, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 	if ct := r.Header.Get("Content-Type"); strings.HasPrefix(ct, "application/json") {
 		var raw map[string]any
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&raw); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			return nil, err
 		}
 		values := url.Values{}

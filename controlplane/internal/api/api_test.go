@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,6 +155,73 @@ func TestTokenEndpoint_RejectsBadRequestsIdentically(t *testing.T) {
 		"refresh_token": {"whatever"},
 	}); rec.Code != http.StatusBadRequest {
 		t.Errorf("wrong grant_type: status = %d, want 400", rec.Code)
+	}
+}
+
+// TestTokenEndpoint_ConcurrentExchangesLoseWithInvalidGrantNotAServerError
+// pins the error shape a losing rotation gets. Exactly one exchange has always
+// committed, so there was never a double rotation, but the loser used to get a
+// 500 server_error out of SQLite's read-to-write upgrade on a deferred
+// transaction. A client reads that as transient, retries with the token the
+// winner already revoked, and signs the operator out even though a valid
+// rotated token exists in the other window.
+func TestTokenEndpoint_ConcurrentExchangesLoseWithInvalidGrantNotAServerError(t *testing.T) {
+	svc, issuer, _ := newTestService(t)
+
+	mux := http.NewServeMux()
+	svc.Register(mux)
+
+	// Several rounds, because the upgrade only fails for a racer whose snapshot
+	// went stale: one round is not a reliable reproduction.
+	for round := range 5 {
+		refresh, err := issuer.IssueRefreshToken(context.Background(), testAccountID, "install-1")
+		if err != nil {
+			t.Fatalf("IssueRefreshToken() unexpected error: %v", err)
+		}
+
+		const racers = 8
+		var (
+			wg     sync.WaitGroup
+			start  = make(chan struct{})
+			codes  = make([]int, racers)
+			bodies = make([]string, racers)
+		)
+		for i := range racers {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/token",
+					strings.NewReader(url.Values{"refresh_token": {refresh}}.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				rec := httptest.NewRecorder()
+				<-start
+				mux.ServeHTTP(rec, req)
+				codes[i] = rec.Code
+				bodies[i] = rec.Body.String()
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		successes := 0
+		for i, code := range codes {
+			switch code {
+			case http.StatusOK:
+				successes++
+			case http.StatusBadRequest:
+				if !strings.Contains(bodies[i], "invalid_grant") {
+					t.Errorf("round %d racer %d: 400 body %q, want invalid_grant", round, i, bodies[i])
+				}
+			default:
+				t.Errorf("round %d racer %d: status = %d, want 200 or 400/invalid_grant, body: %s",
+					round, i, code, bodies[i])
+			}
+		}
+		// The property that already held, asserted so the error-shape fix
+		// cannot quietly cost it: a refresh token is single use.
+		if successes != 1 {
+			t.Errorf("round %d: successes = %d, want exactly 1", round, successes)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package device
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -77,6 +78,16 @@ func (s *Service) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(params.Get("machine_name"))
 	if name == "" {
 		name = hostOf(publicURL)
+	}
+	// This endpoint is unauthenticated and the row it writes is permanent, so
+	// the one attacker-chosen string on it is length checked here rather than
+	// left to whatever the body limit happens to be. Runes, not bytes: the name
+	// is displayed to a human, and a byte cap would silently give a non-Latin
+	// script a quarter of the allowance.
+	if len([]rune(name)) > maxMachineNameRunes {
+		api.WriteError(w, http.StatusBadRequest, errInvalidRequest,
+			fmt.Sprintf("machine_name must be at most %d characters", maxMachineNameRunes))
+		return
 	}
 
 	now := time.Now().UTC()

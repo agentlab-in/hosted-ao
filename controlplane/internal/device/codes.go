@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -38,6 +39,14 @@ const (
 	// hold the drawn value, so more than a couple of retries means something
 	// is wrong rather than unlucky.
 	maxCodeGenerationAttempts = 5
+
+	// maxMachineNameRunes caps machine_name on the device authorization
+	// endpoint. That endpoint is unauthenticated and the row it writes is
+	// permanent, so the name is attacker-chosen storage: without a cap, one
+	// request writes however much the body limit allows. 128 is well past any
+	// hostname or label an operator would type, and the approval page displays
+	// the value, so a longer one would not render usefully anyway.
+	maxMachineNameRunes = 128
 )
 
 // newUserCode returns a fresh user code in storage form (unformatted,
@@ -127,7 +136,26 @@ func normalizePublicURL(raw string) (string, error) {
 	if p := strings.Trim(u.Path, "/"); p != "" {
 		return "", fmt.Errorf("public_url %q must be a bare origin with no path", raw)
 	}
+	// http is a local-development affordance only. The desktop builds its base
+	// URL from this value and sends the bearer token and the Secure ao_gw_token
+	// cookie to it, and `ao vm serve` only ever listens on TLS, so a plaintext
+	// origin for a routable host is a machine that cannot work whose
+	// registration nonetheless succeeded.
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return "", fmt.Errorf("public_url %q must use https: http is accepted only for a loopback host", raw)
+	}
 	return u.Scheme + "://" + strings.ToLower(u.Host), nil
+}
+
+// isLoopbackHost reports whether host names this machine. "localhost" is
+// matched by name because it is not an IP literal; everything else goes
+// through net.IP, so 127.0.0.2 and [::1] are covered as well as 127.0.0.1.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // hostOf returns the hostname of an already-normalized public URL, used as
@@ -141,10 +169,11 @@ func hostOf(publicURL string) string {
 
 const (
 	// attemptWindow and attemptsPerWindow bound how fast one signed-in
-	// account may guess user codes on the enter-code page. The device code
-	// endpoint needs no equivalent because a device code has 256 bits of
-	// entropy, but a user code has about 34, so the page is the oracle worth
-	// closing.
+	// account may guess user codes. Both browser POSTs that read a user_code
+	// out of a form are metered by it: the enter-code page, and the decision
+	// POST that actually binds a machine. The device code endpoint needs no
+	// equivalent because a device code has 256 bits of entropy, but a user code
+	// has about 34, so those two are the oracle worth closing.
 	attemptWindow     = time.Minute
 	attemptsPerWindow = 10
 )
@@ -156,6 +185,14 @@ const (
 // instance today (one Caddy site on one box) and accounts are Google-verified,
 // so both are fine; if it is ever replicated, move this to a table or a shared
 // store, otherwise each replica grants the full allowance.
+//
+// Two more ceilings, so this control is not over-trusted. It is keyed by
+// account, so N Google accounts buy N times the allowance (10N guesses a
+// minute); the real bound on guessing is the 34 bits and the 15 minute code
+// lifetime, not this. And l.seen never evicts, so it holds one entry per
+// account that has ever submitted a code, bounded by the account count, which
+// is small today. If either stops being true, key the window on the request's
+// IP as well and sweep l.seen on a ticker.
 type attemptLimiter struct {
 	mu    sync.Mutex
 	seen  map[string][]time.Time

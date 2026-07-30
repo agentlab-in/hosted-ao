@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +98,22 @@ func (h *harness) do(method, target, account string, body url.Values) *httptest.
 		req = httptest.NewRequest(method, target, strings.NewReader(body.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
+	if account != "" {
+		req.Header.Set(signInHeader, account)
+	}
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	return rec
+}
+
+// doFrom is do with a browser Origin header on the request, which is how a
+// test says "this POST came from that page".
+func (h *harness) doFrom(origin, method, target, account string, body url.Values) *httptest.ResponseRecorder {
+	h.t.Helper()
+
+	req := httptest.NewRequest(method, target, strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", origin)
 	if account != "" {
 		req.Header.Set(signInHeader, account)
 	}
@@ -595,6 +612,250 @@ func TestSubmitCode_UnknownCodeIsRejectedAndRateLimited(t *testing.T) {
 	// The limit is per account: it does not lock out everyone else.
 	if rec := h.do(http.MethodPost, "/device", accountB, url.Values{"user_code": {"WDJB-MJHT"}}); rec.Code == http.StatusTooManyRequests {
 		t.Error("a second account was rate limited by the first account's guesses")
+	}
+}
+
+// TestDecision_GuessingIsRateLimitedOnBothActions is the companion to
+// TestSubmitCode_UnknownCodeIsRejectedAndRateLimited on the handler that
+// actually changes state. Approving is what a guessed user code buys: the
+// guesser's account gets the victim's VM. Denying is the same unmetered
+// primitive and silently kills someone else's setup. Both are metered.
+func TestDecision_GuessingIsRateLimitedOnBothActions(t *testing.T) {
+	for _, action := range []string{"approve", "deny"} {
+		t.Run(action, func(t *testing.T) {
+			h := newHarness(t)
+
+			// Every response on this path is distinguishable (200 hit, 400
+			// unknown, 409 used), so an unmetered guess is an oracle. The cap
+			// is what makes it not one.
+			var last *httptest.ResponseRecorder
+			for range attemptsPerWindow + 2 {
+				last = h.do(http.MethodPost, "/device/decision", accountA, url.Values{
+					"user_code": {"WDJB-MJHT"},
+					"action":    {action},
+				})
+			}
+			if last.Code != http.StatusTooManyRequests {
+				t.Errorf("status after %d %s guesses = %d, want 429", attemptsPerWindow+2, action, last.Code)
+			}
+
+			// A code that exists is refused too once the allowance is spent,
+			// so the limit is not merely a message on the miss path.
+			issued := h.requestCode(testPublicURL, "prod vm")
+			rec := h.do(http.MethodPost, "/device/decision", accountA, url.Values{
+				"user_code": {issued.UserCode},
+				"action":    {action},
+			})
+			if rec.Code != http.StatusTooManyRequests {
+				t.Errorf("a live code past the allowance = %d, want 429", rec.Code)
+			}
+			assertNoMachines(t, h.db)
+			var status string
+			if err := h.db.QueryRow(`SELECT status FROM device_codes`).Scan(&status); err != nil {
+				t.Fatalf("read status: %v", err)
+			}
+			if status != statusPending {
+				t.Errorf("status = %q, want it still %q: a rate limited request must not act", status, statusPending)
+			}
+
+			// The limit is per account, so one guesser cannot lock out the
+			// operator who is legitimately mid-setup.
+			if rec := h.do(http.MethodPost, "/device/decision", accountB, url.Values{
+				"user_code": {"WDJB-MJHT"},
+				"action":    {action},
+			}); rec.Code == http.StatusTooManyRequests {
+				t.Error("a second account was rate limited by the first account's guesses")
+			}
+		})
+	}
+}
+
+// TestDecision_RejectsACrossOriginPost covers the CSRF case SameSite=Lax does
+// not: SameSite is scoped to the registrable domain, so a page on another host
+// under the same domain is same-site and its POST carries the session cookie.
+func TestDecision_RejectsACrossOriginPost(t *testing.T) {
+	h := newHarness(t)
+	issued := h.requestCode(testPublicURL, "prod vm")
+	form := url.Values{"user_code": {issued.UserCode}, "action": {"approve"}}
+
+	// Same registrable domain, different origin: this is the attacker.
+	for _, origin := range []string{"https://evil.ao.test", "https://evil.example.com", "http://ao.test"} {
+		rec := h.doFrom(origin, http.MethodPost, "/device/decision", accountA, form)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("approval with Origin %q = %d, want 403", origin, rec.Code)
+		}
+	}
+	assertNoMachines(t, h.db)
+
+	// The enter-code page is guarded too, so a cross-origin POST cannot burn
+	// the victim's attempt allowance either.
+	if rec := h.doFrom("https://evil.ao.test", http.MethodPost, "/device", accountA,
+		url.Values{"user_code": {issued.UserCode}}); rec.Code != http.StatusForbidden {
+		t.Errorf("submit with a foreign Origin = %d, want 403", rec.Code)
+	}
+
+	// The control plane's own page still works, which is what stops this being
+	// a fix that breaks the flow.
+	if rec := h.doFrom(testOrigin, http.MethodPost, "/device", accountA,
+		url.Values{"user_code": {issued.UserCode}}); rec.Code != http.StatusOK {
+		t.Fatalf("submit from %s = %d, want 200, body: %s", testOrigin, rec.Code, rec.Body)
+	}
+	if rec := h.doFrom(testOrigin, http.MethodPost, "/device/decision", accountA, form); rec.Code != http.StatusOK {
+		t.Fatalf("approval from %s = %d, want 200, body: %s", testOrigin, rec.Code, rec.Body)
+	}
+	var count int
+	if err := h.db.QueryRow(`SELECT count(*) FROM machines`).Scan(&count); err != nil {
+		t.Fatalf("count machines: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("machines rows = %d, want 1 after a same-origin approval", count)
+	}
+}
+
+// TestDecision_ConcurrentApprovalsLoseWithAConflictNotAServerError is the
+// device-flow half of the deferred-transaction fix. Two tabs approving the same
+// code used to produce a 500 from the SQLite read-to-write upgrade, which reads
+// as "retry" when the true answer is "someone already did this".
+func TestDecision_ConcurrentApprovalsLoseWithAConflictNotAServerError(t *testing.T) {
+	h := newHarness(t)
+	issued := h.requestCode(testPublicURL, "prod vm")
+
+	const racers = 6
+	var (
+		wg    sync.WaitGroup
+		start = make(chan struct{})
+		codes = make([]int, racers)
+	)
+	for i := range racers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			codes[i] = h.do(http.MethodPost, "/device/decision", accountA, url.Values{
+				"user_code": {issued.UserCode},
+				"action":    {"approve"},
+			}).Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	approved := 0
+	for i, code := range codes {
+		switch code {
+		case http.StatusOK:
+			approved++
+		case http.StatusConflict:
+		default:
+			t.Errorf("racer %d: status = %d, want 200 or 409", i, code)
+		}
+	}
+	if approved != 1 {
+		t.Errorf("approvals = %d, want exactly 1", approved)
+	}
+}
+
+func TestDeviceCodeEndpoint_RejectsAnOverlongMachineName(t *testing.T) {
+	h := newHarness(t)
+
+	// The endpoint is unauthenticated and its row is permanent, so the one
+	// attacker-chosen string on it is capped.
+	rec := h.do(http.MethodPost, "/device/code", "", url.Values{
+		"public_url":   {testPublicURL},
+		"machine_name": {strings.Repeat("n", maxMachineNameRunes+1)},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("an overlong machine_name = %d, want 400", rec.Code)
+	}
+	var count int
+	if err := h.db.QueryRow(`SELECT count(*) FROM device_codes`).Scan(&count); err != nil {
+		t.Fatalf("count device codes: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("device_codes rows = %d, want 0: a rejected request must not write", count)
+	}
+
+	// Exactly at the cap is fine, and the cap counts runes, not bytes, so a
+	// name in a non-Latin script is not silently a quarter of the allowance.
+	for _, name := range []string{
+		strings.Repeat("n", maxMachineNameRunes),
+		strings.Repeat("é", maxMachineNameRunes),
+	} {
+		if rec := h.do(http.MethodPost, "/device/code", "", url.Values{
+			"public_url":   {testPublicURL},
+			"machine_name": {name},
+		}); rec.Code != http.StatusOK {
+			t.Errorf("a %d rune machine_name = %d, want 200", len([]rune(name)), rec.Code)
+		}
+	}
+}
+
+func TestDeviceCodeEndpoint_RejectsAnOversizedBody(t *testing.T) {
+	h := newHarness(t)
+
+	// net/http's own default is 10 MiB, and the form branch used to inherit it,
+	// so one request could write megabytes into a permanent row.
+	for _, tt := range []struct{ name, contentType, body string }{
+		{"form", "application/x-www-form-urlencoded",
+			"public_url=vm.example.com&machine_name=" + strings.Repeat("n", api.MaxBodyBytes+1)},
+		{"json", "application/json",
+			`{"public_url":"vm.example.com","machine_name":"` + strings.Repeat("n", api.MaxBodyBytes+1) + `"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/device/code", strings.NewReader(tt.body))
+		req.Header.Set("Content-Type", tt.contentType)
+		rec := httptest.NewRecorder()
+		h.mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s body over %d bytes = %d, want 400", tt.name, api.MaxBodyBytes, rec.Code)
+		}
+	}
+
+	var count int
+	if err := h.db.QueryRow(`SELECT count(*) FROM device_codes`).Scan(&count); err != nil {
+		t.Fatalf("count device codes: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("device_codes rows = %d, want 0", count)
+	}
+}
+
+func TestDeviceCodeEndpoint_SweepsExpiredRowsSoTheTableIsBounded(t *testing.T) {
+	h := newHarness(t)
+
+	first := h.requestCode(testPublicURL, "prod vm")
+	if rec := h.approve(first.UserCode, accountA); rec.Code != http.StatusOK {
+		t.Fatalf("approval status = %d, want 200", rec.Code)
+	}
+	h.expireCodes()
+
+	// Nothing used to delete a device_codes row, so an unauthenticated caller
+	// could grow the file that sits beside the signing keys without bound.
+	h.requestCode(testPublicURL, "another vm")
+
+	var count int
+	if err := h.db.QueryRow(`SELECT count(*) FROM device_codes`).Scan(&count); err != nil {
+		t.Fatalf("count device codes: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("device_codes rows = %d, want 1: the expired row should be swept", count)
+	}
+
+	// The sweep is a size bound, not the expiry mechanism, and it does not
+	// take the machine the approval registered with it.
+	var machines int
+	if err := h.db.QueryRow(`SELECT count(*) FROM machines`).Scan(&machines); err != nil {
+		t.Fatalf("count machines: %v", err)
+	}
+	if machines != 1 {
+		t.Errorf("machines rows = %d, want 1: sweeping a device code must not unbind a machine", machines)
+	}
+
+	// A live row is never swept.
+	live := h.requestCode(testPublicURL, "live vm")
+	h.requestCode(testPublicURL, "one more")
+	if _, _, failure := h.poll(live.DeviceCode); failure.Error != errAuthorizationPending {
+		t.Errorf("poll of a live code after a sweep = %q, want authorization_pending", failure.Error)
 	}
 }
 
