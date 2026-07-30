@@ -175,6 +175,7 @@ func passingPreflight() setupPreflight {
 	return setupPreflight{
 		Domain:      "vm.example.com",
 		UID:         0,
+		TargetUser:  "ubuntu",
 		PublicIP:    "203.0.113.10",
 		ResolvedIPs: []string{"203.0.113.10"},
 		Ports:       []setupPortProbe{{Port: 80}, {Port: 443}},
@@ -194,6 +195,12 @@ func TestEvaluatePreflight_Passing(t *testing.T) {
 	}
 	if !strings.Contains(joined, "sudo ufw allow 80/tcp") || !strings.Contains(joined, "nc -vz vm.example.com 443") {
 		t.Fatalf("the unverified warning must still print the firewall fix and the off-box check:\n%s", joined)
+	}
+	// The local probe binds loopback only, so it cannot see a listener bound to
+	// the public address alone. Saying so is the difference between a passed check
+	// and a proven one.
+	if !strings.Contains(joined, "127.0.0.1") {
+		t.Fatalf("the warning must say the local probe only bound loopback:\n%s", joined)
 	}
 }
 
@@ -220,6 +227,32 @@ func TestEvaluatePreflight_SudoProblems(t *testing.T) {
 			t.Fatalf("problems = %+v, want none", problems)
 		}
 	})
+}
+
+// TestEvaluatePreflight_RefusesARootTargetUser is the preflight half of the
+// root guard. A DigitalOcean or Hetzner box, or anyone who ran sudo -i, is root
+// with SUDO_USER unset, so nothing else in preflight objects: UID 0 is exactly
+// what the privilege check wants. Both units would then run as root, so ao daemon
+// would run every agent session, every git, and every gh as root. It has to
+// surface here, before anything on the box is touched, and not later as an
+// install-time error.
+func TestEvaluatePreflight_RefusesARootTargetUser(t *testing.T) {
+	pf := passingPreflight()
+	pf.TargetUser = "root"
+	problems, _ := evaluatePreflight(pf)
+	problem := assertProblem(t, problems, "target user", "adduser")
+	if !strings.Contains(problem.Detail, "root") {
+		t.Errorf("the detail must say the units would run as root: %q", problem.Detail)
+	}
+	if !strings.Contains(strings.Join(problem.Remediation, "\n"), "sudo ao setup-vm --domain vm.example.com") {
+		t.Errorf("remediation must name how to re-run as a human user: %v", problem.Remediation)
+	}
+	// The privilege check still has to be the one that reports it, so the
+	// no-mutation guarantee holds.
+	if !strings.HasPrefix(renderPreflightFailure(problems), "Preflight failed. Nothing on this machine was changed.") {
+		t.Error("a root target user must be a preflight failure, which changes nothing")
+	}
+	assertNoDashes(t, renderPreflightFailure(problems))
 }
 
 func TestEvaluatePreflight_DNSProblems(t *testing.T) {
@@ -253,6 +286,23 @@ func TestEvaluatePreflight_DNSProblems(t *testing.T) {
 		problem := assertProblem(t, problems, "DNS", "AAAA")
 		if strings.Contains(strings.Join(problem.Remediation, "\n"), " A ") {
 			t.Errorf("an IPv6 address must not be described as an A record: %v", problem.Remediation)
+		}
+	})
+	t.Run("a non-canonical IPv6 answer is not a mismatch", func(t *testing.T) {
+		pf := passingPreflight()
+		pf.PublicIP = "2001:0DB8::1"
+		pf.ResolvedIPs = []string{"2001:db8::1"}
+		if problems, _ := evaluatePreflight(pf); len(problems) != 0 {
+			t.Fatalf("problems = %+v, want none: these two spellings are the same address", problems)
+		}
+	})
+	t.Run("a real mismatch offers the explicit address", func(t *testing.T) {
+		pf := passingPreflight()
+		pf.ResolvedIPs = []string{"198.51.100.7"}
+		problems, _ := evaluatePreflight(pf)
+		problem := assertProblem(t, problems, "DNS", "--public-ip 198.51.100.7")
+		if !strings.Contains(strings.Join(problem.Remediation, "\n"), "more than one public address") {
+			t.Errorf("a dual-stack box needs the escape hatch explained: %v", problem.Remediation)
 		}
 	})
 	t.Run("public IP undiscoverable", func(t *testing.T) {
@@ -469,16 +519,84 @@ func TestBuildSetupPlan_RejectsRelativeOverrides(t *testing.T) {
 func TestBuildSetupPlan_HonorsAbsoluteOverrides(t *testing.T) {
 	plan, err := buildSetupPlan(setupPlanInput{
 		Domain: "vm.example.com", User: "ubuntu", Home: "/home/ubuntu",
-		DataDir: "/srv/ao/data", RunFile: "/srv/ao/running.json", MachineFile: "/srv/ao/machine.json",
+		DataDir: "/srv/ao/data", RunFile: "/srv/ao/running.json",
+		// The machine file has to stay inside ~/.ao, which the next test covers.
+		MachineFile: "/home/ubuntu/.ao/machines/this-one.json",
 	})
 	if err != nil {
 		t.Fatalf("buildSetupPlan err = %v", err)
 	}
-	if plan.DataDir != "/srv/ao/data" || plan.RunFile != "/srv/ao/running.json" || plan.MachineFile != "/srv/ao/machine.json" {
+	if plan.DataDir != "/srv/ao/data" || plan.RunFile != "/srv/ao/running.json" {
 		t.Fatalf("absolute overrides were not honored: %+v", plan)
+	}
+	if plan.MachineFile != "/home/ubuntu/.ao/machines/this-one.json" {
+		t.Fatalf("MachineFile = %q, want the override inside ~/.ao honored", plan.MachineFile)
 	}
 	if plan.CertDir != "/srv/ao/data/vm-gateway/certs" {
 		t.Errorf("CertDir = %q, want it to follow the overridden data dir", plan.CertDir)
+	}
+}
+
+// TestBuildSetupPlan_RejectsAMachineFileOutsideAODir keeps the one file the
+// gateway must be able to read inside the only tree this install creates and
+// chowns. A machine.json under a parent this run created as root, mode 0700,
+// is one the gateway user cannot traverse, so `ao vm serve` would refuse to
+// start on a machine that had just been bound successfully.
+func TestBuildSetupPlan_RejectsAMachineFileOutsideAODir(t *testing.T) {
+	for _, machineFile := range []string{
+		"/srv/ao/machine.json",
+		"/etc/ao/machine.json",
+		// A prefix match on the string alone would let this one through.
+		"/home/ubuntu/.aoelsewhere/machine.json",
+		"/home/ubuntu/.ao/../machine.json",
+	} {
+		t.Run(machineFile, func(t *testing.T) {
+			_, err := buildSetupPlan(setupPlanInput{
+				Domain: "vm.example.com", User: "ubuntu", Home: "/home/ubuntu", MachineFile: machineFile,
+			})
+			if err == nil {
+				t.Fatalf("AO_MACHINE_FILE=%q must be refused: the gateway could not read it", machineFile)
+			}
+			if !strings.Contains(err.Error(), "AO_MACHINE_FILE") {
+				t.Errorf("the error must name the variable at fault: %v", err)
+			}
+		})
+	}
+	// The directory itself is fine, and so is a subdirectory of it.
+	for _, machineFile := range []string{"/home/ubuntu/.ao/machine.json", "/home/ubuntu/.ao/sub/machine.json"} {
+		if _, err := buildSetupPlan(setupPlanInput{
+			Domain: "vm.example.com", User: "ubuntu", Home: "/home/ubuntu", MachineFile: machineFile,
+		}); err != nil {
+			t.Errorf("AO_MACHINE_FILE=%q is inside ~/.ao and must be honored: %v", machineFile, err)
+		}
+	}
+}
+
+// TestBuildSetupPlan_RejectsRoot is the pure half of the root guard, and it is
+// what makes systemdUnit's documented invariant ("User and Group are never
+// root") true rather than aspirational.
+func TestBuildSetupPlan_RejectsRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   setupPlanInput
+	}{
+		{name: "user", in: setupPlanInput{Domain: "vm.example.com", User: "root", Home: "/root"}},
+		{name: "group", in: setupPlanInput{Domain: "vm.example.com", User: "ubuntu", Group: "root", Home: "/home/ubuntu"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildSetupPlan(tc.in)
+			if err == nil {
+				t.Fatal("a root identity must be refused: the daemon runs agent sessions, git, and gh")
+			}
+			if !strings.Contains(err.Error(), "root") {
+				t.Errorf("the error must say what is wrong: %v", err)
+			}
+			// The same remediation the preflight problem carries, so an operator
+			// who somehow reaches this path is not told less.
+			if !strings.Contains(err.Error(), "adduser") {
+				t.Errorf("the error must name the fix: %v", err)
+			}
+		})
 	}
 }
 
@@ -522,12 +640,16 @@ func TestRenderDaemonUnit(t *testing.T) {
 		"[Install]",
 		"User=ubuntu",
 		"Group=ubuntu",
-		`WorkingDirectory="/home/ubuntu/.ao/data"`,
+		// Unquoted, deliberately: see TestSetupUnitsQuoteOnlyTheListSettings.
+		"WorkingDirectory=/home/ubuntu/.ao/data",
 		`Environment="AO_DATA_DIR=/home/ubuntu/.ao/data"`,
 		`Environment="AO_RUN_FILE=/home/ubuntu/.ao/running.json"`,
 		`Environment="HOME=/home/ubuntu"`,
 		"ExecStart=/usr/local/bin/ao daemon",
+		// The daemon supervises live agent sessions, so a deliberate exit is left
+		// alone; only a failure earns a restart.
 		"Restart=on-failure",
+		"StartLimitIntervalSec=0",
 		"WantedBy=multi-user.target",
 		// The daemon spawns the harnesses, which install under the user's home.
 		`Environment="PATH=/home/ubuntu/.local/bin:/home/ubuntu/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"`,
@@ -551,7 +673,7 @@ func TestRenderGatewayUnit(t *testing.T) {
 	for _, want := range []string{
 		"User=ubuntu",
 		"Group=ubuntu",
-		`WorkingDirectory="/home/ubuntu/.ao/data"`,
+		"WorkingDirectory=/home/ubuntu/.ao/data",
 		`Environment="AO_DATA_DIR=/home/ubuntu/.ao/data"`,
 		`Environment="AO_MACHINE_FILE=/home/ubuntu/.ao/machine.json"`,
 		`Environment="AO_VM_DOMAIN=vm.example.com"`,
@@ -561,6 +683,11 @@ func TestRenderGatewayUnit(t *testing.T) {
 		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
 		// The gateway fronts the daemon, so it starts after it.
 		"After=network-online.target ao-daemon.service",
+		// The gateway holds no session state, so every exit earns a restart, and
+		// systemd's default start rate limit is off so a gateway that fails for
+		// the first half minute after boot does not give up permanently.
+		"Restart=always",
+		"StartLimitIntervalSec=0",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("gateway unit is missing %q:\n%s", want, unit)
@@ -573,6 +700,57 @@ func TestRenderGatewayUnit(t *testing.T) {
 		t.Error("the gateway unit should record that machine.json is read once at startup")
 	}
 	assertNoDashes(t, unit)
+}
+
+// TestSetupUnitsQuoteOnlyTheListSettings is the regression test for the defect
+// that would have made the very first real run fail after apt had already
+// installed packages and both units had been written.
+//
+// systemd only unquotes settings it parses as a list of words. Environment= is
+// one of those, so quoting it is right and stays. WorkingDirectory= is not: the
+// raw value goes to path_simplify_and_warn with PATH_CHECK_ABSOLUTE and
+// PATH_CHECK_FATAL, so a value starting with a double quote is not an absolute
+// path, the parse handler returns -ENOEXEC, and the unit refuses to load at all
+// rather than ignoring one setting. The golden assertions in this file used to
+// bake in the quoted form, which is why CI stayed green while the box would not
+// have booted the service.
+func TestSetupUnitsQuoteOnlyTheListSettings(t *testing.T) {
+	plan := testSetupPlan(t)
+	for name, unit := range map[string]string{
+		setupVMDaemonUnit:  renderDaemonUnit(plan),
+		setupVMGatewayUnit: renderGatewayUnit(plan),
+	} {
+		value, ok := unitSetting(unit, "WorkingDirectory")
+		if !ok {
+			t.Fatalf("%s has no WorkingDirectory:\n%s", name, unit)
+		}
+		if strings.ContainsAny(value, `"'`) {
+			t.Errorf("%s: WorkingDirectory=%s is quoted, which systemd treats as a fatal error and "+
+				"refuses to load the unit for", name, value)
+		}
+		if !strings.HasPrefix(value, "/") {
+			t.Errorf("%s: WorkingDirectory=%s must be a plain absolute path", name, value)
+		}
+		if value != plan.DataDir {
+			t.Errorf("%s: WorkingDirectory=%s, want the plan's data dir %s", name, value, plan.DataDir)
+		}
+		// Environment= is the opposite case and must keep its quotes: systemd
+		// splits that one on whitespace.
+		if !strings.Contains(unit, `Environment="AO_DATA_DIR=`+plan.DataDir+`"`) {
+			t.Errorf("%s: Environment= values must stay quoted, they are parsed as a list of words:\n%s", name, unit)
+		}
+	}
+}
+
+// unitSetting returns the raw value of the first occurrence of a unit setting,
+// exactly as systemd's parser would see it: no unquoting, no trimming.
+func unitSetting(unit, directive string) (string, bool) {
+	for _, line := range strings.Split(unit, "\n") {
+		if key, value, ok := strings.Cut(line, "="); ok && key == directive {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // TestSetupUnitsSetEveryPathAbsolutely is the regression test for the hazard
@@ -591,7 +769,7 @@ func TestSetupUnitsSetEveryPathAbsolutely(t *testing.T) {
 			}
 			switch directive {
 			case "WorkingDirectory":
-				if !strings.HasPrefix(value, `"/`) {
+				if !strings.HasPrefix(value, "/") {
 					t.Errorf("%s: %s must be absolute, got %q", name, directive, value)
 				}
 			case "ExecStart":
@@ -613,7 +791,8 @@ func TestSetupUnitsSetEveryPathAbsolutely(t *testing.T) {
 
 func TestRenderSetupSummary_Unbound(t *testing.T) {
 	plan := testSetupPlan(t)
-	summary := renderSetupSummary(plan, false, []string{"80 and 443 were not verified from outside"})
+	summary := renderSetupSummary(plan, setupUnitStates{DaemonRunning: true},
+		[]string{"80 and 443 were not verified from outside"})
 	for _, want := range []string{
 		"installed, but not yet ready",
 		"not bound to an AO account",
@@ -632,10 +811,53 @@ func TestRenderSetupSummary_Unbound(t *testing.T) {
 	assertNoDashes(t, summary)
 }
 
+// TestRenderSetupSummary_NamesTheOffBoxPortCheck pins the one preflight
+// requirement setup-vm cannot meet from inside the box. The control plane does
+// not implement the reachability probe, and a cloud firewall is invisible from
+// here, so the pair of nc commands is a numbered step the operator has to run,
+// not remediation text buried inside a warning.
+func TestRenderSetupSummary_NamesTheOffBoxPortCheck(t *testing.T) {
+	plan := testSetupPlan(t)
+	summary := renderSetupSummary(plan, setupUnitStates{DaemonRunning: true}, nil)
+	for _, want := range []string{
+		"nc -vz vm.example.com 80",
+		"nc -vz vm.example.com 443",
+		"cannot",
+		"from any machine that is not this one",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary is missing %q:\n%s", want, summary)
+		}
+	}
+	// It is a numbered still-missing step, in the same list as the harness and
+	// the git credentials.
+	stillMissing := summary[strings.Index(summary, "Still missing"):]
+	if !strings.Contains(stillMissing, "nc -vz") {
+		t.Errorf("the off-box check must be one of the numbered steps:\n%s", stillMissing)
+	}
+	assertNoDashes(t, summary)
+}
+
+// TestRenderSetupSummary_DoesNotClaimAUnitItDidNotSeeRunning is M7 seen from the
+// summary: both units are Type=simple, so a successful `systemctl start` proves
+// only that a process was forked. A crash loop must not read as a green run.
+func TestRenderSetupSummary_DoesNotClaimAUnitItDidNotSeeRunning(t *testing.T) {
+	plan := testSetupPlan(t)
+	plan.Bound = true
+	summary := renderSetupSummary(plan, setupUnitStates{}, []string{"ao-daemon.service was started but is not active"})
+	if strings.Contains(summary, "enabled, running") {
+		t.Errorf("a unit that is not active must not be reported as running:\n%s", summary)
+	}
+	if strings.Count(summary, "not running") != 2 {
+		t.Errorf("both units were started and neither is active, so both lines must say so:\n%s", summary)
+	}
+	assertNoDashes(t, summary)
+}
+
 func TestRenderSetupSummary_Bound(t *testing.T) {
 	plan := testSetupPlan(t)
 	plan.Bound = true
-	summary := renderSetupSummary(plan, true, nil)
+	summary := renderSetupSummary(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil)
 	if !strings.Contains(summary, "already bound") {
 		t.Errorf("a bound machine's summary must say so:\n%s", summary)
 	}

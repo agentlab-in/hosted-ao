@@ -405,6 +405,31 @@ func TestDeviceFlowPollsAtTheServerIntervalAndBacksOff(t *testing.T) {
 	}
 }
 
+// TestDeviceFlowStopsAtOnceWhenTheContextIsCancelled covers Ctrl-C during the
+// wait between polls. The interval is server-supplied and reaches 60 seconds
+// after slow_down backoff, so a wait that only checks cancellation afterwards is
+// up to a minute of a terminal that looks hung. A real clock is used here on
+// purpose: the point is the elapsed time, not the sequence.
+func TestDeviceFlowStopsAtOnceWhenTheContextIsCancelled(t *testing.T) {
+	c := &commandContext{deps: Deps{Now: time.Now, Sleep: time.Sleep}.withDefaults()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	// The endpoint is never reached: the wait comes first and the cancellation
+	// has to win it.
+	_, err := c.pollForBinding(ctx, "http://127.0.0.1:1",
+		deviceAuthorization{DeviceCode: "irrelevant", Interval: 3, ExpiresIn: 900}, 15*time.Minute)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pollForBinding err = %v, want context.Canceled", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("pollForBinding took %s to notice a cancelled context, want it to return at once", elapsed)
+	}
+}
+
 // TestDeviceFlowNeverPrintsTheDeviceCode pins the one security property of the
 // printed output: the user code is meant to be shown, the device code is a
 // bearer secret and must not reach the terminal, a URL, or a log.
