@@ -34,6 +34,25 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
 | `ao daemon`                   | Hidden internal daemon entrypoint used by `ao start`.                                                                             |
 
+### Hosted VM
+
+| Command                             | Purpose                                                                                                                                                                          |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ao setup-vm --domain <host>`       | Prepare a hosted Ubuntu LTS VM: platform gate, preflight (DNS, 80/443, sudo) that mutates nothing on failure, then install `ao`, `tmux`, `git`, `gh`, and two systemd units.       |
+| `ao vm serve`                       | Run the public TLS gateway in front of the loopback daemon. Normally started by the `ao-gateway.service` unit `ao setup-vm` writes, never by hand.                                 |
+
+`ao setup-vm` refuses to run on anything but Ubuntu with systemd and apt, and
+prints the manual path instead. It writes `ao-daemon.service` and
+`ao-gateway.service` as two separate units running two separate processes, per
+`docs/adr/0002-hosted-public-gateway.md`, with `WorkingDirectory` and every
+`AO_*` path set to an absolute value. It is idempotent: a second run rewrites
+nothing that has not changed and restarts nothing that does not need it.
+
+It does not install an agent harness and does not configure git credentials, so
+it ends by printing what is still missing with the exact command for each
+(`ao vm setup-harness claude`, `gh auth login`). Use `--dry-run` to see the plan
+and both unit files without touching the machine.
+
 ### Product commands
 
 | Command                             | Daemon route                                   |
