@@ -70,3 +70,34 @@ build against, and if that section changes, update this file to match.
   not disconnect working users.
 - The JWKS publishes the active key plus the next-rotation key, so a verifier
   caches the next key before it ever signs anything.
+
+## The executable form of this contract
+
+The control plane and the VM gateway are separate Go modules that cannot
+import each other, so nothing but a committed artifact can carry a real token
+from one to the other. That artifact is the golden fixture pair in
+[`backend/internal/vmgateway/testdata/`](../backend/internal/vmgateway/testdata):
+a `jwks.json` produced by `keys.Manager.JWKS()` and an `access_token.jwt`
+produced by `Issuer.IssueAccessToken`, plus a `foreign_token.jwt` signed by a
+key that is deliberately not in the JWKS.
+
+- `backend/internal/vmgateway/golden_test.go` parses that JWKS and verifies
+  that token through the real verification path, and checks the token's `kid`
+  resolves in the key set (verification alone would not catch a `kid` change,
+  since an unrecognised `kid` falls back to trying every key).
+- `controlplane/internal/keys/golden_test.go` asserts the published JWK field
+  set and `kid` derivation still match the fixture.
+- `controlplane/internal/tokens/golden_test.go` owns the generator.
+
+If you change anything above (a claim name, `kid` derivation, base64 padding,
+the JWKS `x` encoding, the published field set) those tests fail, which is
+what they are for. Regenerate the fixtures deliberately, and review the diff:
+
+```
+cd controlplane && go test ./internal/tokens/ -run TestGoldenFixtures -update
+```
+
+`jwks.json` is byte stable across regenerations (the fixture keys are derived
+from committed test-only seed phrases), so a diff in it is always a real
+contract change. The `.jwt` files change every time, because `iat`, `exp`, and
+`jti` are minted fresh.
