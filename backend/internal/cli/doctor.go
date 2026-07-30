@@ -35,6 +35,11 @@ type doctorCheck struct {
 	Section string      `json:"section,omitempty"`
 	Name    string      `json:"name"`
 	Message string      `json:"message"`
+	// Remediation is the one command that fixes this check, when a single
+	// command does. It exists so a consumer of `ao doctor --json` (the
+	// desktop's machine card) can show exactly what to run instead of parsing
+	// it back out of Message. Empty when there is no single command to name.
+	Remediation string `json:"remediation,omitempty"`
 }
 
 type doctorReport struct {
@@ -174,8 +179,90 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 	for _, harness := range doctorHarnesses {
 		checks = append(checks, c.checkHarness(ctx, harness))
 	}
-	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx))
+	checks = append(checks, c.checkClaudeAuth(ctx), c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx))
 	return checks
+}
+
+// checkClaudeAuth reports whether the claude harness has finished its own
+// login on this machine. `claude auth status --json` is the harness's own
+// machine-readable answer, so this reports the harness's state rather than
+// guessing at where its credentials live (a keychain entry on macOS, a file
+// elsewhere, or an environment variable). It is the readiness signal the
+// desktop reads for a machine card: a machine that is registered but has no
+// harness configured shows Remediation instead of failing silently.
+//
+// A missing login is a WARN, never a FAIL: plenty of machines run AO with a
+// different harness, or with none, and `ao doctor` must still exit 0 there.
+func (c *commandContext) checkClaudeAuth(ctx context.Context) doctorCheck {
+	const name = "claude-auth"
+	setupCmd := "ao vm setup-harness " + claudeHarnessName
+	warn := func(message string) doctorCheck {
+		return doctorCheck{
+			Level: doctorWarn, Section: doctorSectionAgents, Name: name,
+			Message: message, Remediation: setupCmd,
+		}
+	}
+
+	path, err := c.deps.LookPath(claudeHarnessName)
+	if err != nil || path == "" {
+		return warn(fmt.Sprintf("claude not found in PATH; install the Claude Code CLI, then run `%s`", setupCmd))
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	probe := strings.Join(claudeAuthStatusArgs, " ")
+	out, cmdErr := c.deps.CommandOutput(reqCtx, path, claudeAuthStatusArgs...)
+	// `claude auth status` exits non-zero when the harness is not logged in and
+	// still prints its JSON, so the output is what answers the question. A
+	// non-zero exit only matters when there is no parseable answer in it.
+	status, parseErr := parseClaudeAuthStatus(out)
+	if parseErr != nil {
+		reason := parseErr
+		if cmdErr != nil {
+			reason = cmdErr
+		}
+		return warn(fmt.Sprintf("could not read harness auth state (`claude %s`: %v); log in with `%s`", probe, reason, setupCmd))
+	}
+	if !status.LoggedIn {
+		return warn(fmt.Sprintf("%s is installed but not signed in; run `%s`", path, setupCmd))
+	}
+	return doctorCheck{
+		Level: doctorPass, Section: doctorSectionAgents, Name: name,
+		Message: fmt.Sprintf("%s is signed in (%s)", path, status.describe()),
+	}
+}
+
+type claudeAuthStatus struct {
+	LoggedIn    bool   `json:"loggedIn"`
+	AuthMethod  string `json:"authMethod"`
+	APIProvider string `json:"apiProvider"`
+}
+
+func (s claudeAuthStatus) describe() string {
+	method := strings.TrimSpace(s.AuthMethod)
+	if method == "" {
+		method = "unknown"
+	}
+	if provider := strings.TrimSpace(s.APIProvider); provider != "" {
+		return fmt.Sprintf("authMethod=%s apiProvider=%s", method, provider)
+	}
+	return "authMethod=" + method
+}
+
+// parseClaudeAuthStatus reads the JSON object out of `claude auth status
+// --json` output. It slices to the outermost braces first because the probe
+// runs through CombinedOutput, so an unrelated notice on stderr (an update
+// banner, a deprecation warning) would otherwise make valid JSON unparseable.
+func parseClaudeAuthStatus(out []byte) (claudeAuthStatus, error) {
+	clean := ansiRE.ReplaceAllString(string(out), "")
+	start, end := strings.Index(clean, "{"), strings.LastIndex(clean, "}")
+	if start < 0 || end < start {
+		return claudeAuthStatus{}, fmt.Errorf("no JSON object in output %q", strings.TrimSpace(clean))
+	}
+	var status claudeAuthStatus
+	if err := json.Unmarshal([]byte(clean[start:end+1]), &status); err != nil {
+		return claudeAuthStatus{}, err
+	}
+	return status, nil
 }
 
 // checkStore inspects the SQLite store WITHOUT opening or migrating it. The

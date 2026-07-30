@@ -29,7 +29,7 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao start`                    | Start the daemon in the background and wait for `/readyz`.                                                                        |
 | `ao stop`                     | Gracefully stop the daemon via loopback `POST /shutdown` after verifying daemon identity.                                         |
 | `ao status` / `--json`        | Report daemon state from `running.json`, process liveness, `/healthz`, and `/readyz`.                                             |
-| `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
+| `ao doctor` / `--json`        | Check config, data directory, DB-file presence, daemon state, `git`, agent-harness presence and sign-in, and (on Darwin/Linux) `tmux`; on Windows conpty is built in. |
 | `ao completion <shell>`       | Generate completions for `bash`, `zsh`, `fish`, or `powershell`.                                                                  |
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
 | `ao daemon`                   | Hidden internal daemon entrypoint used by `ao start`.                                                                             |
@@ -40,6 +40,7 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ao setup-vm --domain <host>`       | Prepare a hosted Ubuntu LTS VM: platform gate, preflight (DNS, 80/443, sudo) that mutates nothing on failure, then install `ao`, `tmux`, `git`, `gh`, and two systemd units.       |
 | `ao vm serve`                       | Run the public TLS gateway in front of the loopback daemon. Normally started by the `ao-gateway.service` unit `ao setup-vm` writes, never by hand.                                 |
+| `ao vm setup-harness claude`        | Hand the terminal to the claude harness's own interactive login. Foreground only, and `claude` is the only supported harness.                                                      |
 
 `ao setup-vm` refuses to run on anything but Ubuntu with systemd and apt, and
 prints the manual path instead. It writes `ao-daemon.service` and
@@ -52,6 +53,18 @@ It does not install an agent harness and does not configure git credentials, so
 it ends by printing what is still missing with the exact command for each
 (`ao vm setup-harness claude`, `gh auth login`). Use `--dry-run` to see the plan
 and both unit files without touching the machine.
+
+`ao vm setup-harness claude` runs `claude auth login` with this process's own
+stdio, so the harness owns the terminal: it prints a URL and then waits for a
+code to be pasted back, which cannot be scripted. Git credentials are not
+wrapped by any `ao` command; `gh auth login` once is enough, and the daemon
+reads the credential through `gh auth token`.
+
+Harness readiness is reported by `ao doctor` as its `claude-auth` check, which
+asks the harness itself (`claude auth status --json`) rather than guessing where
+its credentials live. A machine with no harness login is a `WARN`, never a
+`FAIL`, and carries a `remediation` field in `ao doctor --json` naming the exact
+command to run. That is what the desktop machine card reads.
 
 ### Product commands
 
