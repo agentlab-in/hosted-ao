@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
+	"github.com/aoagents/agent-orchestrator/backend/internal/doctor"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
@@ -96,7 +97,7 @@ func DefaultDeps() Deps {
 		CommandOutput:        commandOutput,
 		CommandOutputInDir:   commandOutputInDir,
 		RunInteractive:       runInteractive,
-		DoctorGitHubRESTBase: defaultDoctorGitHubRESTBase,
+		DoctorGitHubRESTBase: doctor.DefaultGitHubRESTBase,
 		Now:                  time.Now,
 		Sleep:                time.Sleep,
 	}

@@ -77,6 +77,8 @@ func Build() ([]byte, error) {
 			"Developer-only maintenance operations"),
 		*(&openapi31.Tag{Name: "mobile"}).WithDescription(
 			"Connect Mobile LAN bridge control (loopback/desktop only)"),
+		*(&openapi31.Tag{Name: "doctor"}).WithDescription(
+			"Machine health checks (the `ao doctor` checks, read remotely)"),
 	}
 
 	for _, op := range operations() {
@@ -229,6 +231,9 @@ var schemaNames = map[string]string{
 	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
 	// httpd/controllers: mobile wire envelopes
 	"ControllersMobileStatusResponse": "MobileStatusResponse",
+	// httpd/controllers: doctor wire envelopes
+	"ControllersDoctorReportResponse": "DoctorReportResponse",
+	"ControllersDoctorCheckResponse":  "DoctorCheckResponse",
 	// devimport report
 	"DevimportReport":   "DevImportProjectsReport",
 	"DevimportConflict": "DevImportProjectsConflict",
@@ -336,7 +341,24 @@ func operations() []operation {
 	ops = append(ops, devOperations()...)
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
+	ops = append(ops, doctorOperations()...)
 	return ops
+}
+
+// doctorOperations describes the machine-readiness surface: the same checks
+// `ao doctor` runs, served under /api/v1 so the VM gateway forwards them and
+// the desktop can read a remote machine's readiness.
+func doctorOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/doctor", id: "getDoctorReport", tag: "doctor",
+			summary: "Run this machine's health checks and return the report",
+			resps: []respUnit{
+				{http.StatusOK, controllers.DoctorReportResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+	}
 }
 
 // shellTerminalOperations describes the standalone shell terminal surface:

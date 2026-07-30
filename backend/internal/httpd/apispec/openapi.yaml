@@ -134,6 +134,25 @@ paths:
       summary: Run the developer project-registry import through the daemon store
       tags:
       - dev
+  /api/v1/doctor:
+    get:
+      operationId: getDoctorReport
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoctorReportResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Run this machine's health checks and return the report
+      tags:
+      - doctor
   /api/v1/events:
     get:
       operationId: streamEvents
@@ -2519,6 +2538,53 @@ components:
       required:
       - report
       type: object
+    DoctorCheckResponse:
+      properties:
+        level:
+          description: Check outcome. FAIL means the machine is broken; WARN means
+            degraded.
+          enum:
+          - PASS
+          - WARN
+          - FAIL
+          type: string
+        message:
+          description: Human-readable outcome for this check.
+          type: string
+        name:
+          description: Stable check id, e.g. claude-auth.
+          type: string
+        remediation:
+          description: The single command that fixes this check, e.g. ao vm setup-harness
+            claude. Empty when no single command applies.
+          type: string
+        section:
+          description: Report grouping, e.g. Core, Tools, Agent harnesses, GitHub.
+          type: string
+      required:
+      - level
+      - name
+      - message
+      type: object
+    DoctorReportResponse:
+      properties:
+        checks:
+          description: Every check, in report order.
+          items:
+            $ref: '#/components/schemas/DoctorCheckResponse'
+          type: array
+        failures:
+          description: Number of FAIL checks.
+          type: integer
+        ok:
+          description: True when no check failed. WARN checks (a missing optional
+            tool, a harness that is not signed in) do not clear it.
+          type: boolean
+      required:
+      - ok
+      - failures
+      - checks
+      type: object
     DomainActivity:
       properties:
         lastActivityAt:
@@ -3937,3 +4003,5 @@ tags:
   name: dev
 - description: Connect Mobile LAN bridge control (loopback/desktop only)
   name: mobile
+- description: Machine health checks (the `ao doctor` checks, read remotely)
+  name: doctor

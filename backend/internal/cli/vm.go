@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/doctor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
@@ -106,15 +107,14 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 
 // The claude harness is the only one ao vm setup-harness supports in v1. Its
 // login and its readiness probe are two halves of the same `claude auth`
-// surface, so they live together here: if a claude release moves one, doctor's
+// surface, so they stay pinned to one another: the harness name and the status
+// probe live in internal/doctor, which owns the claude-auth check, and this
+// command reads the name from there. If a claude release moves one, doctor's
 // claude-auth check and this command break together and visibly, rather than
 // one of them silently reporting the wrong thing.
-const claudeHarnessName = "claude"
+const claudeHarnessName = doctor.ClaudeHarnessName
 
-var (
-	claudeLoginArgs      = []string{"auth", "login"}
-	claudeAuthStatusArgs = []string{"auth", "status", "--json"}
-)
+var claudeLoginArgs = []string{"auth", "login"}
 
 func newVMSetupHarnessCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
