@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	HARNESS_SETUP_COMMAND,
 	LOCAL_MACHINE_ID,
+	harnessFromDoctorChecks,
 	formatLastSeen,
 	localMachine,
 	parseMachineOrigin,
@@ -34,29 +35,41 @@ describe("parseMachinesResponse", () => {
 		]);
 	});
 
-	test("a machine with no harness reports the exact command to run", () => {
-		const [machine] = parseMachinesResponse({ machines: [row({ harness: { ready: false } })] });
-		expect(machine.harness).toBe("missing");
-		expect(machine.harnessCommand).toBe(HARNESS_SETUP_COMMAND);
-	});
-
-	test("a harness command the control plane supplies wins over the default", () => {
+	test("a machine with no harness reports the command the doctor check names", () => {
 		const [machine] = parseMachinesResponse({
-			machines: [row({ harness: { ready: false, command: "ao vm setup-harness codex" } })],
+			machines: [
+				row({
+					doctor: {
+						checks: [
+							{ level: "PASS", section: "Core", name: "daemon" },
+							{
+								level: "WARN",
+								section: "Agent harnesses",
+								name: "claude-auth",
+								message: "claude is installed but not signed in",
+								remediation: "ao vm setup-harness claude",
+							},
+						],
+					},
+				}),
+			],
 		});
-		expect(machine.harnessCommand).toBe("ao vm setup-harness codex");
+		expect(machine.harness).toBe("missing");
+		expect(machine.harnessCommand).toBe("ao vm setup-harness claude");
 	});
 
-	test("a ready harness carries no command", () => {
-		const [machine] = parseMachinesResponse({ machines: [row({ harness: { ready: true } })] });
+	test("a signed-in harness is ready and carries no command", () => {
+		const [machine] = parseMachinesResponse({
+			machines: [row({ doctor: { checks: [{ level: "PASS", name: "claude-auth" }] } })],
+		});
 		expect(machine).toMatchObject({ harness: "ready", harnessCommand: null });
 	});
 
-	// Readiness comes from task 11's `ao doctor` surfacing, which may not be on
-	// this route yet. Absent must never be read as "missing" or as "ready".
-	test("an absent harness field degrades to unknown rather than claiming either state", () => {
-		for (const harness of [undefined, null, {}, "ready", { ready: "yes" }]) {
-			const [machine] = parseMachinesResponse({ machines: [row({ harness })] });
+	// `ao doctor` has no HTTP route yet, so this is what every registered
+	// machine looks like today. Absent must never read as "missing" or "ready".
+	test("readiness that is simply not available degrades to unknown", () => {
+		for (const doctor of [undefined, null, {}, { checks: [] }, { checks: [{ level: "PASS", name: "codex" }] }]) {
+			const [machine] = parseMachinesResponse({ machines: [row({ doctor })] });
 			expect(machine).toMatchObject({ harness: "unknown", harnessCommand: null });
 		}
 	});
@@ -132,5 +145,36 @@ describe("formatLastSeen", () => {
 	test("has nothing to say about a machine that has never been seen", () => {
 		expect(formatLastSeen(null, now)).toBeNull();
 		expect(formatLastSeen("not a date", now)).toBeNull();
+	});
+});
+
+describe("harnessFromDoctorChecks", () => {
+	const warn = (extra: Record<string, unknown> = {}) => [
+		{ level: "WARN", section: "Agent harnesses", name: "claude-auth", ...extra },
+	];
+
+	test("every non-PASS level is a missing harness, since the check never fails", () => {
+		// The check emits WARN for a missing binary, a missing login, and an
+		// unreadable answer alike, and deliberately never FAIL.
+		expect(harnessFromDoctorChecks(warn())).toMatchObject({ harness: "missing" });
+		expect(harnessFromDoctorChecks([{ level: "FAIL", name: "claude-auth" }])).toMatchObject({ harness: "missing" });
+	});
+
+	test("falls back to the documented command only when the check names none", () => {
+		expect(harnessFromDoctorChecks(warn({ remediation: "  " })).harnessCommand).toBe(HARNESS_SETUP_COMMAND);
+		expect(harnessFromDoctorChecks(warn({ remediation: "ao vm setup-harness claude --force" })).harnessCommand).toBe(
+			"ao vm setup-harness claude --force",
+		);
+	});
+
+	test("accepts a bare checks array as well as the whole doctor report", () => {
+		expect(harnessFromDoctorChecks(warn())).toMatchObject({ harness: "missing" });
+		expect(harnessFromDoctorChecks({ ok: true, failures: 0, checks: warn() })).toMatchObject({ harness: "missing" });
+	});
+
+	test("says nothing when there is no report to read", () => {
+		for (const raw of [undefined, null, "PASS", 7, { checks: "nope" }]) {
+			expect(harnessFromDoctorChecks(raw)).toMatchObject({ harness: "unknown", harnessCommand: null });
+		}
 	});
 });

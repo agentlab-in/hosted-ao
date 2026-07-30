@@ -99,26 +99,59 @@ function optionalIso(raw: unknown): string | null {
 	return Number.isNaN(Date.parse(raw)) ? null : raw;
 }
 
+/** One check from `ao doctor --json` (backend/internal/cli/doctor.go). */
+export type DoctorCheck = {
+	level?: unknown;
+	section?: unknown;
+	name?: unknown;
+	message?: unknown;
+	/** The one command that fixes this check, when a single command does. */
+	remediation?: unknown;
+};
+
+/** The check that answers whether an agent harness is set up on a machine. */
+export const HARNESS_DOCTOR_CHECK = "claude-auth";
+
+type HarnessReadiness = Pick<AoMachine, "harness" | "harnessCommand">;
+
+const HARNESS_UNKNOWN: HarnessReadiness = { harness: "unknown", harnessCommand: null };
+
 /**
- * Harness readiness for one machine, from an optional `harness` object on the
- * row: `{"ready": false, "command": "ao vm setup-harness claude"}`.
+ * Harness readiness from a machine's `ao doctor --json` checks.
  *
- * Readiness itself is produced by the machine's own `ao doctor` checks, which
- * task 11 (issue #30) is adding in parallel; how the control plane will carry
- * that summary on this route is not settled yet. So the field is read when it
- * is there and the state is "unknown" when it is not. Unknown deliberately
- * claims nothing: it neither tells a user to run a command they may not need,
- * nor reports a harness as ready without having checked.
+ * The `claude-auth` check is the whole signal: it asks the harness itself
+ * rather than guessing where its credentials live. PASS is signed in; anything
+ * else is a WARN, which the check emits for a missing binary, a missing login,
+ * and an unreadable answer alike. It never returns FAIL, so nothing here
+ * branches on FAIL. The command shown comes from the check's `remediation`
+ * field, which exists precisely so this does not have to hardcode one.
  */
-function parseHarness(raw: unknown): Pick<AoMachine, "harness" | "harnessCommand"> {
-	if (!raw || typeof raw !== "object") return { harness: "unknown", harnessCommand: null };
-	const { ready, command } = raw as { ready?: unknown; command?: unknown };
-	if (typeof ready !== "boolean") return { harness: "unknown", harnessCommand: null };
-	if (ready) return { harness: "ready", harnessCommand: null };
-	return {
-		harness: "missing",
-		harnessCommand: typeof command === "string" && command.trim() ? command.trim() : HARNESS_SETUP_COMMAND,
-	};
+export function harnessFromDoctorChecks(raw: unknown): HarnessReadiness {
+	const checks = Array.isArray(raw) ? raw : (raw as { checks?: unknown } | null | undefined)?.checks;
+	if (!Array.isArray(checks)) return HARNESS_UNKNOWN;
+	const check = checks.find(
+		(candidate): candidate is DoctorCheck =>
+			!!candidate && typeof candidate === "object" && (candidate as DoctorCheck).name === HARNESS_DOCTOR_CHECK,
+	);
+	if (!check || typeof check.level !== "string") return HARNESS_UNKNOWN;
+	if (check.level === "PASS") return { harness: "ready", harnessCommand: null };
+	const remediation = typeof check.remediation === "string" ? check.remediation.trim() : "";
+	return { harness: "missing", harnessCommand: remediation || HARNESS_SETUP_COMMAND };
+}
+
+/**
+ * Where a machine's harness readiness comes from. The one seam to change when
+ * the data source moves.
+ *
+ * Today `ao doctor` is a local CLI surface with no HTTP route, so nothing
+ * carries a registered machine's checks to this app and this is "unknown" for
+ * every one of them. Unknown deliberately claims nothing: it neither tells a
+ * user to run a command they may not need, nor reports a harness as ready
+ * without having checked. When the daemon route lands, read the checks here;
+ * no caller and nothing in the UI changes.
+ */
+export function readMachineHarness(row: { doctor?: unknown }): HarnessReadiness {
+	return harnessFromDoctorChecks(row.doctor);
 }
 
 function parseMachine(raw: unknown): AoMachine | null {
@@ -140,7 +173,7 @@ function parseMachine(raw: unknown): AoMachine | null {
 		lastSeen: optionalIso(row.last_seen),
 		// Filled in by the liveness probe; the control plane does not know.
 		reachability: "unknown",
-		...parseHarness(row.harness),
+		...readMachineHarness(row),
 	};
 }
 

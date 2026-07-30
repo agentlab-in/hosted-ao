@@ -105,6 +105,31 @@ test("a machine with no harness shows exactly which command to run, and copies i
 	expect(writeText).toHaveBeenCalledWith(HARNESS_SETUP_COMMAND);
 });
 
+test("readiness that is not reported is said once, not badged on every machine", async () => {
+	refresh.mockResolvedValue({
+		...READY,
+		machines: [localMachine("This Mac"), remote({ id: "mch_9", name: "ao-unknown", baseUrl: "https://u.example.com" })],
+	} satisfies AoMachinesState);
+	renderSection();
+
+	expect(await screen.findByTestId("ao-machines-harness-unknown")).toHaveTextContent(
+		/not reported for remote machines/,
+	);
+	expect(within(machineRow("mch_9")).queryByText("No harness")).not.toBeInTheDocument();
+	expect(within(machineRow("mch_9")).queryByTestId("ao-machine-harness-hint")).not.toBeInTheDocument();
+});
+
+test("nothing is said about readiness once every machine has reported", async () => {
+	refresh.mockResolvedValue({
+		...READY,
+		machines: [localMachine("This Mac"), ONLINE, NO_HARNESS],
+	} satisfies AoMachinesState);
+	renderSection();
+
+	await screen.findAllByTestId("ao-machine");
+	expect(screen.queryByTestId("ao-machines-harness-unknown")).not.toBeInTheDocument();
+});
+
 test("a machine that is up and set up carries no state badge at all", async () => {
 	renderSection();
 	await screen.findAllByTestId("ao-machine");

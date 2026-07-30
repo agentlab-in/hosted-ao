@@ -59,6 +59,16 @@ export function MachinesSection() {
 					: "One machine is active at a time. Switching points this app at that machine."}
 			</p>
 
+			{/* `ao doctor` is a local command with no HTTP route yet, so nothing
+			    carries a registered machine's readiness here. Saying so once beats
+			    a badge on every machine that would only mean "not asked". */}
+			{machines.some((machine) => !machine.local && machine.harness === "unknown") ? (
+				<p className="px-1 text-xs leading-row text-settings-muted" data-testid="ao-machines-harness-unknown">
+					Agent-harness readiness is not reported for remote machines yet. Run{" "}
+					<code className="font-mono">ao doctor</code> on the machine to check it.
+				</p>
+			) : null}
+
 			{error ? (
 				<p className="flex items-start gap-2 px-1 text-xs leading-row text-error" data-testid="ao-machines-error">
 					<AlertTriangle className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
