@@ -9,7 +9,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"sync"
@@ -122,6 +124,48 @@ func TestSetupVM_FailedPreflightChangesNothing(t *testing.T) {
 		t.Errorf("output must state that nothing was changed:\n%s", out)
 	}
 	assertNoSetupMutation(t, calls())
+}
+
+// TestDiscoverPublicIPPrefersAnIPv4Answer covers the dual-stack false mismatch:
+// on a box with both families the address an endpoint reports is whichever one
+// the request went out over, and a v6 answer read against a perfectly good A
+// record is a DNS mismatch that does not exist.
+func TestDiscoverPublicIPPrefersAnIPv4Answer(t *testing.T) {
+	answers := func(body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, body)
+		}))
+	}
+	v6 := answers("2001:db8::1\n")
+	defer v6.Close()
+	v4 := answers("203.0.113.10\n")
+	defer v4.Close()
+
+	c := &commandContext{deps: Deps{HTTPClient: &http.Client{}}.withDefaults()}
+
+	restore := setupVMPublicIPEndpoints
+	t.Cleanup(func() { setupVMPublicIPEndpoints = restore })
+
+	// The v6 endpoint answers first and is still not the one that wins.
+	setupVMPublicIPEndpoints = []string{v6.URL, v4.URL}
+	got, err := c.discoverPublicIP(context.Background())
+	if err != nil {
+		t.Fatalf("discoverPublicIP err = %v", err)
+	}
+	if got != "203.0.113.10" {
+		t.Errorf("discoverPublicIP = %q, want the IPv4 answer: a v6 answer against an A record reports a mismatch that does not exist", got)
+	}
+
+	// A genuinely IPv6-only box finds no v4 answer anywhere and keeps the one it
+	// has, so nothing is lost by looking.
+	setupVMPublicIPEndpoints = []string{v6.URL}
+	got, err = c.discoverPublicIP(context.Background())
+	if err != nil {
+		t.Fatalf("discoverPublicIP err = %v", err)
+	}
+	if got != "2001:db8::1" {
+		t.Errorf("discoverPublicIP = %q, want the IPv6 answer when that is all there is", got)
+	}
 }
 
 // assertNoSetupMutation fails if the command ran anything that could have

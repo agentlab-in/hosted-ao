@@ -36,6 +36,11 @@ const (
 	// 2s loopback budget is too tight.
 	setupVMHTTPTimeout = 10 * time.Second
 	setupVMUserAgent   = "ao-agent-orchestrator/setup-vm"
+	// setupUnitSettle is how long to wait after starting a unit before asking
+	// whether it is still running. Long enough for an immediate crash to show up
+	// as anything other than active, short enough to add nothing noticeable to a
+	// healthy run.
+	setupUnitSettle = 2 * time.Second
 	// defaultSetupVMProbeURL is the off-box port prober. A cloud firewall is
 	// invisible from inside the box, so confirming 80 and 443 needs a host that
 	// is not this one, and the AO control plane is the one such host setup-vm
@@ -133,7 +138,7 @@ func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) err
 		return writeSetupText(out, renderSetupDryRun(plan, warnings))
 	}
 
-	gatewayStarted, notes, err := c.installSetupVM(ctx, out, plan)
+	units, notes, err := c.installSetupVM(ctx, out, plan)
 	if err != nil {
 		return err
 	}
@@ -141,7 +146,14 @@ func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) err
 	bindErr := c.bindSetupVM(ctx, out, plan, controlPlaneURL)
 	if bindErr == nil {
 		plan.Bound = true
-		gatewayStarted = true
+		// The binding step restarted the gateway, so whether it is running is a
+		// fresh question: it reads machine.json at startup and refuses to serve
+		// on anything it cannot parse.
+		gatewayActive, gatewayNote := c.confirmSetupUnitActive(ctx, setupVMGatewayUnit)
+		units.GatewayRunning = gatewayActive
+		if gatewayNote != "" {
+			notes = append(notes, gatewayNote)
+		}
 	} else {
 		// The install is done and correct; only the binding is missing. The
 		// summary still has to print, because it is what tells the user how to
@@ -149,7 +161,7 @@ func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) err
 		notes = append(notes, "binding did not complete: "+bindErr.Error())
 	}
 
-	if err := writeSetupText(out, renderSetupSummary(plan, gatewayStarted, append(warnings, notes...))); err != nil {
+	if err := writeSetupText(out, renderSetupSummary(plan, units, append(warnings, notes...))); err != nil {
 		return err
 	}
 	return bindErr
@@ -176,6 +188,14 @@ func (c *commandContext) probeSetupPlatform() setupPlatform {
 
 func (c *commandContext) probeSetupPreflight(ctx context.Context, domain string, opts setupVMOptions) setupPreflight {
 	preflight := setupPreflight{Domain: domain, UID: os.Getuid()}
+
+	// Who the units would run as is a preflight fact, not an install-time one: a
+	// root target has to be refused before anything on this box is touched. A
+	// lookup failure is left empty here and reported by buildSetupPlan, which is
+	// where the error already has the better wording for it.
+	if target, err := setupTargetUser(); err == nil {
+		preflight.TargetUser = target.Username
+	}
 
 	if sudoPath, err := c.deps.LookPath("sudo"); err == nil {
 		preflight.SudoPath = sudoPath
@@ -245,21 +265,57 @@ func (c *commandContext) setupUnitActive(ctx context.Context, unit string) bool 
 	return err == nil
 }
 
+// confirmSetupUnitActive answers whether a unit is really running, and returns
+// the note to carry when it is not. `systemctl start` returning 0 is not
+// evidence for these two units: both are Type=simple, so systemd considers the
+// job done the instant the process is forked, even when it exits a millisecond
+// later. The settle wait is what makes an immediate exit visible at all, since a
+// crash-looping unit reports activating rather than active while it waits out
+// RestartSec.
+func (c *commandContext) confirmSetupUnitActive(ctx context.Context, unit string) (bool, string) {
+	c.deps.Sleep(setupUnitSettle)
+	if c.setupUnitActive(ctx, unit) {
+		return true, ""
+	}
+	return false, fmt.Sprintf(
+		"%s was started but is not active, so it exited on its own. This machine will not work"+
+			"\n  until it stays up. Look at why:"+
+			"\n    sudo systemctl status %s"+
+			"\n    sudo journalctl -u %s -n 50",
+		unit, unit, unit)
+}
+
 func (c *commandContext) setupHTTPClient() *http.Client {
 	client := *c.deps.HTTPClient
 	client.Timeout = setupVMHTTPTimeout
 	return &client
 }
 
+// discoverPublicIP asks each endpoint in turn what this box's address looks like
+// from the internet, and prefers an IPv4 answer. On a dual-stack box the answer
+// is whichever family the request happened to go out over, and a v6 answer read
+// against a perfectly good A record is reported as a DNS mismatch that does not
+// exist. A v6-only box finds no v4 answer at any endpoint and keeps the one it
+// has, so nothing is lost by looking.
 func (c *commandContext) discoverPublicIP(ctx context.Context) (string, error) {
 	client := c.setupHTTPClient()
 	var lastErr error
+	var otherFamily string
 	for _, endpoint := range setupVMPublicIPEndpoints {
 		ip, err := fetchSetupPublicIP(ctx, client, endpoint)
-		if err == nil {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if parsed := net.ParseIP(ip); parsed != nil && parsed.To4() != nil {
 			return ip, nil
 		}
-		lastErr = err
+		if otherFamily == "" {
+			otherFamily = ip
+		}
+	}
+	if otherFamily != "" {
+		return otherFamily, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no public IP endpoint configured")
@@ -398,50 +454,51 @@ func setupTargetUser() (*user.User, error) {
 // install
 // ---------------------------------------------------------------------------
 
-// installSetupVM performs every mutation, in order. It reports whether the
-// gateway ended up running, plus any note the summary has to carry. Each step is
+// installSetupVM performs every mutation, in order. It reports which units ended
+// up actually running, plus any note the summary has to carry. Each step is
 // skipped when it is already done, so a second run of ao setup-vm changes
 // nothing and restarts nothing.
-func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan setupPlan) (bool, []string, error) {
+func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan setupPlan) (setupUnitStates, []string, error) {
 	step := func(format string, args ...any) error {
 		_, err := fmt.Fprintf(out, "==> "+format+"\n", args...)
 		return err
 	}
+	var units setupUnitStates
 	var notes []string
 
 	for _, dir := range plan.setupDirs() {
 		if err := c.runSetupPrivileged(ctx, "install", "-d", "-m", "0700", "-o", plan.User, "-g", plan.Group, dir); err != nil {
-			return false, notes, err
+			return units, notes, err
 		}
 	}
 	if err := step("state directories ready under %s, owned by %s", plan.AODir, plan.User); err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
 
 	if err := c.ensureSetupPackages(ctx, out, plan.Packages); err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
 	binaryChanged, err := c.ensureSetupBinary(ctx, out, plan)
 	if err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
 
 	daemonChanged, err := c.writeSetupUnit(ctx, out, setupVMDaemonUnit, renderDaemonUnit(plan))
 	if err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
 	gatewayChanged, err := c.writeSetupUnit(ctx, out, setupVMGatewayUnit, renderGatewayUnit(plan))
 	if err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
 	if daemonChanged || gatewayChanged {
 		if err := c.runSetupPrivileged(ctx, "systemctl", "daemon-reload"); err != nil {
-			return false, notes, err
+			return units, notes, err
 		}
 	}
 
 	if err := c.runSetupPrivileged(ctx, "systemctl", "enable", setupVMDaemonUnit, setupVMGatewayUnit); err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
 	// Only a changed unit earns a restart: restarting the daemon kills the
 	// agent sessions it is supervising, which a re-run must not do. A new
@@ -451,10 +508,15 @@ func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan
 		daemonAction = "restart"
 	}
 	if err := c.runSetupPrivileged(ctx, "systemctl", daemonAction, setupVMDaemonUnit); err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
-	if err := step("%s enabled and running", setupVMDaemonUnit); err != nil {
-		return false, notes, err
+	daemonActive, daemonNote := c.confirmSetupUnitActive(ctx, setupVMDaemonUnit)
+	units.DaemonRunning = daemonActive
+	if daemonNote != "" {
+		notes = append(notes, daemonNote)
+	}
+	if err := step("%s %s", setupVMDaemonUnit, setupUnitStateText(daemonActive)); err != nil {
+		return units, notes, err
 	}
 	if binaryChanged && daemonAction == "start" {
 		notes = append(notes, fmt.Sprintf(
@@ -466,7 +528,7 @@ func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan
 	if !plan.Bound {
 		// `ao vm serve` reads machine.json once at startup and cannot serve
 		// without it, so starting it now would only produce a restart loop.
-		return false, notes, step("%s enabled but not started: this machine is not bound yet", setupVMGatewayUnit)
+		return units, notes, step("%s enabled but not started: this machine is not bound yet", setupVMGatewayUnit)
 	}
 	// The gateway holds no session state, so a new binary or unit is safe to
 	// restart into immediately.
@@ -475,9 +537,23 @@ func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan
 		gatewayAction = "restart"
 	}
 	if err := c.runSetupPrivileged(ctx, "systemctl", gatewayAction, setupVMGatewayUnit); err != nil {
-		return false, notes, err
+		return units, notes, err
 	}
-	return true, notes, step("%s enabled and running", setupVMGatewayUnit)
+	gatewayActive, gatewayNote := c.confirmSetupUnitActive(ctx, setupVMGatewayUnit)
+	units.GatewayRunning = gatewayActive
+	if gatewayNote != "" {
+		notes = append(notes, gatewayNote)
+	}
+	return units, notes, step("%s %s", setupVMGatewayUnit, setupUnitStateText(gatewayActive))
+}
+
+// setupUnitStateText is what the progress line says about a unit that was just
+// started. "running" is a claim, so it is only made when is-active agreed.
+func setupUnitStateText(active bool) string {
+	if active {
+		return "enabled and running"
+	}
+	return "enabled, but not running: see the warnings at the end of this run"
 }
 
 func (c *commandContext) ensureSetupPackages(ctx context.Context, out io.Writer, packages []string) error {
