@@ -69,11 +69,32 @@ Failure returns a non-2xx with the OAuth error envelope `{"error": "...",
 "error_description": "..."}`; `invalid_grant` covers a reused code, a mismatched
 verifier, and a mismatched `redirect_uri`.
 
-**No access token is issued here.** An access token's `aud` is a machine id
-(`controlplane/TOKEN_CONTRACT.md`) and no machine is selected at login time, so
-access tokens come from a later refresh exchange scoped to the chosen machine. That
-exchange, along with attaching credentials to REST, SSE, and `/mux`, is task 13 in
-batch 5 and is deliberately not implemented here.
+**No access token is issued here.** Login yields identity plus the refresh token and
+nothing else; every access token comes from a later exchange at the token endpoint.
+
+## Two token audiences, deliberately not interchangeable
+
+Decided by the orchestrator after `controlplane/TOKEN_CONTRACT.md` merged, because
+that file only covered machine-audience tokens and said nothing about how a desktop
+install authenticates to the control plane itself, which it must do before it has
+picked any machine. `hosted-ao-17` is implementing the token endpoint and adding a
+section to `TOKEN_CONTRACT.md` defining both audiences; that file wins once it does.
+
+- **Control-plane audience.** `aud` is the control plane origin
+  (`https://ao.agentlab.in`). This is what authenticates control-plane API calls
+  such as `GET /api/v1/machines`. Obtained by exchanging the refresh token at the
+  token endpoint.
+- **Machine audience.** `aud` is a `machines.id`, verified by that machine's
+  gateway. Obtained per machine, and only after one is chosen. Task 13 in batch 5.
+
+The refresh token goes **only** to the control plane's token endpoint. It is never a
+Bearer credential on a resource route, never in a URL, and never in a log line. An
+access token of one audience is never sent to the other.
+
+Neither exchange is implemented here: this task ends at "a refresh token is stored".
+When task 13 adds a cached control-plane access token, **sign-out must discard that
+cache as well as the stored refresh token.** Today there is nothing cached to
+discard, so deleting the file is the whole of sign-out.
 
 ## What the desktop stores
 

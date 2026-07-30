@@ -123,6 +123,8 @@ export function createAoAccountController(deps: AoAccountControllerDeps): AoAcco
 			lastError = null;
 			// Discards the refresh token itself, not just the UI flag. The control plane
 			// keeps its own revocation list; this end stops holding the credential.
+			// Nothing else is held: no access token of either audience is cached yet. When
+			// task 13 caches a control-plane-audience token, clear it here too.
 			if (deps.stateDir) await clearStoredAccount(deps.stateDir);
 			return currentState();
 		},

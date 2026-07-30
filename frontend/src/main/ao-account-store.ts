@@ -96,7 +96,9 @@ export async function readStoredAccount(
  *
  * Also the seam the refresh exchange writes through: the refresh token rotates on
  * every use (controlplane/TOKEN_CONTRACT.md), so the replacement must land here or
- * the next refresh replays a revoked token.
+ * the next refresh replays a revoked token. Only the refresh token belongs on disk;
+ * access tokens are short-lived, audience-scoped, and not stored here at all (see
+ * docs/desktop-login-contract.md).
  */
 export async function writeStoredAccount(
 	stateDir: string,
