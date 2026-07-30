@@ -72,29 +72,31 @@ verifier, and a mismatched `redirect_uri`.
 **No access token is issued here.** Login yields identity plus the refresh token and
 nothing else; every access token comes from a later exchange at the token endpoint.
 
-## Two token audiences, deliberately not interchangeable
+## Which token the desktop uses where
 
-Decided by the orchestrator after `controlplane/TOKEN_CONTRACT.md` merged, because
-that file only covered machine-audience tokens and said nothing about how a desktop
-install authenticates to the control plane itself, which it must do before it has
-picked any machine. `hosted-ao-17` is implementing the token endpoint and adding a
-section to `TOKEN_CONTRACT.md` defining both audiences; that file wins once it does.
+The two access token audiences, how each is obtained, and where a refresh token
+may be presented are defined in
+[`controlplane/TOKEN_CONTRACT.md`](../controlplane/TOKEN_CONTRACT.md), "The two
+audiences". That file is authoritative; this section only records which of them
+the desktop reaches for, and when.
 
-- **Control-plane audience.** `aud` is the control plane origin
-  (`https://ao.agentlab.in`). This is what authenticates control-plane API calls
-  such as `GET /api/v1/machines`. Obtained by exchanging the refresh token at the
-  token endpoint.
-- **Machine audience.** `aud` is a `machines.id`, verified by that machine's
-  gateway. Obtained per machine, and only after one is chosen. Task 13 in batch 5.
+| Desktop step | Credential |
+| --- | --- |
+| Sign in (above) | none, PKCE plus `state` |
+| `GET /api/v1/machines` | control-plane-audience access token, from `POST /api/v1/token` |
+| Talking to a chosen machine | machine-audience access token (task 13, batch 5) |
 
-The refresh token goes **only** to the control plane's token endpoint. It is never a
-Bearer credential on a resource route, never in a URL, and never in a log line. An
-access token of one audience is never sent to the other.
+Two consequences the desktop side owns:
 
-Neither exchange is implemented here: this task ends at "a refresh token is stored".
-When task 13 adds a cached control-plane access token, **sign-out must discard that
-cache as well as the stored refresh token.** Today there is nothing cached to
-discard, so deleting the file is the whole of sign-out.
+- **Sign-out discards every cached token, not just the file.**
+  `frontend/src/main/ao-control-token.ts` caches a control-plane-audience access
+  token in memory, and `aoAccount:signOut` clears it alongside deleting
+  `ao-account.json`. When task 13 caches a machine-audience token, it clears there
+  too.
+- **Every refresh exchange persists the rotated refresh token** through
+  `writeStoredAccount`, before the access token it came with is handed to a caller.
+  The presented token is already revoked by then, so losing the replacement would
+  lock the install out.
 
 ## What the desktop stores
 
@@ -114,3 +116,11 @@ Because refresh tokens rotate on every use, the refresh exchange must persist ea
 replacement through `writeStoredAccount` in
 `frontend/src/main/ao-account-store.ts` or the next refresh replays a revoked
 token.
+
+`~/.ao/ao-machine.json`, mode 0600, records which machine is active, and is
+absent when this computer is. It holds no credential: an id, a name, the
+machine's public origin, and the last-seen the control plane reported. It stores
+the whole record rather than just the id so a launch knows it is pointed at a
+remote machine before it can reach the control plane, which is what stops the
+app spawning a local daemon on a remote machine's behalf. See
+`frontend/src/main/ao-machines.ts`.

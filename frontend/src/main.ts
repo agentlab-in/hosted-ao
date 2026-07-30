@@ -60,9 +60,11 @@ import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { createAoAccountController } from "./main/ao-account";
+import { createAoMachinesController } from "./main/ao-machines";
+import type { AoMachine } from "./shared/ao-machines";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
-import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
+import { createRemoteDaemonLifecycle, machineDaemonStatus } from "./main/remote-daemon";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -117,7 +119,16 @@ const remoteDaemonConfig: RemoteDaemonConfig | null = (() => {
 		return null;
 	}
 })();
-const remoteDaemonLifecycle = createRemoteDaemonLifecycle(remoteDaemonConfig, remoteDaemonConfigurationFailureStatus);
+// The active registered machine's status, or null when this computer is the
+// active machine. Held here rather than read from the machines controller so
+// the lifecycle can be built before the state dir is resolved, and so a remote
+// machine restored at boot is in force before the first startDaemon() call.
+let activeMachineStatus: DaemonStatus | null = null;
+const remoteDaemonLifecycle = createRemoteDaemonLifecycle(
+	remoteDaemonConfig,
+	remoteDaemonConfigurationFailureStatus,
+	() => activeMachineStatus,
+);
 let daemonStatus: DaemonStatus = remoteDaemonLifecycle.currentStatus() ?? { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
@@ -1428,7 +1439,50 @@ function aoAccount(): ReturnType<typeof createAoAccountController> {
 
 ipcMain.handle("aoAccount:getState", () => aoAccount().getState());
 ipcMain.handle("aoAccount:signIn", () => aoAccount().signIn());
-ipcMain.handle("aoAccount:signOut", () => aoAccount().signOut());
+ipcMain.handle("aoAccount:signOut", async () => {
+	const state = await aoAccount().signOut();
+	// Signing out removes the only credential that can reach a registered
+	// machine, so the app falls back to this computer, which needs no account.
+	await aoMachines().reset();
+	return state;
+});
+
+// The machine list and which machine is active. This computer is machine zero
+// and is always offered; everything below is only about reaching a machine the
+// account has registered.
+let aoMachinesController: ReturnType<typeof createAoMachinesController> | null = null;
+function aoMachines(): ReturnType<typeof createAoMachinesController> {
+	if (aoMachinesController) return aoMachinesController;
+	const runFile = runFilePath();
+	aoMachinesController = createAoMachinesController({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		env: process.env,
+		safeStorage,
+		// "This Mac" on macOS, per the spec. The other platforms get a label that
+		// is not wrong for them.
+		localMachineName: process.platform === "darwin" ? "This Mac" : "This computer",
+		onActiveChange: applyActiveMachine,
+	});
+	return aoMachinesController;
+}
+
+/**
+ * Re-point the app at the machine that just became active.
+ *
+ * A remote machine sets activeMachineStatus, which is what makes the remote
+ * lifecycle own the app's daemon state: from here on startDaemon() returns that
+ * status and the local start function is never called, whether the machine is
+ * up or down. Selecting this computer clears it, and startDaemon() attaches to
+ * or spawns the local daemon exactly as it always has.
+ */
+function applyActiveMachine(machine: AoMachine | null): void {
+	activeMachineStatus = machine ? machineDaemonStatus(machine) : null;
+	void startDaemon();
+}
+
+ipcMain.handle("aoMachines:getState", () => aoMachines().getState());
+ipcMain.handle("aoMachines:refresh", () => aoMachines().refresh());
+ipcMain.handle("aoMachines:select", (_event, machineId: string) => aoMachines().select(machineId));
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
 ipcMain.handle("updates:check", async (_event, options?: UpdateCheckOptions) => {
@@ -1564,8 +1618,22 @@ app.whenReady().then(async () => {
 			setDaemonStatus(remoteStatus);
 		}
 	}
+	// Before the first startDaemon(): a machine chosen in a previous run must be
+	// active by the time anything can start a daemon, or the app would spawn a
+	// local one on behalf of a remote machine. restore() reads the remembered
+	// machine off disk, so it needs no network and cannot be beaten by one.
+	try {
+		await aoMachines().restore();
+	} catch (err) {
+		console.error("failed to restore the active machine:", err);
+	}
+
 	createWindow();
 	void startDaemon();
+	// Fills in the real list and each machine's reachability once the window is
+	// up. Failure here leaves the remembered machine in place; it never falls
+	// back to the local daemon.
+	if (activeMachineStatus) void aoMachines().refresh();
 	initAutoUpdates();
 
 	app.on("activate", () => {
