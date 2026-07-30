@@ -120,10 +120,47 @@ func TestNormalizePublicURL(t *testing.T) {
 		"http://vm.example.com:8443",
 		"http://203.0.113.10",
 		"http://localhost.evil.example.com",
+		// A port on a routable host: `ao vm serve` drops it and listens on :443,
+		// so storing it hands the desktop an address the gateway never answers.
+		// See TestNormalizePublicURLRejectsPort.
+		"https://vm.example.com:8443",
+		"vm.example.com:8443",
 	}
 	for _, raw := range bad {
 		if got, err := normalizePublicURL(raw); err == nil {
 			t.Errorf("normalizePublicURL(%q) = %q, want an error", raw, got)
+		}
+	}
+}
+
+// A port in public_url is the one malformed value that used to be accepted and
+// stored intact, because `ao vm serve` reduces the origin to a bare hostname
+// (normalizeDomain in backend/internal/vmgateway/config.go) and then listens on
+// :443. The machine registers, the desktop calls :8443, the gateway answers on
+// :443, and the machine shows Offline with nothing in the gateway log. The two
+// normalizers live in separate Go modules and cannot share code, so this test
+// and TestNormalizeDomain_PortIsDroppedNotCarried on the gateway side are what
+// keep them in agreement.
+func TestNormalizePublicURLRejectsPort(t *testing.T) {
+	for _, raw := range []string{"https://vm.example.com:8443", "https://vm.example.com:443", "vm.example.com:8443"} {
+		got, err := normalizePublicURL(raw)
+		if err == nil {
+			t.Errorf("normalizePublicURL(%q) = %q, want an error naming --https-addr", raw, got)
+			continue
+		}
+		// The operator's other option is a gateway told to listen there, so the
+		// error has to name the flag that would do it.
+		if !strings.Contains(err.Error(), "--https-addr") {
+			t.Errorf("normalizePublicURL(%q) error = %q, want it to name --https-addr", raw, err)
+		}
+	}
+
+	// The loopback development origins keep their port: http is only accepted
+	// for loopback, and no gateway ever serves one, so there is no second side
+	// to disagree with.
+	for _, raw := range []string{"http://127.0.0.1:8443", "http://localhost:8443", "http://[::1]:8443"} {
+		if got, err := normalizePublicURL(raw); err != nil || got != raw {
+			t.Errorf("normalizePublicURL(%q) = %q, %v; want it kept unchanged", raw, got, err)
 		}
 	}
 }

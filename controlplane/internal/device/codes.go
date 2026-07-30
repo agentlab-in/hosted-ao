@@ -111,10 +111,11 @@ func normalizeUserCode(typed string) string {
 
 // normalizePublicURL turns the public URL a VM reports into the single form
 // stored in machines.hostname and handed back to the polling client: an
-// origin with no trailing slash, like https://vm.example.com. `ao vm serve`
-// reduces that origin back to a bare hostname for the certificate whitelist
-// (see backend/internal/vmgateway/config.go), so a value that is not a clean
-// origin has to be rejected here rather than stored and failed on later.
+// origin with no trailing slash and no port, like https://vm.example.com.
+// `ao vm serve` reduces that origin back to a bare hostname for the
+// certificate whitelist (see backend/internal/vmgateway/config.go), so a value
+// that is not a clean origin has to be rejected here rather than stored and
+// failed on later.
 func normalizePublicURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -143,6 +144,19 @@ func normalizePublicURL(raw string) (string, error) {
 	// registration nonetheless succeeded.
 	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
 		return "", fmt.Errorf("public_url %q must use https: http is accepted only for a loopback host", raw)
+	}
+	// A port is stored and served here but dropped on the other side of this
+	// contract: `ao vm serve` reduces the origin to a bare hostname
+	// (normalizeDomain in backend/internal/vmgateway/config.go) and then listens
+	// on :443 unless --https-addr is also set, which nothing checks. Registering
+	// https://vm.example.com:8443 therefore produces a machine that registers
+	// cleanly and then shows Offline forever, with nothing in the gateway log,
+	// because the desktop is calling a port the gateway never listens on. Reject
+	// it the way `ao setup-vm --domain` already does, so the two normalizers
+	// agree. Loopback is exempt: it is the local-development origin from the http
+	// affordance above, and no gateway ever serves it.
+	if u.Port() != "" && !isLoopbackHost(u.Hostname()) {
+		return "", fmt.Errorf("public_url %q must not include a port: `ao vm serve` serves the bare hostname on :443, so a port here would also need --https-addr on the VM and nothing checks the two agree", raw)
 	}
 	return u.Scheme + "://" + strings.ToLower(u.Host), nil
 }

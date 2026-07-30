@@ -181,6 +181,15 @@ func Resolve(opts Options, dataDir string) (Config, error) {
 // issued and every TLS handshake fails while the gateway logs a clean
 // start. Reject here, loudly, at boot, whatever cannot be reduced to a
 // hostname.
+//
+// A port in the origin is dropped, not carried into HTTPSAddr: the listener
+// moves only with --https-addr/AO_VM_HTTPS_ADDR. That stays safe because the
+// other side of the publicUrl contract refuses to store an origin with a port
+// (normalizePublicURL in controlplane/internal/device/codes.go), so the desktop
+// can only ever be pointed at the port this gateway actually listens on. The
+// two normalizers are in separate Go modules, so the agreement is pinned by a
+// test on each side rather than shared code; see
+// TestNormalizeDomain_PortIsDroppedNotCarried.
 func normalizeDomain(domain, source string) (string, error) {
 	domain = strings.TrimSpace(domain)
 	if strings.Contains(domain, "://") {
