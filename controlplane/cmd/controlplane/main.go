@@ -15,9 +15,11 @@ import (
 
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/device"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/server"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/storage/sqlite"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/tokens"
 )
 
 // shutdownTimeout bounds graceful shutdown after SIGINT/SIGTERM.
@@ -57,6 +59,16 @@ func main() {
 		log.Fatalf("init auth: %v", err)
 	}
 	authSvc.Register(mux)
+
+	// The device flow mints access tokens through this Issuer, so the `aud`
+	// on every token a bound machine is shown is machines.id, per
+	// TOKEN_CONTRACT.md.
+	issuer := tokens.NewIssuer(km, db, cfg.PublicOrigin, cfg.AccessTokenTTL)
+	deviceSvc, err := device.NewService(db, issuer, authSvc, cfg.PublicOrigin)
+	if err != nil {
+		log.Fatalf("init device flow: %v", err)
+	}
+	deviceSvc.Register(mux)
 
 	// LISTEN_ADDR defaults to loopback (127.0.0.1:8080): this service sits
 	// behind Caddy on the same box, which terminates TLS and reverse-proxies

@@ -117,6 +117,42 @@ func (i *Issuer) RotateRefreshToken(ctx context.Context, presented string) (newT
 	return newToken, accountID, installID, nil
 }
 
+// AccountForRefreshToken returns the account a presented refresh token
+// belongs to, applying the same revocation and expiry checks as
+// RotateRefreshToken but without rotating it.
+//
+// This is how the control plane's own API authenticates a desktop install
+// that has not yet chosen a machine, and therefore cannot hold an access
+// token: the access tokens in TOKEN_CONTRACT.md are addressed to a machine
+// (`aud` = machines.id) and are verified by that machine's gateway, so there
+// is no machine-audience token that authenticates a call to this service.
+// Validating is deliberately not exchanging, so the caller's stored token
+// stays valid; only RotateRefreshToken consumes one.
+func (i *Issuer) AccountForRefreshToken(ctx context.Context, presented string) (string, error) {
+	var (
+		accountID string
+		expiresAt sql.NullTime
+		revokedAt sql.NullTime
+	)
+	err := i.db.QueryRowContext(ctx,
+		`SELECT account_id, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = ?`,
+		hashToken(presented),
+	).Scan(&accountID, &expiresAt, &revokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrInvalidRefreshToken
+	}
+	if err != nil {
+		return "", fmt.Errorf("look up refresh token: %w", err)
+	}
+	if revokedAt.Valid {
+		return "", ErrRefreshTokenRevoked
+	}
+	if expiresAt.Valid && time.Now().UTC().After(expiresAt.Time) {
+		return "", ErrRefreshTokenExpired
+	}
+	return accountID, nil
+}
+
 // RevokeRefreshToken revokes a refresh token so it can no longer be
 // exchanged. It is idempotent: revoking an already-revoked token is not an
 // error. Revoking a token whose hash matches no row returns

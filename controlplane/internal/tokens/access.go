@@ -41,6 +41,14 @@ func NewIssuer(km *keys.Manager, db *sql.DB, issuerURL string, accessTTL time.Du
 	return &Issuer{keys: km, db: db, issuer: issuerURL, accessTTL: accessTTL}
 }
 
+// AccessTokenTTL is the lifetime of the access tokens this Issuer mints. It
+// is exposed so a caller returning a token to a client can report the same
+// `expires_in` the token's own `exp` encodes, rather than keeping a second
+// copy of the configured TTL that can drift from it.
+func (i *Issuer) AccessTokenTTL() time.Duration {
+	return i.accessTTL
+}
+
 type accessClaims struct {
 	Iss string `json:"iss"`
 	Sub string `json:"sub"`

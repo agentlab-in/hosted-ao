@@ -257,3 +257,46 @@ func TestRevokeRefreshToken_IsIdempotentAndRejectsUnknown(t *testing.T) {
 		t.Errorf("revoking an unknown token: err = %v, want ErrInvalidRefreshToken", err)
 	}
 }
+
+func TestAccountForRefreshToken_ValidatesWithoutRotating(t *testing.T) {
+	issuer, _, db := newTestIssuer(t)
+	ctx := context.Background()
+
+	plaintext, err := issuer.IssueRefreshToken(ctx, testAccountID, "install-1")
+	if err != nil {
+		t.Fatalf("IssueRefreshToken() unexpected error: %v", err)
+	}
+
+	// Looking the account up twice must both work: unlike RotateRefreshToken,
+	// this does not consume the presented token.
+	for i := range 2 {
+		accountID, err := issuer.AccountForRefreshToken(ctx, plaintext)
+		if err != nil {
+			t.Fatalf("AccountForRefreshToken() call %d unexpected error: %v", i+1, err)
+		}
+		if accountID != testAccountID {
+			t.Errorf("accountID = %q, want %q", accountID, testAccountID)
+		}
+	}
+
+	if _, err := issuer.AccountForRefreshToken(ctx, "not-a-real-token"); err != ErrInvalidRefreshToken {
+		t.Errorf("unknown token: err = %v, want ErrInvalidRefreshToken", err)
+	}
+
+	if _, err := db.Exec(
+		`UPDATE refresh_tokens SET expires_at = ? WHERE token_hash = ?`,
+		time.Now().UTC().Add(-time.Hour), hashToken(plaintext),
+	); err != nil {
+		t.Fatalf("force-expire token: %v", err)
+	}
+	if _, err := issuer.AccountForRefreshToken(ctx, plaintext); err != ErrRefreshTokenExpired {
+		t.Errorf("expired token: err = %v, want ErrRefreshTokenExpired", err)
+	}
+
+	if err := issuer.RevokeRefreshToken(ctx, plaintext); err != nil {
+		t.Fatalf("RevokeRefreshToken() unexpected error: %v", err)
+	}
+	if _, err := issuer.AccountForRefreshToken(ctx, plaintext); err != ErrRefreshTokenRevoked {
+		t.Errorf("revoked token: err = %v, want ErrRefreshTokenRevoked", err)
+	}
+}

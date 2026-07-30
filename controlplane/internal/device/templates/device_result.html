@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Approved}}Machine connected{{else}}Request denied{{end}} - AO</title>
+  {{template "device_style.html"}}
+</head>
+<body>
+  <div class="card">
+    {{if .Approved}}
+      <h1>Machine connected</h1>
+      {{if .MachineName}}<p class="hint">{{.MachineName}} ({{.PublicURL}}) is now bound to your account.</p>{{end}}
+      <p class="hint">Return to your terminal: <code>ao setup-vm</code> finishes on its own.</p>
+    {{else}}
+      <h1>Request denied</h1>
+      <p class="hint">Nothing was connected. You can close this page.</p>
+    {{end}}
+    <a class="button" href="/device">Connect another machine</a>
+  </div>
+</body>
+</html>

@@ -69,6 +69,63 @@ exercise the login flow end to end (see `internal/auth/` for the
 authorization-code exchange with PKCE, the `accounts` upsert, and the browser
 session cookie).
 
+## Device flow and machine registry
+
+`ao setup-vm` binds a VM to an account with the RFC 8628 device authorization
+flow, implemented in `internal/device/`. Both endpoints accept either a
+form-encoded or a JSON body.
+
+```bash
+# 1. The VM asks for a code. public_url is required and must be a bare origin;
+#    machine_name is optional and defaults to the host.
+curl -s http://127.0.0.1:8080/device/code \
+  -d public_url=https://vm.example.com -d machine_name='prod vm'
+# {"device_code":"...","user_code":"WDJB-MJHT",
+#  "verification_uri":"http://127.0.0.1:8080/device",
+#  "verification_uri_complete":"http://127.0.0.1:8080/device?user_code=WDJB-MJHT",
+#  "expires_in":900,"interval":5}
+
+# 2. The human opens verification_uri, signs in, types the code, and approves.
+
+# 3. The VM polls, no faster than `interval` seconds.
+curl -s http://127.0.0.1:8080/device/token \
+  -d grant_type=urn:ietf:params:oauth:grant-type:device_code \
+  -d device_code=...
+# {"access_token":"...","token_type":"Bearer","expires_in":900,
+#  "machine_id":"...","account_id":"...","public_url":"https://vm.example.com"}
+```
+
+While the flow is in progress the poll returns HTTP 400 with an RFC 8628 error
+code: `authorization_pending` until it is approved, `slow_down` if it is polled
+faster than `interval`, `expired_token` once the code's 15 minutes are up, and
+`invalid_grant` for a code that was never issued. A denial in the browser
+returns 403 `access_denied`.
+
+`machine_id` is `machines.id`. It is the value that goes in `machineId` in
+`~/.ao/machine.json` and the `aud` of the access token in the same response;
+it is never the hostname or the public URL. See `TOKEN_CONTRACT.md`.
+
+A successful poll is repeatable until the device code expires, so a dropped
+response does not force the operator to approve a second code. Re-running the
+device flow for a public URL an account has already bound reuses the existing
+machine row, so `ao setup-vm` stays re-runnable without changing the machine
+id or duplicating the box in the machine list.
+
+## Machines API
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/machines -H 'Authorization: Bearer <refresh token>'
+# {"machines":[{"id":"...","name":"prod vm","public_url":"https://vm.example.com",
+#               "created_at":"...","last_seen":null}]}
+```
+
+The credential is either the account's opaque refresh token or the browser
+session cookie. It is not an access token: the access tokens in
+`TOKEN_CONTRACT.md` are addressed to one machine (`aud` = `machines.id`) and
+are verified by that machine's gateway, so a desktop install that has just
+signed in and has no machine yet holds no token addressed to anything.
+Listing does not rotate the refresh token; only exchanging one does.
+
 ## Test
 
 ```bash

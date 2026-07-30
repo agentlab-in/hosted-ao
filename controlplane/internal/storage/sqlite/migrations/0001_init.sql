@@ -29,10 +29,13 @@ CREATE TABLE machines (
 CREATE INDEX idx_machines_account ON machines (account_id);
 
 -- device_codes backs the RFC 8628 device authorization flow used by
--- ao setup-vm. device_code is the opaque, high-entropy value the VM polls
--- with; user_code is the short value a human types into the enter-code page.
--- account_id is filled in once the human approves the request in their
--- browser.
+-- ao setup-vm. device_code holds the SHA-256 hash of the opaque, high-entropy
+-- value the VM polls with, never that value itself: it is a bearer secret, so
+-- a database leak must not hand over live device codes, and hashing also
+-- makes the lookup a fixed-width comparison. user_code is the short value a
+-- human types into the enter-code page, stored as typed because the approval
+-- page displays it back. account_id is filled in once the human approves the
+-- request in their browser.
 CREATE TABLE device_codes (
     device_code    TEXT PRIMARY KEY,
     user_code      TEXT NOT NULL UNIQUE,
