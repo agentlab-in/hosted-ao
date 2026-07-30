@@ -8,7 +8,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -51,19 +50,20 @@ func (c *commandContext) runWhoami(cmd *cobra.Command, machineFile string) error
 }
 
 // resolveMachineFilePath mirrors vmgateway.Resolve exactly: the flag wins, then
-// AO_MACHINE_FILE, then ~/.ao/machine.json. It deliberately does not use the
-// AO_DATA_DIR-resolved data dir, because the reader does not look there either,
-// and the two have to name the same file or this command would confidently
-// report a binding the gateway never sees.
+// AO_MACHINE_FILE, then the gateway's own default. The default comes from
+// vmgateway.DefaultMachineFilePath rather than being spelled out a second time,
+// because the two have to name the same file or this command would confidently
+// report a binding the gateway never sees. That function documents why the
+// default is the AO home directory and not the AO_DATA_DIR-resolved data dir.
 func resolveMachineFilePath(override string) (string, error) {
 	for _, candidate := range []string{override, os.Getenv("AO_MACHINE_FILE")} {
 		if candidate = strings.TrimSpace(candidate); candidate != "" {
 			return candidate, nil
 		}
 	}
-	home, err := os.UserHomeDir()
+	path, err := vmgateway.DefaultMachineFilePath()
 	if err != nil {
 		return "", fmt.Errorf("resolve the machine file path: %w", err)
 	}
-	return filepath.Join(home, ".ao", "machine.json"), nil
+	return path, nil
 }

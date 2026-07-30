@@ -103,8 +103,14 @@ func DefaultDeps() Deps {
 	}
 }
 
+// commandOutput runs a probe through the shared helper, which bounds the wait
+// on the output pipes (aoprocess.WaitDelay). `ao doctor` shells out to Node
+// CLIs that spawn children of their own, and without that bound a surviving
+// grandchild holding the pipe keeps Wait blocked forever: the probe's context
+// deadline kills the direct child and nothing else, so the command never
+// returns to the user.
 func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return aoprocess.CommandContext(ctx, name, args...).CombinedOutput()
+	return aoprocess.CombinedOutput(ctx, name, args...)
 }
 
 // runInteractive inherits the process's own stdio so the child owns the
@@ -122,6 +128,7 @@ func runInteractive(ctx context.Context, name string, args ...string) error {
 func commandOutputInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = aoprocess.WaitDelay // same pipe-holding grandchild problem, see commandOutput
 	return cmd.CombinedOutput()
 }
 

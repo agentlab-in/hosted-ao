@@ -239,7 +239,21 @@ func extractToken(r *http.Request) (string, bool) {
 // cookie is attached by the browser to any request to this host, so
 // accepting it on a state-changing method would leave corsGate as the sole
 // CSRF defence.
+//
+// An Origin header is required on both, which is what makes corsGate a real
+// gate rather than one a request can opt out of: corsGate passes a request
+// with no Origin straight through, and the cookie is SameSite=None
+// (TOKEN_CONTRACT.md), so a hostile page's `new Image().src =
+// "https://vm.example.com/api/v1/events"` would otherwise be an authenticated
+// SSE stream held open on the daemon. Every browser API that can reach these
+// two routes sends an Origin (fetch, EventSource, and the WebSocket
+// handshake all do), and a non-browser client authenticates with the
+// Authorization header, which this does not touch. So a cookie with no Origin
+// is only ever the shape no legitimate caller has.
 func cookieAuthAllowed(r *http.Request) bool {
+	if r.Header.Get("Origin") == "" {
+		return false
+	}
 	if r.URL.Path == muxPath {
 		return true
 	}

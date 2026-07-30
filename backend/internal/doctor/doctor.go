@@ -55,6 +55,13 @@ type Check struct {
 	// desktop's machine card) can show exactly what to run instead of parsing
 	// it back out of Message. Empty when there is no single command to name.
 	Remediation string `json:"remediation,omitempty"`
+	// PublicMessage replaces Message for a consumer off this machine, when
+	// Message says more than a remote caller should be told. It is deliberately
+	// not serialized: `ao doctor` and `ao doctor --json` run locally and keep
+	// the full Message, and the daemon's HTTP route (a body that crosses the
+	// network, see httpd/controllers.doctorReport) projects this instead when
+	// it is set. Empty means Message is safe to publish as-is.
+	PublicMessage string `json:"-"`
 }
 
 // Section names group the checks in a report, and the names and probe
@@ -82,6 +89,21 @@ const (
 	minGitVersion         = "2.25.0"
 	githubDoctorUserAgent = "ao-agent-orchestrator/doctor"
 	probeTimeout          = 2 * time.Second
+
+	// harnessAuthTimeout is the claude-auth probe's own budget. probeTimeout is
+	// sized for `git --version`: a local binary that prints a line. `claude auth
+	// status --json` is a Node CLI cold start, which on a 1 vCPU VM routinely
+	// takes longer than that, and it may talk to the network. Timing out there
+	// produces a WARN that the desktop maps to "harness not set up", so too
+	// small a budget makes a correctly signed-in machine report as unconfigured
+	// and sends the user back to `ao vm setup-harness`.
+	harnessAuthTimeout = 10 * time.Second
+
+	// maxProbeOutputInMessage caps how much harness output a check message may
+	// quote. These messages cross the network on GET /api/v1/doctor, so a
+	// future harness release that prints something long, or something private,
+	// on this path cannot turn the report into a transcript of it.
+	maxProbeOutputInMessage = 200
 )
 
 // ClaudeAuthStatusArgs is the harness's own machine-readable answer to "is
@@ -126,8 +148,13 @@ func DefaultDeps() Deps {
 	}
 }
 
+// commandOutput runs a probe through the shared helper, which bounds the wait
+// on the output pipes (aoprocess.WaitDelay). A probe that ignored that would
+// hang the whole report, and now the HTTP request behind it, whenever a
+// grandchild outlives the probe's context: `claude` is a Node CLI and spawns
+// exactly such children.
 func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return aoprocess.CommandContext(ctx, name, args...).CombinedOutput()
+	return aoprocess.CombinedOutput(ctx, name, args...)
 }
 
 func (d Deps) withDefaults() Deps {
@@ -217,7 +244,7 @@ func (d Deps) checkClaudeAuth(ctx context.Context) Check {
 	if err != nil || path == "" {
 		return warn(fmt.Sprintf("claude not found in PATH; install the Claude Code CLI, then run `%s`", setupCmd))
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, harnessAuthTimeout)
 	defer cancel()
 	probe := strings.Join(ClaudeAuthStatusArgs, " ")
 	out, cmdErr := d.CommandOutput(reqCtx, path, ClaudeAuthStatusArgs...)
@@ -262,11 +289,15 @@ func (s claudeAuthStatus) describe() string {
 // --json` output. It slices to the outermost braces first because the probe
 // runs through CombinedOutput, so an unrelated notice on stderr (an update
 // banner, a deprecation warning) would otherwise make valid JSON unparseable.
+//
+// The "no JSON" error quotes only a truncated head of that output: the error
+// becomes the check Message, which GET /api/v1/doctor serves, so whatever a
+// future claude release decides to print must not be echoed wholesale.
 func parseClaudeAuthStatus(out []byte) (claudeAuthStatus, error) {
 	clean := ansiRE.ReplaceAllString(string(out), "")
 	start, end := strings.Index(clean, "{"), strings.LastIndex(clean, "}")
 	if start < 0 || end < start {
-		return claudeAuthStatus{}, fmt.Errorf("no JSON object in output %q", strings.TrimSpace(clean))
+		return claudeAuthStatus{}, fmt.Errorf("no JSON object in output %q", truncate(strings.TrimSpace(clean), maxProbeOutputInMessage))
 	}
 	var status claudeAuthStatus
 	if err := json.Unmarshal([]byte(clean[start:end+1]), &status); err != nil {
@@ -568,7 +599,26 @@ func (d Deps) checkGitHubToken(ctx context.Context) Check {
 	if scopes != "" {
 		scopeMsg = "scopes: " + scopes
 	}
-	return Check{Level: Pass, Section: SectionGitHub, Name: "github-token", Message: fmt.Sprintf("%s token valid for %s (%s)", source, login, scopeMsg)}
+	return Check{
+		Level: Pass, Section: SectionGitHub, Name: "github-token",
+		Message: fmt.Sprintf("%s token valid for %s (%s)", source, login, scopeMsg),
+		// The login names the GitHub account this machine acts as and the scope
+		// list is the exact capability of the credential sitting on it. Both are
+		// what you want locally and neither is anyone else's business, so the
+		// remote projection gets the answer to the question only: is the token
+		// good.
+		PublicMessage: fmt.Sprintf("%s token valid", source),
+	}
+}
+
+// truncate shortens s to at most maxRunes characters and says that it did.
+// Rune-based so a cut never lands mid-sequence and produces mojibake.
+func truncate(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "... (truncated)"
 }
 
 func (d Deps) githubToken(ctx context.Context) (token, source string, err error) {
