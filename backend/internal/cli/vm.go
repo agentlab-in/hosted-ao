@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -13,15 +14,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
-// newVMCommand groups commands that run on a hosted VM gateway machine. It
-// is a plain grouping parent; ao setup-vm and ao vm setup-harness are later
-// batches and not added here yet.
+// newVMCommand groups commands that run on a hosted VM gateway machine.
 func newVMCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "vm",
 		Short: "Commands for a hosted VM gateway machine",
 	}
 	cmd.AddCommand(newVMServeCommand(ctx))
+	cmd.AddCommand(newVMSetupHarnessCommand(ctx))
 	return cmd
 }
 
@@ -102,6 +102,69 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 	log.Info("ao vm serve starting",
 		"domain", gwCfg.Domain, "machineId", gwCfg.MachineID, "daemonAddr", gwCfg.DaemonAddr)
 	return srv.Run(ctxSig, cfg.ShutdownTimeout)
+}
+
+// The claude harness is the only one ao vm setup-harness supports in v1. Its
+// login and its readiness probe are two halves of the same `claude auth`
+// surface, so they live together here: if a claude release moves one, doctor's
+// claude-auth check and this command break together and visibly, rather than
+// one of them silently reporting the wrong thing.
+const claudeHarnessName = "claude"
+
+var (
+	claudeLoginArgs      = []string{"auth", "login"}
+	claudeAuthStatusArgs = []string{"auth", "status", "--json"}
+)
+
+func newVMSetupHarnessCommand(ctx *commandContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup-harness " + claudeHarnessName,
+		Short: "Log in to an agent harness on this machine, in the foreground",
+		Long: "ao vm setup-harness runs the harness's own interactive login and hands the\n" +
+			"terminal over to it. The harness prints a URL and then waits for a code to be\n" +
+			"pasted back, so the exchange cannot be scripted or run in the background: run\n" +
+			"this on a real terminal (an SSH session into the VM is fine).\n\n" +
+			"Only the claude harness is supported. `ao doctor` then reports whether the\n" +
+			"harness is signed in as its claude-auth check, which is what the desktop app\n" +
+			"reads for a machine's harness readiness.\n\n" +
+			"Git credentials are separate and are not wrapped by ao: run `gh auth login`\n" +
+			"once, and the daemon picks the credential up on its own.",
+		Args: usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return ctx.runVMSetupHarness(cmd, args[0])
+		},
+	}
+}
+
+func (c *commandContext) runVMSetupHarness(cmd *cobra.Command, harness string) error {
+	if strings.ToLower(strings.TrimSpace(harness)) != claudeHarnessName {
+		return usageError{fmt.Errorf(
+			"unsupported harness %q: only %q is supported (other harnesses are out of scope for now)",
+			harness, claudeHarnessName)}
+	}
+	path, err := c.deps.LookPath(claudeHarnessName)
+	if err != nil || path == "" {
+		return fmt.Errorf("claude not found in PATH: install the Claude Code CLI on this machine first (ao setup-vm deliberately does not, because the login is interactive), then re-run `ao vm setup-harness %s`", claudeHarnessName)
+	}
+
+	out := cmd.OutOrStdout()
+	login := strings.Join(claudeLoginArgs, " ")
+	if _, err := fmt.Fprintf(out, "Handing the terminal to `%s %s`.\n"+
+		"It prints a URL and then waits for a code to be pasted back, so finish the\n"+
+		"login here rather than trying to script it.\n\n", path, login); err != nil {
+		return err
+	}
+
+	// Everything around it is ao's; the login itself is the harness's. This
+	// hand-off stays deliberately thin, so there is nothing here for a claude
+	// release to break behind our back.
+	if err := c.deps.RunInteractive(cmd.Context(), path, claudeLoginArgs...); err != nil {
+		return fmt.Errorf("`claude %s` did not complete: %w", login, err)
+	}
+
+	_, err = fmt.Fprint(out, "\nHarness login finished. Confirm it with `ao doctor` (the claude-auth check),\n"+
+		"and if this machine still needs git credentials, run `gh auth login`.\n")
+	return err
 }
 
 // discoverDaemonAddr reads the loopback daemon's own running.json handshake

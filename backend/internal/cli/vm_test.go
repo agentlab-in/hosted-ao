@@ -3,7 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,5 +91,117 @@ func TestVMServe_StartsAndShutsDownCleanly(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ao vm serve did not shut down after context cancellation")
+	}
+}
+
+// setupHarnessDeps builds Deps for ao vm setup-harness with a fake claude on
+// PATH, recording the interactive hand-off instead of performing it. The real
+// hand-off is one exec.Cmd with inherited stdio (see runInteractive): it cannot
+// run in CI because the harness login waits for a human to paste a code, which
+// is exactly why everything else about the command is kept out of it.
+func setupHarnessDeps(claudePath string, runErr error, calls *[][]string) Deps {
+	return Deps{
+		LookPath: func(name string) (string, error) {
+			if name == "claude" && claudePath != "" {
+				return claudePath, nil
+			}
+			return "", fmt.Errorf("%s missing", name)
+		},
+		RunInteractive: func(_ context.Context, name string, args ...string) error {
+			*calls = append(*calls, append([]string{name}, args...))
+			return runErr
+		},
+	}
+}
+
+func TestVMSetupHarnessRunsClaudeLoginInForeground(t *testing.T) {
+	setConfigEnv(t)
+	var calls [][]string
+	stdout, _, err := executeCLI(t, setupHarnessDeps("/bin/claude", nil, &calls), "vm", "setup-harness", "claude")
+	if err != nil {
+		t.Fatalf("ao vm setup-harness claude: %v", err)
+	}
+	if len(calls) != 1 || strings.Join(calls[0], " ") != "/bin/claude auth login" {
+		t.Fatalf("interactive calls = %v, want one `/bin/claude auth login`", calls)
+	}
+	if !strings.Contains(stdout, "ao doctor") {
+		t.Errorf("stdout = %q, want it to point at ao doctor for readiness", stdout)
+	}
+}
+
+// TestVMSetupHarnessRejectsOtherHarnesses pins the deliberate v1 limit: any
+// harness other than claude is refused outright, with the supported name in the
+// message, rather than half-supported.
+func TestVMSetupHarnessRejectsOtherHarnesses(t *testing.T) {
+	setConfigEnv(t)
+	for _, harness := range []string{"codex", "gemini", "Claude Code", ""} {
+		t.Run("harness="+harness, func(t *testing.T) {
+			var calls [][]string
+			_, _, err := executeCLI(t, setupHarnessDeps("/bin/claude", nil, &calls), "vm", "setup-harness", harness)
+			if err == nil {
+				t.Fatalf("expected an error for harness %q", harness)
+			}
+			if got := ExitCode(err); got != 2 {
+				t.Errorf("ExitCode = %d, want 2 (an unsupported harness name is misuse)", got)
+			}
+			if !strings.Contains(err.Error(), `"claude"`) {
+				t.Errorf("error = %q, want it to name the supported harness", err)
+			}
+			if len(calls) != 0 {
+				t.Errorf("interactive calls = %v, want none for an unsupported harness", calls)
+			}
+		})
+	}
+}
+
+func TestVMSetupHarnessCaseAndSpaceInsensitive(t *testing.T) {
+	setConfigEnv(t)
+	var calls [][]string
+	if _, _, err := executeCLI(t, setupHarnessDeps("/bin/claude", nil, &calls), "vm", "setup-harness", " Claude "); err != nil {
+		t.Fatalf("ao vm setup-harness \" Claude \": %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("interactive calls = %v, want one", calls)
+	}
+}
+
+func TestVMSetupHarnessRequiresExactlyOneHarness(t *testing.T) {
+	setConfigEnv(t)
+	for _, args := range [][]string{{"vm", "setup-harness"}, {"vm", "setup-harness", "claude", "codex"}} {
+		var calls [][]string
+		_, _, err := executeCLI(t, setupHarnessDeps("/bin/claude", nil, &calls), args...)
+		if err == nil {
+			t.Fatalf("expected an error for %v", args)
+		}
+		if got := ExitCode(err); got != 2 {
+			t.Errorf("ExitCode for %v = %d, want 2", args, got)
+		}
+	}
+}
+
+func TestVMSetupHarnessErrorsWhenClaudeMissing(t *testing.T) {
+	setConfigEnv(t)
+	var calls [][]string
+	_, _, err := executeCLI(t, setupHarnessDeps("", nil, &calls), "vm", "setup-harness", "claude")
+	if err == nil || !strings.Contains(err.Error(), "not found in PATH") {
+		t.Fatalf("err = %v, want a not-found-in-PATH failure", err)
+	}
+	if len(calls) != 0 {
+		t.Errorf("interactive calls = %v, want none when claude is missing", calls)
+	}
+}
+
+// TestVMSetupHarnessSurfacesLoginFailure covers the user abandoning the login
+// (Ctrl-C) or the harness exiting non-zero: the command must fail rather than
+// claim the machine is ready.
+func TestVMSetupHarnessSurfacesLoginFailure(t *testing.T) {
+	setConfigEnv(t)
+	var calls [][]string
+	_, _, err := executeCLI(t, setupHarnessDeps("/bin/claude", errors.New("exit status 130"), &calls), "vm", "setup-harness", "claude")
+	if err == nil || !strings.Contains(err.Error(), "exit status 130") {
+		t.Fatalf("err = %v, want the harness exit surfaced", err)
+	}
+	if got := ExitCode(err); got != 1 {
+		t.Errorf("ExitCode = %d, want 1 (a failed login is a runtime failure, not misuse)", got)
 	}
 }
