@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gitremote"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -494,7 +495,7 @@ func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, [
 				continue
 			}
 			if p.RepoOriginURL == "" && p.Path != "" {
-				if url := resolveGitOriginURL(p.Path); url != "" {
+				if url := gitremote.OriginURL(p.Path); url != "" {
 					p.RepoOriginURL = url
 					if err := o.store.UpsertProject(ctx, p); err != nil {
 						o.logger.Warn("scm observer: backfill origin URL persist failed", "project", p.ID, "err", err)
@@ -1443,18 +1444,6 @@ func normalizePRState(draft, merged, closed bool) string {
 	default:
 		return string(domain.PRStateOpen)
 	}
-}
-
-// resolveGitOriginURL runs `git -C path remote get-url origin` and returns the
-// trimmed URL, or "" if the command fails (missing repo, no origin remote, etc).
-// The observer uses this to backfill projects that were registered before
-// project.Add resolved origin URLs at add time.
-func resolveGitOriginURL(path string) string {
-	out, err := aoprocess.Command("git", "-C", path, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // gitRemoteURLs lists the fetch URL of every git remote configured at path. It

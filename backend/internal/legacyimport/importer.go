@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gitremote"
 )
 
 // Store is the narrow slice of the rewrite's native storage layer the importer
@@ -93,7 +93,7 @@ func Run(ctx context.Context, store Store, opts Options) (Report, error) {
 	}
 	resolveOrigin := opts.RepoOriginURL
 	if resolveOrigin == nil {
-		resolveOrigin = defaultRepoOriginURL
+		resolveOrigin = gitremote.OriginURL
 	}
 
 	rep := Report{DryRun: opts.DryRun}
@@ -174,18 +174,4 @@ func quote(s string) string {
 		return `"?"`
 	}
 	return `"` + s + `"`
-}
-
-// defaultRepoOriginURL resolves a repo's git origin URL, "" when the repo is
-// absent or has no origin. Matches the rewrite's resolveGitOriginURL.
-func defaultRepoOriginURL(path string) string {
-	if path == "" {
-		return ""
-	}
-	cmd := aoprocess.Command("git", "-C", path, "remote", "get-url", "origin")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
