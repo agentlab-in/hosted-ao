@@ -8,6 +8,8 @@
  * I/O, so the main process owns the fetch and the renderer owns the rendering.
  */
 
+import { isLoopbackHost } from "./control-plane";
+
 /** Machine zero. Never comes from the control plane and never needs an account. */
 export const LOCAL_MACHINE_ID = "local";
 
@@ -89,7 +91,11 @@ export function parseMachineOrigin(raw: unknown): string | null {
 	} catch {
 		return null;
 	}
-	if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+	// Same rule as AO_CONTROL_URL: HTTPS, or plain HTTP only for a gateway on this
+	// machine. A remote machine reached over HTTP would carry the session over a
+	// network anyone on the path can read, and isRemoteDaemonBaseUrl would stop
+	// treating it as remote, so credentials would silently change behaviour too.
+	if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHost(url.hostname))) return null;
 	if (url.pathname !== "/" || url.search || url.hash || url.username || url.password) return null;
 	return url.origin;
 }

@@ -12,6 +12,11 @@ export const DEFAULT_CONTROL_PLANE_URL = "https://ao.agentlab.in";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 
+/** Whether a URL's hostname is this machine. `[::1]` arrives bracketed from URL. */
+export function isLoopbackHost(hostname: string): boolean {
+	return LOOPBACK_HOSTS.has(hostname) || LOOPBACK_HOSTS.has(hostname.replace(/^\[|\]$/g, ""));
+}
+
 /**
  * Resolve the control-plane origin from the environment. Returns an origin with
  * no trailing slash so it can be concatenated with a path, matching the way the
@@ -36,8 +41,7 @@ export function readControlPlaneUrl(env: Record<string, string | undefined>): st
 	}
 	// Plain HTTP is allowed only for a control plane on this machine, which is the
 	// one case where there is no network to intercept the authorization code.
-	const loopback = LOOPBACK_HOSTS.has(url.hostname) || LOOPBACK_HOSTS.has(url.hostname.replace(/^\[|\]$/g, ""));
-	if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+	if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHost(url.hostname))) {
 		throw new Error("AO_CONTROL_URL must be HTTPS, or HTTP on 127.0.0.1 for a locally-run control plane");
 	}
 	return url.origin;

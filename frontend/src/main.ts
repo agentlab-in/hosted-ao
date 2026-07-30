@@ -41,7 +41,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
-import { readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
+import { machineDaemonStatus, readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import { KEYBOARD_SHORTCUTS_HELP_CHANNEL } from "./shared/shortcuts";
 import {
@@ -64,7 +64,7 @@ import { createAoMachinesController } from "./main/ao-machines";
 import type { AoMachine } from "./shared/ao-machines";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
-import { createRemoteDaemonLifecycle, machineDaemonStatus } from "./main/remote-daemon";
+import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;

@@ -224,6 +224,53 @@ test("signing out forgets the token and falls back to this computer", async () =
 	expect(active.at(-1)).toBeNull();
 });
 
+test("a refresh already in flight cannot re-point a signed-out install", async () => {
+	let releaseList = (): void => undefined;
+	const listArrived = new Promise<void>((resolve) => {
+		releaseList = resolve;
+	});
+	// A previous run left this computer pointed at mch_1.
+	const before = controller(fakeFetch([machineRow()], { "https://vm.example.com": true }));
+	await before.refresh();
+	await before.select("mch_1");
+
+	const machines = createAoMachinesController({
+		stateDir,
+		env: {},
+		safeStorage,
+		localMachineName: "This Mac",
+		onActiveChange: (machine) => active.push(machine),
+		fetchImpl: (async (input: string) => {
+			if (String(input).endsWith("/api/v1/machines")) {
+				await listArrived;
+				return listResponse(machineRow());
+			}
+			return new Response("not found", { status: 404 });
+		}) as unknown as typeof fetch,
+		probeTimeoutMs: 50,
+		tokenSource: signedIn,
+	});
+	await machines.restore();
+
+	// Sign out lands while the list request is still open, holding a token the
+	// refresh fetched before the reset.
+	const inFlight = machines.refresh();
+	await machines.reset();
+	releaseList();
+	await inFlight;
+
+	expect(machines.getState()).toMatchObject({ status: "signed-out", activeMachineId: LOCAL_MACHINE_ID });
+	expect(active.at(-1)).toBeNull();
+	await expect(readFile(path.join(stateDir, AO_MACHINE_FILE_NAME), "utf8")).rejects.toThrow();
+});
+
+test("the machine file's temp name is random, so a stale one from a reused pid cannot be adopted", async () => {
+	const machines = controller(fakeFetch([machineRow()], { "https://vm.example.com": true }));
+	await machines.refresh();
+	await machines.select("mch_1");
+	await expect(readFile(path.join(stateDir, `.ao-machine-${process.pid}.json`), "utf8")).rejects.toThrow();
+});
+
 test("a bad AO_CONTROL_URL is reported, never a silent fall back to production", async () => {
 	const machines = createAoMachinesController({
 		stateDir,
