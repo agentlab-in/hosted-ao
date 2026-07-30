@@ -25,10 +25,44 @@ test("binds loopback on an ephemeral port and hands back the matching code", asy
 });
 
 test("rejects a callback whose state does not match and never resolves a code", async () => {
-	const callback = await startLoopbackCallback("st");
+	// Long enough that the request below finishes before the listener gives up.
+	const callback = await startLoopbackCallback("st", 300);
 	const page = await get(`${callback.redirectUri}?code=abc&state=forged`);
 	expect(page.status).toBe(400);
-	await expect(callback.code).rejects.toThrow(/did not match/);
+	// The forged code is never handed out: the listener waits for the real
+	// callback and gives up on its own timeout instead.
+	await expect(callback.code).rejects.toThrow(/timed out/);
+});
+
+// The hazard: a wrong-state hit is anything on this machine that touches the
+// port, including a browser prefetch, a scanner, or a page walking the ephemeral
+// range. Ending the sign-in on one would let any of those abort every login.
+test("keeps waiting after a wrong-state hit, and still accepts the real callback", async () => {
+	const callback = await startLoopbackCallback("st");
+
+	expect((await get(`${callback.redirectUri}?code=stolen&state=forged`)).status).toBe(400);
+	expect((await get(`${callback.redirectUri}?code=stolen`)).status).toBe(400);
+	expect((await get(`${callback.redirectUri}?error=access_denied&state=forged`)).status).toBe(400);
+
+	const page = await get(`${callback.redirectUri}?code=abc&state=st`);
+	expect(page.status).toBe(200);
+	await expect(callback.code).resolves.toBe("abc");
+});
+
+test("ends the sign-in on an OAuth error that did carry our state", async () => {
+	const callback = await startLoopbackCallback("st");
+	const page = await get(`${callback.redirectUri}?error=access_denied&state=st`);
+	expect(page.status).toBe(400);
+	await expect(callback.code).rejects.toThrow(/declined/);
+});
+
+test("escapes the authorization server's error description into the page", async () => {
+	const callback = await startLoopbackCallback("st");
+	const description = encodeURIComponent("<script>alert(1)</script>");
+	const page = await get(`${callback.redirectUri}?error=server_error&error_description=${description}&state=st`);
+	expect(page.body).not.toContain("<script>");
+	expect(page.body).toContain("&lt;script&gt;");
+	await expect(callback.code).rejects.toThrow();
 });
 
 test("ignores a request on any other path without consuming the one callback", async () => {

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { isRemoteDaemonBaseUrl, readRemoteDaemonConfig } from "./remote-daemon";
+import type { AoMachine } from "./ao-machines";
+import { isRemoteDaemonBaseUrl, machineDaemonStatus, readRemoteDaemonConfig } from "./remote-daemon";
+
+const machine = (extra: Partial<AoMachine> = {}): AoMachine => ({
+	id: "mch_1",
+	name: "ao-build-01",
+	baseUrl: "https://vm.example.com",
+	local: false,
+	createdAt: null,
+	lastSeen: null,
+	reachability: "online",
+	harness: "unknown",
+	harnessCommand: null,
+	...extra,
+});
 
 describe("readRemoteDaemonConfig", () => {
 	it("returns a normalized remote config for an HTTPS origin and URL-safe token", () => {
@@ -52,5 +66,29 @@ describe("isRemoteDaemonBaseUrl", () => {
 
 	it("does not recognize loopback HTTP", () => {
 		expect(isRemoteDaemonBaseUrl("http://127.0.0.1:4317")).toBe(false);
+	});
+});
+
+describe("machineDaemonStatus", () => {
+	it("says when a machine was last seen, or that it never has been", () => {
+		expect(machineDaemonStatus(machine({ reachability: "offline" })).message).toContain("never connected");
+		expect(machineDaemonStatus(machine({ reachability: "offline", lastSeen: "2020-01-01T09:00:00Z" })).message)
+			.toMatch(/Last seen .+ ago\./);
+	});
+
+	it("is connecting, not ready, before the machine has answered", () => {
+		expect(machineDaemonStatus(machine({ reachability: "unknown" }))).toMatchObject({ state: "starting" });
+		// Nothing is pointed at a machine that has not answered yet.
+		expect(machineDaemonStatus(machine({ reachability: "unknown" })).baseUrl).toBeUndefined();
+	});
+
+	// The regression this guards: a "ready" status here sets the renderer's API
+	// base URL, and with no machine-audience token in this build every REST call
+	// and both EventSources would 401 under a UI that says Connected.
+	it("does not hand out a base URL for a reachable machine while there is no credential for it", () => {
+		const status = machineDaemonStatus(machine({ reachability: "online" }));
+		expect(status.state).not.toBe("ready");
+		expect(status.baseUrl).toBeUndefined();
+		expect(status.message).toContain("ao-build-01");
 	});
 });

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -48,6 +48,32 @@ test("the refresh token never appears on disk in plaintext, and the file is owne
 	// Identity stays readable so the signed-in row renders without a keychain unlock.
 	expect(raw).toContain("dev@example.com");
 	expect((await stat(file)).mode & 0o777).toBe(0o600);
+});
+
+// The refresh token rotates on use, so the copy a write replaces is already
+// revoked. A temp file left behind, or reused because it happens to carry this
+// pid, is an encrypted credential nobody owns.
+test("leaves no temp file behind, and never names one after the pid", async () => {
+	await writeStoredAccount(stateDir, fakeSafeStorage(), { account, refreshToken: "rt_secret" });
+	await writeStoredAccount(stateDir, fakeSafeStorage(), { account, refreshToken: "rt_rotated" });
+
+	expect(await readdir(stateDir)).toEqual([AO_ACCOUNT_FILE_NAME]);
+	await expect(readFile(path.join(stateDir, `.ao-account-${process.pid}.json`), "utf8")).rejects.toThrow();
+});
+
+test("a failed write leaves nothing to clean up and does not damage the stored token", async () => {
+	const safeStorage = fakeSafeStorage();
+	await writeStoredAccount(stateDir, safeStorage, { account, refreshToken: "rt_secret" });
+
+	const exploding: SafeStorageLike = {
+		...safeStorage,
+		encryptString: () => {
+			throw new Error("keychain locked");
+		},
+	};
+	await expect(writeStoredAccount(stateDir, exploding, { account, refreshToken: "rt_rotated" })).rejects.toThrow();
+	expect(await readdir(stateDir)).toEqual([AO_ACCOUNT_FILE_NAME]);
+	await expect(readStoredAccount(stateDir, safeStorage)).resolves.toEqual({ account, refreshToken: "rt_secret" });
 });
 
 test("nothing at all is written when the OS has no credential store", async () => {

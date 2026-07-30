@@ -30,6 +30,12 @@ const EXPIRY_SKEW_MS = 60_000;
 /** Fallback when the token endpoint omits `expires_in`; the contract's default. */
 const DEFAULT_TTL_SECONDS = 15 * 60;
 
+/** Said when the rotated refresh token could not be stored. See exchange(). */
+export const STORE_ROTATED_TOKEN_FAILURE =
+	"This computer's AO sign-in could not be saved after being refreshed, so it is no longer valid. Sign in again.";
+
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
 export type ControlPlaneTokenDeps = {
 	/** The ~/.ao state dir, where the encrypted refresh token lives. */
 	stateDir: string;
@@ -106,7 +112,15 @@ export function createControlPlaneTokenSource(deps: ControlPlaneTokenDeps): Cont
 		// Persisted before the access token is handed out: the presented refresh
 		// token is already revoked, so losing the replacement here would lock this
 		// install out until the user signs in again.
-		await writeStoredAccount(deps.stateDir, deps.safeStorage, { account: stored.account, refreshToken: rotated });
+		try {
+			await writeStoredAccount(deps.stateDir, deps.safeStorage, { account: stored.account, refreshToken: rotated });
+		} catch (err) {
+			// The exchange succeeded, which revoked the token still on disk. Whatever
+			// stopped the write, the sign-in is gone and only signing in again brings
+			// it back, so say that rather than reporting a filesystem error that reads
+			// as something a retry would fix.
+			throw new Error(`${STORE_ROTATED_TOKEN_FAILURE} (${errorMessage(err)})`);
+		}
 
 		const ttlSeconds = typeof expiresIn === "number" && expiresIn > 0 ? expiresIn : DEFAULT_TTL_SECONDS;
 		cached = { token: accessToken, expiresAt: now() + ttlSeconds * 1000 };

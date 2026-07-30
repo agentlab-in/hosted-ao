@@ -52,13 +52,23 @@ test("a matching callback yields the code", () => {
 	expect(parseCallback("/callback?code=abc&state=st", "st")).toEqual({ code: "abc" });
 });
 
-test("a callback whose state does not match is rejected, not exchanged", () => {
-	expect(parseCallback("/callback?code=abc&state=other", "st")).toEqual({
-		error: expect.stringContaining("did not match"),
+test("a callback whose state does not match is a mismatch, not an error", () => {
+	// `mismatch`, not `error`: the caller must keep waiting for the real callback
+	// rather than ending the sign-in on a stray hit. Same length as the
+	// expectation, and one character longer, both mismatch.
+	expect(parseCallback("/callback?code=abc&state=xt", "st")).toEqual({
+		mismatch: expect.stringContaining("did not match"),
+	});
+	expect(parseCallback("/callback?code=abc&state=stt", "st")).toEqual({
+		mismatch: expect.stringContaining("did not match"),
 	});
 	// A missing state is a mismatch too, and an empty expectation never matches.
-	expect(parseCallback("/callback?code=abc", "st")).toEqual({ error: expect.stringContaining("did not match") });
-	expect(parseCallback("/callback?code=abc&state=", "")).toEqual({ error: expect.stringContaining("did not match") });
+	expect(parseCallback("/callback?code=abc", "st")).toEqual({ mismatch: expect.stringContaining("did not match") });
+	expect(parseCallback("/callback?code=abc&state=", "")).toEqual({ mismatch: expect.stringContaining("did not match") });
+	// A multibyte state must compare as a mismatch, not throw on byte length.
+	expect(parseCallback(`/callback?code=abc&state=${encodeURIComponent("é")}`, "st")).toEqual({
+		mismatch: expect.stringContaining("did not match"),
+	});
 });
 
 test("an OAuth error is reported, and access_denied reads as a decline", () => {

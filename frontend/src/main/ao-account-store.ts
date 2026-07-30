@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { AoAccount } from "../shared/ao-account";
 
@@ -116,11 +117,29 @@ export async function writeStoredAccount(
 	};
 
 	// Atomic write, mirroring app-state.json: a temp file in the same dir then a
-	// rename, so a reader never sees a half-written credential.
+	// rename, so a reader never sees a half-written credential. The name carries
+	// random bytes rather than the pid, because `mode` applies only when the file
+	// is created, so a stale temp left by a crashed run with the same pid would be
+	// reopened with whatever mode it already had.
 	await mkdir(stateDir, { recursive: true, mode: 0o750 });
-	const tmp = path.join(stateDir, `.ao-account-${process.pid}.json`);
-	await writeFile(tmp, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-	await rename(tmp, accountFilePath(stateDir));
+	const tmp = path.join(stateDir, `.ao-account-${randomBytes(8).toString("hex")}.json`);
+	// fsync before the rename: the refresh token rotates on use, so the copy this
+	// replaces is already revoked server-side. A rename that outlives its data
+	// across a power loss would leave the install with no usable token at all.
+	try {
+		const handle = await open(tmp, "wx", 0o600);
+		try {
+			await handle.writeFile(`${JSON.stringify(file, null, 2)}\n`);
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await rename(tmp, accountFilePath(stateDir));
+	} catch (err) {
+		// Never leave an encrypted token lying about under a temp name.
+		await rm(tmp, { force: true });
+		throw err;
+	}
 }
 
 /** Sign-out: delete the stored token. Absent file is success, not an error. */

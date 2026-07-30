@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { readStoredAccount, writeStoredAccount, type SafeStorageLike } from "./ao-account-store";
-import { createControlPlaneTokenSource } from "./ao-control-token";
+import { createControlPlaneTokenSource, STORE_ROTATED_TOKEN_FAILURE } from "./ao-control-token";
 
 // Same stand-in as ao-account-store.test.ts: reversible, and different from the
 // plaintext, which is all these tests need from it.
@@ -119,6 +119,30 @@ test("a response missing either token is a failure, not a half-applied rotation"
 	await expect(source(noRotation as unknown as typeof fetch).get()).rejects.toThrow(/replacement refresh token/);
 	// The refresh token on disk is untouched, so the next attempt can retry it.
 	await expect(readStoredAccount(stateDir, safeStorage)).resolves.toMatchObject({ refreshToken: "rt_1" });
+});
+
+// The exchange already revoked the token on disk, so a write that fails here is
+// a dead sign-in, not a transient filesystem problem, and the message has to say
+// so or the user retries something that can never work again.
+test("a failed persist after a successful exchange says the sign-in has to be redone", async () => {
+	await writeStoredAccount(stateDir, safeStorage, { account, refreshToken: "rt_1" });
+	const fetchImpl = vi.fn(async () => tokenResponse({ access_token: "at_1", expires_in: 900, refresh_token: "rt_2" }));
+	const lockedKeychain: SafeStorageLike = {
+		...safeStorage,
+		encryptString: () => {
+			throw new Error("ENOSPC: no space left on device");
+		},
+	};
+	const tokens = createControlPlaneTokenSource({
+		stateDir,
+		controlPlaneUrl: CONTROL_PLANE,
+		safeStorage: lockedKeychain,
+		fetchImpl: fetchImpl as unknown as typeof fetch,
+	});
+
+	await expect(tokens.get()).rejects.toThrow(STORE_ROTATED_TOKEN_FAILURE);
+	// The underlying cause is still carried, for anyone reading a log.
+	await expect(tokens.get()).rejects.toThrow(/ENOSPC/);
 });
 
 test("clear drops the cached token, so sign-out leaves nothing behind", async () => {

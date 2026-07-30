@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AoMachine } from "../shared/ao-machines";
-import {
-	createRemoteDaemonLifecycle,
-	installRemoteDaemonCookie,
-	machineDaemonStatus,
-	remoteDaemonReadyStatus,
-} from "./remote-daemon";
+import { machineDaemonStatus } from "../shared/remote-daemon";
+import { createRemoteDaemonLifecycle, installRemoteDaemonCookie, remoteDaemonReadyStatus } from "./remote-daemon";
 
 const machine = (extra: Partial<AoMachine> = {}): AoMachine => ({
 	id: "mch_1",
@@ -149,14 +145,18 @@ describe("an active registered machine", () => {
 		};
 	};
 
-	it("re-points the app at that machine's base URL", async () => {
+	// TASK 13: this becomes "re-points the app at that machine's base URL", with a
+	// ready status carrying baseUrl, once the desktop can present a
+	// machine-audience token. Until then the app must not point at a machine it
+	// cannot authenticate to.
+	it("owns the app's daemon status without claiming a connection it cannot make", async () => {
 		const lifecycle = createRemoteDaemonLifecycle(null, null, () => machineDaemonStatus(machine()));
 		const { localStart } = localCalls();
 
 		await expect(lifecycle.start(localStart, vi.fn())).resolves.toEqual({
-			state: "ready",
-			baseUrl: "https://vm.example.com",
-			message: "Connected to ao-build-01",
+			state: "error",
+			code: "machine_transport_missing",
+			message: expect.stringContaining("cannot sign in to it yet"),
 		});
 		expect(localStart).not.toHaveBeenCalled();
 	});
@@ -199,20 +199,6 @@ describe("an active registered machine", () => {
 		const lifecycle = createRemoteDaemonLifecycle(config, null, () => machineDaemonStatus(machine()));
 
 		await expect(lifecycle.start(vi.fn(), vi.fn())).resolves.toEqual(remoteDaemonReadyStatus(config));
-	});
-});
-
-describe("machineDaemonStatus", () => {
-	it("says when a machine was last seen, or that it never has been", () => {
-		expect(machineDaemonStatus(machine({ reachability: "offline" })).message).toContain("never connected");
-		expect(machineDaemonStatus(machine({ reachability: "offline", lastSeen: "2020-01-01T09:00:00Z" })).message)
-			.toMatch(/Last seen .+ ago\./);
-	});
-
-	it("is connecting, not ready, before the machine has answered", () => {
-		expect(machineDaemonStatus(machine({ reachability: "unknown" }))).toMatchObject({ state: "starting" });
-		// Nothing is pointed at a machine that has not answered yet.
-		expect(machineDaemonStatus(machine({ reachability: "unknown" })).baseUrl).toBeUndefined();
 	});
 });
 
