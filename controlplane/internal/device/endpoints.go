@@ -39,21 +39,26 @@ type deviceCodeResponse struct {
 	Interval                int    `json:"interval"`
 }
 
-// tokenResponse is the RFC 8628 section 3.5 successful response, extended
-// with the machine triple `ao setup-vm` writes into machine.json: machine id,
-// account id, and public URL.
+// bindingResponse is what an approved poll returns: the machine triple
+// `ao setup-vm` writes into machine.json, and nothing else.
 //
-// machine_id is machines.id and is the `aud` of the access token in the same
-// response. A client writing machine.json must use this field for machineId
-// and must not substitute the public URL, or `ao vm serve` will reject every
-// token it is ever shown.
-type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
-	MachineID   string `json:"machine_id"`
-	AccountID   string `json:"account_id"`
-	PublicURL   string `json:"public_url"`
+// It carries no access token, which is a deliberate departure from the RFC
+// 8628 section 3.5 response shape. The VM does not present tokens, it verifies
+// them, so `ao setup-vm` never decoded the one that used to be here; minting it
+// created a live 15 minute credential on every bind, sent it across the wire,
+// and handed it to a client whose only correct move was to drop it. The desktop
+// gets machine tokens from POST /api/v1/machines/{id}/token, against a
+// credential of its own. The one client of this endpoint is `ao setup-vm`, so
+// nothing generically OAuth reads this body.
+//
+// machine_id is machines.id, and it is the `aud` of every access token minted
+// for this machine. A client writing machine.json must use this field for
+// machineId and must not substitute the public URL, or `ao vm serve` will
+// reject every token it is ever shown.
+type bindingResponse struct {
+	MachineID string `json:"machine_id"`
+	AccountID string `json:"account_id"`
+	PublicURL string `json:"public_url"`
 }
 
 // handleDeviceCode is the device authorization endpoint: `ao setup-vm` calls
@@ -117,7 +122,8 @@ func (s *Service) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 // handleDeviceToken is the device access token request endpoint. It returns
 // the RFC 8628 error codes while the flow is in progress
 // (authorization_pending, slow_down, expired_token, access_denied) and, once
-// approved, an access token plus the machine triple.
+// approved, the machine triple. See bindingResponse for why no token comes
+// back with it.
 //
 // A successful poll is repeatable until the device code expires, rather than
 // consuming the code on first success. The device code is already bounded by
@@ -151,22 +157,10 @@ func (s *Service) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The audience is the machine id. Minting goes through the Issuer so this
-	// package never constructs a JWT and cannot pass a hostname here.
-	accessToken, err := s.issuer.IssueAccessToken(res.grant.AccountID, res.grant.MachineID)
-	if err != nil {
-		log.Printf("device: issue access token: %v", err)
-		api.WriteError(w, http.StatusInternalServerError, "server_error", "could not issue an access token")
-		return
-	}
-
-	api.WriteJSON(w, http.StatusOK, tokenResponse{
-		AccessToken: accessToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   int(s.issuer.AccessTokenTTL().Seconds()),
-		MachineID:   res.grant.MachineID,
-		AccountID:   res.grant.AccountID,
-		PublicURL:   res.grant.PublicURL,
+	api.WriteJSON(w, http.StatusOK, bindingResponse{
+		MachineID: res.grant.MachineID,
+		AccountID: res.grant.AccountID,
+		PublicURL: res.grant.PublicURL,
 	})
 }
 

@@ -52,9 +52,21 @@ plane and it already publishes that origin everywhere.
 
 ### How each is obtained
 
-- **Machine audience:** from the RFC 8628 device flow, at the end of
-  `ao setup-vm`. The polling response carries the machine id, the account id,
-  and the public URL, which is what `~/.ao/machine.json` is written from.
+- **Machine audience:** by asking for one at
+  `POST /api/v1/machines/{id}/token`, authenticated with a
+  **control-plane-audience** access token. The control plane checks that the
+  machine belongs to the calling account and is not revoked, then mints
+  `aud` = `machines.id`, `sub` = that account. A machine the caller does not
+  own answers exactly as one that does not exist: same 404, same body. The
+  refresh token is not a credential for this route, deliberately. A machine
+  token is wanted whenever the desktop switches machines or a 15 minute token
+  lapses, and rotating a 90 day credential on every one of those calls would
+  be both wasteful and a lockout race.
+- The RFC 8628 device flow does **not** hand out a machine token. Its polling
+  response carries the machine id, the account id, and the public URL, which
+  is what `~/.ao/machine.json` is written from, and nothing else: the VM
+  verifies tokens rather than presenting them, so a token in that response
+  would be a live credential minted for no reader.
 - **`publicUrl` is a full origin on the control-plane side** (`https://vm.example.com`,
   scheme included, no path and no trailing slash, and `http` only for a loopback
   host) **and is reduced to a bare hostname on the gateway side**, where
