@@ -51,10 +51,11 @@ const (
 var setupVMPublicIPEndpoints = []string{"https://api.ipify.org", "https://ifconfig.me/ip"}
 
 type setupVMOptions struct {
-	Domain   string
-	PublicIP string
-	ProbeURL string
-	DryRun   bool
+	Domain          string
+	PublicIP        string
+	ProbeURL        string
+	ControlPlaneURL string
+	DryRun          bool
 }
 
 func newSetupVMCommand(ctx *commandContext) *cobra.Command {
@@ -67,9 +68,14 @@ func newSetupVMCommand(ctx *commandContext) *cobra.Command {
 			"anything, then installs the ao binary, tmux, git, and gh, and writes two\n" +
 			"systemd units: one for the loopback daemon and one for the public TLS gateway\n" +
 			"(see docs/adr/0002-hosted-public-gateway.md).\n\n" +
+			"It then binds this machine to an AO account over an RFC 8628 device code: it\n" +
+			"prints a short code and a URL, waits for you to approve the machine in a browser\n" +
+			"on any device, writes ~/.ao/machine.json, and restarts the gateway so it reads\n" +
+			"the new binding.\n\n" +
 			"A failed preflight changes nothing at all: it prints exactly what to fix and\n" +
-			"exits. A successful run is idempotent, so running it again is safe, and it ends\n" +
-			"by listing what is still missing with the exact command for each.\n\n" +
+			"exits. A successful run is idempotent, so running it again is safe; an\n" +
+			"already-bound machine has its current binding printed and is then bound again.\n" +
+			"The run ends by listing what is still missing with the exact command for each.\n\n" +
 			"It does not install an agent harness and does not configure git credentials,\n" +
 			"because both need an interactive login.",
 		Args: noArgs,
@@ -81,6 +87,7 @@ func newSetupVMCommand(ctx *commandContext) *cobra.Command {
 	flags.StringVar(&opts.Domain, "domain", "", "Public hostname you own, with a DNS record pointing at this machine (required)")
 	flags.StringVar(&opts.PublicIP, "public-ip", "", "This machine's public IP, for when it cannot be discovered automatically")
 	flags.StringVar(&opts.ProbeURL, "reachability-probe-url", defaultSetupVMProbeURL, "Off-box prober used to confirm 80 and 443 are reachable from the internet")
+	flags.StringVar(&opts.ControlPlaneURL, "control-plane-url", vmgateway.DefaultIssuer, "AO control plane this machine is bound against")
 	flags.BoolVar(&opts.DryRun, "dry-run", false, "Gate, preflight, print the plan and both unit files, and change nothing")
 	return cmd
 }
@@ -92,6 +99,10 @@ func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) err
 	domain, err := normalizeSetupDomain(opts.Domain)
 	if err != nil {
 		return usageError{err}
+	}
+	controlPlaneURL := strings.TrimRight(strings.TrimSpace(opts.ControlPlaneURL), "/")
+	if controlPlaneURL == "" {
+		return usageError{errors.New("--control-plane-url is required, for example --control-plane-url " + vmgateway.DefaultIssuer)}
 	}
 
 	platform := c.probeSetupPlatform()
@@ -126,7 +137,22 @@ func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) err
 	if err != nil {
 		return err
 	}
-	return writeSetupText(out, renderSetupSummary(plan, gatewayStarted, append(warnings, notes...)))
+
+	bindErr := c.bindSetupVM(ctx, out, plan, controlPlaneURL)
+	if bindErr == nil {
+		plan.Bound = true
+		gatewayStarted = true
+	} else {
+		// The install is done and correct; only the binding is missing. The
+		// summary still has to print, because it is what tells the user how to
+		// finish, and it is now the only place that says so.
+		notes = append(notes, "binding did not complete: "+bindErr.Error())
+	}
+
+	if err := writeSetupText(out, renderSetupSummary(plan, gatewayStarted, append(warnings, notes...))); err != nil {
+		return err
+	}
+	return bindErr
 }
 
 // ---------------------------------------------------------------------------
@@ -341,9 +367,10 @@ func (c *commandContext) buildSetupVMPlan(domain string) (setupPlan, error) {
 	if err != nil {
 		return setupPlan{}, err
 	}
-	// Binding is a later batch: this command only reports whether it has
-	// happened, so the gateway is started rather than left stopped on a machine
-	// that is already bound. It never writes machine.json.
+	// Bound describes the machine as the install finds it, before this run
+	// binds anything: it is what decides whether the gateway is started during
+	// install, and whether the binding step prints a previous binding it is
+	// about to replace.
 	if _, err := os.Stat(plan.MachineFile); err == nil {
 		plan.Bound = true
 	}
