@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -109,6 +110,72 @@ func TestResolve_EnvOverridesMachineFileButNotFlag(t *testing.T) {
 	}
 	if cfg.AccountID != "flag-account" {
 		t.Errorf("AccountID = %q, want flag to win over machine.json", cfg.AccountID)
+	}
+}
+
+// machine.json's publicUrl is a full origin, but Domain is handed to
+// autocert.HostWhitelist, which silently ignores anything that is not a bare
+// hostname and would then never obtain a certificate.
+func TestResolve_MachineFilePublicURLIsReducedToHostname(t *testing.T) {
+	for _, tc := range []struct{ publicURL, want string }{
+		{"https://vm.example.com", "vm.example.com"},
+		{"https://vm.example.com/", "vm.example.com"},
+		{"https://vm.example.com:8443", "vm.example.com"},
+		{"http://vm.example.com", "vm.example.com"},
+		{"vm.example.com", "vm.example.com"},
+	} {
+		t.Run(tc.publicURL, func(t *testing.T) {
+			path := writeMachineFile(t, MachineFile{
+				MachineID: "mf-machine",
+				AccountID: "mf-account",
+				PublicURL: tc.publicURL,
+			})
+			cfg, err := Resolve(Options{MachineFile: path}, t.TempDir())
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if cfg.Domain != tc.want {
+				t.Errorf("Domain = %q, want %q", cfg.Domain, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolve_UnusableDomainIsRejected(t *testing.T) {
+	for _, domain := range []string{
+		"https://",
+		"vm.example.com:443",
+		"vm.example.com/path",
+	} {
+		t.Run(domain, func(t *testing.T) {
+			path := writeMachineFile(t, MachineFile{
+				MachineID: "mf-machine",
+				AccountID: "mf-account",
+				PublicURL: domain,
+			})
+			_, err := Resolve(Options{MachineFile: path}, t.TempDir())
+			if err == nil {
+				t.Fatalf("expected an error: %q cannot be reduced to a hostname autocert will accept", domain)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("error %q should name %s, the file the operator has to fix", err, path)
+			}
+		})
+	}
+}
+
+func TestResolve_UnusableFlagDomainIsRejected(t *testing.T) {
+	_, err := Resolve(Options{
+		Domain:      "vm.example.com:443",
+		MachineID:   "machine-1",
+		AccountID:   "account-1",
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for a --domain that is not a bare hostname")
+	}
+	if !strings.Contains(err.Error(), "--domain") {
+		t.Errorf("error %q should name the flag it came from", err)
 	}
 }
 

@@ -81,9 +81,10 @@ func (ks *KeySet) candidates(kid string) []ed25519.PublicKey {
 
 // JWKSCache fetches and caches the control plane's published signing keys. It
 // refreshes at most once per ttl. A refresh that fails after a keyset has
-// already been cached serves the stale keyset instead (stale-if-error), so a
-// brief control-plane outage does not disconnect working users, per
-// TOKEN_CONTRACT.md. A refresh that fails before any keyset has ever been
+// already been cached serves the stale keyset instead (stale-if-error) and
+// is not retried for failureBackoff, so a brief control-plane outage does not
+// disconnect working users, per TOKEN_CONTRACT.md. A refresh that fails
+// before any keyset has ever been
 // cached fails closed: Get returns the error and callers must treat every
 // token as unverifiable.
 type JWKSCache struct {
@@ -92,10 +93,17 @@ type JWKSCache struct {
 	client *http.Client
 	now    func() time.Time
 
-	mu        sync.Mutex
-	keys      *KeySet
-	fetchedAt time.Time
+	mu         sync.Mutex
+	keys       *KeySet
+	fetchedAt  time.Time
+	refreshing bool
 }
+
+// failureBackoff is how long a failed refresh suppresses the next attempt
+// while a stale keyset is still cached. Without it, every request during a
+// control-plane outage starts its own fetch and waits out the client
+// timeout, which is the opposite of what stale-if-error exists to do.
+const failureBackoff = 30 * time.Second
 
 // NewJWKSCache builds a cache for url with the spec's 1 hour TTL. client
 // defaults to one with a bounded timeout when nil.
@@ -109,17 +117,33 @@ func NewJWKSCache(url string, client *http.Client) *JWKSCache {
 // Get returns the current key set, refreshing it first if the cache is empty
 // or older than the TTL. See the JWKSCache doc comment for the
 // stale-if-error and fail-closed behavior.
+//
+// The refresh runs without c.mu held, and a caller that arrives while one is
+// already in flight is served the cached keyset immediately rather than
+// queueing on the mutex: an unreachable control plane must cost one request
+// the client timeout, not every concurrent request that timeout in turn.
+// Only a cold start (nothing cached at all) can fetch concurrently, and
+// there the alternative would be rejecting valid tokens.
 func (c *JWKSCache) Get(ctx context.Context) (*KeySet, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.keys != nil && c.now().Sub(c.fetchedAt) < c.ttl {
-		return c.keys, nil
+	if cached := c.keys; cached != nil && (c.refreshing || c.now().Sub(c.fetchedAt) < c.ttl) {
+		c.mu.Unlock()
+		return cached, nil
 	}
+	c.refreshing = true
+	c.mu.Unlock()
 
 	fresh, err := c.fetch(ctx)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshing = false
 	if err != nil {
 		if c.keys != nil {
+			// Record the failed attempt as if it were a fetch that expires
+			// failureBackoff from now, so the next request serves the stale
+			// keyset outright instead of retrying immediately.
+			c.fetchedAt = c.now().Add(failureBackoff - c.ttl)
 			return c.keys, nil
 		}
 		return nil, err

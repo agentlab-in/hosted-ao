@@ -38,6 +38,15 @@ func newTestGateway(t *testing.T) *testGateway {
 		clone := r.Clone(r.Context())
 		tg.daemonCalls = append(tg.daemonCalls, clone)
 		w.Header().Set("X-From", "daemon")
+		// The real daemon runs its own corsMiddleware (internal/httpd/cors.go)
+		// and app://renderer is in its allowed set, so a forwarded request
+		// comes back carrying these. Modelled here because the gateway has to
+		// strip them; see dropUpstreamCORS.
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -228,17 +237,20 @@ func TestGateway_AllowsSiblingOfBlockedPrefix(t *testing.T) {
 	}
 }
 
-func TestGateway_Mux_UsesCookieNotHeader(t *testing.T) {
+func TestGateway_Mux_AcceptsCookieOrHeader(t *testing.T) {
 	tg := newTestGateway(t)
 	token := tg.validToken(t)
 
+	// A browser can only send the cookie, but the CLI and any other
+	// non-browser client have nothing but the header.
 	req := httptest.NewRequest(http.MethodGet, muxPath, nil)
-	req.Header.Set("Authorization", "Bearer "+token) // must be ignored on /mux
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	tg.handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("/mux with only an Authorization header: status = %d, want 401", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/mux with only an Authorization header: status = %d, want 200", rec.Code)
 	}
+	tg.daemonCalls = nil
 
 	req = httptest.NewRequest(http.MethodGet, muxPath, nil)
 	req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: token})
@@ -252,6 +264,134 @@ func TestGateway_Mux_UsesCookieNotHeader(t *testing.T) {
 	}
 	if _, err := tg.daemonCalls[0].Cookie(gatewayCookieName); err == nil {
 		t.Error("the gateway auth cookie must not be forwarded to the daemon")
+	}
+}
+
+// The daemon behind the gateway sets its own CORS headers and
+// httputil.ReverseProxy merges upstream headers with Add, so without
+// dropUpstreamCORS the client sees each value twice and every browser
+// rejects the response outright.
+func TestGateway_UpstreamCORSHeaders_NotDuplicated(t *testing.T) {
+	tg := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req.Header.Set("Origin", testOrigin)
+	req.Header.Set("Authorization", "Bearer "+tg.validToken(t))
+	rec := httptest.NewRecorder()
+
+	tg.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Values("Access-Control-Allow-Origin"); len(got) != 1 || got[0] != testOrigin {
+		t.Errorf("Access-Control-Allow-Origin = %q, want exactly one value %q", got, testOrigin)
+	}
+	if got := rec.Header().Values("Access-Control-Allow-Credentials"); len(got) != 1 || got[0] != "true" {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want exactly one value \"true\"", got)
+	}
+	// The gateway does not answer a non-preflight with this header at all, so
+	// the only way it could appear is the upstream's copy surviving.
+	if got := rec.Header().Values("Access-Control-Allow-Methods"); len(got) != 0 {
+		t.Errorf("Access-Control-Allow-Methods = %q, want the upstream's copy dropped", got)
+	}
+	if len(tg.daemonCalls) != 1 {
+		t.Fatalf("daemon calls = %d, want 1", len(tg.daemonCalls))
+	}
+	if got := tg.daemonCalls[0].Header.Get("Origin"); got != testOrigin {
+		t.Fatalf("Origin = %q, want the daemon to have seen the renderer origin (otherwise this test proves nothing)", got)
+	}
+}
+
+// EventSource has no header API, so the SSE stream is unreachable from the
+// renderer unless the cookie authenticates it.
+func TestGateway_Events_AcceptsCookie(t *testing.T) {
+	tg := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodGet, eventsPath, nil)
+	req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: tg.validToken(t)})
+	rec := httptest.NewRecorder()
+
+	tg.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s with the gateway cookie: status = %d, want 200", eventsPath, rec.Code)
+	}
+	if len(tg.daemonCalls) != 1 {
+		t.Fatalf("daemon calls = %d, want 1", len(tg.daemonCalls))
+	}
+	if _, err := tg.daemonCalls[0].Cookie(gatewayCookieName); err == nil {
+		t.Error("the gateway auth cookie must not be forwarded to the daemon")
+	}
+}
+
+// The cookie is ambient, so widening it beyond the two routes that cannot
+// send a header would make corsGate the only CSRF defence.
+func TestGateway_Cookie_RejectedOnEveryOtherRoute(t *testing.T) {
+	tg := newTestGateway(t)
+	token := tg.validToken(t)
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/projects"},
+		{http.MethodPost, "/api/v1/projects"},
+		{http.MethodPost, eventsPath},
+		{http.MethodDelete, eventsPath},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: token})
+			rec := httptest.NewRecorder()
+
+			tg.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401: only /mux and GET %s may use the cookie", rec.Code, eventsPath)
+			}
+		})
+	}
+	if len(tg.daemonCalls) != 0 {
+		t.Errorf("a cookie-only request must never reach the daemon, got %d calls", len(tg.daemonCalls))
+	}
+}
+
+// The daemon runs middleware.RealIP and gates its loopback-only routes on
+// what it believes the peer is, so a client must not be able to write its own
+// answer.
+func TestGateway_ClientForwardingHeaders_NotForwarded(t *testing.T) {
+	tg := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+tg.validToken(t))
+	req.Header.Set("X-Real-IP", "127.0.0.1")
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	rec := httptest.NewRecorder()
+
+	tg.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if len(tg.daemonCalls) != 1 {
+		t.Fatalf("daemon calls = %d, want 1", len(tg.daemonCalls))
+	}
+	forwarded := tg.daemonCalls[0].Header
+	if got := forwarded.Get("X-Real-IP"); got != "" {
+		t.Errorf("X-Real-IP = %q, want the client's own claim dropped", got)
+	}
+	// httptest.NewRequest's RemoteAddr, i.e. the real peer and nothing else.
+	if got := forwarded.Get("X-Forwarded-For"); got != "192.0.2.1" {
+		t.Errorf("X-Forwarded-For = %q, want only the true peer address", got)
+	}
+}
+
+func TestGateway_PreflightOnBlockedPath_Is404(t *testing.T) {
+	tg := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/mobile/status", nil)
+	req.Header.Set("Origin", testOrigin)
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	rec := httptest.NewRecorder()
+
+	tg.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("preflight status = %d, want 404: a 204 confirms a route every real method 404s", rec.Code)
 	}
 }
 
