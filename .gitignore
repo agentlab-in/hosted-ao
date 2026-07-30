@@ -28,6 +28,11 @@ agent-orchestrator.yaml
 session-events.jsonl
 session-events.jsonl.*
 
+# Control plane local data dir: SQLite database and EdDSA signing keys
+# (DATA_DIR defaults to controlplane/data when run locally). The keys must
+# never be committed.
+/controlplane/data/
+
 # Agent Orchestrator local session state
 .ao/
 
