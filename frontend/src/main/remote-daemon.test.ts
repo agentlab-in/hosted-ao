@@ -155,7 +155,7 @@ describe("an active registered machine", () => {
 
 		await expect(lifecycle.start(localStart, vi.fn())).resolves.toEqual({
 			state: "error",
-			code: "not_configured",
+			code: "machine_transport_missing",
 			message: expect.stringContaining("cannot sign in to it yet"),
 		});
 		expect(localStart).not.toHaveBeenCalled();

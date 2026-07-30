@@ -66,7 +66,7 @@ export function machineDaemonStatus(machine: AoMachine): DaemonStatus {
 function machineTransportMissingStatus(machine: AoMachine): DaemonStatus {
 	return {
 		state: "error",
-		code: "not_configured",
+		code: "machine_transport_missing",
 		message: `${machine.name} is up, but this build cannot sign in to it yet. Reaching a registered machine needs the remote transport, which is not in this build. Use this computer for now.`,
 	};
 }

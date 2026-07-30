@@ -13,7 +13,10 @@ export type DaemonFailureCode =
 	| "port_unconfirmed"
 	| "not_ready"
 	| "identity_mismatch"
-	| "datadir_unwritable";
+	| "datadir_unwritable"
+	// TASK 13 PLACEHOLDER: a registered machine is up but this build has no
+	// credential for it. Delete this with machineTransportMissingStatus.
+	| "machine_transport_missing";
 
 export type DaemonStatus = {
 	state: "starting" | "ready" | "stopped" | "error";
