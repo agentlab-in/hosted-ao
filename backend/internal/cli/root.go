@@ -201,6 +201,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newVMCommand(ctx))
 	root.AddCommand(newSetupVMCommand(ctx))
+	root.AddCommand(newWhoamiCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 
