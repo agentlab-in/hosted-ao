@@ -19,7 +19,21 @@ import (
 // deliberately decoupled from the daemon's per-request HTTP timeout (see
 // cloneRepository) because project.Add clones synchronously — no job model
 // with progress reporting exists yet.
-const cloneTimeout = 5 * time.Minute
+//
+// A var rather than a const only so the timeout rejection path is testable
+// without a five minute test.
+var cloneTimeout = 5 * time.Minute
+
+// cloneWaitDelay bounds how long CombinedOutput may keep waiting on the output
+// pipes after the clone deadline has killed `git`. Without it CLONE_TIMEOUT is
+// unreachable in practice: `git clone` delegates to a `git-remote-http` (or
+// `ssh`) child that inherits the pipe, killing the parent does not kill the
+// child, and a child blocked on a stalled server holds the pipe open for as
+// long as it likes. cloneRepository would then never return, and because it
+// runs under Add's addMu, every later project add would block behind it.
+//
+// Also a var only so the test does not have to wait it out.
+var cloneWaitDelay = 5 * time.Second
 
 // cloneRepository clones cloneURL into <reposRoot>/<owner>-<repo> and returns
 // the destination path. Every failure is mapped to a remediation-shaped
@@ -51,6 +65,7 @@ func (m *Service) cloneRepository(ctx context.Context, cloneURL string) (string,
 	defer cancel()
 
 	cmd := aoprocess.CommandContext(cloneCtx, "git", "clone", "--", cloneURL, dest)
+	cmd.WaitDelay = cloneWaitDelay
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0", // never block on an interactive credential prompt
 		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=15", // never block on an SSH password/host-key prompt
@@ -149,6 +164,44 @@ func parseCloneURL(raw string) (owner, repo string, err error) {
 		return "", "", err
 	}
 	return owner, repo, nil
+}
+
+// sanitizeOriginURL removes any credential embedded in a git remote URL. A
+// client may legitimately POST `cloneUrl` as
+// `https://x-access-token:<token>@github.com/owner/repo.git`, which is how
+// non-interactive https git auth is normally expressed and what
+// GIT_TERMINAL_PROMPT=0 leaves as the practical option; git then records that
+// string verbatim as the repo's `origin`. The token has a job to do there, so
+// the clone's own .git/config keeps it, but it must not travel any further.
+// See resolveGitOriginURL.
+//
+// raw is returned unchanged when there is nothing to strip, when it does not
+// parse as a URL at all, and for the scp-like SSH shorthand
+// (git@host:owner/repo.git), which url.Parse rejects outright and whose
+// userinfo is an SSH login name rather than a secret.
+func sanitizeOriginURL(raw string) string {
+	if !strings.Contains(raw, "@") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.User == nil {
+		return raw
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "ssh", "git+ssh":
+		// An ssh:// URL's userinfo is the login name (`git`), which is not a
+		// secret and which the remote stops working without. Drop only a
+		// password, which has no legitimate use over SSH.
+		if _, hasPassword := u.User.Password(); !hasPassword {
+			return raw
+		}
+		u.User = url.User(u.User.Username())
+	default:
+		// Over http(s) the username alone is a credential too: a bare
+		// `https://<token>@github.com/...` authenticates with no password.
+		u.User = nil
+	}
+	return u.String()
 }
 
 func sanitizeDirComponent(s string) (string, error) {
