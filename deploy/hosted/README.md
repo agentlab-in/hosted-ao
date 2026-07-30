@@ -1,5 +1,19 @@
 # Hosted AO proxy
 
+> **Scope note (2026-07-30).** This file documents the **pairing-secret Caddy proxy**, the
+> pre-accounts hosted path. It is still the only path that has ever run on a VM, and it keeps
+> working on purpose: spec task 15 removes `AO_REMOTE_URL`, `AO_REMOTE_TOKEN`, and the
+> `ao_hosted_pair` secret only after the fresh-VM run (task 14) passes, so remote mode is
+> never untestable mid-build.
+>
+> The replacement is `ao setup-vm` plus `ao vm serve`: per-account registered machines and
+> short-lived per-machine JWTs instead of one shared secret, and the `ao` binary itself
+> holding `:80` and `:443` instead of Caddy. It is merged but **unrun**; task 14 owns
+> standing it up on a clean Ubuntu LTS VM and writing the deployment guide for it. Do not
+> read the accounts path out of this file, and do not add results here that have not
+> happened. See [`docs/adr/0002-hosted-public-gateway.md`](../../docs/adr/0002-hosted-public-gateway.md)
+> and [`docs/hosted-ao-v1-build-log.md`](../../docs/hosted-ao-v1-build-log.md).
+
 This deployment exposes the AO daemon on a VM through Caddy at
 `https://api.ao.agentlab.in`. The daemon remains loopback-only on
 `127.0.0.1:3001`; Caddy is the only public listener and permits requests only
@@ -51,7 +65,11 @@ substitution, which is required for the cookie regular-expression matcher.
 Create an A record for `api.ao.agentlab.in` that points to `YOUR_VM_PUBLIC_IP`.
 Allow TCP ports 80 and 443 through both the Azure NSG and the VM host firewall.
 Do not expose port 3001. Do not add a public daemon bind, a second daemon
-listener, or a proxy route for a browser preview server.
+listener, or a proxy route for a browser preview server. The one permitted
+network-facing bind besides this proxy is `ao vm serve`, the VM gateway, which
+is a separate process from the daemon and is covered by ADR 0002; that carve-out
+is in `AGENTS.md` and does not widen anything here. Caddy and `ao vm serve` both
+want `:80` and `:443`, so they cannot run on the same VM at the same time.
 
 `app://renderer` is already the Go daemon's default allowed CORS origin. Do
 not set `AO_ALLOWED_ORIGINS` on the VM in a way that overwrites that default.

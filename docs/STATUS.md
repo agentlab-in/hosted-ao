@@ -83,6 +83,53 @@ surface (`npm run sqlc`, `npm run api`).
   actions, persistent read history, mark-read controls, and Electron app toasts
   while the app is running.
 
+## Hosted AO v1: accounts and registered machines
+
+Tracked separately because it lives on `develop`, not `main`, and because it is not
+usable end to end yet. Spec:
+[`superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md`](superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md).
+Decisions, the PR-per-task table, and the review history:
+[`hosted-ao-v1-build-log.md`](hosted-ao-v1-build-log.md).
+
+**12 of the 15 spec tasks are merged into `develop`** (batches 1 through 4), plus
+`GET /api/v1/doctor` ([#36](https://github.com/agentlab-in/hosted-ao/pull/36)), which was
+added mid-build so the desktop could read remote machine readiness.
+
+Merged:
+
+- **Control plane** (`controlplane/`): Google login with PKCE, EdDSA signing keys and JWKS,
+  access and refresh token issuance with rotation, the RFC 8628 device flow, the machine
+  registry, and the authenticated `GET /api/v1/machines`.
+- **VM gateway** (`ao vm serve`): ACME TLS, JWT verification against the control plane's
+  JWKS, machine allowlist, reverse proxy to the loopback daemon, deny-by-default path
+  allowlist, CORS preflight handling.
+- **CLI**: `ao setup-vm` (Ubuntu preflight, dependency install, systemd units for daemon and
+  gateway, device binding, `machine.json`), `ao vm setup-harness claude`, `ao whoami`, and
+  `cloneUrl` on `POST /api/v1/projects`.
+- **Desktop**: AO account login through the system browser, the machine list, picker, and
+  switching.
+
+Still open, in spec order:
+
+- **Task 13, desktop authenticated remote transport**
+  ([#48](https://github.com/agentlab-in/hosted-ao/issues/48)): in flight. Bearer tokens on
+  REST and SSE, the JWT-valued `ao_gw_token` cookie for `/mux`, and silent refresh. Its
+  prerequisite, `POST /api/v1/machines/{id}/token`
+  ([#47](https://github.com/agentlab-in/hosted-ao/issues/47)), is in flight alongside it:
+  nothing currently mints a machine-audience token for a desktop install, so the remote
+  transport has no credential to carry. Until both land, picking a machine in the desktop
+  reports a not-ready state on purpose.
+- **Task 14, fresh-VM end-to-end verification and docs**: blocked on hardware. It needs an
+  Ubuntu LTS VM, a DNS A record pointing at it, and a hand-created Google OAuth client. No
+  part of the hosted stack has run on a real VM yet: the gateway has never obtained a
+  certificate, and the device flow has never run against real DNS.
+- **Task 15, retire the env-var pairing path**: gated on task 14 passing. `AO_REMOTE_URL`,
+  `AO_REMOTE_TOKEN`, and the `ao_hosted_pair` shared secret are removed only once accounts
+  are proven end to end, so remote mode is never untestable mid-build.
+
+Three code-review reports covering batches 1 through 4 are preserved in
+[`reviews/`](reviews/), with every finding mapped to the PR that fixed it.
+
 ## In flight / not yet a runtime feature
 
 - **Tracker lane**: GitHub tracker adapter exists, but there is no daemon
