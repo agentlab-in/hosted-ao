@@ -144,7 +144,7 @@ func (h *harness) requestCode(publicURL, name string) deviceCodeResponse {
 
 // poll runs one device access token request and returns the recorder plus the
 // decoded body, whichever shape it has.
-func (h *harness) poll(deviceCode string) (*httptest.ResponseRecorder, tokenResponse, oauthError) {
+func (h *harness) poll(deviceCode string) (*httptest.ResponseRecorder, bindingResponse, oauthError) {
 	h.t.Helper()
 
 	rec := h.do(http.MethodPost, "/device/token", "", url.Values{
@@ -152,7 +152,7 @@ func (h *harness) poll(deviceCode string) (*httptest.ResponseRecorder, tokenResp
 		"device_code": {deviceCode},
 	})
 	var (
-		ok      tokenResponse
+		ok      bindingResponse
 		failure oauthError
 	)
 	if rec.Code == http.StatusOK {
@@ -220,7 +220,7 @@ func claimsOf(t *testing.T, token string) (aud, sub string) {
 	return claims.Aud, claims.Sub
 }
 
-func TestDeviceFlow_HappyPathBindsTheMachineAndMintsAMachineAudienceToken(t *testing.T) {
+func TestDeviceFlow_HappyPathBindsTheMachineAndReturnsOnlyTheTriple(t *testing.T) {
 	h := newHarness(t)
 
 	issued := h.requestCode(testPublicURL, "prod vm")
@@ -293,24 +293,19 @@ func TestDeviceFlow_HappyPathBindsTheMachineAndMintsAMachineAudienceToken(t *tes
 	if granted.PublicURL != testPublicURL {
 		t.Errorf("public_url = %q, want %q", granted.PublicURL, testPublicURL)
 	}
-	if granted.TokenType != "Bearer" {
-		t.Errorf("token_type = %q, want Bearer", granted.TokenType)
+	// And nothing else. A bind must not mint a credential the VM has no use
+	// for: `ao vm serve` verifies tokens, it never presents one, so a token in
+	// this body would be a live 15 minute credential created and transmitted
+	// for no reader. The desktop gets machine tokens from
+	// POST /api/v1/machines/{id}/token instead.
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode poll body: %v", err)
 	}
-	if granted.ExpiresIn != int((15 * time.Minute).Seconds()) {
-		t.Errorf("expires_in = %d, want 900", granted.ExpiresIn)
-	}
-
-	// The trap this whole task exists to avoid: the audience is machines.id,
-	// never the hostname and never the public URL.
-	aud, sub := claimsOf(t, granted.AccessToken)
-	if sub != accountA {
-		t.Errorf("access token sub = %q, want the account id %q", sub, accountA)
-	}
-	if aud != machineID {
-		t.Errorf("access token aud = %q, want the machine id %q", aud, machineID)
-	}
-	if aud == testPublicURL || aud == "vm.example.com" {
-		t.Fatalf("access token aud = %q, which is the machine's address: it must be machines.id", aud)
+	for _, field := range []string{"access_token", "token_type", "expires_in", "refresh_token"} {
+		if _, present := body[field]; present {
+			t.Errorf("poll body carries %q, want only the machine triple", field)
+		}
 	}
 }
 

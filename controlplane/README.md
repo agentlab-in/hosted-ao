@@ -91,8 +91,7 @@ curl -s http://127.0.0.1:8080/device/code \
 curl -s http://127.0.0.1:8080/device/token \
   -d grant_type=urn:ietf:params:oauth:grant-type:device_code \
   -d device_code=...
-# {"access_token":"...","token_type":"Bearer","expires_in":900,
-#  "machine_id":"...","account_id":"...","public_url":"https://vm.example.com"}
+# {"machine_id":"...","account_id":"...","public_url":"https://vm.example.com"}
 ```
 
 While the flow is in progress the poll returns HTTP 400 with an RFC 8628 error
@@ -102,8 +101,14 @@ faster than `interval`, `expired_token` once the code's 15 minutes are up, and
 returns 403 `access_denied`.
 
 `machine_id` is `machines.id`. It is the value that goes in `machineId` in
-`~/.ao/machine.json` and the `aud` of the access token in the same response;
-it is never the hostname or the public URL. See `TOKEN_CONTRACT.md`.
+`~/.ao/machine.json` and the `aud` of every access token minted for this
+machine; it is never the hostname or the public URL. See `TOKEN_CONTRACT.md`.
+
+That response deliberately carries no access token, unlike the RFC 8628
+section 3.5 shape it is otherwise. The VM verifies tokens rather than
+presenting them, so `ao setup-vm` never read the one that used to be there:
+minting it created and transmitted a live 15 minute credential on every bind
+for no consumer. Machine tokens come from the machine token endpoint below.
 
 A successful poll is repeatable until the device code expires, so a dropped
 response does not force the operator to approve a second code. Re-running the
@@ -128,7 +133,20 @@ curl -s http://127.0.0.1:8080/api/v1/token \
 curl -s http://127.0.0.1:8080/api/v1/machines -H 'Authorization: Bearer <access token>'
 # {"machines":[{"id":"...","name":"prod vm","public_url":"https://vm.example.com",
 #               "created_at":"...","last_seen":null}]}
+
+# Ask for a token addressed to one of your machines, so the desktop can call
+# that machine's gateway. No request body. Nothing rotates.
+curl -s -X POST http://127.0.0.1:8080/api/v1/machines/<machine id>/token \
+  -H 'Authorization: Bearer <access token>'
+# {"access_token":"...","token_type":"Bearer","expires_in":900}
 ```
+
+The token that comes back has `aud` = `machines.id` and `sub` = the account
+id, so it is a credential for that machine's gateway and is rejected by the
+control plane API, which is the point. A machine that belongs to another
+account, one that is revoked, and one that does not exist all answer the same
+404 `not_found`: distinguishing them would make this a machine-id enumeration
+oracle for anyone with an account.
 
 `internal/api` owns both the token endpoint and the authenticator; a feature
 package registering an `/api/v1` route takes that authenticator as a value

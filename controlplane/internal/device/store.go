@@ -266,7 +266,7 @@ func registerMachine(ctx context.Context, tx *sql.Tx, accountID, name, publicURL
 }
 
 // grant is what a successful poll returns: the triple `ao setup-vm` writes
-// into machine.json, plus the access token minted for it.
+// into machine.json.
 type grant struct {
 	MachineID string
 	AccountID string

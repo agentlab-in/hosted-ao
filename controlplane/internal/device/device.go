@@ -1,7 +1,7 @@
 // Package device implements the RFC 8628 device authorization flow that
 // `ao setup-vm` uses to bind a VM to an account, the two browser pages that
 // flow goes through, the machine registration the approval performs, and the
-// authenticated list-machines API the desktop reads.
+// authenticated machines API the desktop reads and asks for machine tokens at.
 //
 // The one thing to get right here: the access tokens this package mints carry
 // `aud` = machines.id, never the machine's hostname and never its public URL.
@@ -73,10 +73,10 @@ type Service struct {
 	attempts *attemptLimiter
 }
 
-// NewService builds the device flow Service. issuer mints the access token
-// returned to a polling client once its code is approved; sessions identifies
-// the signed-in operator on the browser pages; apiAuth identifies the caller
-// of the machines API.
+// NewService builds the device flow Service. issuer mints the machine-audience
+// access tokens the machine token endpoint returns; sessions identifies the
+// signed-in operator on the browser pages; apiAuth identifies the caller of the
+// machines API.
 func NewService(db *sql.DB, issuer *tokens.Issuer, s sessions, apiAuth APIAuthenticator, publicOrigin string) (*Service, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
@@ -109,6 +109,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 
 	// The machine registry API the desktop reads.
 	mux.HandleFunc("GET /api/v1/machines", s.handleListMachines)
+	mux.HandleFunc("POST /api/v1/machines/{id}/token", s.handleMachineToken)
 }
 
 // verificationURI is the absolute URL of the enter-code page.
