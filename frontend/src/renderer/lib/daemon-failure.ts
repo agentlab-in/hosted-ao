@@ -13,8 +13,8 @@ export function daemonFailureTitle(status: DaemonStatus): string {
 			return "AO daemon is not ready yet";
 		case "not_configured":
 			return "AO daemon is not configured";
-		case "machine_transport_missing":
-			return "This build cannot reach a registered machine yet";
+		case "machine_auth_failed":
+			return "AO could not sign in to that machine";
 		case "daemon_unreachable":
 			return "AO daemon is unreachable";
 		case "identity_mismatch":
@@ -39,8 +39,8 @@ export function daemonFailureHint(status: DaemonStatus): string {
 			return "The daemon has not passed its readiness check yet. Open details below for more information.";
 		case "not_configured":
 			return "Set AO_DAEMON_COMMAND or run the desktop app from a source checkout.";
-		case "machine_transport_missing":
-			return "Pick this computer under Settings, Machines to keep working.";
+		case "machine_auth_failed":
+			return "Check your sign-in under Settings, Account, or pick this computer under Settings, Machines to keep working.";
 		case "daemon_unreachable":
 		case "identity_mismatch":
 			return "Stop the conflicting daemon, then restart the desktop app.";

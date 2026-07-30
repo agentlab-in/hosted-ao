@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { gatewayTokenMock } = vi.hoisted(() => ({ gatewayTokenMock: vi.fn<() => Promise<string | null>>() }));
+
+vi.mock("./bridge", () => ({
+	aoBridge: { machines: { gatewayToken: gatewayTokenMock } },
+}));
+
 import {
 	apiClient,
 	apiErrorMessage,
@@ -19,6 +26,9 @@ vi.mock("./telemetry", () => ({
 const captureMock = vi.mocked(captureRendererEvent);
 
 describe("apiClient runtime base URL", () => {
+	beforeEach(() => {
+		gatewayTokenMock.mockReset().mockResolvedValue(null);
+	});
 	afterEach(() => {
 		vi.restoreAllMocks();
 		setApiBaseUrl("http://127.0.0.1:3001");
@@ -61,6 +71,49 @@ describe("apiClient runtime base URL", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
 		expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.ao.agentlab.in/api/v1/projects");
 		expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ credentials: "include" });
+	});
+
+	// Bearer is the only credential the machine gateway accepts on a REST route:
+	// the ao_gw_token cookie is confined to /mux and the SSE stream, so nothing
+	// state-changing rides an ambient credential.
+	it("carries the machine bearer on a remote REST call", async () => {
+		gatewayTokenMock.mockResolvedValue("machine.audience.jwt");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ session: { id: "s1" } }), { status: 201 }));
+
+		setApiBaseUrl("https://vm.example.com");
+		await apiClient.POST("/api/v1/sessions", { body: { projectId: "p1", prompt: "hi" } });
+
+		expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://vm.example.com/api/v1/sessions");
+		const init = fetchSpy.mock.calls[0]?.[1];
+		expect(new Headers(init?.headers).get("authorization")).toBe("Bearer machine.audience.jwt");
+		expect(init).toMatchObject({ credentials: "include" });
+	});
+
+	// AO_REMOTE_URL pairs with its own cookie and has no machine token, and it
+	// keeps working exactly as it did.
+	it("sends no Authorization header when there is no machine token", async () => {
+		gatewayTokenMock.mockResolvedValue(null);
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response(JSON.stringify({ projects: [] }), { status: 200 }));
+
+		setApiBaseUrl("https://api.ao.agentlab.in");
+		await apiClient.GET("/api/v1/projects");
+
+		expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
+	});
+
+	it("does not ask for a machine token for a loopback daemon", async () => {
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ projects: [] }), { status: 200 }),
+		);
+
+		setApiBaseUrl("http://127.0.0.1:3037");
+		await apiClient.GET("/api/v1/projects");
+
+		expect(gatewayTokenMock).not.toHaveBeenCalled();
 	});
 
 	it("prefers a ready daemon remote base URL over its loopback port", () => {

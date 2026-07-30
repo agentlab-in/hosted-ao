@@ -3,6 +3,23 @@ import type { DaemonStatus } from "./daemon-status";
 
 export const REMOTE_PAIRING_COOKIE_NAME = "ao_hosted_pair";
 
+/**
+ * The VM gateway's JWT cookie, whose value is the current machine-audience
+ * access token.
+ *
+ * It exists for the two routes a browser cannot put a header on: the `/mux`
+ * WebSocket handshake, which has no header API, and the SSE stream at
+ * `GET /api/v1/events`, which the renderer opens with `EventSource`, which has
+ * none either. Every other route on the gateway takes `Authorization: Bearer`
+ * and refuses this cookie, deliberately: it is ambient, so accepting it on a
+ * state-changing method would leave the gateway's CORS origin check as the only
+ * CSRF defence.
+ *
+ * Must stay equal to `gatewayCookieName` in
+ * `backend/internal/vmgateway/proxy.go`. See `controlplane/TOKEN_CONTRACT.md`.
+ */
+export const GATEWAY_COOKIE_NAME = "ao_gw_token";
+
 export type RemoteDaemonConfig = { baseUrl: string; token: string };
 
 export function readRemoteDaemonConfig(env: Record<string, string | undefined>): RemoteDaemonConfig | null {
@@ -22,6 +39,11 @@ export function isRemoteDaemonBaseUrl(baseUrl: string): boolean {
 	return baseUrl.startsWith("https://");
 }
 
+/** Reaching a machine, before it has answered or before it is authenticated. */
+export function machineConnectingStatus(machine: AoMachine): DaemonStatus {
+	return { state: "starting", message: `Connecting to ${machine.name}…` };
+}
+
 /**
  * The app's daemon status while a registered machine is the active one.
  *
@@ -30,6 +52,13 @@ export function isRemoteDaemonBaseUrl(baseUrl: string): boolean {
  * local daemon when there is no status here at all. A remote machine being
  * down therefore cannot spawn a local daemon, because the code path that
  * spawns one is never reached rather than being skipped by a condition.
+ *
+ * The `ready` case carries the machine's base URL, which is what re-points the
+ * renderer's REST calls, its SSE stream, and the terminal mux at that gateway.
+ * Only `main/machine-transport.ts` may publish it, and only once a
+ * machine-audience token has been obtained and the `ao_gw_token` cookie is
+ * installed for that origin. Publishing it earlier would point every one of
+ * those at a gateway that answers 401 under a UI saying "Connected".
  *
  * Shared rather than main-process-only so browser preview shows the same
  * states, from the same copy, as the packaged app.
@@ -45,28 +74,21 @@ export function machineDaemonStatus(machine: AoMachine): DaemonStatus {
 				: `${machine.name} is not reachable, and has never connected to AO.`,
 		};
 	}
-	if (machine.reachability === "unknown") {
-		return { state: "starting", message: `Connecting to ${machine.name}…` };
-	}
-	return machineTransportMissingStatus(machine);
+	if (machine.reachability === "unknown") return machineConnectingStatus(machine);
+	return { state: "ready", baseUrl: machine.baseUrl, message: `Connected to ${machine.name}` };
 }
 
 /**
- * TASK 13 PLACEHOLDER. Delete this function and return
- * `{ state: "ready", baseUrl: machine.baseUrl, message: "Connected to ..." }`
- * from machineDaemonStatus when the remote transport lands.
+ * A reachable machine the app has no usable credential for.
  *
- * A reachable machine is not a usable one yet: every route on it wants a
- * machine-audience access token, and the desktop mints none (see the scope note
- * at the top of main/ao-control-token.ts). Reporting ready would point the
- * renderer at the gateway and turn every REST call and both EventSources into
- * 401s under a UI that says "Connected". Naming the missing piece is the honest
- * answer until there is a credential to send.
+ * Deliberately not a `ready` status: it carries no base URL, so nothing is
+ * pointed at a gateway that would refuse it. `reason` is the failure as
+ * reported, never a token or a cookie value.
  */
-function machineTransportMissingStatus(machine: AoMachine): DaemonStatus {
+export function machineAuthFailedStatus(machine: AoMachine, reason: string): DaemonStatus {
 	return {
 		state: "error",
-		code: "machine_transport_missing",
-		message: `${machine.name} is up, but this build cannot sign in to it yet. Reaching a registered machine needs the remote transport, which is not in this build. Use this computer for now.`,
+		code: "machine_auth_failed",
+		message: `Could not sign in to ${machine.name}. ${reason}`,
 	};
 }
