@@ -52,6 +52,11 @@ curl http://127.0.0.1:8080/healthz
 # {"status":"ok"}
 ```
 
+Open `http://127.0.0.1:8080/login` in a browser and sign in with Google to
+exercise the login flow end to end (see `internal/auth/` for the
+authorization-code exchange with PKCE, the `accounts` upsert, and the browser
+session cookie).
+
 ## Test
 
 ```bash
