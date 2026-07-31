@@ -213,7 +213,9 @@ function ShellLayout() {
 				source: input.cloneUrl ? "clone_url" : "local_path",
 			});
 			const status = await refreshDaemonStatus();
-			if (status.state !== "ready" || !status.port) {
+			// A remote machine's daemon status has baseUrl (and no port); a local
+			// daemon's has port (and no baseUrl). Accept either as ready.
+			if (status.state !== "ready" || (!status.port && !status.baseUrl)) {
 				throw new Error(status.message || "AO daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
