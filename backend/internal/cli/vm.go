@@ -88,7 +88,7 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 		Skew:     vmgateway.DefaultSkew,
 	}
 	jwks := vmgateway.NewJWKSCache(gwCfg.JWKSURL, nil)
-	handler, err := vmgateway.NewHandler(gwCfg.DaemonAddr, jwks, verify, config.DefaultAllowedOrigins, log)
+	handler, err := vmgateway.NewHandler(gwCfg.DaemonAddr, jwks, verify, cfg.AllowedOrigins, log)
 	if err != nil {
 		return fmt.Errorf("build gateway handler: %w", err)
 	}
