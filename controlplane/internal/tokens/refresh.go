@@ -37,17 +37,38 @@ var (
 	ErrRefreshTokenExpired = errors.New("refresh token expired")
 )
 
+// execer is the write half shared by *sql.DB and *sql.Tx, so one insert
+// serves both the standalone issue path and a caller's transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // IssueRefreshToken mints a new opaque refresh token bound to accountID and
 // installID, stores only its hash in refresh_tokens, and returns the
 // plaintext token. The plaintext is never stored and cannot be recovered
 // once returned.
 func (i *Issuer) IssueRefreshToken(ctx context.Context, accountID, installID string) (string, error) {
+	return issueRefreshToken(ctx, i.db, accountID, installID)
+}
+
+// IssueRefreshTokenTx is IssueRefreshToken inside a transaction the caller
+// already owns, so consuming a one-time credential and issuing the refresh
+// token it yields commit together or not at all.
+//
+// The desktop login exchange needs exactly that: it deletes the authorization
+// code and inserts this row in one commit, so a replay of the same code cannot
+// mint a second refresh token no matter how the two requests interleave.
+func (i *Issuer) IssueRefreshTokenTx(ctx context.Context, tx *sql.Tx, accountID, installID string) (string, error) {
+	return issueRefreshToken(ctx, tx, accountID, installID)
+}
+
+func issueRefreshToken(ctx context.Context, db execer, accountID, installID string) (string, error) {
 	plaintext, err := randomToken()
 	if err != nil {
 		return "", err
 	}
 	now := time.Now().UTC()
-	_, err = i.db.ExecContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`INSERT INTO refresh_tokens (id, account_id, install_id, token_hash, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		uuid.NewString(), accountID, installID, hashToken(plaintext), now, now.Add(DefaultRefreshTokenTTL),
