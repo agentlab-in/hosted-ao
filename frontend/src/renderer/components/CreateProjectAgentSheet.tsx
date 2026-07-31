@@ -5,6 +5,7 @@ import { memo, useEffect, useState } from "react";
 import type { components } from "../../api/schema";
 import { agentsQueryKey, agentsQueryOptions, refreshAgents } from "../hooks/useAgentsQuery";
 import { AGENT_OPTIONS } from "../lib/agent-options";
+import { cloneUrlLabel } from "../lib/clone-url";
 import { cn } from "../lib/utils";
 import { buildIntake, type IntakeForm, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import type { ProjectKind } from "../types/workspace";
@@ -33,6 +34,10 @@ function agentLabelCompare(a: AgentInfo, b: AgentInfo): number {
 }
 
 type CreateProjectAgentSheetProps = {
+	// Set instead of `path` when the project is being cloned by URL. The daemon
+	// clones synchronously (no job model, no progress channel), so submitting
+	// can take minutes and the sheet has to keep saying so.
+	cloneUrl?: string | null;
 	error?: string | null;
 	isCreating: boolean;
 	isInitializing?: boolean;
@@ -85,6 +90,7 @@ function projectSheetError(error: string): SheetError {
 }
 
 export function CreateProjectAgentSheet({
+	cloneUrl = null,
 	error,
 	isCreating,
 	isInitializing = false,
@@ -157,7 +163,7 @@ export function CreateProjectAgentSheet({
 								{kind === "workspace" ? "Workspace agents" : "Project agents"}
 							</Dialog.Title>
 							<Dialog.Description className="mt-1 break-all text-xs text-[var(--color-text-agents-sheet-description)]">
-								{path ?? ""}
+								{path ?? cloneUrl ?? ""}
 							</Dialog.Description>
 						</div>
 						<Dialog.Close asChild>
@@ -256,6 +262,8 @@ export function CreateProjectAgentSheet({
 							/>
 						</div>
 
+						{cloneUrl !== null && isCreating && <CloneProgress url={cloneUrl} />}
+
 						{repositorySetupNeeded && (
 							<div className="rounded-lg border border-[var(--color-border-agents-sheet)] bg-[var(--color-bg-agents-sheet-control)]/80 px-3 py-2.5 text-xs leading-body-md text-[var(--color-text-agents-sheet-description)]">
 								If this folder needs Git setup, AO will initialize it and create the first commit before starting.
@@ -308,16 +316,62 @@ export function CreateProjectAgentSheet({
 								{isInitializing
 									? "Setting up..."
 									: isCreating
-										? "Creating..."
-										: kind === "workspace"
-											? "Create workspace and start"
-											: "Create and start"}
+										? cloneUrl !== null
+											? "Cloning..."
+											: "Creating..."
+										: cloneUrl !== null
+											? "Clone and start"
+											: kind === "workspace"
+												? "Create workspace and start"
+												: "Create and start"}
 							</Button>
 						</div>
 					</form>
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
+	);
+}
+
+function formatElapsed(totalSeconds: number): string {
+	const minutes = Math.floor(totalSeconds / 60);
+	return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Liveness for a synchronous clone. There is no progress to report (the daemon
+ * runs `git clone` to completion and answers once), so the honest signal is an
+ * elapsed counter plus an indeterminate bar: the window is working, not hung.
+ */
+function CloneProgress({ url }: { url: string }) {
+	const [elapsedSeconds, setElapsedSeconds] = useState(0);
+	useEffect(() => {
+		const startedAt = Date.now();
+		const timer = window.setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+		return () => window.clearInterval(timer);
+	}, []);
+
+	return (
+		<div
+			className="space-y-2 rounded-lg border border-[var(--color-border-agents-sheet)] bg-[var(--color-bg-agents-sheet-control)]/80 px-3 py-2.5"
+			role="status"
+			aria-live="polite"
+		>
+			<div className="flex items-center justify-between gap-3 text-xs leading-body-md">
+				<span className="min-w-0 truncate font-medium text-[var(--color-text-agents-sheet-title)]">
+					Cloning {cloneUrlLabel(url)}...
+				</span>
+				<span className="shrink-0 font-mono tabular-nums text-[var(--color-text-agents-sheet-description)]">
+					{formatElapsed(elapsedSeconds)}
+				</span>
+			</div>
+			<div className="h-1 overflow-hidden rounded-full bg-[var(--color-bg-agents-sheet)]">
+				<div className="clone-progress-bar" />
+			</div>
+			<p className="text-xs leading-body-md text-[var(--color-text-agents-sheet-description)]">
+				A large repository can take a few minutes. Keep this window open.
+			</p>
+		</div>
 	);
 }
 

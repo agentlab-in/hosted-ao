@@ -1,14 +1,23 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { CheckCircle2, ChevronRight, Folder, FolderPlus, X, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronRight, CloudDownload, Folder, FolderPlus, TriangleAlert, X, XCircle } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ImportFolderScan } from "../../preload";
 import { aoBridge } from "../lib/bridge";
+import { cloneErrorPresentation, parseCloneUrl } from "../lib/clone-url";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
 import { CreateProjectAgentSheet, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 
-export type CreateProjectInput = { path: string; asWorkspace?: boolean } & CreateProjectAgentSelection;
+// A local folder and a clone URL are mutually exclusive on the daemon (it
+// answers PATH_AND_CLONE_URL_CONFLICT when both arrive). Modelling the source
+// as a union means the UI cannot express the conflict at all: the two are
+// separate branches of the flow, and nothing can send both.
+export type CreateProjectSource = { path: string; cloneUrl?: never } | { cloneUrl: string; path?: never };
+
+export type CreateProjectInput = CreateProjectSource & { asWorkspace?: boolean } & CreateProjectAgentSelection;
 
 type CreateProjectFlowMode = ProjectKind | "choose";
 
@@ -38,8 +47,16 @@ export function CreateProjectFlow({
 	openSignal?: number;
 }) {
 	const [error, setError] = useState<string | null>(null);
+	const [errorCode, setErrorCode] = useState<string | null>(null);
 	const [modePickerOpen, setModePickerOpen] = useState(false);
 	const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+	const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
+	// The field's text, kept across a failed clone so a retry (after `gh auth
+	// login`, say) does not start from an empty input.
+	const [cloneUrl, setCloneUrl] = useState("");
+	// Set once the URL is confirmed: the agent sheet is open and this is what
+	// gets cloned on submit.
+	const [pendingCloneUrl, setPendingCloneUrl] = useState<string | null>(null);
 	const [selectedKind, setSelectedKind] = useState<ProjectKind>(mode === "workspace" ? "workspace" : "single_repo");
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [validationScan, setValidationScan] = useState<ImportFolderScan | null>(null);
@@ -57,8 +74,27 @@ export function CreateProjectFlow({
 		void chooseDirectory(kind);
 	};
 
+	const openCloneStep = () => {
+		setError(null);
+		setErrorCode(null);
+		setValidationScan(null);
+		setRepositorySetup(null);
+		setSelectedKind("single_repo");
+		setModePickerOpen(false);
+		setCloneDialogOpen(true);
+	};
+
+	const confirmCloneUrl = (url: string) => {
+		setError(null);
+		setErrorCode(null);
+		setCloneUrl(url);
+		setCloneDialogOpen(false);
+		setPendingCloneUrl(url);
+	};
+
 	const chooseDirectory = async (kind: ProjectKind) => {
 		setError(null);
+		setErrorCode(null);
 		setValidationScan(null);
 		setRepositorySetup(null);
 		setSelectedKind(kind);
@@ -101,26 +137,43 @@ export function CreateProjectFlow({
 	}, [openSignal]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
-		if (!selectedPath) return;
+		const path = selectedPath;
+		const clone = pendingCloneUrl;
+		if (path === null && clone === null) return;
 		setError(null);
+		setErrorCode(null);
 		setIsCreating(true);
 		try {
-			if (selectedKind === "single_repo" && repositorySetup) {
+			if (path !== null && selectedKind === "single_repo" && repositorySetup) {
 				setIsCreating(false);
 				setIsInitializing(true);
-				await onInitializeProject(selectedPath);
+				await onInitializeProject(path);
 				setRepositorySetup(null);
 				setIsInitializing(false);
 				setIsCreating(true);
 			}
-			await onCreateProject({ path: selectedPath, asWorkspace: selectedKind === "workspace", ...selection });
-			setSelectedPath(null);
+			if (clone !== null) {
+				await onCreateProject({ cloneUrl: clone, ...selection });
+				setPendingCloneUrl(null);
+				setCloneUrl("");
+			} else if (path !== null) {
+				await onCreateProject({ path, asWorkspace: selectedKind === "workspace", ...selection });
+				setSelectedPath(null);
+			}
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? (err.code as string | undefined) : undefined;
 			const message = err instanceof Error ? err.message : "Could not add project";
-			if (selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) setRepositorySetup(code);
 			setError(message);
-			if (hasModePicker) {
+			setErrorCode(code ?? null);
+			if (clone !== null) {
+				// Back to the URL step: every clone failure is fixed there, either
+				// by editing the URL or by fixing credentials and retrying it.
+				setPendingCloneUrl(null);
+				setCloneDialogOpen(true);
+				return;
+			}
+			if (selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) setRepositorySetup(code);
+			if (hasModePicker && selectedPath !== null) {
 				if (shouldScanCreateFailure(message)) {
 					try {
 						const scan = await aoBridge.app.scanImportFolder({
@@ -164,8 +217,8 @@ export function CreateProjectFlow({
 				})}
 			{hasModePicker && embedded && !modePickerOpen && (
 				<div className="flex w-full flex-col items-center gap-3">
-					<ImportModePicker disabled={isBusy} onSelect={openFolderStep} />
-					{error && !folderPickerOpen && selectedPath === null && (
+					<ImportModePicker disabled={isBusy} onSelect={openFolderStep} onCloneFromUrl={openCloneStep} />
+					{error && !folderPickerOpen && !cloneDialogOpen && selectedPath === null && (
 						<p className="text-caption leading-body text-error" role="status">
 							{error}
 						</p>
@@ -179,6 +232,31 @@ export function CreateProjectFlow({
 						open={modePickerOpen}
 						onOpenChange={(open) => !isBusy && setModePickerOpen(open)}
 						onSelect={openFolderStep}
+						onCloneFromUrl={openCloneStep}
+					/>
+					<CloneProjectDialog
+						disabled={isBusy}
+						error={error ? cloneErrorPresentation(errorCode ?? undefined, error) : null}
+						open={cloneDialogOpen}
+						url={cloneUrl}
+						onUrlChange={setCloneUrl}
+						onBack={() => {
+							setError(null);
+							setErrorCode(null);
+							setCloneDialogOpen(false);
+							if (!embedded) {
+								window.requestAnimationFrame(() => setModePickerOpen(true));
+							}
+						}}
+						onOpenChange={(open) => {
+							if (isBusy) return;
+							setCloneDialogOpen(open);
+							if (!open) {
+								setError(null);
+								setErrorCode(null);
+							}
+						}}
+						onSubmit={confirmCloneUrl}
 					/>
 					<CreateProjectFolderDialog
 						disabled={isBusy}
@@ -208,20 +286,23 @@ export function CreateProjectFlow({
 				</>
 			)}
 			<CreateProjectAgentSheet
-				error={error}
+				cloneUrl={pendingCloneUrl}
+				error={pendingCloneUrl === null ? error : null}
 				isCreating={isCreating}
 				isInitializing={isInitializing}
 				kind={selectedKind}
 				onOpenChange={(open) => {
 					if (!open) {
 						setSelectedPath(null);
-						if (!folderPickerOpen) {
+						setPendingCloneUrl(null);
+						if (!folderPickerOpen && !cloneDialogOpen) {
 							setError(null);
+							setErrorCode(null);
 						}
 					}
 				}}
 				onSubmit={createProject}
-				open={selectedPath !== null}
+				open={selectedPath !== null || pendingCloneUrl !== null}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 			/>
@@ -257,11 +338,13 @@ function shouldScanCreateFailure(message: string): boolean {
 
 function CreateProjectModeDialog({
 	disabled,
+	onCloneFromUrl,
 	onOpenChange,
 	onSelect,
 	open,
 }: {
 	disabled: boolean;
+	onCloneFromUrl: () => void;
 	onOpenChange: (open: boolean) => void;
 	onSelect: (kind: ProjectKind) => void;
 	open: boolean;
@@ -271,7 +354,13 @@ function CreateProjectModeDialog({
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in" />
 				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-[min(var(--size-import-modal-max),calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 border-0 bg-transparent p-0 shadow-none outline-none data-[state=open]:animate-modal-in">
-					<ImportModePicker disabled={disabled} onClose={() => onOpenChange(false)} onSelect={onSelect} dialog />
+					<ImportModePicker
+						disabled={disabled}
+						onCloneFromUrl={onCloneFromUrl}
+						onClose={() => onOpenChange(false)}
+						onSelect={onSelect}
+						dialog
+					/>
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
@@ -282,11 +371,13 @@ function CreateProjectModeDialog({
 function ImportModePicker({
 	dialog = false,
 	disabled,
+	onCloneFromUrl,
 	onClose,
 	onSelect,
 }: {
 	dialog?: boolean;
 	disabled: boolean;
+	onCloneFromUrl: () => void;
 	onClose?: () => void;
 	onSelect: (kind: ProjectKind) => void;
 }) {
@@ -321,6 +412,22 @@ function ImportModePicker({
 					kind="single_repo"
 					onClick={() => onSelect("single_repo")}
 				/>
+			</div>
+			{/* Third source, deliberately quieter than the two cards: both of those
+			    import something already on this machine, this one fetches it first. */}
+			<div className="relative z-[2] flex flex-col items-center gap-1.5 self-stretch border-t border-[var(--color-border-import-modal)] pt-6 text-center">
+				<button
+					type="button"
+					className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-[14px] font-semibold text-[var(--color-text-import-title)] underline-offset-4 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50"
+					disabled={disabled}
+					onClick={onCloneFromUrl}
+				>
+					<CloudDownload className="size-4 shrink-0" aria-hidden="true" />
+					Clone from a Git URL
+				</button>
+				<p className="text-[13px] font-normal leading-5 text-[var(--color-text-import-muted)]">
+					Not on this machine yet? AO clones the repository first, then imports it as a project.
+				</p>
 			</div>
 			{onClose && (
 				<button
@@ -565,6 +672,188 @@ function CreateProjectFolderDialog({
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
+	);
+}
+
+/**
+ * Clone-by-URL step, and the surface every clone failure comes back to: the
+ * daemon's remediation always resolves here, either by editing the URL or by
+ * fixing credentials on the machine and submitting the same URL again.
+ */
+function CloneProjectDialog({
+	disabled,
+	error,
+	onBack,
+	onOpenChange,
+	onSubmit,
+	onUrlChange,
+	open,
+	url,
+}: {
+	disabled: boolean;
+	error: { title: string; message: string } | null;
+	onBack: () => void;
+	onOpenChange: (open: boolean) => void;
+	onSubmit: (url: string) => void;
+	onUrlChange: (url: string) => void;
+	open: boolean;
+	url: string;
+}) {
+	// Validity is checked as you type, but only reported once the field has been
+	// left or a submit was attempted: no red text while typing a valid URL.
+	const [touched, setTouched] = useState(false);
+	useEffect(() => {
+		if (!open) setTouched(false);
+	}, [open]);
+
+	const target = parseCloneUrl(url);
+	const invalid = touched && url.trim() !== "" && target === null;
+
+	return (
+		<Dialog.Root open={open} onOpenChange={onOpenChange}>
+			<Dialog.Portal>
+				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in" />
+				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay flex max-h-[calc(100svh-24px)] w-[min(var(--size-import-folder-dialog),calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-0 text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)] data-[state=open]:animate-modal-in">
+					<form
+						className="flex min-h-0 flex-col"
+						onSubmit={(event) => {
+							event.preventDefault();
+							setTouched(true);
+							if (!disabled && target) onSubmit(url.trim());
+						}}
+					>
+						<div className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border-import-modal)] px-4 py-4 sm:gap-4 sm:px-6 sm:py-5">
+							<button
+								type="button"
+								className="grid size-8 shrink-0 place-items-center rounded-lg border border-[var(--color-border-import-modal)] text-[var(--color-text-import-muted)] transition hover:bg-[var(--color-bg-import-card-hover)] hover:text-[var(--color-text-import-title)] disabled:pointer-events-none disabled:opacity-50"
+								aria-label="Back to import type"
+								disabled={disabled}
+								onClick={onBack}
+							>
+								<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
+							</button>
+							<div className="min-w-0 flex-1">
+								<Dialog.Title className="text-[18px] font-semibold text-[var(--color-text-import-title)]">
+									Clone a repository
+								</Dialog.Title>
+								<Dialog.Description className="mt-1 max-w-[440px] text-[13px] font-medium leading-5 text-[var(--color-text-import-muted)]">
+									AO clones the repository onto the machine running it, then imports the clone as a project.
+								</Dialog.Description>
+							</div>
+							<Dialog.Close asChild>
+								<button
+									type="button"
+									className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--color-text-import-muted)] transition hover:bg-[var(--color-bg-import-card-hover)] hover:text-[var(--color-text-import-title)] disabled:pointer-events-none disabled:opacity-50"
+									aria-label="Close clone dialog"
+									disabled={disabled}
+								>
+									<X className="size-4" aria-hidden="true" />
+								</button>
+							</Dialog.Close>
+						</div>
+
+						<div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
+							<div className="flex flex-col gap-1.5">
+								<Label
+									htmlFor="cloneProjectUrl"
+									className="text-[12px] font-medium text-[var(--color-text-import-muted)]"
+								>
+									Repository URL
+								</Label>
+								<Input
+									id="cloneProjectUrl"
+									autoFocus
+									autoComplete="off"
+									autoCorrect="off"
+									autoCapitalize="off"
+									spellCheck={false}
+									aria-invalid={invalid || undefined}
+									aria-describedby="cloneProjectUrlHint"
+									className="font-mono text-[13px]"
+									disabled={disabled}
+									placeholder="https://github.com/owner/repo.git"
+									value={url}
+									onBlur={() => setTouched(true)}
+									onChange={(event) => onUrlChange(event.target.value)}
+								/>
+								<p
+									id="cloneProjectUrlHint"
+									className={cn(
+										"text-[12px] leading-5",
+										invalid ? "text-destructive" : "text-[var(--color-text-import-muted)]",
+									)}
+								>
+									{invalid
+										? "Use an https:// or ssh git remote URL that names an owner and a repository."
+										: "https:// or ssh, for example git@github.com:owner/repo.git"}
+								</p>
+							</div>
+
+							{/* Standing expectation-setting, dropped once a real failure is on
+							    screen: the daemon's own remediation supersedes it. */}
+							{!error && (
+								<div className="rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-4 py-3 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
+									A large repository can take a few minutes to clone. A private one needs git credentials on that
+									machine: run <RemediationText text="`gh auth login`" /> there first.
+								</div>
+							)}
+
+							{error && (
+								<div
+									role="alert"
+									className="flex gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-[12px] leading-5"
+								>
+									<TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
+									<div className="min-w-0 space-y-1">
+										<p className="font-semibold text-destructive">{error.title}</p>
+										<p className="text-[var(--color-text-import-muted)]">
+											<RemediationText text={error.message} />
+										</p>
+									</div>
+								</div>
+							)}
+						</div>
+
+						<div className="flex shrink-0 flex-col gap-3 border-t border-[var(--color-border-import-modal)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+							<p className="text-[12px] font-medium text-[var(--color-text-import-muted)]">
+								{target ? `Clones ${target.owner}/${target.repo}` : "Paste the repository's git remote URL"}
+							</p>
+							<div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+								<Button type="button" variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
+									Cancel
+								</Button>
+								<Button type="submit" variant="primary" disabled={disabled || target === null}>
+									Continue
+								</Button>
+							</div>
+						</div>
+					</form>
+				</Dialog.Content>
+			</Dialog.Portal>
+		</Dialog.Root>
+	);
+}
+
+/**
+ * The daemon writes its remediation with the command in backticks ("run `gh
+ * auth login`"). Render those spans as code so the thing to copy is obvious.
+ */
+export function RemediationText({ text }: { text: string }) {
+	return (
+		<>
+			{text.split(/`([^`]+)`/).map((part, index) =>
+				index % 2 === 1 ? (
+					<code
+						key={`${index}:${part}`}
+						className="rounded bg-[var(--color-bg-import-chip)] px-1 py-0.5 font-mono text-[11px] text-[var(--color-text-import-title)]"
+					>
+						{part}
+					</code>
+				) : (
+					part
+				),
+			)}
+		</>
 	);
 }
 

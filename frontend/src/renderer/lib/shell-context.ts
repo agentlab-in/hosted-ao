@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { components } from "../../api/schema";
+import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import type { useDaemonStatus } from "../hooks/useDaemonStatus";
 
 // Shared state the persistent _shell layout owns and route content reads. The
@@ -7,13 +7,7 @@ import type { useDaemonStatus } from "../hooks/useDaemonStatus";
 // it lives in the shell and is handed down here rather than re-run per route.
 export type ShellContextValue = {
 	daemonStatus: ReturnType<typeof useDaemonStatus>;
-	createProject: (input: {
-		path: string;
-		workerAgent: string;
-		orchestratorAgent: string;
-		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
-		asWorkspace?: boolean;
-	}) => Promise<void>;
+	createProject: (input: CreateProjectInput) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;
 };
 
