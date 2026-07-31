@@ -95,6 +95,57 @@ device-code binding gives the VM any credential to present. The rate limits are
 the whole budget. See the package doc in `internal/reachability/` for the
 detail.
 
+## Desktop sign-in
+
+The desktop app signs in with an RFC 8252 loopback authorization-code exchange
+with PKCE, implemented in `internal/desktopauth/`. The wire contract is
+[`docs/desktop-login-contract.md`](../docs/desktop-login-contract.md) and the
+client half is `frontend/src/main/ao-pkce.ts`.
+
+```
+GET /oauth/desktop/authorize
+  ?response_type=code&client_id=ao-desktop
+  &redirect_uri=http://127.0.0.1:<ephemeral>/callback
+  &code_challenge=<base64url SHA-256 of the verifier>
+  &code_challenge_method=S256&state=<CSPRNG>
+```
+
+Opened in the system browser. It reuses `internal/auth`'s Google sign-in and
+session (a signed-out request is sent to `/auth/google/login?next=` pointing
+back here), then redirects to the loopback listener with a one-time `code` and
+the `state` unmodified.
+
+```bash
+curl -s http://127.0.0.1:8080/oauth/desktop/token \
+  -d grant_type=authorization_code -d client_id=ao-desktop \
+  -d code=... -d code_verifier=... \
+  -d redirect_uri=http://127.0.0.1:54321/callback
+# {"refresh_token":"...","account":{"id":"...","email":"..."}}
+```
+
+No access token comes back: login yields identity plus the refresh token, and
+every access token comes from `POST /api/v1/token`.
+
+Three things about this endpoint are load-bearing, because it is the only
+public unauthenticated entry point that ends in a ninety-day credential.
+
+- **The redirect target is proven loopback before it is used at all**, for a
+  code or for an error. `127.0.0.1` and `[::1]` on any port, per RFC 8252
+  section 7.3, and nothing else: not `localhost`, which is a name whose
+  resolution is not this service's decision, and not any other host, which
+  would make this an open redirect that hands out accounts. A refused redirect
+  URI, an unknown `client_id`, and a missing `state` are shown to the operator
+  in the browser rather than redirected anywhere (RFC 6749 section 4.1.2.1).
+- **The code is bound at issue to the PKCE challenge, the redirect URI, and
+  the account**, and the exchange re-checks all three against the stored row.
+- **The code is consumed in the same transaction that inserts the refresh
+  token**, so no interleaving of a replay mints a second one.
+
+An unknown code, an expired one, a replayed one, a mismatched `redirect_uri`,
+and a wrong verifier are one `invalid_grant` with one description, the way the
+refresh token endpoint collapses its three failures: the distinctions are
+exactly the oracle someone holding a stolen code would want.
+
 ## Device flow and machine registry
 
 `ao setup-vm` binds a VM to an account with the RFC 8628 device authorization

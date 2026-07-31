@@ -16,6 +16,7 @@ import (
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/api"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/desktopauth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/device"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/home"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
@@ -76,6 +77,11 @@ func main() {
 		log.Fatalf("init device flow: %v", err)
 	}
 	deviceSvc.Register(mux)
+
+	// The desktop app's own sign-in: the loopback PKCE exchange in
+	// docs/desktop-login-contract.md. It reuses authSvc's Google flow and
+	// session rather than standing up a second one.
+	desktopauth.NewService(db, issuer, authSvc).Register(mux)
 
 	homeSvc, err := home.NewService(authSvc)
 	if err != nil {
