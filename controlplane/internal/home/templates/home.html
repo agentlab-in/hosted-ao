@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AO</title>
+  {{/*
+    Inline styling, kept in step with internal/auth/templates/signin.html and
+    internal/device/templates/device_style.html so sign-in, this page, and
+    approval look like one service. Inline rather than a served stylesheet:
+    the control plane has no static file route.
+  */}}
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b0d12;
+      color: #e6e8eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #151821;
+      border: 1px solid #262b36;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 360px;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 1rem;
+    }
+    p.hint {
+      color: #9aa4b2;
+      font-size: 0.875rem;
+      margin: 0 0 1.25rem;
+    }
+    p.hint:last-child {
+      margin: 1.25rem 0 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-all;
+    }
+    .button {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      background: #3b82f6;
+      border: 1px solid #3b82f6;
+      color: #fff;
+      text-decoration: none;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .button:hover {
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>You are signed in</h1>
+    <p class="hint">Connect a VM to this account to run agents on it from anywhere.</p>
+    <a class="button" href="/device">Connect a machine</a>
+    <p class="hint">No VM yet? Run <code>sudo ao setup-vm --domain your.domain</code> on an Ubuntu VM, then enter the code it prints.</p>
+  </div>
+</body>
+</html>
