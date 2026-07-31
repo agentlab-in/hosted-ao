@@ -75,7 +75,7 @@ func newSetupVMCommand(ctx *commandContext) *cobra.Command {
 			"(see docs/adr/0002-hosted-public-gateway.md).\n\n" +
 			"It then binds this machine to an AO account over an RFC 8628 device code: it\n" +
 			"prints a short code and a URL, waits for you to approve the machine in a browser\n" +
-			"on any device, writes ~/.ao/machine.json, and restarts the gateway so it reads\n" +
+			"on any device, writes ~/.ao/hosted/machine.json, and restarts the gateway so it reads\n" +
 			"the new binding.\n\n" +
 			"A failed preflight changes nothing at all: it prints exactly what to fix and\n" +
 			"exits. A successful run is idempotent, so running it again is safe; an\n" +

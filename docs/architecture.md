@@ -727,7 +727,7 @@ flowchart TD
 The daemon runs two independent HTTP listeners sharing the same chi router:
 
 1. **Primary (Loopback) Listener** — binds `127.0.0.1:3001` with no authentication. All existing daemon operations (CLI, desktop app) use this listener.
-2. **LAN Listener** (Connect Mobile) — an opt-in second listener that binds `0.0.0.0:3011` (or ephemeral fallback) **only when explicitly enabled** by the user through the desktop app's Settings. It wraps the shared router in bearer-password authentication middleware, serves app API routes to mobile clients, but never exposes loopback-gated control routes (`/shutdown`, telemetry, mobile control commands). All traffic is plaintext HTTP on a home network only, by deliberate security decision — see `docs/adr/0001-lan-listener-for-mobile.md` for rationale and threat model. Auth state (hashed password, per-source lockout) is persisted to `~/.ao/mobile/config.json` and restored on daemon boot.
+2. **LAN Listener** (Connect Mobile) — an opt-in second listener that binds `0.0.0.0:3011` (or ephemeral fallback) **only when explicitly enabled** by the user through the desktop app's Settings. It wraps the shared router in bearer-password authentication middleware, serves app API routes to mobile clients, but never exposes loopback-gated control routes (`/shutdown`, telemetry, mobile control commands). All traffic is plaintext HTTP on a home network only, by deliberate security decision — see `docs/adr/0001-lan-listener-for-mobile.md` for rationale and threat model. Auth state (hashed password, per-source lockout) is persisted to `$AO_DATA_DIR/mobile/config.json` (`~/.ao/hosted/data/mobile/config.json` by default) and restored on daemon boot.
 
 For implementation details and security model, consult `docs/adr/0001-lan-listener-for-mobile.md` and the glossary in `CONTEXT.md`.
 
@@ -841,7 +841,7 @@ These rules are **load-bearing** — changing them breaks fundamental architectu
 1. **Never store display status** — Status is derived from durable facts at read time
 2. **Never treat failed probes as death** — A failed probe is a fact, not a termination signal
 3. **Never force-delete dirty worktrees** — User data safety over cleanup convenience
-4. **All app state under ~/.ao** — No OS-default app-data locations
+4. **All app state under ~/.ao/hosted**: no OS-default app-data locations, and a subdirectory of its own so hosted-ao never shares `running.json` or `ao.db` with the upstream agent-orchestrator app
 5. **Daemon binds to 127.0.0.1 only** — No network exposure, ever
 6. **CLI is thin** — All logic lives in the daemon, CLI is just an HTTP client
 7. **CDC is source-truth for events** — DB triggers write to change_log, poller fans out

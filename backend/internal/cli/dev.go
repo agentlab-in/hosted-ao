@@ -54,7 +54,7 @@ func newDevImportProjectsCommand(ctx *commandContext) *cobra.Command {
 			return ctx.runDevImportProjects(cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.fromDataDir, "from-data-dir", "", "AO data dir to read (default ~/.ao/data)")
+	cmd.Flags().StringVar(&opts.fromDataDir, "from-data-dir", "", "AO data dir to read (default ~/.ao/hosted/data)")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Report planned changes without writing")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output the import report as JSON")
 	return cmd
@@ -143,11 +143,11 @@ func writeDevImportProjectsSummary(w io.Writer, rep devimport.Report) error {
 }
 
 func defaultNormalDataDir() (string, error) {
-	home, err := os.UserHomeDir()
+	stateDir, err := config.DefaultStateDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".ao", "data"), nil
+	return filepath.Join(stateDir, "data"), nil
 }
 
 func expandHomePath(path string) (string, error) {

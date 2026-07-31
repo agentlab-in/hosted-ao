@@ -38,7 +38,7 @@ func newVMServeCommand(ctx *commandContext) *cobra.Command {
 			"It runs as its own process, separate from the daemon, normally started by\n" +
 			"systemd on a machine provisioned by `ao setup-vm` (see\n" +
 			"docs/adr/0002-hosted-public-gateway.md). Configuration is read from\n" +
-			"~/.ao/machine.json when present; every value can also be set with a flag\n" +
+			"~/.ao/hosted/machine.json when present; every value can also be set with a flag\n" +
 			"or environment variable, which take precedence over machine.json.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -52,7 +52,7 @@ func newVMServeCommand(ctx *commandContext) *cobra.Command {
 	flags.StringVar(&opts.Issuer, "issuer", "", fmt.Sprintf("Expected token issuer (default %s)", vmgateway.DefaultIssuer))
 	flags.StringVar(&opts.JWKSURL, "jwks-url", "", "Control-plane JWKS URL (default <issuer>/.well-known/jwks.json)")
 	flags.StringVar(&opts.DaemonAddr, "daemon-addr", "", "Loopback daemon host:port (default: discovered from running.json)")
-	flags.StringVar(&opts.MachineFile, "machine-file", "", "machine.json path (default ~/.ao/machine.json)")
+	flags.StringVar(&opts.MachineFile, "machine-file", "", "machine.json path (default ~/.ao/hosted/machine.json)")
 	flags.StringVar(&opts.CertDir, "cert-dir", "", "ACME certificate cache directory (default under the AO data dir)")
 	flags.StringVar(&opts.HTTPAddr, "http-addr", "", fmt.Sprintf("ACME HTTP-01 challenge / redirect listener address (default %s)", vmgateway.DefaultHTTPAddr))
 	flags.StringVar(&opts.HTTPSAddr, "https-addr", "", fmt.Sprintf("Public TLS listener address (default %s)", vmgateway.DefaultHTTPSAddr))

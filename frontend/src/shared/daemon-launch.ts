@@ -1,3 +1,5 @@
+import { STATE_ROOT_SEGMENTS } from "./state-root";
+
 export type DaemonLaunchSpec = {
 	command: string;
 	args: string[];
@@ -46,7 +48,7 @@ export function resolveDaemonLaunch(
 	return {
 		command: joinPath(resourcesPath, "daemon", bundledDaemonBinaryName(platform)),
 		args: ["daemon"],
-		cwd: joinPath(homeDir, ".ao"),
+		cwd: joinPath(homeDir, ...STATE_ROOT_SEGMENTS),
 		shell: false,
 		source: "bundled",
 	};

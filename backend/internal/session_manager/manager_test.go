@@ -2205,7 +2205,7 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	m, st, _, _ := newManager()
-	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
+	m.dataDir = filepath.Join(home, ".ao", "hosted", "dev", "data")
 
 	worker, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
 	if err != nil {
@@ -2228,7 +2228,7 @@ func TestSpawn_ExplicitBranchBypassesDevNamespace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	m, st, _, _ := newManager()
-	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
+	m.dataDir = filepath.Join(home, ".ao", "hosted", "dev", "data")
 
 	s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "ao/custom"})
 	if err != nil {

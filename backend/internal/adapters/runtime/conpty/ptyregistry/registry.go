@@ -8,6 +8,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 // Entry is one registered pty-host process.
@@ -23,15 +25,16 @@ type Entry struct {
 // pidalive_windows.go).
 var pidAlive = defaultPidAlive
 
-// registryFile resolves ~/.ao/windows-pty-hosts.json. Uses os.UserHomeDir()
-// so t.Setenv("HOME", dir) in tests redirects reads/writes to a temp dir.
-// ponytail: HOME-based resolution; no AO_DATA_DIR override needed here.
+// registryFile resolves ~/.ao/hosted/windows-pty-hosts.json. Derives from
+// config.DefaultStateDir(), which still reads os.UserHomeDir() under the
+// hood, so t.Setenv("HOME", dir) in tests redirects reads/writes to a temp
+// dir. ponytail: HOME-based resolution; no AO_DATA_DIR override needed here.
 func registryFile() (string, error) {
-	home, err := os.UserHomeDir()
+	stateDir, err := config.DefaultStateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".ao", "windows-pty-hosts.json"), nil
+	return filepath.Join(stateDir, "windows-pty-hosts.json"), nil
 }
 
 // readRaw reads and defensively parses the registry. Missing file or malformed

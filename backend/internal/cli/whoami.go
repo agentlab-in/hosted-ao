@@ -20,7 +20,7 @@ func newWhoamiCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show which AO account this machine is bound to",
-		Long: "ao whoami reads ~/.ao/machine.json and reports the binding `ao vm serve` is\n" +
+		Long: "ao whoami reads ~/.ao/hosted/machine.json and reports the binding `ao vm serve` is\n" +
 			"running with: the machine id an access token's audience has to match, the one\n" +
 			"account allowed to reach this machine, and the public URL it was registered\n" +
 			"under.\n\n" +
@@ -31,7 +31,7 @@ func newWhoamiCommand(ctx *commandContext) *cobra.Command {
 			return ctx.runWhoami(cmd, machineFile)
 		},
 	}
-	cmd.Flags().StringVar(&machineFile, "machine-file", "", "machine.json path (default: AO_MACHINE_FILE, else ~/.ao/machine.json)")
+	cmd.Flags().StringVar(&machineFile, "machine-file", "", "machine.json path (default: AO_MACHINE_FILE, else ~/.ao/hosted/machine.json)")
 	return cmd
 }
 

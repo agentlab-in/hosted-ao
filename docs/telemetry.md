@@ -74,7 +74,7 @@ their invocation frequency off PostHog.
 ## Install ID
 
 On first run, a random install identifier is generated and stored at
-`~/.ao/data/telemetry_install_id` (or `$AO_DATA_DIR/telemetry_install_id`). The
+`~/.ao/hosted/data/telemetry_install_id` (or `$AO_DATA_DIR/telemetry_install_id`). The
 renderer and daemon both use this ID as the PostHog distinct ID so activity is
 deduplicated across app launches and CLI invocations. It is not linked to any
 personal account.

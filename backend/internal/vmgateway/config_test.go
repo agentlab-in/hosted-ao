@@ -277,8 +277,8 @@ func TestReadMachineFile_Malformed(t *testing.T) {
 
 // TestDefaultMachineFilePath_IsHomeNotDataDir pins the asymmetry with CertDir
 // above, which a review read as a bug: AO_DATA_DIR moves durable data, while
-// machine.json is binding identity pinned to ~/.ao and moved only by
-// AO_MACHINE_FILE. `ao setup-vm` writes <home>/.ao/machine.json whatever
+// machine.json is binding identity pinned to the state root and moved only by
+// AO_MACHINE_FILE. `ao setup-vm` writes <home>/.ao/hosted/machine.json whatever
 // AO_DATA_DIR says, so deriving the read path from the data dir would point the
 // gateway at a file nothing ever writes. `ao whoami` resolves through this same
 // function so the two can never drift.
@@ -290,7 +290,7 @@ func TestDefaultMachineFilePath_IsHomeNotDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DefaultMachineFilePath: %v", err)
 	}
-	if want := filepath.Join(home, ".ao", "machine.json"); got != want {
+	if want := filepath.Join(home, ".ao", "hosted", "machine.json"); got != want {
 		t.Fatalf("DefaultMachineFilePath = %q, want %q", got, want)
 	}
 
