@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams } from "
 import { useQueryClient } from "@tanstack/react-query";
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "../components/CommandPalette";
+import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { NotificationRuntime } from "../components/NotificationCenter";
@@ -202,26 +203,25 @@ function ShellLayout() {
 	);
 
 	const createProject = useCallback(
-		async (input: {
-			path: string;
-			workerAgent: string;
-			orchestratorAgent: string;
-			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
-			asWorkspace?: boolean;
-		}) => {
+		async (input: CreateProjectInput) => {
 			void addRendererExceptionStep("Project add requested", {
 				source: "project-add",
 				operation: "project_add",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_add_requested");
+			void captureRendererEvent("ao.renderer.project_add_requested", {
+				source: input.cloneUrl ? "clone_url" : "local_path",
+			});
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				throw new Error(status.message || "AO daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
-					path: input.path,
+					// Exactly one source, never both: the daemon rejects the pair with
+					// PATH_AND_CLONE_URL_CONFLICT, and CreateProjectInput makes the
+					// pair unrepresentable upstream of here.
+					...(input.cloneUrl ? { cloneUrl: input.cloneUrl } : { path: input.path }),
 					asWorkspace: input.asWorkspace || undefined,
 					config: createProjectConfig(input),
 				},

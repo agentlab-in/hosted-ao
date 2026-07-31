@@ -911,6 +911,28 @@ select {
 	}
 }
 
+/* Indeterminate bar for the synchronous clone in the create-project sheet.
+ * The daemon reports no progress (it runs `git clone` to completion and then
+ * answers), so this only says "still working"; the elapsed counter beside it
+ * carries the real signal, which is why reduced motion can drop the travel and
+ * settle for a dimmed full bar. */
+.clone-progress-bar {
+	height: 100%;
+	width: 34%;
+	border-radius: inherit;
+	background: var(--color-accent);
+	animation: clone-progress 1.4s ease-in-out infinite;
+}
+
+@keyframes clone-progress {
+	from {
+		transform: translateX(-110%);
+	}
+	to {
+		transform: translateX(310%);
+	}
+}
+
 /* ── Global resize state (sidebar drag) ─────────────────────────────────── */
 body.is-resizing-x {
 	cursor: col-resize;
@@ -948,6 +970,12 @@ body.is-resizing-x [data-slot="sidebar-container"] {
 	[data-slot="command-dialog-overlay"],
 	[data-slot="command-dialog-content"] {
 		animation: none;
+	}
+
+	.clone-progress-bar {
+		animation: none;
+		width: 100%;
+		opacity: 0.45;
 	}
 }
 

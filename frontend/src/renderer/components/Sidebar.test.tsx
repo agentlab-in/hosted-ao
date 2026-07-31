@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CreateProjectInput } from "./CreateProjectFlow";
 import { Sidebar } from "./Sidebar";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { agentsQueryKey } from "../hooks/useAgentsQuery";
@@ -94,13 +95,6 @@ function sidebarPR(overrides: Partial<WorkspaceSession["prs"][number]> = {}): Wo
 	};
 }
 
-type CreateProjectInput = {
-	path: string;
-	workerAgent: string;
-	orchestratorAgent: string;
-	trackerIntake?: unknown;
-	asWorkspace?: boolean;
-};
 type CreateProjectHandler = (input: CreateProjectInput) => Promise<void>;
 type InitializeProjectHandler = (path: string) => Promise<void>;
 type RemoveProjectHandler = (projectId: string) => Promise<void>;
