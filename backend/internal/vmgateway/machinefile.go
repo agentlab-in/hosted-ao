@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// MachineFile is the shape of ~/.ao/machine.json, written by `ao setup-vm`
+// MachineFile is the shape of ~/.ao/hosted/machine.json, written by `ao setup-vm`
 // once a machine is bound to an account (see the "ao setup-vm" section of
 // docs/superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md).
 // ao setup-vm itself is out of scope here; this type only defines what `ao vm

@@ -474,17 +474,17 @@ func TestBuildSetupPlan_DefaultsUnderAODir(t *testing.T) {
 		"MachineFile": plan.MachineFile,
 		"CertDir":     plan.CertDir,
 	} {
-		if !strings.HasPrefix(got, "/home/ubuntu/.ao") {
-			t.Errorf("%s = %q, want it under /home/ubuntu/.ao: all AO state lives there only", name, got)
+		if !strings.HasPrefix(got, "/home/ubuntu/.ao/hosted") {
+			t.Errorf("%s = %q, want it under /home/ubuntu/.ao/hosted: all AO state lives there only", name, got)
 		}
 	}
-	if plan.DataDir != "/home/ubuntu/.ao/data" {
+	if plan.DataDir != "/home/ubuntu/.ao/hosted/data" {
 		t.Errorf("DataDir = %q", plan.DataDir)
 	}
-	if plan.RunFile != "/home/ubuntu/.ao/running.json" {
+	if plan.RunFile != "/home/ubuntu/.ao/hosted/running.json" {
 		t.Errorf("RunFile = %q", plan.RunFile)
 	}
-	if plan.CertDir != "/home/ubuntu/.ao/data/vm-gateway/certs" {
+	if plan.CertDir != "/home/ubuntu/.ao/hosted/data/vm-gateway/certs" {
 		t.Errorf("CertDir = %q, want vmgateway's own default so the unit is explicit about it", plan.CertDir)
 	}
 	if plan.BinaryPath != "/usr/local/bin/ao" {
@@ -520,8 +520,8 @@ func TestBuildSetupPlan_HonorsAbsoluteOverrides(t *testing.T) {
 	plan, err := buildSetupPlan(setupPlanInput{
 		Domain: "vm.example.com", User: "ubuntu", Home: "/home/ubuntu",
 		DataDir: "/srv/ao/data", RunFile: "/srv/ao/running.json",
-		// The machine file has to stay inside ~/.ao, which the next test covers.
-		MachineFile: "/home/ubuntu/.ao/machines/this-one.json",
+		// The machine file has to stay inside ~/.ao/hosted, which the next test covers.
+		MachineFile: "/home/ubuntu/.ao/hosted/machines/this-one.json",
 	})
 	if err != nil {
 		t.Fatalf("buildSetupPlan err = %v", err)
@@ -529,8 +529,8 @@ func TestBuildSetupPlan_HonorsAbsoluteOverrides(t *testing.T) {
 	if plan.DataDir != "/srv/ao/data" || plan.RunFile != "/srv/ao/running.json" {
 		t.Fatalf("absolute overrides were not honored: %+v", plan)
 	}
-	if plan.MachineFile != "/home/ubuntu/.ao/machines/this-one.json" {
-		t.Fatalf("MachineFile = %q, want the override inside ~/.ao honored", plan.MachineFile)
+	if plan.MachineFile != "/home/ubuntu/.ao/hosted/machines/this-one.json" {
+		t.Fatalf("MachineFile = %q, want the override inside ~/.ao/hosted honored", plan.MachineFile)
 	}
 	if plan.CertDir != "/srv/ao/data/vm-gateway/certs" {
 		t.Errorf("CertDir = %q, want it to follow the overridden data dir", plan.CertDir)
@@ -547,8 +547,8 @@ func TestBuildSetupPlan_RejectsAMachineFileOutsideAODir(t *testing.T) {
 		"/srv/ao/machine.json",
 		"/etc/ao/machine.json",
 		// A prefix match on the string alone would let this one through.
-		"/home/ubuntu/.aoelsewhere/machine.json",
-		"/home/ubuntu/.ao/../machine.json",
+		"/home/ubuntu/.ao/hostedelsewhere/machine.json",
+		"/home/ubuntu/.ao/hosted/../machine.json",
 	} {
 		t.Run(machineFile, func(t *testing.T) {
 			_, err := buildSetupPlan(setupPlanInput{
@@ -563,11 +563,11 @@ func TestBuildSetupPlan_RejectsAMachineFileOutsideAODir(t *testing.T) {
 		})
 	}
 	// The directory itself is fine, and so is a subdirectory of it.
-	for _, machineFile := range []string{"/home/ubuntu/.ao/machine.json", "/home/ubuntu/.ao/sub/machine.json"} {
+	for _, machineFile := range []string{"/home/ubuntu/.ao/hosted/machine.json", "/home/ubuntu/.ao/hosted/sub/machine.json"} {
 		if _, err := buildSetupPlan(setupPlanInput{
 			Domain: "vm.example.com", User: "ubuntu", Home: "/home/ubuntu", MachineFile: machineFile,
 		}); err != nil {
-			t.Errorf("AO_MACHINE_FILE=%q is inside ~/.ao and must be honored: %v", machineFile, err)
+			t.Errorf("AO_MACHINE_FILE=%q is inside ~/.ao/hosted and must be honored: %v", machineFile, err)
 		}
 	}
 }
@@ -625,7 +625,7 @@ func TestSetupDirsAreDeduplicated(t *testing.T) {
 		}
 		seen[dir] = true
 	}
-	for _, want := range []string{"/home/ubuntu/.ao", "/home/ubuntu/.ao/data", "/home/ubuntu/.ao/data/vm-gateway/certs"} {
+	for _, want := range []string{"/home/ubuntu/.ao/hosted", "/home/ubuntu/.ao/hosted/data", "/home/ubuntu/.ao/hosted/data/vm-gateway/certs"} {
 		if !seen[want] {
 			t.Errorf("setupDirs is missing %q: %v", want, dirs)
 		}
@@ -641,9 +641,9 @@ func TestRenderDaemonUnit(t *testing.T) {
 		"User=ubuntu",
 		"Group=ubuntu",
 		// Unquoted, deliberately: see TestSetupUnitsQuoteOnlyTheListSettings.
-		"WorkingDirectory=/home/ubuntu/.ao/data",
-		`Environment="AO_DATA_DIR=/home/ubuntu/.ao/data"`,
-		`Environment="AO_RUN_FILE=/home/ubuntu/.ao/running.json"`,
+		"WorkingDirectory=/home/ubuntu/.ao/hosted/data",
+		`Environment="AO_DATA_DIR=/home/ubuntu/.ao/hosted/data"`,
+		`Environment="AO_RUN_FILE=/home/ubuntu/.ao/hosted/running.json"`,
 		`Environment="HOME=/home/ubuntu"`,
 		"ExecStart=/usr/local/bin/ao daemon",
 		// The daemon supervises live agent sessions, so a deliberate exit is left
@@ -673,11 +673,11 @@ func TestRenderGatewayUnit(t *testing.T) {
 	for _, want := range []string{
 		"User=ubuntu",
 		"Group=ubuntu",
-		"WorkingDirectory=/home/ubuntu/.ao/data",
-		`Environment="AO_DATA_DIR=/home/ubuntu/.ao/data"`,
-		`Environment="AO_MACHINE_FILE=/home/ubuntu/.ao/machine.json"`,
+		"WorkingDirectory=/home/ubuntu/.ao/hosted/data",
+		`Environment="AO_DATA_DIR=/home/ubuntu/.ao/hosted/data"`,
+		`Environment="AO_MACHINE_FILE=/home/ubuntu/.ao/hosted/machine.json"`,
 		`Environment="AO_VM_DOMAIN=vm.example.com"`,
-		`Environment="AO_VM_CERT_DIR=/home/ubuntu/.ao/data/vm-gateway/certs"`,
+		`Environment="AO_VM_CERT_DIR=/home/ubuntu/.ao/hosted/data/vm-gateway/certs"`,
 		"ExecStart=/usr/local/bin/ao vm serve",
 		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
 		"CapabilityBoundingSet=CAP_NET_BIND_SERVICE",
@@ -800,7 +800,7 @@ func TestRenderSetupSummary_Unbound(t *testing.T) {
 		"ao vm setup-harness claude",
 		"gh auth login",
 		"ao doctor",
-		"/home/ubuntu/.ao/machine.json",
+		"/home/ubuntu/.ao/hosted/machine.json",
 		"80 and 443 were not verified from outside",
 		"enabled, not started",
 	} {

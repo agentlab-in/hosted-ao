@@ -126,8 +126,8 @@ func (c Config) Addr() string {
 //	AO_PORT              bind port           (default 3001)
 //	AO_REQUEST_TIMEOUT   per-request timeout (Go duration > 0, default 60s)
 //	AO_SHUTDOWN_TIMEOUT  shutdown deadline   (Go duration > 0, default 10s)
-//	AO_RUN_FILE          running.json path   (default ~/.ao/running.json)
-//	AO_DATA_DIR          durable state dir   (default ~/.ao/data)
+//	AO_RUN_FILE          running.json path   (default ~/.ao/hosted/running.json)
+//	AO_DATA_DIR          durable state dir   (default ~/.ao/hosted/data)
 //	AO_AGENT             compatibility agent id (default claude-code)
 //	AO_APP_RUN_ID        desktop-app launch id, set by the Electron supervisor
 //	                     (default: a fresh id minted per daemon boot)
@@ -311,7 +311,7 @@ func resolveRunFilePath() (string, error) {
 	if p, ok := os.LookupEnv("AO_RUN_FILE"); ok && p != "" {
 		return absOverride("AO_RUN_FILE", p)
 	}
-	stateDir, err := defaultStateDir()
+	stateDir, err := DefaultStateDir()
 	if err != nil {
 		return "", err
 	}
@@ -325,19 +325,49 @@ func resolveDataDir() (string, error) {
 	if p, ok := os.LookupEnv("AO_DATA_DIR"); ok && p != "" {
 		return absOverride("AO_DATA_DIR", p)
 	}
-	stateDir, err := defaultStateDir()
+	stateDir, err := DefaultStateDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(stateDir, "data"), nil
 }
 
-func defaultStateDir() (string, error) {
+// StateRootSubdir is hosted-ao's own subdirectory of ~/.ao.
+//
+// The upstream agent-orchestrator desktop app writes its running.json, its
+// ao.db and its worktrees directly under ~/.ao. Two builds sharing that
+// directory fight over daemon discovery, the pid and the port, and over a
+// SQLite file whose goose history the other build owns and renumbers, which is
+// how a migration of ours ends up skipped at a version number the other build
+// already claimed. Defaulting one level down keeps hosted-ao out of its way.
+//
+// The hard rule is unchanged: state stays under ~/.ao and never lands in an
+// OS-default app-data location.
+const StateRootSubdir = "hosted"
+
+// StateRootSegments are the path segments of the default state root, relative
+// to the user's home directory.
+//
+// Everything that defaults under the state root derives from here (the data
+// dir and therefore the worktrees and repos inside it, running.json,
+// machine.json, the supervisor socket, the Electron userData pin), so the
+// default moves in one place. Returned as segments rather than a joined path
+// because `ao setup-vm` renders Linux paths from any host OS and must not go
+// through filepath.
+//
+// AO_DATA_DIR and AO_RUN_FILE are untouched by this: an explicit override
+// still wins outright and is used verbatim.
+func StateRootSegments() []string { return []string{".ao", StateRootSubdir} }
+
+// DefaultStateDir resolves the default state root under the user's home
+// directory. Exported so callers that must name the same directory (the CLI,
+// the VM gateway) derive it from this one line instead of re-spelling it.
+func DefaultStateDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve state dir: %w", err)
 	}
-	return filepath.Join(homeDir, ".ao"), nil
+	return filepath.Join(append([]string{homeDir}, StateRootSegments()...)...), nil
 }
 
 // absOverride resolves an explicit AO_DATA_DIR/AO_RUN_FILE override to an

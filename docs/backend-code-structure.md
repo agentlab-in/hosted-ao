@@ -701,8 +701,8 @@ graph LR
 - `AO_PORT` — HTTP bind port (default: 3001)
 - `AO_REQUEST_TIMEOUT` — Per-request timeout (default: 60s)
 - `AO_SHUTDOWN_TIMEOUT` — Graceful shutdown cap (default: 10s)
-- `AO_RUN_FILE` — PID/port handshake (default: ~/.ao/running.json)
-- `AO_DATA_DIR` — SQLite data directory (default: ~/.ao/data)
+- `AO_RUN_FILE`: PID/port handshake (default: ~/.ao/hosted/running.json)
+- `AO_DATA_DIR`: SQLite data directory (default: ~/.ao/hosted/data)
 - `AO_AGENT` — Compatibility agent adapter (default: claude-code)
 - `GITHUB_TOKEN` — GitHub authentication
 

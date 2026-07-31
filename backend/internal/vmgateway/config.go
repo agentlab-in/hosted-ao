@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 const (
@@ -53,7 +55,7 @@ type Config struct {
 	JWKSURL string
 	// DaemonAddr is the loopback daemon's host:port, the reverse-proxy target.
 	DaemonAddr string
-	// CertDir is where the ACME certificate cache is stored, under ~/.ao.
+	// CertDir is where the ACME certificate cache is stored, under ~/.ao/hosted.
 	CertDir string
 	// HTTPAddr is the ACME HTTP-01 challenge / redirect listener address.
 	HTTPAddr string
@@ -78,7 +80,7 @@ type Options struct {
 }
 
 // Resolve builds a Config from opts, environment variables, and (for
-// Domain/MachineID/AccountID, when still unset) ~/.ao/machine.json.
+// Domain/MachineID/AccountID, when still unset) ~/.ao/hosted/machine.json.
 // Precedence: explicit flag > environment variable > machine.json > built-in
 // default. dataDir is the resolved AO data directory (config.Config.DataDir)
 // used for the certificate cache when --cert-dir/AO_VM_CERT_DIR is not set.
@@ -91,7 +93,7 @@ type Options struct {
 //	AO_VM_ISSUER        expected token issuer       (default DefaultIssuer)
 //	AO_VM_JWKS_URL      control-plane JWKS URL      (default <issuer>/.well-known/jwks.json)
 //	AO_VM_DAEMON_ADDR   loopback daemon host:port   (default DefaultDaemonAddr)
-//	AO_MACHINE_FILE     machine.json path           (default ~/.ao/machine.json)
+//	AO_MACHINE_FILE     machine.json path           (default ~/.ao/hosted/machine.json)
 //	AO_VM_CERT_DIR      ACME cert cache dir         (default <dataDir>/vm-gateway/certs)
 //	AO_VM_HTTP_ADDR     ACME challenge listener     (default DefaultHTTPAddr)
 //	AO_VM_HTTPS_ADDR    public TLS listener         (default DefaultHTTPSAddr)
@@ -206,28 +208,28 @@ func normalizeDomain(domain, source string) (string, error) {
 }
 
 // DefaultMachineFilePath is where machine.json lives when AO_MACHINE_FILE and
-// --machine-file are both unset: ~/.ao/machine.json, the AO home directory,
+// --machine-file are both unset: ~/.ao/hosted/machine.json, the AO state root,
 // NOT the AO_DATA_DIR-resolved data dir that CertDir above uses.
 //
 // That asymmetry is deliberate, and it is the answer to a review finding that
 // read it as a bug. AO_DATA_DIR moves durable data (the SQLite database, the
 // ACME cert cache). machine.json is this machine's binding identity and sits
-// beside running.json, which has the same shape: pinned to ~/.ao and moved
-// only by its own override (AO_RUN_FILE there, AO_MACHINE_FILE here). Deriving
-// it from the data dir instead would move the file the gateway reads without
-// moving the file `ao setup-vm` writes (setupPlan.MachineFile is
-// <home>/.ao/machine.json regardless of AO_DATA_DIR), so an operator who set
+// beside running.json, which has the same shape: pinned to the state root and
+// moved only by its own override (AO_RUN_FILE there, AO_MACHINE_FILE here).
+// Deriving it from the data dir instead would move the file the gateway reads
+// without moving the file `ao setup-vm` writes (setupPlan.MachineFile is
+// <state root>/machine.json regardless of AO_DATA_DIR), so an operator who set
 // AO_DATA_DIR would get a gateway looking in a place nothing ever writes.
 //
 // It is exported so `ao whoami` resolves the same path from the same line of
 // code: the two must name the same file, or whoami confidently reports a
 // binding the gateway never sees.
 func DefaultMachineFilePath() (string, error) {
-	home, err := os.UserHomeDir()
+	stateDir, err := config.DefaultStateDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve machine file path: %w", err)
 	}
-	return filepath.Join(home, ".ao", "machine.json"), nil
+	return filepath.Join(stateDir, "machine.json"), nil
 }
 
 // firstNonEmpty returns the first non-empty (after trimming) candidate, or ""

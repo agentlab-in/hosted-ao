@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 const (
@@ -143,11 +145,11 @@ func renderManualPath(p setupPlatform, domain string) string {
 	fmt.Fprintf(&b, "  2. Put the ao binary on PATH at an absolute location, for example %s.\n", setupVMBinaryPath)
 	b.WriteString("  3. Run the daemon as your own (non-root) user, with the state directory set\n")
 	b.WriteString("     explicitly to an absolute path:\n")
-	b.WriteString("       AO_DATA_DIR=\"$HOME/.ao/data\" ao daemon\n")
+	b.WriteString("       AO_DATA_DIR=\"$HOME/.ao/hosted/data\" ao daemon\n")
 	b.WriteString("     It listens on 127.0.0.1 only and has no authentication, which is why it must\n")
 	b.WriteString("     never be exposed directly.\n")
 	b.WriteString("  4. Run the gateway as a second, separate process, never the same one:\n")
-	fmt.Fprintf(&b, "       AO_DATA_DIR=\"$HOME/.ao/data\" ao vm serve --domain %s\n", domain)
+	fmt.Fprintf(&b, "       AO_DATA_DIR=\"$HOME/.ao/hosted/data\" ao vm serve --domain %s\n", domain)
 	b.WriteString("     It binds :80 and :443, so it needs both ports free, the privilege to bind\n")
 	b.WriteString("     them, and both reachable from the internet for the Let's Encrypt HTTP-01\n")
 	b.WriteString("     challenge.\n")
@@ -657,7 +659,7 @@ type setupPlan struct {
 	User  string
 	Group string
 	Home  string
-	// AODir is ~/.ao, the only place AO state may live.
+	// AODir is ~/.ao/hosted, the only place AO state may live.
 	AODir string
 	// DataDir, RunFile, MachineFile, and CertDir are all absolute. PR #18 made
 	// the control plane require an absolute DATA_DIR because under systemd a
@@ -712,7 +714,10 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 	if group == "" {
 		group = in.User
 	}
-	aoDir := slashPath(in.Home, ".ao")
+	// aoDir is the state root, derived from config.StateRootSegments() so the
+	// rendered systemd units land in the same place the daemon itself defaults
+	// to (~/.ao/hosted), not the upstream agent-orchestrator's ~/.ao.
+	aoDir := slashPath(append([]string{in.Home}, config.StateRootSegments()...)...)
 	plan := setupPlan{
 		Domain:      in.Domain,
 		User:        in.User,
@@ -748,15 +753,15 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 	}
 	// machine.json is the one file the gateway must be able to read as an
 	// unprivileged user, and the install only creates and chowns directories
-	// inside ~/.ao. An AO_MACHINE_FILE pointing outside it would be written into
-	// a parent this run created as root, mode 0700, which the gateway user cannot
-	// traverse: it would then refuse to start on a machine that had just been
-	// bound successfully.
+	// inside ~/.ao/hosted. An AO_MACHINE_FILE pointing outside it would be
+	// written into a parent this run created as root, mode 0700, which the
+	// gateway user cannot traverse: it would then refuse to start on a machine
+	// that had just been bound successfully.
 	if !insideSetupDir(plan.AODir, plan.MachineFile) {
 		return setupPlan{}, fmt.Errorf(
-			"AO_MACHINE_FILE=%q is outside %s. All AO state lives under ~/.ao, and the gateway runs as "+
+			"AO_MACHINE_FILE=%q is outside %s. All AO state lives under %s, and the gateway runs as "+
 				"%s, so a machine file anywhere else is one it cannot read; unset it or point it inside %s",
-			plan.MachineFile, plan.AODir, plan.User, plan.AODir)
+			plan.MachineFile, plan.AODir, plan.AODir, plan.User, plan.AODir)
 	}
 	// Matches vmgateway's own default so the unit is explicit about a path the
 	// gateway would otherwise derive on its own.
@@ -789,7 +794,7 @@ func isLinuxAbs(p string) bool {
 }
 
 // setupDirs are the directories the install creates, in order, all owned by
-// the target user and none of them outside ~/.ao.
+// the target user and none of them outside ~/.ao/hosted.
 func (p setupPlan) setupDirs() []string {
 	dirs := []string{p.AODir}
 	for _, dir := range []string{p.DataDir, p.CertDir, path.Dir(p.RunFile)} {

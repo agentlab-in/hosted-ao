@@ -28,11 +28,11 @@ var releaseRepo = "AgentWrapper/agent-orchestrator"
 // (spaced, per frontend/forge.config.ts).
 const appBundleName = "Agent Orchestrator.app"
 
-// appStateFileName is the marker the desktop app writes under ~/.ao on every
+// appStateFileName is the marker the desktop app writes under ~/.ao/hosted on every
 // launch (spec §5). `ao start` is a read-only consumer of it.
 const appStateFileName = "app-state.json"
 
-// appState mirrors the app-written ~/.ao/app-state.json marker (spec §5). Only
+// appState mirrors the app-written ~/.ao/hosted/app-state.json marker (spec §5). Only
 // the desktop app writes it; `ao start` reads it as a fast-path hint and never
 // trusts appPath without stat-ing it (invariant 2).
 type appState struct {
@@ -133,7 +133,7 @@ func (c *commandContext) resolveApp() string {
 // tests can point the scan at a temp bundle instead of real system paths.
 var appScanLocations = knownAppLocations
 
-// markerAppPath reads ~/.ao/app-state.json and returns its recorded appPath, or
+// markerAppPath reads ~/.ao/hosted/app-state.json and returns its recorded appPath, or
 // "" if the marker is missing/unreadable. It does not stat the path; callers do.
 func (c *commandContext) markerAppPath() string {
 	dir, err := aoStateDir()
@@ -151,14 +151,14 @@ func (c *commandContext) markerAppPath() string {
 	return st.AppPath
 }
 
-// aoStateDir resolves the canonical ~/.ao home, honoring AO_DATA_DIR exactly as
-// the daemon's config does (the marker lives beside running.json under ~/.ao).
+// aoStateDir resolves the canonical ~/.ao/hosted home, honoring AO_DATA_DIR exactly
+// as the daemon's config does (the marker lives beside running.json under ~/.ao/hosted).
 func aoStateDir() (string, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return "", err
 	}
-	// running.json lives directly under ~/.ao; the marker sits beside it.
+	// running.json lives directly under ~/.ao/hosted; the marker sits beside it.
 	return filepath.Dir(cfg.RunFilePath), nil
 }
 
@@ -249,7 +249,7 @@ func (c *commandContext) fetchApp(ctx context.Context, w io.Writer) (string, err
 }
 
 // fetchAppDarwin downloads the latest macOS release zip and unpacks it into a
-// staging dir under ~/.ao/staging, returning the .app bundle path (spec §6.3).
+// staging dir under ~/.ao/hosted/staging, returning the .app bundle path (spec §6.3).
 func (c *commandContext) fetchAppDarwin(ctx context.Context, w io.Writer) (string, error) {
 	asset, err := assetName()
 	if err != nil {
@@ -344,7 +344,7 @@ func (c *commandContext) fetchAppWindows(ctx context.Context, w io.Writer) (stri
 }
 
 // fetchAppLinux downloads the self-contained AppImage to a stable path under
-// ~/.ao, makes it executable, and returns it. There is no install step (spec
+// ~/.ao/hosted, makes it executable, and returns it. There is no install step (spec
 // §6.3). Re-runs resolve the existing file via knownAppLocations and skip fetch.
 func (c *commandContext) fetchAppLinux(ctx context.Context, w io.Writer) (string, error) {
 	asset, err := assetName()
