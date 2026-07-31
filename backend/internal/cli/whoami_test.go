@@ -98,9 +98,9 @@ func TestResolveMachineFilePathPrecedence(t *testing.T) {
 		t.Errorf("path = %q, want AO_MACHINE_FILE", got)
 	}
 
-	// The default is $HOME/.ao/machine.json, not the AO_DATA_DIR-resolved data
-	// dir, because that is where vmgateway's reader looks. The two have to name
-	// the same file or whoami would report a binding the gateway never sees.
+	// The default is $HOME/.ao/hosted/machine.json, not the AO_DATA_DIR-resolved
+	// data dir, because that is where vmgateway's reader looks. The two have to
+	// name the same file or whoami would report a binding the gateway never sees.
 	t.Setenv("AO_MACHINE_FILE", "")
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -110,7 +110,7 @@ func TestResolveMachineFilePathPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(home, ".ao", "machine.json"); got != want {
+	if want := filepath.Join(home, ".ao", "hosted", "machine.json"); got != want {
 		t.Errorf("default path = %q, want %q", got, want)
 	}
 }

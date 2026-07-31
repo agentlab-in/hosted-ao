@@ -150,7 +150,7 @@ func validateMachineFile(mf vmgateway.MachineFile) error {
 	return nil
 }
 
-// renderMachineFile is the exact bytes of ~/.ao/machine.json.
+// renderMachineFile is the exact bytes of ~/.ao/hosted/machine.json.
 //
 // It marshals vmgateway.MachineFile, the very type `ao vm serve` unmarshals, so
 // the writer and the reader cannot drift: renaming a field there stops this

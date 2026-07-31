@@ -133,8 +133,8 @@ func migrate(db *sql.DB) error {
 	// A goose version recorded by a build with a different migration history
 	// makes goose skip ours at that number forever, so a table never gets
 	// created and a later migration against it dies on a raw SQLite error.
-	// Un-record those before goose reads the history.
-	if err := repairPhantomVersions(db); err != nil {
+	// Catch that before goose starts writing, and say what to do about it.
+	if err := checkForeignHistory(db); err != nil {
 		return err
 	}
 	// Builds can advance a database past a migration that is added or

@@ -40,6 +40,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { type DaemonLaunchSpec, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
+import { STATE_ROOT_SEGMENTS } from "./shared/state-root";
 import type { DaemonStatus } from "./shared/daemon-status";
 import { machineAuthFailedStatus, readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
 import { attachAppShortcuts } from "./main/app-shortcuts";
@@ -95,12 +96,14 @@ if (process.platform === "win32") {
 }
 
 // Pin ALL Electron-owned state (Chromium cache, cookies, local/session storage,
-// crash dumps) under the canonical AO home at ~/.ao instead of Electron's macOS
-// default ~/Library/Application Support/<name>. Keeps the app's entire footprint
-// inside ~/.ao alongside the daemon's data dir and running.json. sessionData and
-// crashDumps derive from userData, so this one override reparents them all.
+// crash dumps) under the canonical hosted-ao state root at ~/.ao/hosted instead
+// of Electron's macOS default ~/Library/Application Support/<name>. Keeps the
+// app's entire footprint alongside the daemon's data dir and running.json, one
+// level down from ~/.ao so it does not collide with the upstream
+// agent-orchestrator app's own state there. sessionData and crashDumps derive
+// from userData, so this one override reparents them all.
 // Must run before app ready.
-app.setPath("userData", path.join(os.homedir(), ".ao", "electron"));
+app.setPath("userData", path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "electron"));
 
 let mainWindow: BrowserWindow | null = null;
 let daemonProcess: ChildProcess | null = null;
@@ -177,7 +180,7 @@ const isDev = !app.isPackaged;
 // on Unix (backend derives it as dir(RunFilePath)/supervise.sock) and the named pipe
 // on Windows (supervisorPipeFromRunFile derives it from the same dir basename).
 const DEV_DAEMON_PORT = 3002;
-const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
+const DEV_STATE_SUBDIR = "dev"; // ~/.ao/hosted/dev/
 
 // Height (px) of the custom Windows title bar. Must stay in sync with the Window
 // Controls Overlay height passed to BrowserWindow and the .window-titlebar height
@@ -405,7 +408,7 @@ const DAEMON_PROBE_TIMEOUT_MS = 2_000;
 
 function runFilePath(): string | null {
 	if (process.env.AO_RUN_FILE) return process.env.AO_RUN_FILE;
-	if (isDev) return path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR, "running.json");
+	if (isDev) return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR, "running.json");
 	return defaultRunFilePath(process.platform, process.env, os.homedir());
 }
 
@@ -511,7 +514,7 @@ function daemonEnv(): NodeJS.ProcessEnv {
 	if (isDev) {
 		if (!process.env.AO_PORT) devExtras.AO_PORT = String(DEV_DAEMON_PORT);
 		if (!process.env.AO_RUN_FILE) devExtras.AO_RUN_FILE = runFilePath() ?? "";
-		if (!process.env.AO_DATA_DIR) devExtras.AO_DATA_DIR = path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR, "data");
+		if (!process.env.AO_DATA_DIR) devExtras.AO_DATA_DIR = path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR, "data");
 	}
 	// Windows keeps the old behavior exactly: no shell probe, no unix PATH floor.
 	if (process.platform === "win32") {
@@ -599,11 +602,25 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
  * headless `ao start` daemons stay unlinked so they remain persistent after
  * app quit.
  */
+// Mirrors backend/internal/daemon/supervisor/listen_windows.go's
+// pipeNameFromRunFile exactly; the two must stay in step or a Windows dev
+// build and the installed app can end up on the same pipe.
+//
+// Windows named pipes are a single global namespace (unlike the run file and
+// the Unix socket, which move with the state root), so the base pipe name
+// itself carries the "hosted" sentinel to stay out of the upstream
+// agent-orchestrator app's pipe. The sentinel is the last segment of
+// STATE_ROOT_SEGMENTS, not re-spelled here, so the two sides cannot drift.
+// ~/.ao/hosted/running.json     -> \\.\pipe\ao-supervise-hosted     (default)
+// ~/.ao/hosted/dev/running.json -> \\.\pipe\ao-supervise-hosted-dev (dev isolation)
+const SUPERVISOR_PIPE_SENTINEL = STATE_ROOT_SEGMENTS[STATE_ROOT_SEGMENTS.length - 1];
+const SUPERVISOR_PIPE_BASE_NAME = "\\\\.\\pipe\\ao-supervise-" + SUPERVISOR_PIPE_SENTINEL;
+
 function supervisorPipeFromRunFile(rfp: string | null): string {
-	if (!rfp) return "\\\\.\\pipe\\ao-supervise";
+	if (!rfp) return SUPERVISOR_PIPE_BASE_NAME;
 	const dir = path.basename(path.dirname(rfp));
-	if (dir === ".ao" || dir === "." || dir === "") return "\\\\.\\pipe\\ao-supervise";
-	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
+	if (dir === SUPERVISOR_PIPE_SENTINEL || dir === "." || dir === "") return SUPERVISOR_PIPE_BASE_NAME;
+	return SUPERVISOR_PIPE_BASE_NAME + "-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
 function establishSupervisorLink(): void {
@@ -886,14 +903,14 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// AO_KEEP_DAEMON: the daemon must survive this app, so it cannot inherit
 	// Electron-owned stdout/stderr pipes — when Electron exits, the pipe read
 	// ends close and the daemon's next stderr log write (SIGPIPE/EPIPE) kills it,
-	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
-	// child so the parent does not wait on it. Port discovery then relies on the
-	// running.json handshake (the log pipe scan is skipped).
+	// defeating the keep-alive. Redirect stdio to ~/.ao/hosted/daemon.log and
+	// unref the child so the parent does not wait on it. Port discovery then
+	// relies on the running.json handshake (the log pipe scan is skipped).
 	const keep = keepDaemonAlive(process.env);
 	let keepDaemonLogFd: number | undefined;
 	let stdio: "pipe" | "ignore" | ["ignore", number, number] = "pipe";
 	if (keep) {
-		const logPath = path.join(os.homedir(), ".ao", "daemon.log");
+		const logPath = path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "daemon.log");
 		try {
 			keepDaemonLogFd = openSync(logPath, "a");
 			stdio = ["ignore", keepDaemonLogFd, keepDaemonLogFd];

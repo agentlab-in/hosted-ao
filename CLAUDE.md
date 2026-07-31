@@ -2,14 +2,22 @@
 
 Read and follow [`AGENTS.md`](AGENTS.md) for repository layout, commands, coding conventions, and hard rules.
 
-## App state lives under `~/.ao` only
+## App state lives under `~/.ao/hosted` only
 
-All app state, the daemon's data dir, `running.json`, worktrees, and the Electron
-supervisor's `userData` (Chromium cache, cookies, local/session storage, crash
-dumps), must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`).
-Never write to or read from `~/Library/Application Support` or any other OS-default
-app-data location. `frontend/src/main.ts` pins Electron's `userData` to
-`~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
+All app state, the daemon's data dir, `running.json`, worktrees, repos,
+`machine.json`, and the Electron supervisor's `userData` (Chromium cache, cookies,
+local/session storage, crash dumps), must resolve under `~/.ao/hosted`
+(overridable via `AO_DATA_DIR`/`AO_RUN_FILE`). Never write to or read from
+`~/Library/Application Support` or any other OS-default app-data location.
+`frontend/src/main.ts` pins Electron's `userData` to `~/.ao/hosted/electron`; do
+not remove that override.
+
+The subdirectory is not decoration. The upstream agent-orchestrator app writes its
+own `running.json` and `ao.db` directly under `~/.ao`, so a bare `~/.ao` default
+makes the two builds fight over daemon discovery, the pid, the port, and a SQLite
+file whose goose migration history the other build owns. Derive the default from
+`config.StateRootSegments()` (Go) or `frontend/src/shared/state-root.ts`
+(main/renderer); never re-spell the path. See the hard rule in `AGENTS.md`.
 
 ## Design System
 

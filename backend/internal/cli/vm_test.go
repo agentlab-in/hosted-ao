@@ -55,7 +55,7 @@ func TestVMServe_StartsAndShutsDownCleanly(t *testing.T) {
 	// Every identity field is supplied by flag, but Resolve still reads
 	// machine.json up front; point it at a guaranteed-missing path so this
 	// test never depends on (or is broken by) whatever happens to exist at
-	// the real $HOME/.ao/machine.json on the machine running it.
+	// the real $HOME/.ao/hosted/machine.json on the machine running it.
 	t.Setenv("AO_MACHINE_FILE", filepath.Join(t.TempDir(), "missing.json"))
 
 	deps := Deps{}.withDefaults()
