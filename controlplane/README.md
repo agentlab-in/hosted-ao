@@ -67,7 +67,33 @@ curl http://127.0.0.1:8080/healthz
 Open `http://127.0.0.1:8080/login` in a browser and sign in with Google to
 exercise the login flow end to end (see `internal/auth/` for the
 authorization-code exchange with PKCE, the `accounts` upsert, and the browser
-session cookie).
+session cookie). Sign-in lands on `/`, the landing page in `internal/home/`,
+which links to the device page. An anonymous `GET /` redirects to `/login`.
+
+## Reachability probe
+
+`ao setup-vm` preflights the VM's public ports with an off-box check: a cloud
+firewall is invisible from inside the box, so confirming 80 and 443 needs a
+host that is not that box. `internal/reachability/` serves it.
+
+```bash
+curl -s 'http://127.0.0.1:8080/api/v1/reachability?host=vm.example.com&ports=80,443'
+# {"ports":{"443":true,"80":true}}
+```
+
+It is a public service that makes an outbound connection to a caller-supplied
+target, so it is an SSRF primitive and is written as one. The hostname is
+resolved first and every resolved address is checked against the private,
+loopback, link-local (including `169.254.169.254`), CGNAT, multicast, and
+IPv6-equivalent ranges; the connection then goes to the address that was
+checked rather than to the name, so a second DNS answer cannot redirect it.
+Only 80 and 443 are ever dialled, the socket is closed without a read, and the
+endpoint is rate limited per client, per target, and globally.
+
+It is unauthenticated: `ao setup-vm` calls it during preflight, before the
+device-code binding gives the VM any credential to present. The rate limits are
+the whole budget. See the package doc in `internal/reachability/` for the
+detail.
 
 ## Device flow and machine registry
 
@@ -118,10 +144,12 @@ id or duplicating the box in the machine list.
 
 ## Control plane API
 
-Every `/api/v1` route takes one credential: an access token whose `aud` is the
-control plane's own origin. A machine-audience token is rejected, and so is a
-refresh token, which is presented only at the token endpoint. See
-`TOKEN_CONTRACT.md`, "The two audiences".
+Every `/api/v1` route that carries a credential takes one: an access token
+whose `aud` is the control plane's own origin. A machine-audience token is
+rejected, and so is a refresh token, which is presented only at the token
+endpoint. See `TOKEN_CONTRACT.md`, "The two audiences". The one route with no
+credential at all is the reachability probe above, which is called before a VM
+has one.
 
 ```bash
 # Exchange a refresh token. The refresh token rotates, so persist the

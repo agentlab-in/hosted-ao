@@ -17,7 +17,9 @@ import (
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/auth"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/config"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/device"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/home"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/keys"
+	"github.com/agentlab-in/hosted-ao/controlplane/internal/reachability"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/server"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/storage/sqlite"
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/tokens"
@@ -74,6 +76,17 @@ func main() {
 		log.Fatalf("init device flow: %v", err)
 	}
 	deviceSvc.Register(mux)
+
+	homeSvc, err := home.NewService(authSvc)
+	if err != nil {
+		log.Fatalf("init landing page: %v", err)
+	}
+	homeSvc.Register(mux)
+
+	// Unauthenticated by necessity: ao setup-vm probes this during preflight,
+	// before the device-code binding gives the VM any credential. See the
+	// package doc for the controls that stand in for authentication.
+	reachability.NewService().Register(mux)
 
 	// LISTEN_ADDR defaults to loopback (127.0.0.1:8080): this service sits
 	// behind Caddy on the same box, which terminates TLS and reverse-proxies
