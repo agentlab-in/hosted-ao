@@ -130,6 +130,13 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	// A goose version recorded by a build with a different migration history
+	// makes goose skip ours at that number forever, so a table never gets
+	// created and a later migration against it dies on a raw SQLite error.
+	// Un-record those before goose reads the history.
+	if err := repairPhantomVersions(db); err != nil {
+		return err
+	}
 	// Builds can advance a database past a migration that is added or
 	// renumbered later (notably across fast-moving Nightly releases). Apply
 	// those embedded migrations instead of permanently wedging daemon startup
