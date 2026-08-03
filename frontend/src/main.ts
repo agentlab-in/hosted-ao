@@ -42,7 +42,7 @@ import { type DaemonLaunchSpec, resolveDaemonLaunch } from "./shared/daemon-laun
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import { STATE_ROOT_SEGMENTS } from "./shared/state-root";
 import type { DaemonStatus } from "./shared/daemon-status";
-import { machineAuthFailedStatus, readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
+import { machineAuthFailedStatus } from "./shared/remote-daemon";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import { KEYBOARD_SHORTCUTS_HELP_CHANNEL } from "./shared/shortcuts";
 import {
@@ -110,29 +110,12 @@ let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
-let remoteDaemonConfigurationFailureStatus: DaemonStatus | null = null;
-const remoteDaemonConfig: RemoteDaemonConfig | null = (() => {
-	try {
-		return readRemoteDaemonConfig(process.env);
-	} catch {
-		remoteDaemonConfigurationFailureStatus = {
-			state: "error",
-			message: "Remote daemon configuration is invalid.",
-			code: "not_configured",
-		};
-		return null;
-	}
-})();
 // The active registered machine's status, or null when this computer is the
 // active machine. Held here rather than read from the machines controller so
 // the lifecycle can be built before the state dir is resolved, and so a remote
 // machine restored at boot is in force before the first startDaemon() call.
 let activeMachineStatus: DaemonStatus | null = null;
-const remoteDaemonLifecycle = createRemoteDaemonLifecycle(
-	remoteDaemonConfig,
-	remoteDaemonConfigurationFailureStatus,
-	() => activeMachineStatus,
-);
+const remoteDaemonLifecycle = createRemoteDaemonLifecycle(() => activeMachineStatus);
 let daemonStatus: DaemonStatus = remoteDaemonLifecycle.currentStatus() ?? { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
@@ -1528,11 +1511,6 @@ function machineTransport(): MachineTransport | null {
  * gateway cookie.
  */
 function applyActiveMachine(machine: AoMachine | null): void {
-	// AO_REMOTE_URL is checked first in the lifecycle and wins outright, so the
-	// renderer is pointed at the env origin no matter what is selected here.
-	// Fetching a machine credential for a gateway nothing will call would be a
-	// pointless token request, and the env hatch keeps behaving exactly as before.
-	if (remoteDaemonConfig) return;
 	const transport = machineTransport();
 	if (transport) {
 		transport.setMachine(machine);
@@ -1679,12 +1657,6 @@ app.whenReady().then(async () => {
 
 	registerRendererProtocol();
 	applyRuntimeAppIcon();
-	if (remoteDaemonConfig) {
-		const remoteStatus = await remoteDaemonLifecycle.installCookie(session.defaultSession.cookies);
-		if (remoteStatus) {
-			setDaemonStatus(remoteStatus);
-		}
-	}
 	// Before the first startDaemon(): a machine chosen in a previous run must be
 	// active by the time anything can start a daemon, or the app would spawn a
 	// local one on behalf of a remote machine. restore() reads the remembered

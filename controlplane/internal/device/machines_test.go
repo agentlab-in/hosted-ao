@@ -75,6 +75,48 @@ func TestListMachines_ScopedToTheTokensAccount(t *testing.T) {
 	}
 }
 
+func TestRevokeMachine_RemovesFromListAndBlocksTokens(t *testing.T) {
+	h := newHarness(t)
+	machineID := h.bindMachine(accountA, testPublicURL, "prod vm")
+	credential := h.controlPlaneToken(accountA)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/machines/"+machineID, nil)
+	req.Header.Set("Authorization", "Bearer "+credential)
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, want 204, body: %s", rec.Code, rec.Body)
+	}
+
+	if listed := h.listMachines(credential); len(listed) != 0 {
+		t.Fatalf("list after revoke: %d machines, want 0", len(listed))
+	}
+	if rec := h.machineTokenRaw(machineID, credential); rec.Code != http.StatusNotFound {
+		t.Fatalf("token after revoke: status = %d, want 404", rec.Code)
+	}
+
+	// Second DELETE is the same not-found as an unknown id.
+	req2 := httptest.NewRequest(http.MethodDelete, "/api/v1/machines/"+machineID, nil)
+	req2.Header.Set("Authorization", "Bearer "+credential)
+	rec2 := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("second DELETE status = %d, want 404", rec2.Code)
+	}
+}
+
+func TestRevokeMachine_RequiresControlPlaneToken(t *testing.T) {
+	h := newHarness(t)
+	machineID := h.bindMachine(accountA, testPublicURL, "prod vm")
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/machines/"+machineID, nil)
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated DELETE status = %d, want 401", rec.Code)
+	}
+}
+
 func TestListMachines_RequiresAControlPlaneAudienceToken(t *testing.T) {
 	h := newHarness(t)
 	machineID := h.bindMachine(accountA, testPublicURL, "prod vm")

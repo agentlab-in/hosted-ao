@@ -67,8 +67,10 @@ curl http://127.0.0.1:8080/healthz
 Open `http://127.0.0.1:8080/login` in a browser and sign in with Google to
 exercise the login flow end to end (see `internal/auth/` for the
 authorization-code exchange with PKCE, the `accounts` upsert, and the browser
-session cookie). Sign-in lands on `/`, the landing page in `internal/home/`,
-which links to the device page. An anonymous `GET /` redirects to `/login`.
+session cookie). Sign-in lands on `/`, the account home page in
+`internal/home/`: it lists machines bound to the account, unbinds them, and
+points at `/device` plus `ao setup-vm` when the list is empty. An anonymous
+`GET /` redirects to `/login`.
 
 ## Reachability probe
 
@@ -218,6 +220,12 @@ curl -s http://127.0.0.1:8080/api/v1/machines -H 'Authorization: Bearer <access 
 curl -s -X POST http://127.0.0.1:8080/api/v1/machines/<machine id>/token \
   -H 'Authorization: Bearer <access token>'
 # {"access_token":"...","token_type":"Bearer","expires_in":900}
+
+# Unbind (revoke) a machine. It drops out of the list and cannot mint tokens.
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
+  http://127.0.0.1:8080/api/v1/machines/<machine id> \
+  -H 'Authorization: Bearer <access token>'
+# 204
 ```
 
 The token that comes back has `aud` = `machines.id` and `sub` = the account

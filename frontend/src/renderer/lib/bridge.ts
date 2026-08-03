@@ -238,9 +238,8 @@ export const aoBridge: AoBridge =
 				previewDaemonStatusListeners.forEach((listener) => listener(status));
 				return browserPreviewMachinesState();
 			},
-			// Browser preview has no main process, so no machine token either. Null
-			// means "send no Authorization header", which is also what the
-			// AO_REMOTE_URL pairing hatch wants.
+			// Browser preview has no main process, so no machine token either.
+			// Null means "send no Authorization header".
 			gatewayToken: async () => null,
 		},
 	} satisfies AoBridge);

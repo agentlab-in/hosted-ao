@@ -1,46 +1,20 @@
-import { REMOTE_PAIRING_COOKIE_NAME, type RemoteDaemonConfig } from "../shared/remote-daemon";
 import type { DaemonStatus } from "../shared/daemon-status";
-
-type CookieStore = {
-	set: (details: Electron.CookiesSetDetails) => Promise<void>;
-};
 
 type SetDaemonStatus = (status: DaemonStatus) => void;
 
-const remoteDaemonCookieFailureStatus = (): DaemonStatus => ({
-	state: "error",
-	message: "Could not configure remote daemon authentication.",
-	code: "not_configured",
-});
-
-export async function installRemoteDaemonCookie(store: CookieStore, config: RemoteDaemonConfig): Promise<void> {
-	await store.set({
-		url: config.baseUrl,
-		name: REMOTE_PAIRING_COOKIE_NAME,
-		value: config.token,
-		path: "/",
-		secure: true,
-		httpOnly: true,
-		sameSite: "no_restriction",
-	});
-}
-
-export function remoteDaemonReadyStatus(config: RemoteDaemonConfig): DaemonStatus {
-	return { state: "ready", baseUrl: config.baseUrl, message: "Connected to remote daemon" };
-}
-
+/**
+ * Daemon lifecycle when remote may mean "an account machine is active".
+ *
+ * Remote is only the registered-machine path: the active machine's status, or
+ * null when this computer is the active machine (local daemon). The old
+ * AO_REMOTE_URL / AO_REMOTE_TOKEN pairing hatch is gone (spec task 15).
+ */
 export function createRemoteDaemonLifecycle(
-	config: RemoteDaemonConfig | null,
-	initialFailureStatus: DaemonStatus | null = null,
 	// The active registered machine's status, or null when this computer is the
-	// active machine. AO_REMOTE_URL is checked first so the env pairing hatch
-	// keeps behaving exactly as it did before machines existed.
+	// active machine.
 	activeMachineStatus: () => DaemonStatus | null = () => null,
 ) {
-	let failureStatus = initialFailureStatus;
-
-	const currentStatus = (): DaemonStatus | null =>
-		failureStatus ?? (config ? remoteDaemonReadyStatus(config) : activeMachineStatus());
+	const currentStatus = (): DaemonStatus | null => activeMachineStatus();
 	const applyRemoteStatus = (setStatus: SetDaemonStatus): DaemonStatus | null => {
 		const status = currentStatus();
 		if (status) setStatus(status);
@@ -49,15 +23,6 @@ export function createRemoteDaemonLifecycle(
 
 	return {
 		currentStatus,
-		async installCookie(store: CookieStore): Promise<DaemonStatus | null> {
-			if (!config || failureStatus) return currentStatus();
-			try {
-				await installRemoteDaemonCookie(store, config);
-			} catch {
-				failureStatus = remoteDaemonCookieFailureStatus();
-			}
-			return currentStatus();
-		},
 		async refresh(localRefresh: () => Promise<DaemonStatus>, setStatus: SetDaemonStatus): Promise<DaemonStatus> {
 			return applyRemoteStatus(setStatus) ?? localRefresh();
 		},

@@ -85,47 +85,66 @@ surface (`npm run sqlc`, `npm run api`).
 
 ## Hosted AO v1: accounts and registered machines
 
-Tracked separately because it lives on `develop`, not `main`, and because it is not
-usable end to end yet. Spec:
+Lives on `develop` (not yet the story on `main`). Spec:
 [`superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md`](superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md).
 Decisions, the PR-per-task table, and the review history:
 [`hosted-ao-v1-build-log.md`](hosted-ao-v1-build-log.md).
+Real-VM verification writeup: [`../hosted-log.md`](../hosted-log.md)
+([#68](https://github.com/agentlab-in/hosted-ao/pull/68)).
 
-**12 of the 15 spec tasks are merged into `develop`** (batches 1 through 4), plus
-`GET /api/v1/doctor` ([#36](https://github.com/agentlab-in/hosted-ao/pull/36)), which was
-added mid-build so the desktop could read remote machine readiness.
+**Tasks 1 through 14 are done.** Batches 1 through 4 plus batch 5 transport and the
+fresh-VM run are on `develop`. Mid-build additions that stayed:
+`GET /api/v1/doctor` ([#36](https://github.com/agentlab-in/hosted-ao/pull/36)),
+`POST /api/v1/machines/{id}/token` ([#50](https://github.com/agentlab-in/hosted-ao/pull/50)),
+desktop OAuth authorize/token ([#62](https://github.com/agentlab-in/hosted-ao/pull/62)),
+reachability probe and post-login landing ([#61](https://github.com/agentlab-in/hosted-ao/pull/61)).
+Verification fixes that closed the two e2e blockers:
+gateway honors `AO_ALLOWED_ORIGINS` ([#66](https://github.com/agentlab-in/hosted-ao/pull/66)),
+remote project create accepts `status.baseUrl`
+([#67](https://github.com/agentlab-in/hosted-ao/pull/67)).
 
-Merged:
+### Shipped on `develop`
 
-- **Control plane** (`controlplane/`): Google login with PKCE, EdDSA signing keys and JWKS,
-  access and refresh token issuance with rotation, the RFC 8628 device flow, the machine
-  registry, and the authenticated `GET /api/v1/machines`.
+- **Control plane** (`controlplane/`, live at `https://ao.agentlab.in`): Google login with
+  PKCE, desktop OAuth authorize/token, EdDSA signing keys and JWKS, access and refresh
+  token issuance with rotation, the RFC 8628 device flow, the machine registry,
+  authenticated `GET /api/v1/machines`, machine-audience token mint at
+  `POST /api/v1/machines/{id}/token`, off-box reachability probe, post-login landing page.
 - **VM gateway** (`ao vm serve`): ACME TLS, JWT verification against the control plane's
   JWKS, machine allowlist, reverse proxy to the loopback daemon, deny-by-default path
-  allowlist, CORS preflight handling.
+  allowlist, CORS preflight handling (including `AO_ALLOWED_ORIGINS`).
 - **CLI**: `ao setup-vm` (Ubuntu preflight, dependency install, systemd units for daemon and
   gateway, device binding, `machine.json`), `ao vm setup-harness claude`, `ao whoami`, and
   `cloneUrl` on `POST /api/v1/projects`.
-- **Desktop**: AO account login through the system browser, the machine list, picker, and
-  switching.
+- **Desktop**: AO account login through the system browser, machine list / picker /
+  switching, authenticated remote transport (Bearer on REST and SSE, JWT-valued
+  `ao_gw_token` cookie for `/mux`, silent refresh), remote project create by Git URL.
+- **State isolation**: hosted desktop and daemon state default under `~/.ao/hosted`
+  ([#60](https://github.com/agentlab-in/hosted-ao/pull/60)) so they never fight the
+  upstream agent-orchestrator install over `~/.ao`.
 
-Still open, in spec order:
+### Verified end to end (2026-07-31)
 
-- **Task 13, desktop authenticated remote transport**
-  ([#48](https://github.com/agentlab-in/hosted-ao/issues/48)): in flight. Bearer tokens on
-  REST and SSE, the JWT-valued `ao_gw_token` cookie for `/mux`, and silent refresh. Its
-  prerequisite, `POST /api/v1/machines/{id}/token`
-  ([#47](https://github.com/agentlab-in/hosted-ao/issues/47)), is in flight alongside it:
-  nothing currently mints a machine-audience token for a desktop install, so the remote
-  transport has no credential to carry. Until both land, picking a machine in the desktop
-  reports a not-ready state on purpose.
-- **Task 14, fresh-VM end-to-end verification and docs**: blocked on hardware. It needs an
-  Ubuntu LTS VM, a DNS A record pointing at it, and a hand-created Google OAuth client. No
-  part of the hosted stack has run on a real VM yet: the gateway has never obtained a
-  certificate, and the device flow has never run against real DNS.
-- **Task 15, retire the env-var pairing path**: gated on task 14 passing. `AO_REMOTE_URL`,
-  `AO_REMOTE_TOKEN`, and the `ao_hosted_pair` shared secret are removed only once accounts
-  are proven end to end, so remote mode is never untestable mid-build.
+On a real user-owned VM (`vm-test.ao.agentlab.in`), from a signed-out desktop:
+
+1. Google sign-in against `https://ao.agentlab.in`
+2. Account machines listed; remote machine selected
+3. Project cloned by Git URL onto the VM over the machine-audience JWT path
+4. Claude harness auth on the VM reported `PASS` via `ao doctor`
+
+Details, operator redeploy notes, and snapshot restore behavior:
+[`../hosted-log.md`](../hosted-log.md).
+
+### Task 15 and account home (done)
+
+- **Env-var pairing path retired.** `AO_REMOTE_URL`, `AO_REMOTE_TOKEN`, and the
+  `ao_hosted_pair` cookie are gone from the desktop. Remote is accounts only.
+  `AO_CONTROL_URL` remains the development hatch (which control plane to trust; never
+  skips authentication). `deploy/hosted/` documents the old Caddy pairing proxy as
+  retired.
+- **Account home on the control plane** (`GET /`): lists machines bound to the signed-in
+  account, unbind via `POST /machines/unbind` (session + same-origin), and empty-state
+  setup copy for `ao setup-vm`. API unbind: `DELETE /api/v1/machines/{id}`.
 
 Three code-review reports covering batches 1 through 4 are preserved in
 [`reviews/`](reviews/), with every finding mapped to the PR that fixed it.

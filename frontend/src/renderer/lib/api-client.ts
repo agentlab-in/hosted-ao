@@ -196,8 +196,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		// its cookie is confined to /mux and the SSE stream, so nothing
 		// state-changing rides an ambient credential (controlplane/TOKEN_CONTRACT.md).
 		// Asked for per request because the main process owns expiry and the silent
-		// refresh; null while AO_REMOTE_URL is the remote hatch, which authenticates
-		// with its own pairing cookie instead, and null in browser preview.
+		// refresh. Null when no machine is selected (local daemon) or in browser preview.
 		const gatewayToken = remote ? await aoBridge.machines.gatewayToken() : null;
 		if (target.href === input.url && credentials === input.credentials && !gatewayToken) {
 			return fetch(input);

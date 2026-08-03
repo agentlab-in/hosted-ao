@@ -38,16 +38,16 @@ func (h *harness) machineToken(machineID, bearer string) machineTokenResponse {
 	return resp
 }
 
-// revokeMachine sets revoked_at on a machine, as a future revoke endpoint will.
+// revokeMachine sets revoked_at on a machine through the public API.
 func (h *harness) revokeMachine(machineID string) {
 	h.t.Helper()
 
-	res, err := h.db.Exec(`UPDATE machines SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`, machineID)
-	if err != nil {
-		h.t.Fatalf("revoke machine: %v", err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		h.t.Fatalf("revoke machine affected %d rows, want 1", n)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/machines/"+machineID, nil)
+	req.Header.Set("Authorization", "Bearer "+h.controlPlaneToken(accountA))
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		h.t.Fatalf("DELETE machine status = %d, want 204, body: %s", rec.Code, rec.Body)
 	}
 }
 

@@ -364,8 +364,8 @@ func (s *Service) poll(ctx context.Context, deviceCode string, now time.Time) (p
 	}
 }
 
-// machine is one row of the list-machines response.
-type machine struct {
+// Machine is one row of the list-machines response and the account home page.
+type Machine struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	PublicURL string     `json:"public_url"`
@@ -373,10 +373,11 @@ type machine struct {
 	LastSeen  *time.Time `json:"last_seen"`
 }
 
-// listMachines returns the account's unrevoked machines, newest first. A
-// revoked machine is omitted rather than flagged: the desktop must not offer
-// it, and nothing in the current UI has a use for its tombstone.
-func (s *Service) listMachines(ctx context.Context, accountID string) ([]machine, error) {
+// ListMachines returns the account's unrevoked machines, newest first. A
+// revoked machine is omitted rather than flagged: the desktop and the account
+// home page must not offer it, and nothing in the current UI has a use for its
+// tombstone.
+func (s *Service) ListMachines(ctx context.Context, accountID string) ([]Machine, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, hostname, created_at, last_seen
 		   FROM machines
@@ -389,10 +390,10 @@ func (s *Service) listMachines(ctx context.Context, accountID string) ([]machine
 
 	// Non-nil so an account with no machines serializes as [] rather than
 	// null, which a JSON client would otherwise have to special-case.
-	out := []machine{}
+	out := []Machine{}
 	for rows.Next() {
 		var (
-			m        machine
+			m        Machine
 			lastSeen sql.NullTime
 		)
 		if err := rows.Scan(&m.ID, &m.Name, &m.PublicURL, &m.CreatedAt, &lastSeen); err != nil {
@@ -408,4 +409,26 @@ func (s *Service) listMachines(ctx context.Context, accountID string) ([]machine
 		return nil, fmt.Errorf("iterate machines: %w", err)
 	}
 	return out, nil
+}
+
+// RevokeMachine sets revoked_at on one of accountID's live machines.
+//
+// A revoked machine no longer appears in the list, cannot mint a machine
+// token, and cannot re-bind under the same machines.id until a new bind
+// inserts a fresh row. Returns false when no live row matched (missing,
+// foreign, or already revoked), without distinguishing those cases.
+func (s *Service) RevokeMachine(ctx context.Context, accountID, machineID string, now time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE machines SET revoked_at = ?
+		  WHERE id = ? AND account_id = ? AND revoked_at IS NULL`,
+		now, machineID, accountID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("revoke machine %q: %w", machineID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("revoke machine %q rows affected: %w", machineID, err)
+	}
+	return n > 0, nil
 }

@@ -107,9 +107,10 @@ func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /device", s.handleSubmitCode)
 	mux.HandleFunc("POST /device/decision", s.handleDecision)
 
-	// The machine registry API the desktop reads.
+	// The machine registry API the desktop and the account home page use.
 	mux.HandleFunc("GET /api/v1/machines", s.handleListMachines)
 	mux.HandleFunc("POST /api/v1/machines/{id}/token", s.handleMachineToken)
+	mux.HandleFunc("DELETE /api/v1/machines/{id}", s.handleRevokeMachine)
 }
 
 // verificationURI is the absolute URL of the enter-code page.
