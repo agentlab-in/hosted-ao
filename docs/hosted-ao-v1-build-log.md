@@ -31,9 +31,9 @@ independent and were built in parallel by separate AO workers.
 | 10. `ao setup-vm`, part two | 4 | [#32](https://github.com/agentlab-in/hosted-ao/pull/32) | [#29](https://github.com/agentlab-in/hosted-ao/issues/29) | merged |
 | 11. `ao vm setup-harness claude` | 4 | [#33](https://github.com/agentlab-in/hosted-ao/pull/33) | [#30](https://github.com/agentlab-in/hosted-ao/issues/30) | merged |
 | 12. Desktop: machine list | 4 | [#35](https://github.com/agentlab-in/hosted-ao/pull/35) | [#31](https://github.com/agentlab-in/hosted-ao/issues/31) | merged |
-| 13. Desktop: authenticated remote transport | 5 | not opened | [#48](https://github.com/agentlab-in/hosted-ao/issues/48) | in flight |
-| 14. Fresh-VM end-to-end verification and docs | 5 | not opened | not filed | blocked on hardware |
-| 15. Retire the env-var pairing path | 5 | not opened | not filed | gated on task 14 |
+| 13. Desktop: authenticated remote transport | 5 | [#54](https://github.com/agentlab-in/hosted-ao/pull/54) | [#48](https://github.com/agentlab-in/hosted-ao/issues/48) | merged |
+| 14. Fresh-VM end-to-end verification and docs | 5 | [#68](https://github.com/agentlab-in/hosted-ao/pull/68) | not filed | done (see `hosted-log.md`) |
+| 15. Retire the env-var pairing path | 5 | (this change) | not filed | done; accounts-only remote + account home fleet page |
 
 Two pieces of work were added mid-build and are not spec tasks:
 

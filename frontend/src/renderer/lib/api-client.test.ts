@@ -57,7 +57,7 @@ describe("apiClient runtime base URL", () => {
 		expect(seen).toEqual([{ url: "http://127.0.0.1:3037/api/v1/projects", credentials: "same-origin" }]);
 	});
 
-	it("rebases remote API calls and includes the pairing cookie", async () => {
+	it("rebases remote API calls with credentials included for the gateway cookie", async () => {
 		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ projects: [] }), {
 				status: 200,
@@ -65,11 +65,11 @@ describe("apiClient runtime base URL", () => {
 			}),
 		);
 
-		setApiBaseUrl("https://api.ao.agentlab.in");
+		setApiBaseUrl("https://vm.example.com");
 		await apiClient.GET("/api/v1/projects");
 
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
-		expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.ao.agentlab.in/api/v1/projects");
+		expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://vm.example.com/api/v1/projects");
 		expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ credentials: "include" });
 	});
 
@@ -91,15 +91,13 @@ describe("apiClient runtime base URL", () => {
 		expect(init).toMatchObject({ credentials: "include" });
 	});
 
-	// AO_REMOTE_URL pairs with its own cookie and has no machine token, and it
-	// keeps working exactly as it did.
 	it("sends no Authorization header when there is no machine token", async () => {
 		gatewayTokenMock.mockResolvedValue(null);
 		const fetchSpy = vi
 			.spyOn(globalThis, "fetch")
 			.mockResolvedValue(new Response(JSON.stringify({ projects: [] }), { status: 200 }));
 
-		setApiBaseUrl("https://api.ao.agentlab.in");
+		setApiBaseUrl("https://vm.example.com");
 		await apiClient.GET("/api/v1/projects");
 
 		expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
@@ -117,9 +115,9 @@ describe("apiClient runtime base URL", () => {
 	});
 
 	it("prefers a ready daemon remote base URL over its loopback port", () => {
-		applyDaemonStatus({ state: "ready", baseUrl: "https://api.ao.agentlab.in", port: 3001 });
+		applyDaemonStatus({ state: "ready", baseUrl: "https://vm.example.com", port: 3001 });
 
-		expect(getApiBaseUrl()).toBe("https://api.ao.agentlab.in");
+		expect(getApiBaseUrl()).toBe("https://vm.example.com");
 	});
 
 	it("rebases POSTs without Request-as-init, preserving method, body, and headers", async () => {
