@@ -930,7 +930,7 @@ func assertNoMachines(t *testing.T, db *sql.DB) {
 
 // listMachines calls the machines API with a bearer token and returns the
 // decoded list.
-func (h *harness) listMachines(bearer string) []machine {
+func (h *harness) listMachines(bearer string) []Machine {
 	h.t.Helper()
 
 	rec := h.listMachinesRaw(bearer)

@@ -83,7 +83,28 @@ func main() {
 	// session rather than standing up a second one.
 	desktopauth.NewService(db, issuer, authSvc).Register(mux)
 
-	homeSvc, err := home.NewService(authSvc)
+	// Account home lists and unbinds machines. Bridged without home importing
+	// device: same registry, browser session instead of bearer tokens.
+	homeSvc, err := home.NewService(authSvc, home.Adapt(
+		func(ctx context.Context, accountID string) ([]home.Machine, error) {
+			ms, err := deviceSvc.ListMachines(ctx, accountID)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]home.Machine, len(ms))
+			for i, m := range ms {
+				out[i] = home.Machine{
+					ID:        m.ID,
+					Name:      m.Name,
+					PublicURL: m.PublicURL,
+					CreatedAt: m.CreatedAt,
+					LastSeen:  m.LastSeen,
+				}
+			}
+			return out, nil
+		},
+		deviceSvc.RevokeMachine,
+	), cfg.PublicOrigin)
 	if err != nil {
 		log.Fatalf("init landing page: %v", err)
 	}

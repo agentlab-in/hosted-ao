@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/agentlab-in/hosted-ao/controlplane/internal/api"
 )
@@ -15,7 +16,7 @@ import (
 // bare array so a later addition (paging, a revoked list) does not have to
 // break the shape.
 type machinesResponse struct {
-	Machines []machine `json:"machines"`
+	Machines []Machine `json:"machines"`
 }
 
 // handleListMachines serves the account's registered machines to the desktop.
@@ -31,7 +32,7 @@ func (s *Service) handleListMachines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	machines, err := s.listMachines(r.Context(), accountID)
+	machines, err := s.ListMachines(r.Context(), accountID)
 	if err != nil {
 		log.Printf("device: list machines: %v", err)
 		api.WriteError(w, http.StatusInternalServerError, "server_error", "could not list machines")
@@ -99,6 +100,32 @@ func (s *Service) handleMachineToken(w http.ResponseWriter, r *http.Request) {
 		TokenType:   "Bearer",
 		ExpiresIn:   int(s.issuer.AccessTokenTTL().Seconds()),
 	})
+}
+
+// handleRevokeMachine unbinds a machine from the calling account.
+//
+// Sets revoked_at; the row stays as a tombstone so history is not rewritten.
+// Same not-found story as the token endpoint for foreign, missing, and already
+// revoked ids.
+func (s *Service) handleRevokeMachine(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := s.apiAuth(r)
+	if !ok {
+		api.Unauthorized(w)
+		return
+	}
+
+	machineID := r.PathValue("id")
+	revoked, err := s.RevokeMachine(r.Context(), accountID, machineID, time.Now().UTC())
+	if err != nil {
+		log.Printf("device: revoke machine: %v", err)
+		api.WriteError(w, http.StatusInternalServerError, "server_error", "could not unbind the machine")
+		return
+	}
+	if !revoked {
+		notFound(w)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // notFound is the answer to a machine id this account may not have a token
