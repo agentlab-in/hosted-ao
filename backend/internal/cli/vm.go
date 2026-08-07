@@ -105,25 +105,29 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 	return srv.Run(ctxSig, cfg.ShutdownTimeout)
 }
 
-// The claude harness is the only one ao vm setup-harness supports in v1. Its
-// login and its readiness probe are two halves of the same `claude auth`
-// surface, so they stay pinned to one another: the harness name and the status
-// probe live in internal/doctor, which owns the claude-auth check, and this
-// command reads the name from there. If a claude release moves one, doctor's
-// claude-auth check and this command break together and visibly, rather than
-// one of them silently reporting the wrong thing.
+// The claude harness is the only one ao vm setup-harness supports in v1. The
+// login uses `claude setup-token` (paste a long-lived token created in the
+// Anthropic console) rather than the browser OAuth flow, because that fits the
+// remote-VM case: no assumption that the VM has a browser, and the operator's
+// already SSHed in to run this. The readiness probe is a separate `claude`
+// subcommand that reads the same credential storage `setup-token` writes to;
+// both live in internal/doctor (claude-auth check), and this command reads the
+// harness name from there. If a claude release moves either, doctor's
+// claude-auth check and this command break together and visibly.
 const claudeHarnessName = doctor.ClaudeHarnessName
 
-var claudeLoginArgs = []string{"auth", "login"}
+var claudeLoginArgs = []string{"setup-token"}
 
 func newVMSetupHarnessCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup-harness " + claudeHarnessName,
 		Short: "Log in to an agent harness on this machine, in the foreground",
 		Long: "ao vm setup-harness runs the harness's own interactive login and hands the\n" +
-			"terminal over to it. The harness prints a URL and then waits for a code to be\n" +
-			"pasted back, so the exchange cannot be scripted or run in the background: run\n" +
-			"this on a real terminal (an SSH session into the VM is fine).\n\n" +
+			"terminal over to it. The harness waits for a long-lived token to be pasted\n" +
+			"back. Create one by running `claude setup-token` on a machine where you are\n" +
+			"already signed in to Claude, or on https://ao.agentlab.in, then copy the\n" +
+			"displayed token here. Because the exchange waits on a paste it cannot be\n" +
+			"scripted, so run this on a real terminal (an SSH session into the VM is fine).\n\n" +
 			"Only the claude harness is supported. `ao doctor` then reports whether the\n" +
 			"harness is signed in as its claude-auth check, which is what the desktop app\n" +
 			"reads for a machine's harness readiness.\n\n" +
@@ -150,8 +154,8 @@ func (c *commandContext) runVMSetupHarness(cmd *cobra.Command, harness string) e
 	out := cmd.OutOrStdout()
 	login := strings.Join(claudeLoginArgs, " ")
 	if _, err := fmt.Fprintf(out, "Handing the terminal to `%s %s`.\n"+
-		"It prints a URL and then waits for a code to be pasted back, so finish the\n"+
-		"login here rather than trying to script it.\n\n", path, login); err != nil {
+		"It prints a URL to create a long-lived token and then waits for the token to\n"+
+		"be pasted back, so finish the login here rather than trying to script it.\n\n", path, login); err != nil {
 		return err
 	}
 

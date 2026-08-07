@@ -121,8 +121,8 @@ func TestVMSetupHarnessRunsClaudeLoginInForeground(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ao vm setup-harness claude: %v", err)
 	}
-	if len(calls) != 1 || strings.Join(calls[0], " ") != "/bin/claude auth login" {
-		t.Fatalf("interactive calls = %v, want one `/bin/claude auth login`", calls)
+	if len(calls) != 1 || strings.Join(calls[0], " ") != "/bin/claude setup-token" {
+		t.Fatalf("interactive calls = %v, want one `/bin/claude setup-token`", calls)
 	}
 	if !strings.Contains(stdout, "ao doctor") {
 		t.Errorf("stdout = %q, want it to point at ao doctor for readiness", stdout)
