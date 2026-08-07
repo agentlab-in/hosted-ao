@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your machines - AO</title>
+  {{/*
+    Inline styling, kept in step with internal/auth/templates/signin.html and
+    internal/device/templates/device_style.html so sign-in, this page, and
+    approval look like one service. Inline rather than a served stylesheet:
+    the control plane has no static file route.
+  */}}
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b0d12;
+      color: #e6e8eb;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 2rem 1rem;
+      box-sizing: border-box;
+    }
+    .card {
+      background: #151821;
+      border: 1px solid #262b36;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 520px;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 0.5rem;
+    }
+    p.hint {
+      color: #9aa4b2;
+      font-size: 0.875rem;
+      margin: 0 0 1.25rem;
+      line-height: 1.45;
+    }
+    p.hint:last-child {
+      margin-bottom: 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-all;
+      font-size: 0.8em;
+    }
+    .flash {
+      background: #13251a;
+      border: 1px solid #1f6f3a;
+      color: #9ae6b4;
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.875rem;
+      margin: 0 0 1rem;
+    }
+    .error {
+      background: #2a1515;
+      border: 1px solid #7f1d1d;
+      color: #fca5a5;
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.875rem;
+      margin: 0 0 1rem;
+    }
+    .machines {
+      list-style: none;
+      margin: 0 0 1.25rem;
+      padding: 0;
+    }
+    .machine {
+      border: 1px solid #262b36;
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      margin: 0 0 0.65rem;
+      text-align: left;
+    }
+    .machine:last-child {
+      margin-bottom: 0;
+    }
+    .machine-name {
+      font-weight: 600;
+      margin: 0 0 0.25rem;
+      font-size: 0.95rem;
+    }
+    .machine-meta {
+      color: #9aa4b2;
+      font-size: 0.8rem;
+      margin: 0 0 0.75rem;
+      line-height: 1.4;
+    }
+    .machine-meta code {
+      color: #c5cbd3;
+    }
+    .button {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      background: #3b82f6;
+      border: 1px solid #3b82f6;
+      color: #fff;
+      text-decoration: none;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+    }
+    .button:hover {
+      background: #2563eb;
+      border-color: #2563eb;
+    }
+    .button.secondary {
+      background: transparent;
+      border-color: #262b36;
+      color: #9aa4b2;
+      margin-top: 0.65rem;
+    }
+    .button.secondary:hover {
+      border-color: #3b4252;
+      color: #e6e8eb;
+    }
+    .button.danger {
+      background: transparent;
+      border-color: #7f1d1d;
+      color: #fca5a5;
+      font-size: 0.85rem;
+      padding: 0.45rem 0.75rem;
+      width: auto;
+      display: inline-block;
+    }
+    .button.danger:hover {
+      background: #2a1515;
+      border-color: #991b1b;
+      color: #fecaca;
+    }
+    .empty {
+      border: 1px dashed #262b36;
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin: 0 0 1.25rem;
+      text-align: left;
+    }
+    .empty p {
+      margin: 0 0 0.75rem;
+      color: #9aa4b2;
+      font-size: 0.875rem;
+      line-height: 1.45;
+    }
+    .empty p:last-child {
+      margin-bottom: 0;
+    }
+    .empty ol {
+      margin: 0.5rem 0 0;
+      padding-left: 1.2rem;
+      color: #9aa4b2;
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Your machines</h1>
+    <p class="hint">VMs bound to this AO account. The desktop app lists the same set; pick one there to run agents on it.</p>
+
+    {{if .Flash}}
+    <p class="flash">Machine unbound. It will no longer accept tokens for this account.</p>
+    {{end}}
+    {{if .Error}}
+    <p class="error">{{.Error}}</p>
+    {{end}}
+
+    {{if .Machines}}
+    <ul class="machines">
+      {{range .Machines}}
+      <li class="machine">
+        <p class="machine-name">{{.Name}}</p>
+        <p class="machine-meta">
+          <code>{{.PublicURL}}</code><br>
+          Bound {{formatTime .CreatedAt}} · Last seen {{formatSeen .LastSeen}}
+        </p>
+        <form method="post" action="/machines/unbind" onsubmit="return confirm('Unbind {{.Name}}? The desktop will stop being able to reach it until you run setup-vm again.');">
+          <input type="hidden" name="machine_id" value="{{.ID}}">
+          <button type="submit" class="button danger">Unbind</button>
+        </form>
+      </li>
+      {{end}}
+    </ul>
+    {{else}}
+    <div class="empty">
+      <p><strong style="color:#e6e8eb">No machines yet.</strong></p>
+      <p>On an Ubuntu LTS VM with a public DNS name pointed at it:</p>
+      <ol>
+        <li>Open ports <code>80</code> and <code>443</code> on the cloud firewall and host firewall.</li>
+        <li>Run <code>sudo ao setup-vm --domain your.domain</code>.</li>
+        <li>Open the link it prints (or enter the code on <a href="/device" style="color:#93c5fd">/device</a>) while signed in here.</li>
+        <li>Sign the harness in as the <em>daemon</em> Unix user, then check with <code>ao doctor</code>.</li>
+      </ol>
+      <p>After bind, open the AO desktop, sign in, and pick the machine.</p>
+    </div>
+    {{end}}
+
+    <a class="button" href="/device">Connect a machine</a>
+    {{if .Machines}}
+    <p class="hint" style="margin-top:1.25rem">New box? Run <code>sudo ao setup-vm --domain your.domain</code>, then enter the code via Connect a machine.</p>
+    {{end}}
+  </div>
+</body>
+</html>

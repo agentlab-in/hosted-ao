@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect a machine - AO</title>
+  {{template "device_style.html"}}
+</head>
+<body>
+  <div class="card">
+    <h1>Connect a machine</h1>
+    <p class="hint">Enter the code shown by <code>ao setup-vm</code> on your VM.</p>
+    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+    <form method="post" action="/device">
+      <input
+        class="code"
+        type="text"
+        name="user_code"
+        value="{{.UserCode}}"
+        placeholder="WDJB-MJHT"
+        autocomplete="off"
+        autocapitalize="characters"
+        autocorrect="off"
+        spellcheck="false"
+        autofocus>
+      <button class="button" type="submit">Continue</button>
+    </form>
+  </div>
+</body>
+</html>

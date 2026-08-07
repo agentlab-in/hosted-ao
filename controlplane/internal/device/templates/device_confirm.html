@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Approve this machine - AO</title>
+  {{template "device_style.html"}}
+</head>
+<body>
+  <div class="card">
+    <h1>Approve this machine?</h1>
+    <p class="hint">
+      Approving binds this machine to your account. Only do this if you
+      started it yourself.
+    </p>
+    <dl class="details">
+      <dt>Name</dt><dd>{{.MachineName}}</dd>
+      <dt>Address</dt><dd>{{.PublicURL}}</dd>
+      <dt>Code</dt><dd class="mono">{{.UserCode}}</dd>
+    </dl>
+    <p class="hint">This request expires in {{.ExpiresIn}}.</p>
+    <form method="post" action="/device/decision">
+      <input type="hidden" name="user_code" value="{{.UserCode}}">
+      <button class="button" type="submit" name="action" value="approve">Approve</button>
+      <button class="button secondary" type="submit" name="action" value="deny">Deny</button>
+    </form>
+  </div>
+</body>
+</html>
