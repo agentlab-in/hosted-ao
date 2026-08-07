@@ -5,7 +5,9 @@ export type DaemonStatus = Awaited<ReturnType<typeof aoBridge.daemon.getStatus>>
 
 export function applyDaemonStatus(nextStatus: DaemonStatus): void {
 	setApiDaemonStatus(nextStatus);
-	if (nextStatus.state === "ready" && nextStatus.port) {
+	if (nextStatus.state === "ready" && nextStatus.baseUrl) {
+		setApiBaseUrl(nextStatus.baseUrl);
+	} else if (nextStatus.state === "ready" && nextStatus.port) {
 		setApiBaseUrl(`http://127.0.0.1:${nextStatus.port}`);
 	} else {
 		setApiBaseUrl(null);

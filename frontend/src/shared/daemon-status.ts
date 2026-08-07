@@ -18,6 +18,8 @@ export type DaemonFailureCode =
 export type DaemonStatus = {
 	state: "starting" | "ready" | "stopped" | "error";
 	port?: number;
+	// Non-secret HTTPS origin used only for an externally hosted daemon.
+	baseUrl?: string;
 	pid?: number;
 	executablePath?: string;
 	workingDirectory?: string;

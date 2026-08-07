@@ -23,6 +23,7 @@ func TestCORS(t *testing.T) {
 		headers    map[string]string
 		wantStatus int
 		wantACAO   string
+		wantACAC   string
 	}{
 		{
 			name:       "allowed origin gets ACAO",
@@ -30,6 +31,7 @@ func TestCORS(t *testing.T) {
 			headers:    map[string]string{"Origin": "app://renderer"},
 			wantStatus: http.StatusOK,
 			wantACAO:   "app://renderer",
+			wantACAC:   "true",
 		},
 		{
 			// Not in the allowlist — trusted because loopback-served content
@@ -40,6 +42,7 @@ func TestCORS(t *testing.T) {
 			headers:    map[string]string{"Origin": "http://localhost:5181"},
 			wantStatus: http.StatusOK,
 			wantACAO:   "http://localhost:5181",
+			wantACAC:   "true",
 		},
 		{
 			name:       "loopback IP origin allowed",
@@ -47,6 +50,7 @@ func TestCORS(t *testing.T) {
 			headers:    map[string]string{"Origin": "http://127.0.0.1:8080"},
 			wantStatus: http.StatusOK,
 			wantACAO:   "http://127.0.0.1:8080",
+			wantACAC:   "true",
 		},
 		{
 			name:       "isolated localhost preview origin allowed",
@@ -54,6 +58,7 @@ func TestCORS(t *testing.T) {
 			headers:    map[string]string{"Origin": "http://ao-preview.mfxs2mi.localhost:5181"},
 			wantStatus: http.StatusOK,
 			wantACAO:   "http://ao-preview.mfxs2mi.localhost:5181",
+			wantACAC:   "true",
 		},
 		{
 			// localhost in the host position of a non-loopback origin must not
@@ -105,6 +110,7 @@ func TestCORS(t *testing.T) {
 			},
 			wantStatus: http.StatusNoContent,
 			wantACAO:   "app://renderer",
+			wantACAC:   "true",
 		},
 		{
 			name:   "preflight from unknown origin is rejected",
@@ -139,6 +145,9 @@ func TestCORS(t *testing.T) {
 			}
 			if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tt.wantACAO {
 				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, tt.wantACAO)
+			}
+			if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != tt.wantACAC {
+				t.Errorf("Access-Control-Allow-Credentials = %q, want %q", got, tt.wantACAC)
 			}
 			if tt.headers["Origin"] != "" && resp.Header.Get("Vary") == "" {
 				t.Error("Vary header missing for request with Origin")
@@ -175,6 +184,7 @@ func TestCORSPreflightHeaders(t *testing.T) {
 	}
 	for header, want := range map[string]string{
 		"Access-Control-Allow-Origin":          "app://renderer",
+		"Access-Control-Allow-Credentials":     "true",
 		"Access-Control-Allow-Methods":         "GET, POST, PATCH, PUT, DELETE, OPTIONS",
 		"Access-Control-Allow-Headers":         "content-type",
 		"Access-Control-Max-Age":               "600",

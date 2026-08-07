@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
 import { aoBridge } from "./bridge";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
@@ -81,7 +82,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				source = undefined;
 				sourceBaseUrl = baseUrl;
 				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events`);
+					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events`, {
+						withCredentials: isRemoteDaemonBaseUrl(baseUrl),
+					});
 					source.onopen = () => {
 						setEventsConnectionState("connected");
 						// Events emitted during the gap were lost; refetch once on (re)open.

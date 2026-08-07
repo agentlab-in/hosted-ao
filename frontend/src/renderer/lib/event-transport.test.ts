@@ -40,7 +40,7 @@ class EventSourceStub {
 	onerror: (() => void) | null = null;
 	onmessage: (() => void) | null = null;
 	listeners: string[] = [];
-	constructor(url: string) {
+	constructor(url: string, readonly options?: EventSourceInit) {
 		this.url = url;
 		EventSourceStub.instances.push(this);
 	}
@@ -79,9 +79,21 @@ describe("createEventTransport", () => {
 
 		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(EventSourceStub.instances[0].url).toBe("http://127.0.0.1:3001/api/v1/events");
+		expect(EventSourceStub.instances[0].options).toEqual({ withCredentials: false });
 		// All CDC event types plus onmessage are wired up.
 		expect(EventSourceStub.instances[0].listeners).toContain("session_updated");
 		expect(EventSourceStub.instances[0].onmessage).toBeTypeOf("function");
+	});
+
+	it("opens the remote CDC stream with credentials", () => {
+		getApiBaseUrlMock.mockReturnValue("https://api.ao.agentlab.in");
+
+		createEventTransport(fakeQueryClient()).connect();
+
+		expect(EventSourceStub.instances[0]).toMatchObject({
+			url: "https://api.ao.agentlab.in/api/v1/events",
+			options: { withCredentials: true },
+		});
 	});
 
 	it("does not reconnect when a daemon status keeps the same base URL", () => {

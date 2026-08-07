@@ -9,6 +9,7 @@ import {
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
 } from "./api-client";
+import { applyDaemonStatus } from "./daemon-status";
 import { captureRendererEvent } from "./telemetry";
 
 vi.mock("./telemetry", () => ({
@@ -25,9 +26,12 @@ describe("apiClient runtime base URL", () => {
 	});
 
 	it("rewrites requests to the current runtime daemon port", async () => {
-		const seenUrls: string[] = [];
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
-			seenUrls.push(input instanceof Request ? input.url : input.toString());
+		const seen: { url: string; credentials?: RequestCredentials }[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+			seen.push({
+				url: input instanceof Request ? input.url : input.toString(),
+				credentials: init?.credentials,
+			});
 			return new Response(JSON.stringify({ projects: [] }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
@@ -40,7 +44,29 @@ describe("apiClient runtime base URL", () => {
 
 		expect(error).toBeUndefined();
 		expect(getApiBaseUrl()).toBe("http://127.0.0.1:3037");
-		expect(seenUrls).toEqual(["http://127.0.0.1:3037/api/v1/projects"]);
+		expect(seen).toEqual([{ url: "http://127.0.0.1:3037/api/v1/projects", credentials: "same-origin" }]);
+	});
+
+	it("rebases remote API calls and includes the pairing cookie", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ projects: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+
+		setApiBaseUrl("https://api.ao.agentlab.in");
+		await apiClient.GET("/api/v1/projects");
+
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("https://api.ao.agentlab.in/api/v1/projects");
+		expect(fetchSpy.mock.calls[0]?.[1]).toMatchObject({ credentials: "include" });
+	});
+
+	it("prefers a ready daemon remote base URL over its loopback port", () => {
+		applyDaemonStatus({ state: "ready", baseUrl: "https://api.ao.agentlab.in", port: 3001 });
+
+		expect(getApiBaseUrl()).toBe("https://api.ao.agentlab.in");
 	});
 
 	it("rebases POSTs without Request-as-init, preserving method, body, and headers", async () => {

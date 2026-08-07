@@ -10,6 +10,7 @@ import {
 	nativeImage,
 	Notification as ElectronNotification,
 	protocol,
+	session,
 	shell,
 	WebContentsView,
 	webContents,
@@ -39,6 +40,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { readRemoteDaemonConfig, type RemoteDaemonConfig } from "./shared/remote-daemon";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import { KEYBOARD_SHORTCUTS_HELP_CHANNEL } from "./shared/shortcuts";
 import {
@@ -58,6 +60,7 @@ import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
+import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -99,7 +102,21 @@ let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
-let daemonStatus: DaemonStatus = { state: "stopped" };
+let remoteDaemonConfigurationFailureStatus: DaemonStatus | null = null;
+const remoteDaemonConfig: RemoteDaemonConfig | null = (() => {
+	try {
+		return readRemoteDaemonConfig(process.env);
+	} catch {
+		remoteDaemonConfigurationFailureStatus = {
+			state: "error",
+			message: "Remote daemon configuration is invalid.",
+			code: "not_configured",
+		};
+		return null;
+	}
+})();
+const remoteDaemonLifecycle = createRemoteDaemonLifecycle(remoteDaemonConfig, remoteDaemonConfigurationFailureStatus);
+let daemonStatus: DaemonStatus = remoteDaemonLifecycle.currentStatus() ?? { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 // Held for the app lifetime. Dropping it (on any exit) triggers daemon self-stop.
@@ -617,6 +634,10 @@ async function inspectExistingDaemon(
 }
 
 async function refreshDaemonStatus(): Promise<DaemonStatus> {
+	return remoteDaemonLifecycle.refresh(refreshLocalDaemonStatus, setDaemonStatus);
+}
+
+async function refreshLocalDaemonStatus(): Promise<DaemonStatus> {
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -646,6 +667,10 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 }
 
 async function startDaemon(): Promise<DaemonStatus> {
+	return remoteDaemonLifecycle.start(startLocalDaemon, setDaemonStatus);
+}
+
+async function startLocalDaemon(): Promise<DaemonStatus> {
 	if (daemonStartPromise) {
 		return daemonStartPromise;
 	}
@@ -1051,6 +1076,10 @@ function killDaemon(child: ChildProcess): void {
 }
 
 function stopDaemon(): DaemonStatus {
+	return remoteDaemonLifecycle.stop(stopLocalDaemon, setDaemonStatus);
+}
+
+function stopLocalDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	if (!daemonProcess) {
@@ -1505,6 +1534,12 @@ app.whenReady().then(async () => {
 
 	registerRendererProtocol();
 	applyRuntimeAppIcon();
+	if (remoteDaemonConfig) {
+		const remoteStatus = await remoteDaemonLifecycle.installCookie(session.defaultSession.cookies);
+		if (remoteStatus) {
+			setDaemonStatus(remoteStatus);
+		}
+	}
 	createWindow();
 	void startDaemon();
 	initAutoUpdates();

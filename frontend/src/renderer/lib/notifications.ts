@@ -1,5 +1,6 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
 import { aoBridge } from "./bridge";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 
@@ -201,7 +202,9 @@ export function createNotificationsTransport(queryClient: QueryClient) {
 				source = undefined;
 				sourceBaseUrl = baseUrl;
 				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/notifications/stream`);
+					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/notifications/stream`, {
+						withCredentials: isRemoteDaemonBaseUrl(baseUrl),
+					});
 					source.onopen = invalidateNotifications;
 					source.onerror = () => {
 						if (source?.readyState === EVENTSOURCE_CLOSED) scheduleRetry();
