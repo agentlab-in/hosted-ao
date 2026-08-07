@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Mail } from "lucide-react";
 import { ConnectMobileModal } from "./ConnectMobileModal";
 import { AccountSection } from "./settings/AccountSection";
+import { CloudSection } from "./settings/CloudSection";
 import { DeveloperModeSection } from "./settings/DeveloperModeSection";
 import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
 import { MachinesSection } from "./settings/MachinesSection";
@@ -25,6 +26,7 @@ export function GlobalSettingsForm() {
 					<GeneralSettingsSection onConnectMobile={() => setMobileOpen(true)} />
 					<AccountSection />
 					<MachinesSection />
+					<CloudSection />
 					<UpdatesSection />
 					<DeveloperModeSection />
 					<SettingsSection title="Get help">

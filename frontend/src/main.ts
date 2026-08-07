@@ -62,6 +62,7 @@ import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { createAoAccountController } from "./main/ao-account";
 import { createAoMachinesController } from "./main/ao-machines";
+import { createPeerWorkspacesController } from "./main/peer-workspaces";
 import type { AoMachine } from "./shared/ao-machines";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
@@ -1448,6 +1449,12 @@ ipcMain.handle("aoAccount:signOut", async () => {
 	return state;
 });
 
+// "This Mac" on macOS, per the spec. The other platforms get a label that is
+// not wrong for them. Shared by the machines controller and the peer
+// workspaces controller so the local machine's display name cannot drift
+// between the two.
+const LOCAL_MACHINE_NAME = process.platform === "darwin" ? "This Mac" : "This computer";
+
 // The machine list and which machine is active. This computer is machine zero
 // and is always offered; everything below is only about reaching a machine the
 // account has registered.
@@ -1459,12 +1466,35 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
 		stateDir: runFile ? path.dirname(runFile) : null,
 		env: process.env,
 		safeStorage,
-		// "This Mac" on macOS, per the spec. The other platforms get a label that
-		// is not wrong for them.
-		localMachineName: process.platform === "darwin" ? "This Mac" : "This computer",
+		localMachineName: LOCAL_MACHINE_NAME,
 		onActiveChange: applyActiveMachine,
 	});
 	return aoMachinesController;
+}
+
+// Read-only view of the daemon that is NOT the app's active one (the
+// "peer"), so the UI can list its projects and sessions alongside the active
+// one's. Fully independent of machineTransport(): a peer never opens /mux or
+// the SSE stream, so it needs no cookie and must never touch the one
+// target/one token machinery in machine-transport.ts.
+let peerWorkspacesController: ReturnType<typeof createPeerWorkspacesController> | null = null;
+function peerWorkspaces(): ReturnType<typeof createPeerWorkspacesController> {
+	if (peerWorkspacesController) return peerWorkspacesController;
+	peerWorkspacesController = createPeerWorkspacesController({
+		getMachinesState: () => aoMachines().getState(),
+		credential: () => aoMachines().credential(),
+		localMachineName: LOCAL_MACHINE_NAME,
+		readLocalRunFile: async () => {
+			const rfp = runFilePath();
+			if (!rfp) return null;
+			try {
+				return await readFile(rfp, "utf8");
+			} catch {
+				return null;
+			}
+		},
+	});
+	return peerWorkspacesController;
 }
 
 // The authenticated transport to the active machine's gateway: the Bearer token
@@ -1528,6 +1558,7 @@ ipcMain.handle("aoMachines:select", (_event, machineId: string) => aoMachines().
 // Read from the already-built transport rather than machineTransport(), so a
 // local-only install never constructs one just to be told there is no token.
 ipcMain.handle("aoMachines:gatewayToken", () => machineTransportInstance?.token() ?? null);
+ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
 ipcMain.handle("updates:check", async (_event, options?: UpdateCheckOptions) => {

@@ -36,6 +36,7 @@ import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { NotificationCenter } from "./NotificationCenter";
+import { CloudLocalSections } from "./PeerSessionsSection";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { OrchestratorIcon } from "./icons";
 import { AgentAvatar } from "./AgentAvatar";
@@ -103,6 +104,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const cloudEnabled = useUiStore((state) => state.cloudEnabled);
 	const isProjectRestarting = projectId ? restartingProjectIds.has(projectId) : false;
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
 	const visibleSpawnError = spawnError ?? orchestratorStartupError;
@@ -282,12 +284,49 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		<NotificationCenter />
 	) : undefined;
 
+	// Extracted so the Cloud toggle can wrap it in a LOCAL section without
+	// touching how the active daemon's own board renders.
+	const boardBody = workspaceQuery.isError ? (
+		<p className="py-10 text-center text-xs text-passive">Could not load sessions.</p>
+	) : showWelcome ? (
+		<BoardWelcome />
+	) : showProjectEmpty ? (
+		<ProjectBoardEmpty
+			hasOrchestrator={orchestrator !== undefined}
+			isSpawning={isSpawning}
+			isProjectRestarting={isProjectRestarting}
+			onNewTask={() => projectId && requestNewTask(projectId)}
+			onOpenOrchestrator={() => void openOrchestrator()}
+			spawnError={visibleSpawnError}
+		/>
+	) : (
+		<div className="h-full overflow-hidden">
+			{/* The 4 zone columns share the width and shrink to fit: no
+			    horizontal scroll on a narrow window (each column is min-w-0,
+			    cards truncate/wrap). */}
+			<div className="grid h-full grid-cols-4 gap-2">
+				{COLUMNS.map((col) => (
+					<BoardColumn
+						key={`${projectId ?? "all"}:${col.zone}`}
+						col={col}
+						sessions={byZone.get(col.zone) ?? []}
+						onOpen={openSession}
+						onTerminate={(session) => {
+							terminateSession.reset();
+							setTerminationSession(session);
+						}}
+					/>
+				))}
+			</div>
+		</div>
+	);
+
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board">
 			{/* macOS: shell topbar is hidden on board routes, so the project/"Board"
 			    crumb + New task / Orchestrator / bell live in this in-panel row.
 			    Win/Linux keep the crumb and actions in the framed ShellTopbar.
-			    Welcome skips the row — a dangling "Board" above the import
+			    Welcome skips the row: a dangling "Board" above the import
 			    chooser was review feedback on #2432. */}
 			{!showWelcome && boardActionsInPanel && (boardLabel || actions) ? (
 				<div className="center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 pr-4.5" style={dragStyle}>
@@ -314,39 +353,10 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 						) : null}
 					</div>
 				) : null}
-				{workspaceQuery.isError ? (
-					<p className="py-10 text-center text-xs text-passive">Could not load sessions.</p>
-				) : showWelcome ? (
-					<BoardWelcome />
-				) : showProjectEmpty ? (
-					<ProjectBoardEmpty
-						hasOrchestrator={orchestrator !== undefined}
-						isSpawning={isSpawning}
-						isProjectRestarting={isProjectRestarting}
-						onNewTask={() => projectId && requestNewTask(projectId)}
-						onOpenOrchestrator={() => void openOrchestrator()}
-						spawnError={visibleSpawnError}
-					/>
+				{cloudEnabled && !projectId ? (
+					<CloudLocalSections activeBoardContent={boardBody} />
 				) : (
-					<div className="h-full overflow-hidden">
-						{/* The 4 zone columns share the width and shrink to fit — no
-						    horizontal scroll on a narrow window (each column is min-w-0,
-						    cards truncate/wrap). */}
-						<div className="grid h-full grid-cols-4 gap-2">
-							{COLUMNS.map((col) => (
-								<BoardColumn
-									key={`${projectId ?? "all"}:${col.zone}`}
-									col={col}
-									sessions={byZone.get(col.zone) ?? []}
-									onOpen={openSession}
-									onTerminate={(session) => {
-										terminateSession.reset();
-										setTerminationSession(session);
-									}}
-								/>
-							))}
-						</div>
-					</div>
+					boardBody
 				)}
 			</div>
 
