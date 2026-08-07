@@ -722,6 +722,24 @@ describe("startAutoUpdates", () => {
     );
   });
 
+  it("broadcasts friendly error when the release repo has no published versions", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const { module, updaterEvents } = await importAutoUpdater();
+    const err = Object.assign(new Error("No published versions on GitHub"), {
+      code: "ERR_UPDATER_NO_PUBLISHED_VERSIONS",
+    });
+
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("error")?.(err);
+
+    expect(module.getUpdateStatus()).toEqual({
+      state: "error",
+      message: expect.stringContaining(
+        "the update information was not found on the server",
+      ),
+    });
+  });
+
   it("still surfaces non-manifest 404 errors", async () => {
     const { module, updaterEvents } = await importAutoUpdater();
     const err = new Error(
