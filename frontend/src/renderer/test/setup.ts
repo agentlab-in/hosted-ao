@@ -2,8 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import type { AoAccountState } from "../../shared/ao-account";
 import { LOCAL_MACHINE_ID, localMachine, type AoMachinesState } from "../../shared/ao-machines";
 import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
+import type { PeerWorkspacesResult } from "../../shared/peer-workspaces";
 
 const signedOutAoAccount: AoAccountState = { status: "signed-out", controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL };
+
+// Default peer result for tests that don't care about the Cloud toggle: no
+// peer machine registered, same as a fresh install.
+const noPeerRegistered: PeerWorkspacesResult = { state: "unavailable", reason: "No cloud machine registered." };
 
 // Signed out is the default everywhere in tests, and this computer is still the
 // active machine: local use never requires an account.
@@ -209,6 +214,7 @@ if (typeof window !== "undefined") {
 			refresh: async () => signedOutAoMachines,
 			select: async () => signedOutAoMachines,
 			gatewayToken: async () => null,
+			peerWorkspaces: async () => noPeerRegistered,
 		},
 	};
 } // end if (typeof window !== "undefined")

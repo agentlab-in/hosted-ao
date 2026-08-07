@@ -39,6 +39,8 @@ type UiState = {
 	resolvedTheme: Theme;
 	/** When true, developer-only surfaces (e.g. Feature Releases) are revealed. Default off. */
 	developerMode: boolean;
+	/** When true, the board shows CLOUD and LOCAL session sections side by side. Default off. */
+	cloudEnabled: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	orchestratorReplacementErrors: Record<string, string>;
 	orchestratorStartupErrors: Record<string, string>;
@@ -63,6 +65,7 @@ type UiState = {
 	setWorkbenchTab: (tab: WorkbenchTab) => void;
 	setThemePreference: (theme: ThemePreference) => void;
 	setDeveloperMode: (enabled: boolean) => void;
+	setCloudEnabled: (enabled: boolean) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -83,6 +86,7 @@ type UiState = {
 
 const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
+const cloudEnabledStorageKey = "ao.cloudEnabled";
 
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
@@ -95,6 +99,10 @@ function initialSidebarOpen() {
 
 function initialDeveloperMode() {
 	return getLocalStorage()?.getItem(developerModeStorageKey) === "true";
+}
+
+function initialCloudEnabled() {
+	return getLocalStorage()?.getItem(cloudEnabledStorageKey) === "true";
 }
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
@@ -111,6 +119,7 @@ export const useUiStore = create<UiState>((set) => ({
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
 	developerMode: initialDeveloperMode(),
+	cloudEnabled: initialCloudEnabled(),
 	restartingProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
 	orchestratorStartupErrors: {},
@@ -126,6 +135,10 @@ export const useUiStore = create<UiState>((set) => ({
 	setDeveloperMode: (developerMode) => {
 		getLocalStorage()?.setItem(developerModeStorageKey, String(developerMode));
 		set({ developerMode });
+	},
+	setCloudEnabled: (cloudEnabled) => {
+		getLocalStorage()?.setItem(cloudEnabledStorageKey, String(cloudEnabled));
+		set({ cloudEnabled });
 	},
 	syncSystemTheme: () =>
 		set((state) => {

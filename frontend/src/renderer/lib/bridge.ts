@@ -10,6 +10,7 @@ import {
 import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 import { machineDaemonStatus } from "../../shared/remote-daemon";
 import type { DaemonStatus } from "../../shared/daemon-status";
+import type { PeerProject, PeerWorkspacesResult } from "../../shared/peer-workspaces";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 const BROWSER_PREVIEW_ACCOUNT_STATE: AoAccountState = {
@@ -63,6 +64,59 @@ const browserPreviewMachinesState = (): AoMachinesState => ({
 	machines: BROWSER_PREVIEW_MACHINES,
 	activeMachineId: previewActiveMachineId,
 });
+
+// A couple of demoable sessions for the "Turn on Cloud" preview, whichever
+// side of the toggle plays the peer.
+const BROWSER_PREVIEW_PEER_PROJECTS: PeerProject[] = [
+	{
+		id: "proj_peer",
+		name: "reverbcode",
+		sessions: [
+			{
+				id: "peer_s1",
+				title: "Fix the login redirect loop",
+				status: "working",
+				activity: "active",
+				branch: "ao/dev/fix-login-redirect",
+				harness: "codex",
+				kind: "worker",
+				updatedAt: new Date().toISOString(),
+			},
+			{
+				id: "peer_s2",
+				title: "Add dark mode toggle",
+				status: "pr_open",
+				activity: "idle",
+				branch: "ao/dev/dark-mode-toggle",
+				harness: "claude-code",
+				kind: "worker",
+				updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+			},
+		],
+	},
+];
+
+/** Peer = the daemon that is NOT active, mirroring machines.select's target. */
+const browserPreviewPeerWorkspaces = (): PeerWorkspacesResult => {
+	if (previewActiveMachineId === LOCAL_MACHINE_ID) {
+		const peer = BROWSER_PREVIEW_MACHINES.find((machine) => machine.id === "mch_ready");
+		if (!peer) return { state: "unavailable", reason: "No cloud machine registered." };
+		return {
+			state: "ok",
+			machineId: peer.id,
+			machineName: peer.name,
+			isRemote: true,
+			projects: BROWSER_PREVIEW_PEER_PROJECTS,
+		};
+	}
+	return {
+		state: "ok",
+		machineId: LOCAL_MACHINE_ID,
+		machineName: "This Mac",
+		isRemote: false,
+		projects: BROWSER_PREVIEW_PEER_PROJECTS,
+	};
+};
 
 /**
  * What the app's daemon status would be for the machine picked in preview, from
@@ -241,5 +295,6 @@ export const aoBridge: AoBridge =
 			// Browser preview has no main process, so no machine token either.
 			// Null means "send no Authorization header".
 			gatewayToken: async () => null,
+			peerWorkspaces: async () => browserPreviewPeerWorkspaces(),
 		},
 	} satisfies AoBridge);
