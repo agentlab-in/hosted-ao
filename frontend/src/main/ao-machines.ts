@@ -326,7 +326,20 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 			}
 			const listed = await fetchMachines(token);
 			if (superseded()) return currentState();
-			remote = listed;
+			// Relisting must not reset what the last probe learned. A fresh list
+			// entry starts at reachability "unknown", and letting that overwrite
+			// the active machine flips its daemon status to connecting until the
+			// probe below finishes. The renderer clears its query cache on every
+			// such flip, and the machines list is itself one of those queries, so
+			// the reset closed a loop: refresh -> status flip -> cache clear ->
+			// machines refetch -> refresh, hammering the gateway continuously.
+			const known = new Map(remote.map((machine) => [machine.id, machine]));
+			remote = listed.map((machine) => {
+				const prev = known.get(machine.id);
+				return prev && prev.baseUrl === machine.baseUrl
+					? { ...machine, reachability: prev.reachability }
+					: machine;
+			});
 			status = "ready";
 			const stillRegistered = active ? (remote.find((machine) => machine.id === active?.id) ?? null) : null;
 			// A revoked machine is absent from the list. Falling back to this
