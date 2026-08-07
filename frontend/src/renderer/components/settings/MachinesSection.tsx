@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Copy, Laptop, Loader2, Server } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { formatLastSeen, type AoMachine, type AoMachinesState } from "../../../shared/ao-machines";
 import { Badge } from "../ui/badge";
@@ -19,6 +20,7 @@ export const aoMachinesQueryKey = ["ao-machines"] as const;
  * and no token is ever typed into this app.
  */
 export function MachinesSection() {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const query = useQuery({ queryKey: aoMachinesQueryKey, queryFn: () => aoBridge.machines.refresh() });
 	const apply = (next: AoMachinesState) => queryClient.setQueryData(aoMachinesQueryKey, next);
@@ -35,7 +37,7 @@ export function MachinesSection() {
 	const error = state?.error ?? mutationError;
 
 	return (
-		<SettingsSection title="Machines" sectionId="machines">
+		<SettingsSection title={t("settings.machines.title")} sectionId="machines">
 			{machines.map((machine) => (
 				<MachineRow
 					key={machine.id}
@@ -49,14 +51,12 @@ export function MachinesSection() {
 			{query.isLoading ? (
 				<p className="flex items-center gap-2 px-1 text-xs leading-row text-settings-muted">
 					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
-					Looking for machines registered to your account…
+					{t("settings.machines.looking")}
 				</p>
 			) : null}
 
 			<p className="px-1 text-xs leading-row text-settings-muted">
-				{state?.status === "signed-out"
-					? "Sign in to reach a machine you registered with `ao setup-vm`. This computer works without an account."
-					: "One machine is active at a time. Switching points this app at that machine."}
+				{state?.status === "signed-out" ? t("settings.machines.signInHint") : t("settings.machines.activeHint")}
 			</p>
 
 			{/* `ao doctor` is a local command with no HTTP route yet, so nothing
@@ -64,8 +64,8 @@ export function MachinesSection() {
 			    a badge on every machine that would only mean "not asked". */}
 			{machines.some((machine) => !machine.local && machine.harness === "unknown") ? (
 				<p className="px-1 text-xs leading-row text-settings-muted" data-testid="ao-machines-harness-unknown">
-					Agent-harness readiness is not reported for remote machines yet. Run{" "}
-					<code className="font-mono">ao doctor</code> on the machine to check it.
+					{t("settings.machines.harnessUnknownPrefix")} <code className="font-mono">ao doctor</code>{" "}
+					{t("settings.machines.harnessUnknownSuffix")}
 				</p>
 			) : null}
 
@@ -90,15 +90,16 @@ function MachineRow({
 	busy: boolean;
 	onSelect: () => void;
 }) {
+	const { t } = useTranslation();
 	const Icon = machine.local ? Laptop : Server;
 	const offline = machine.reachability === "offline";
 	const lastSeen = formatLastSeen(machine.lastSeen);
 	const detail = machine.local
-		? "Runs on this computer"
+		? t("settings.machines.runsHere")
 		: offline
 			? lastSeen
-				? `Offline, last seen ${lastSeen}`
-				: "Offline, has never connected"
+				? t("settings.machines.offlineLastSeen", { lastSeen })
+				: t("settings.machines.offlineNeverConnected")
 			: new URL(machine.baseUrl).host;
 
 	return (
@@ -116,12 +117,12 @@ function MachineRow({
 				</div>
 				<div className="flex min-w-0 flex-1 items-center justify-end gap-2">
 					<span className="min-w-0 truncate text-control text-settings-muted">{detail}</span>
-					{offline ? <Badge variant="error">Offline</Badge> : null}
-					{machine.harness === "missing" ? <Badge variant="warning">No harness</Badge> : null}
+					{offline ? <Badge variant="error">{t("settings.machines.offline")}</Badge> : null}
+					{machine.harness === "missing" ? <Badge variant="warning">{t("settings.machines.noHarness")}</Badge> : null}
 					{active ? (
 						<Badge variant="accent">
 							<Check className="size-3" aria-hidden="true" />
-							Active
+							{t("settings.machines.active")}
 						</Badge>
 					) : null}
 				</div>
@@ -140,6 +141,7 @@ function MachineRow({
  * act on. The command runs on that machine, over SSH, not here.
  */
 function HarnessHint({ machineName, command }: { machineName: string; command: string }) {
+	const { t } = useTranslation();
 	const [copied, setCopied] = useState(false);
 
 	return (
@@ -148,8 +150,8 @@ function HarnessHint({ machineName, command }: { machineName: string; command: s
 			data-testid="ao-machine-harness-hint"
 		>
 			<span className="min-w-0 flex-1">
-				No agent harness on {machineName}. Run <code className="font-mono text-foreground">{command}</code> on that
-				machine.
+				{t("settings.machines.harnessHintPrefix", { machineName })}{" "}
+				<code className="font-mono text-foreground">{command}</code> {t("settings.machines.harnessHintSuffix")}
 			</span>
 			<Button
 				type="button"
@@ -161,7 +163,7 @@ function HarnessHint({ machineName, command }: { machineName: string; command: s
 				}}
 			>
 				{copied ? <Check className="size-icon-sm" aria-hidden="true" /> : <Copy className="size-icon-sm" aria-hidden="true" />}
-				{copied ? "Copied" : "Copy"}
+				{copied ? t("settings.machines.copied") : t("settings.machines.copy")}
 			</Button>
 		</div>
 	);

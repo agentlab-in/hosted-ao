@@ -9,6 +9,8 @@
 // so tests can exercise them directly; the Electron main process owns the
 // streams, fs polling, and timers.
 
+import { STATE_ROOT_SEGMENTS } from "./state-root";
+
 // Minimal join: "/" works for fs access on every platform Node supports,
 // including Windows paths that already contain backslashes (e.g. %APPDATA%).
 function joinPath(...segments: string[]): string {
@@ -109,9 +111,9 @@ export function parseRunFile(contents: string): RunFileInfo | null {
 
 /**
  * Where the daemon writes running.json when AO_RUN_FILE is unset. Matches
- * backend/internal/config's canonical AO home default so the supervisor reads
- * the same file the daemon writes. Returns null when the user home directory
- * cannot be resolved.
+ * backend/internal/config's canonical state root default so the supervisor
+ * reads the same file the daemon writes. Returns null when the user home
+ * directory cannot be resolved.
  */
 export function defaultRunFilePath(
 	platform: NodeJS.Platform,
@@ -120,5 +122,5 @@ export function defaultRunFilePath(
 ): string | null {
 	void platform;
 	if (!homeDir) return null;
-	return joinPath(homeDir, ".ao", "running.json");
+	return joinPath(homeDir, ...STATE_ROOT_SEGMENTS, "running.json");
 }

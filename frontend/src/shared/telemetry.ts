@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { STATE_ROOT_SEGMENTS } from "./state-root";
 
 export type TelemetryBootstrap = {
 	distinctId: string;
@@ -54,7 +55,7 @@ export function defaultDataDir(
 	void platform;
 	if (env.AO_DATA_DIR) return env.AO_DATA_DIR;
 	if (!homeDir) return null;
-	return path.join(homeDir, ".ao", "data");
+	return path.join(homeDir, ...STATE_ROOT_SEGMENTS, "data");
 }
 
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {

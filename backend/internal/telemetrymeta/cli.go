@@ -64,6 +64,8 @@ var legacyActorlessSystemCLICommands = map[string]struct{}{
 	"ao help":                    {},
 	"ao pty-host":                {},
 	"ao start":                   {},
+	// systemd-driven bootstrapping, like "ao daemon".
+	"ao vm serve": {},
 }
 
 var legacyActorlessUserCLICommands = map[string]struct{}{
@@ -131,9 +133,13 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session kill":           {},
 	"ao session rename":         {},
 	"ao session restore":        {},
+	"ao setup-vm":               {},
 	"ao spawn":                  {},
 	"ao stop":                   {},
 	"ao version":                {},
+	"ao vm":                     {},
+	"ao vm setup-harness":       {},
+	"ao whoami":                 {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},

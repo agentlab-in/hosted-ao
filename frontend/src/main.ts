@@ -10,6 +10,8 @@ import {
 	nativeImage,
 	Notification as ElectronNotification,
 	protocol,
+	safeStorage,
+	session,
 	shell,
 	WebContentsView,
 	webContents,
@@ -72,6 +74,14 @@ import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/exter
 import { shouldSignalAttention, shouldToast } from "./main/notification-signals";
 import { buildWindowsAppMenuTemplate } from "./main/menu";
 import { ancestorRepositorySetupWarning, scanImportFolder } from "./main/import-folder-scan";
+import { STATE_ROOT_SEGMENTS } from "./shared/state-root";
+import { machineAuthFailedStatus } from "./shared/remote-daemon";
+import { createAoAccountController } from "./main/ao-account";
+import { createAoMachinesController } from "./main/ao-machines";
+import { createPeerWorkspacesController } from "./main/peer-workspaces";
+import type { AoMachine } from "./shared/ao-machines";
+import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
+import { createMachineTransport, type MachineTransport } from "./main/machine-transport";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -101,18 +111,22 @@ if (process.platform === "win32") {
 }
 
 // Pin ALL Electron-owned state (Chromium cache, cookies, local/session storage,
-// crash dumps) under the canonical AO home at ~/.ao instead of Electron's macOS
-// default ~/Library/Application Support/<name>. Keeps the app's entire footprint
-// inside ~/.ao alongside the daemon's data dir and running.json. sessionData and
-// crashDumps derive from userData, so this one override reparents them all.
+// crash dumps) under the canonical hosted-ao state root at ~/.ao/hosted instead
+// of Electron's macOS default ~/Library/Application Support/<name>. Keeps the
+// app's entire footprint alongside the daemon's data dir and running.json, one
+// level down from ~/.ao so it does not collide with the upstream
+// agent-orchestrator app's own state there. sessionData and crashDumps derive
+// from userData, so this one override reparents them all.
 // Must run before app ready.
-// Dev runs get their own profile under the same ~/.ao root: the packaged app
-// keeps this directory open, and two Chromium instances sharing one profile
+// Dev runs get their own profile under the same ~/.ao/hosted root: the packaged
+// app keeps this directory open, and two Chromium instances sharing one profile
 // corrupt its LevelDB stores. Mirrors how dev already isolates running.json and
-// the daemon data dir into ~/.ao/dev.
+// the daemon data dir into ~/.ao/hosted/dev.
 app.setPath(
 	"userData",
-	app.isPackaged ? path.join(os.homedir(), ".ao", "electron") : path.join(os.homedir(), ".ao", "dev", "electron"),
+	app.isPackaged
+		? path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "electron")
+		: path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "dev", "electron"),
 );
 
 let mainWindow: BrowserWindow | null = null;
@@ -127,7 +141,13 @@ let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
-let daemonStatus: DaemonStatus = { state: "stopped" };
+// The active registered machine's status, or null when this computer is the
+// active machine. Held here rather than read from the machines controller so
+// the lifecycle can be built before the state dir is resolved, and so a remote
+// machine restored at boot is in force before the first startDaemon() call.
+let activeMachineStatus: DaemonStatus | null = null;
+const remoteDaemonLifecycle = createRemoteDaemonLifecycle(() => activeMachineStatus);
+let daemonStatus: DaemonStatus = remoteDaemonLifecycle.currentStatus() ?? { state: "stopped" };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
@@ -146,7 +166,7 @@ const isDev = !app.isPackaged;
 // on Unix (backend derives it as dir(RunFilePath)/supervise.sock) and the named pipe
 // on Windows (supervisorPipeFromRunFile derives it from the same dir basename).
 const DEV_DAEMON_PORT = 3002;
-const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
+const DEV_STATE_SUBDIR = "dev"; // ~/.ao/hosted/dev/
 
 // Height (px) of the custom Windows title bar. Must stay in sync with
 // --size-window-titlebar (tokens.css) and .window-titlebar, plus the Window
@@ -413,7 +433,7 @@ const DAEMON_PROBE_TIMEOUT_MS = 2_000;
 
 function runFilePath(): string | null {
 	if (process.env.AO_RUN_FILE) return process.env.AO_RUN_FILE;
-	if (isDev) return path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR, "running.json");
+	if (isDev) return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR, "running.json");
 	return defaultRunFilePath(process.platform, process.env, os.homedir());
 }
 
@@ -545,7 +565,7 @@ function daemonEnv(): NodeJS.ProcessEnv {
 	if (isDev) {
 		if (!process.env.AO_PORT) devExtras.AO_PORT = String(DEV_DAEMON_PORT);
 		if (!process.env.AO_RUN_FILE) devExtras.AO_RUN_FILE = runFilePath() ?? "";
-		if (!process.env.AO_DATA_DIR) devExtras.AO_DATA_DIR = path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR, "data");
+		if (!process.env.AO_DATA_DIR) devExtras.AO_DATA_DIR = path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR, "data");
 	}
 	// Windows keeps the old behavior exactly: no shell probe, no unix PATH floor.
 	if (process.platform === "win32") {
@@ -633,11 +653,25 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
  * headless `ao start` daemons stay unlinked so they remain persistent after
  * app quit.
  */
+// Mirrors backend/internal/daemon/supervisor/listen_windows.go's
+// pipeNameFromRunFile exactly; the two must stay in step or a Windows dev
+// build and the installed app can end up on the same pipe.
+//
+// Windows named pipes are a single global namespace (unlike the run file and
+// the Unix socket, which move with the state root), so the base pipe name
+// itself carries the "hosted" sentinel to stay out of the upstream
+// agent-orchestrator app's pipe. The sentinel is the last segment of
+// STATE_ROOT_SEGMENTS, not re-spelled here, so the two sides cannot drift.
+// ~/.ao/hosted/running.json     -> \\.\pipe\ao-supervise-hosted     (default)
+// ~/.ao/hosted/dev/running.json -> \\.\pipe\ao-supervise-hosted-dev (dev isolation)
+const SUPERVISOR_PIPE_SENTINEL = STATE_ROOT_SEGMENTS[STATE_ROOT_SEGMENTS.length - 1];
+const SUPERVISOR_PIPE_BASE_NAME = "\\\\.\\pipe\\ao-supervise-" + SUPERVISOR_PIPE_SENTINEL;
+
 function supervisorPipeFromRunFile(rfp: string | null): string {
-	if (!rfp) return "\\\\.\\pipe\\ao-supervise";
+	if (!rfp) return SUPERVISOR_PIPE_BASE_NAME;
 	const dir = path.basename(path.dirname(rfp));
-	if (dir === ".ao" || dir === "." || dir === "") return "\\\\.\\pipe\\ao-supervise";
-	return "\\\\.\\pipe\\ao-supervise-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
+	if (dir === SUPERVISOR_PIPE_SENTINEL || dir === "." || dir === "") return SUPERVISOR_PIPE_BASE_NAME;
+	return SUPERVISOR_PIPE_BASE_NAME + "-" + dir.replace(/[^a-zA-Z0-9-]/g, "-");
 }
 
 function establishBrowserRuntimeLink(): void {
@@ -717,6 +751,10 @@ async function inspectExistingDaemon(
 }
 
 async function refreshDaemonStatus(): Promise<DaemonStatus> {
+	return remoteDaemonLifecycle.refresh(refreshLocalDaemonStatus, setDaemonStatus);
+}
+
+async function refreshLocalDaemonStatus(): Promise<DaemonStatus> {
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -746,6 +784,10 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 }
 
 async function startDaemon(): Promise<DaemonStatus> {
+	return remoteDaemonLifecycle.start(startLocalDaemon, setDaemonStatus);
+}
+
+async function startLocalDaemon(): Promise<DaemonStatus> {
 	if (daemonStartPromise) {
 		return daemonStartPromise;
 	}
@@ -947,14 +989,14 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// AO_KEEP_DAEMON: the daemon must survive this app, so it cannot inherit
 	// Electron-owned stdout/stderr pipes — when Electron exits, the pipe read
 	// ends close and the daemon's next stderr log write (SIGPIPE/EPIPE) kills it,
-	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
-	// child so the parent does not wait on it. Port discovery then relies on the
-	// running.json handshake (the log pipe scan is skipped).
+	// defeating the keep-alive. Redirect stdio to ~/.ao/hosted/daemon.log and
+	// unref the child so the parent does not wait on it. Port discovery then
+	// relies on the running.json handshake (the log pipe scan is skipped).
 	const keep = keepDaemonAlive(process.env);
 	let keepDaemonLogFd: number | undefined;
 	let stdio: "pipe" | "ignore" | ["ignore", number, number] = "pipe";
 	if (keep) {
-		const logPath = path.join(os.homedir(), ".ao", "daemon.log");
+		const logPath = path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "daemon.log");
 		try {
 			keepDaemonLogFd = openSync(logPath, "a");
 			stdio = ["ignore", keepDaemonLogFd, keepDaemonLogFd];
@@ -1169,6 +1211,10 @@ function killDaemon(child: ChildProcess): void {
 }
 
 function stopDaemon(): DaemonStatus {
+	return remoteDaemonLifecycle.stop(stopLocalDaemon, setDaemonStatus);
+}
+
+function stopLocalDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	// An explicit stop (or a newer restart request) cancels any deferred restart
@@ -1380,6 +1426,146 @@ ipcMain.handle("app:checkAncestorRepo", async (_event, path: string) => {
 	await ensureShellEnv();
 	return ancestorRepositorySetupWarning(path, { env: daemonEnv(), homeDir: os.homedir() });
 });
+
+// AO account sign-in. The stored refresh token lives beside the other ~/.ao state
+// files, encrypted with safeStorage. Local mode never consults this: it exists only
+// so a remote machine can be reached later (batches 4 and 5).
+let aoAccountController: ReturnType<typeof createAoAccountController> | null = null;
+function aoAccount(): ReturnType<typeof createAoAccountController> {
+	if (aoAccountController) return aoAccountController;
+	const runFile = runFilePath();
+	aoAccountController = createAoAccountController({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		env: process.env,
+		safeStorage,
+		// The system browser, never an embedded BrowserWindow: Google blocks OAuth in
+		// embedded webviews (RFC 8252 is the supported shape anyway).
+		openExternal: (url: string) => openAllowedAppExternalURL(url, shell),
+	});
+	return aoAccountController;
+}
+
+ipcMain.handle("aoAccount:getState", () => aoAccount().getState());
+ipcMain.handle("aoAccount:signIn", () => aoAccount().signIn());
+ipcMain.handle("aoAccount:signOut", async () => {
+	const state = await aoAccount().signOut();
+	// Signing out removes the only credential that can reach a registered
+	// machine, so the app falls back to this computer, which needs no account.
+	await aoMachines().reset();
+	return state;
+});
+
+// "This Mac" on macOS, per the spec. The other platforms get a label that is
+// not wrong for them. Shared by the machines controller and the peer
+// workspaces controller so the local machine's display name cannot drift
+// between the two.
+const LOCAL_MACHINE_NAME = process.platform === "darwin" ? "This Mac" : "This computer";
+
+// The machine list and which machine is active. This computer is machine zero
+// and is always offered; everything below is only about reaching a machine the
+// account has registered.
+let aoMachinesController: ReturnType<typeof createAoMachinesController> | null = null;
+function aoMachines(): ReturnType<typeof createAoMachinesController> {
+	if (aoMachinesController) return aoMachinesController;
+	const runFile = runFilePath();
+	aoMachinesController = createAoMachinesController({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		env: process.env,
+		safeStorage,
+		localMachineName: LOCAL_MACHINE_NAME,
+		onActiveChange: applyActiveMachine,
+	});
+	return aoMachinesController;
+}
+
+// Read-only view of the daemon that is NOT the app's active one (the
+// "peer"), so the UI can list its projects and sessions alongside the active
+// one's. Fully independent of machineTransport(): a peer never opens /mux or
+// the SSE stream, so it needs no cookie and must never touch the one
+// target/one token machinery in machine-transport.ts.
+let peerWorkspacesController: ReturnType<typeof createPeerWorkspacesController> | null = null;
+function peerWorkspaces(): ReturnType<typeof createPeerWorkspacesController> {
+	if (peerWorkspacesController) return peerWorkspacesController;
+	peerWorkspacesController = createPeerWorkspacesController({
+		getMachinesState: () => aoMachines().getState(),
+		credential: () => aoMachines().credential(),
+		localMachineName: LOCAL_MACHINE_NAME,
+		readLocalRunFile: async () => {
+			const rfp = runFilePath();
+			if (!rfp) return null;
+			try {
+				return await readFile(rfp, "utf8");
+			} catch {
+				return null;
+			}
+		},
+	});
+	return peerWorkspacesController;
+}
+
+// The authenticated transport to the active machine's gateway: the Bearer token
+// the renderer attaches to REST calls, the ao_gw_token cookie /mux and the SSE
+// stream authenticate with, and the silent refresh that keeps both current.
+let machineTransportInstance: MachineTransport | null = null;
+function machineTransport(): MachineTransport | null {
+	if (machineTransportInstance) return machineTransportInstance;
+	// Null when no control-plane credential can exist in this install: no ~/.ao
+	// state dir, or an AO_CONTROL_URL that does not parse. The machines controller
+	// already reports that as its own error, so there is nothing to add here.
+	const credential = aoMachines().credential();
+	if (!credential) return null;
+	machineTransportInstance = createMachineTransport({
+		cookies: session.defaultSession.cookies,
+		controlPlaneUrl: credential.controlPlaneUrl,
+		controlToken: credential.token,
+		onStatus: (status) => {
+			activeMachineStatus = status;
+			void startDaemon();
+		},
+		// The control plane will not mint a token for the active machine, and it
+		// answers revoked, someone else's, and never-existed identically. The list
+		// is where that resolves: refresh() drops a machine that is gone from the
+		// list and falls back to this computer, which needs no account.
+		onMachineGone: () => {
+			void aoMachines().refresh();
+		},
+	});
+	return machineTransportInstance;
+}
+
+/**
+ * Re-point the app at the machine that just became active.
+ *
+ * A remote machine sets activeMachineStatus, which is what makes the remote
+ * lifecycle own the app's daemon state: from here on startDaemon() returns that
+ * status and the local start function is never called, whether the machine is
+ * up or down. Selecting this computer clears it, and startDaemon() attaches to
+ * or spawns the local daemon exactly as it always has.
+ *
+ * The transport, not this function, publishes the ready status that carries the
+ * machine's base URL, and only once it holds a token and has installed the
+ * gateway cookie.
+ */
+function applyActiveMachine(machine: AoMachine | null): void {
+	const transport = machineTransport();
+	if (transport) {
+		transport.setMachine(machine);
+		return;
+	}
+	activeMachineStatus = machine
+		? machineAuthFailedStatus(machine, "This computer cannot store an AO sign-in, so it has no credential to send.")
+		: null;
+	void startDaemon();
+}
+
+ipcMain.handle("aoMachines:getState", () => aoMachines().getState());
+ipcMain.handle("aoMachines:refresh", () => aoMachines().refresh());
+ipcMain.handle("aoMachines:select", (_event, machineId: string) => aoMachines().select(machineId));
+// Read from the already-built transport rather than machineTransport(), so a
+// local-only install never constructs one just to be told there is no token.
+ipcMain.handle("aoMachines:gatewayToken", () => machineTransportInstance?.token() ?? null);
+ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
+
 ipcMain.handle("clipboard:writeText", (_event, text: string) => {
 	clipboard.writeText(text, "clipboard");
 	if (process.platform === "linux") {
@@ -1679,9 +1865,23 @@ app.whenReady().then(async () => {
 			locale: initialUiSettings.locale,
 		});
 	}
+	// Before the first startDaemon(): a machine chosen in a previous run must be
+	// active by the time anything can start a daemon, or the app would spawn a
+	// local one on behalf of a remote machine. restore() reads the remembered
+	// machine off disk, so it needs no network and cannot be beaten by one.
+	try {
+		await aoMachines().restore();
+	} catch (err) {
+		console.error("failed to restore the active machine:", err);
+	}
+
 	createWindow();
 	void startDaemon();
 	initAutoUpdates();
+	// Fills in the real list and each machine's reachability once the window is
+	// up. Failure here leaves the remembered machine in place; it never falls
+	// back to the local daemon.
+	if (activeMachineStatus) void aoMachines().refresh();
 
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) {

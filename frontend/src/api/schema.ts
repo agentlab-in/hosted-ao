@@ -140,6 +140,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run this machine's health checks and return the report */
+        get: operations["getDoctorReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events": {
         parameters: {
             query?: never;
@@ -1327,9 +1344,10 @@ export interface components {
         };
         AddProjectInput: {
             asWorkspace?: boolean;
+            cloneUrl?: string;
             config?: components["schemas"]["ProjectConfig"];
             name?: null | string;
-            path: string;
+            path?: string;
             projectId?: null | string;
         };
         AgentConfig: {
@@ -1430,6 +1448,29 @@ export interface components {
         };
         ContainerReapConfig: {
             disabled?: boolean;
+        };
+        ControllersDoctorCheckResponse: {
+            /**
+             * @description Check outcome. FAIL means the machine is broken; WARN means degraded.
+             * @enum {string}
+             */
+            level: "PASS" | "WARN" | "FAIL";
+            /** @description Human-readable outcome for this check. */
+            message: string;
+            /** @description Stable check id, e.g. claude-auth. */
+            name: string;
+            /** @description The single command that fixes this check, e.g. ao vm setup-harness claude. Empty when no single command applies. */
+            remediation?: string;
+            /** @description Report grouping, e.g. Core, Tools, Agent harnesses, GitHub. */
+            section?: string;
+        };
+        ControllersDoctorReportResponse: {
+            /** @description Every check, in report order. */
+            checks: components["schemas"]["ControllersDoctorCheckResponse"][];
+            /** @description Number of FAIL checks. */
+            failures: number;
+            /** @description True when no check failed. WARN checks (a missing optional tool, a harness that is not signed in) do not clear it. */
+            ok: boolean;
         };
         ControllersSessionView: {
             activity: components["schemas"]["DomainActivity"];
@@ -2930,6 +2971,35 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getDoctorReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersDoctorReportResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

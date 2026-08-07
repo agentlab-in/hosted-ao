@@ -6,7 +6,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
-import { queryClient } from "./lib/query-client";
+import { clearQueryCacheOnMachineSwitch, queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
@@ -62,6 +62,8 @@ if (import.meta.env.DEV) {
 void initTelemetry();
 startDaemonFailureTelemetry();
 startUpdateTelemetry();
+// Nothing cached under machine A may be read under machine B.
+clearQueryCacheOnMachineSwitch();
 
 declare module "@tanstack/react-router" {
 	interface Register {

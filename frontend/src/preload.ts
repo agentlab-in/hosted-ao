@@ -14,6 +14,9 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
+import type { AoAccountState } from "./shared/ao-account";
+import type { AoMachinesState } from "./shared/ao-machines";
+import type { PeerWorkspacesResult } from "./shared/peer-workspaces";
 import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus } from "./main/update-settings";
@@ -316,6 +319,31 @@ const api = {
 	featureBuilds: {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
+	},
+	// AO account sign-in. The renderer only ever sees identity and status: the
+	// refresh token stays in the main process, encrypted on disk, and the whole
+	// PKCE exchange happens there too.
+	account: {
+		getState: () => ipcRenderer.invoke("aoAccount:getState") as Promise<AoAccountState>,
+		signIn: () => ipcRenderer.invoke("aoAccount:signIn") as Promise<AoAccountState>,
+		signOut: () => ipcRenderer.invoke("aoAccount:signOut") as Promise<AoAccountState>,
+	},
+	// The machine list and the picker. No URL and no token is ever typed into
+	// the app, so there is nothing here that takes either: the renderer picks an
+	// id out of a list the main process fetched.
+	machines: {
+		getState: () => ipcRenderer.invoke("aoMachines:getState") as Promise<AoMachinesState>,
+		refresh: () => ipcRenderer.invoke("aoMachines:refresh") as Promise<AoMachinesState>,
+		select: (machineId: string) => ipcRenderer.invoke("aoMachines:select", machineId) as Promise<AoMachinesState>,
+		// The Bearer credential for a REST call to the active machine's gateway,
+		// asked for per request so the renderer never has to reason about expiry.
+		// It is a fifteen minute token scoped to one machine; the refresh token it
+		// descends from never leaves the main process.
+		gatewayToken: () => ipcRenderer.invoke("aoMachines:gatewayToken") as Promise<string | null>,
+		// Read-only: the peer (non-active) daemon's projects and sessions, for
+		// listing alongside the active machine's. No URL or token here either;
+		// the main process fetches it and shapes the result.
+		peerWorkspaces: () => ipcRenderer.invoke("aoMachines:peerWorkspaces") as Promise<PeerWorkspacesResult>,
 	},
 };
 

@@ -13,7 +13,12 @@ export type DaemonFailureCode =
 	| "port_unconfirmed"
 	| "not_ready"
 	| "identity_mismatch"
-	| "datadir_unwritable";
+	| "datadir_unwritable"
+	// A registered machine is up, but no machine-audience access token could be
+	// obtained for it: this install is signed out, the control plane refused the
+	// sign-in, or the account no longer has that machine. See
+	// main/machine-transport.ts.
+	| "machine_auth_failed";
 
 export type DaemonStatus = {
 	state: "starting" | "ready" | "stopped" | "error";
@@ -28,4 +33,6 @@ export type DaemonStatus = {
 	code?: DaemonFailureCode;
 	exitCode?: number | null;
 	signal?: string | null;
+	// Non-secret HTTPS origin used only for an externally hosted daemon.
+	baseUrl?: string;
 };

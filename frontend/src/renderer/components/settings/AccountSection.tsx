@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, UserRound } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { DEFAULT_CONTROL_PLANE_URL } from "../../../shared/control-plane";
 import type { AoAccountState } from "../../../shared/ao-account";
@@ -15,6 +16,7 @@ export const aoAccountQueryKey = ["ao-account"] as const;
  * section never blocks anything and there is no sign-in wall anywhere else.
  */
 export function AccountSection() {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const query = useQuery({ queryKey: aoAccountQueryKey, queryFn: () => aoBridge.account.getState() });
 
@@ -40,15 +42,19 @@ export function AccountSection() {
 		state && state.controlPlaneUrl !== DEFAULT_CONTROL_PLANE_URL ? state.controlPlaneUrl : null;
 
 	return (
-		<SettingsSection title="Account" sectionId="account">
-			<SettingsRow icon={UserRound} label="AO account">
+		<SettingsSection title={t("settings.account.title")} sectionId="account">
+			<SettingsRow icon={UserRound} label={t("settings.account.label")}>
 				<div className="flex min-w-0 items-center gap-2">
 					<span className="min-w-0 truncate text-control text-settings-muted" data-testid="ao-account-identity">
-						{signedIn ? (state?.account?.email || state?.account?.id) : busy ? "Waiting for your browser…" : "Not signed in"}
+						{signedIn
+							? state?.account?.email || state?.account?.id
+							: busy
+								? t("settings.account.waitingForBrowser")
+								: t("settings.account.notSignedIn")}
 					</span>
 					{signedIn ? (
 						<Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => signOut.mutate()}>
-							Sign out
+							{t("settings.account.signOut")}
 						</Button>
 					) : (
 						<Button
@@ -59,22 +65,18 @@ export function AccountSection() {
 							onClick={() => signIn.mutate()}
 						>
 							{busy ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
-							Sign in
+							{t("settings.account.signIn")}
 						</Button>
 					)}
 				</div>
 			</SettingsRow>
 
 			<p className="px-1 text-xs leading-row text-settings-muted">
-				{signedIn
-					? "Signing out discards the stored credential on this computer. Sessions on this computer keep running."
-					: "Sign in to reach a machine you have registered with AO. Everything on this computer works without an account."}
+				{signedIn ? t("settings.account.signOutHint") : t("settings.account.signInHint")}
 			</p>
 
 			{busy && !signedIn ? (
-				<p className="px-1 text-xs leading-row text-settings-muted">
-					Sign-in opens in your browser. Finish there, then come back here.
-				</p>
+				<p className="px-1 text-xs leading-row text-settings-muted">{t("settings.account.signInInProgress")}</p>
 			) : null}
 
 			{error ? (
@@ -86,7 +88,7 @@ export function AccountSection() {
 
 			{nonDefaultControlPlane ? (
 				<p className="px-1 text-xs leading-row text-warning">
-					Development control plane: <span className="font-mono">{nonDefaultControlPlane}</span> (AO_CONTROL_URL).
+					{t("settings.account.devControlPlane")} <span className="font-mono">{nonDefaultControlPlane}</span> (AO_CONTROL_URL).
 				</p>
 			) : null}
 		</SettingsSection>

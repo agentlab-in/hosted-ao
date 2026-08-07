@@ -160,6 +160,7 @@ func TestTelemetryMetaClassifiesRegisteredCommandPaths(t *testing.T) {
 		"ao help":                    {},
 		"ao pty-host":                {},
 		"ao start":                   {},
+		"ao vm serve":                {},
 	}
 
 	var failures []string

@@ -3,6 +3,8 @@ import type { paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
+import { aoBridge } from "./bridge";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
@@ -204,9 +206,20 @@ async function runtimeFetch(input: Request): Promise<Response> {
 
 		const url = new URL(input.url);
 		const target = new URL(url.pathname + url.search + url.hash, baseUrl);
-		if (target.href === input.url) {
+		const remote = isRemoteDaemonBaseUrl(baseUrl);
+		const credentials = remote ? "include" : input.credentials;
+		// Bearer is the only credential the machine gateway accepts on a REST route:
+		// its cookie is confined to /mux and the SSE stream, so nothing
+		// state-changing rides an ambient credential (controlplane/TOKEN_CONTRACT.md).
+		// Asked for per request because the main process owns expiry and the silent
+		// refresh. Null when no machine is selected (local daemon) or in browser preview.
+		const gatewayToken = remote ? await aoBridge.machines.gatewayToken() : null;
+		if (target.href === input.url && credentials === input.credentials && !gatewayToken) {
 			return fetch(input);
 		}
+
+		const headers = new Headers(input.headers);
+		if (gatewayToken) headers.set("Authorization", `Bearer ${gatewayToken}`);
 
 		// Rebase onto the runtime base URL by copying fields explicitly and
 		// buffering the body. `new Request(target, input)` reads the source
@@ -217,10 +230,10 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
 		return fetch(target, {
 			method: input.method,
-			headers: input.headers,
+			headers,
 			body,
 			signal: input.signal,
-			credentials: input.credentials,
+			credentials,
 			cache: input.cache,
 			redirect: input.redirect,
 			referrerPolicy: input.referrerPolicy,

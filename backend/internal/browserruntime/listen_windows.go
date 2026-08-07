@@ -8,19 +8,27 @@ import (
 	"regexp"
 
 	"github.com/Microsoft/go-winio"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 var unsafePipeChars = regexp.MustCompile(`[^a-zA-Z0-9\-]`)
 
+// basePipeName carries the same "-hosted" collision guard as
+// supervisor.basePipeName: Windows named pipes are a single global namespace,
+// so this build's browser-bridge pipe must not collide with the upstream
+// agent-orchestrator desktop app's \\.\pipe\ao-browser.
+const basePipeName = `\\.\pipe\ao-browser-hosted`
+
 func pipeNameFromRunFile(runFilePath string) string {
 	if runFilePath == "" {
-		return `\\.\pipe\ao-browser`
+		return basePipeName
 	}
 	dir := filepath.Base(filepath.Dir(runFilePath))
-	if dir == ".ao" || dir == "." || dir == "" {
-		return `\\.\pipe\ao-browser`
+	if dir == config.StateRootSubdir || dir == "." || dir == "" {
+		return basePipeName
 	}
-	return `\\.\pipe\ao-browser-` + unsafePipeChars.ReplaceAllString(dir, "-")
+	return basePipeName + "-" + unsafePipeChars.ReplaceAllString(dir, "-")
 }
 
 // Listen creates the local daemon-to-Electron browser bridge listener.

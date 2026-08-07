@@ -37,7 +37,7 @@ describe("resolveDaemonLaunch", () => {
 		).toEqual({
 			command: "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao",
 			args: ["daemon"],
-			cwd: "/Users/alice/.ao",
+			cwd: "/Users/alice/.ao/hosted",
 			shell: false,
 			source: "bundled",
 		});
@@ -56,7 +56,7 @@ describe("resolveDaemonLaunch", () => {
 		).toEqual({
 			command: "C:\\Program Files\\AO\\resources/daemon/ao.exe",
 			args: ["daemon"],
-			cwd: "C:\\Users\\alice/.ao",
+			cwd: "C:\\Users\\alice/.ao/hosted",
 			shell: false,
 			source: "bundled",
 		});

@@ -29,9 +29,13 @@ import (
 // lineage and are exactly what WithAllowMissing exists to tolerate.
 //
 // Extend this when a new migration creates or alters one of these tables.
+// Only track a table here for as long as it is expected to exist in every
+// valid history: worker_idle_events (created in 0025) is deliberately absent,
+// because upstream's own 0037_drop_worker_idle_outbox.sql drops it again, so
+// "applied but missing" is the normal post-0037 state, not evidence of a
+// foreign build.
 var tableVersions = map[string][]int64{
-	"shell_terminals":    {27, 36},
-	"worker_idle_events": {25},
+	"shell_terminals": {27, 36},
 }
 
 // checkForeignHistory runs before goose.Up and reports a database whose

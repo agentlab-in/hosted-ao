@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
+	"github.com/aoagents/agent-orchestrator/backend/internal/doctor"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -71,6 +72,11 @@ type Deps struct {
 	LookPath           func(file string) (string, error)
 	CommandOutput      func(ctx context.Context, name string, args ...string) ([]byte, error)
 	CommandOutputInDir func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+	// RunInteractive hands this process's real terminal to another program and
+	// waits for it, rather than capturing its output. ao vm setup-harness needs
+	// it: the harness login prints a URL and waits for a code to be pasted
+	// back, which only works on a terminal a human is sitting at.
+	RunInteractive func(ctx context.Context, name string, args ...string) error
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -91,19 +97,39 @@ func DefaultDeps() Deps {
 		LookPath:             exec.LookPath,
 		CommandOutput:        commandOutput,
 		CommandOutputInDir:   commandOutputInDir,
-		DoctorGitHubRESTBase: defaultDoctorGitHubRESTBase,
+		RunInteractive:       runInteractive,
+		DoctorGitHubRESTBase: doctor.DefaultGitHubRESTBase,
 		Now:                  time.Now,
 		Sleep:                time.Sleep,
 	}
 }
 
+// commandOutput runs a probe through the shared helper, which bounds the wait
+// on the output pipes (aoprocess.WaitDelay). `ao doctor` shells out to Node
+// CLIs that spawn children of their own, and without that bound a surviving
+// grandchild holding the pipe keeps Wait blocked forever: the probe's context
+// deadline kills the direct child and nothing else, so the command never
+// returns to the user.
 func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return aoprocess.CommandContext(ctx, name, args...).CombinedOutput()
+	return aoprocess.CombinedOutput(ctx, name, args...)
+}
+
+// runInteractive inherits the process's own stdio so the child owns the
+// terminal. It uses os/exec directly rather than the shared process helper
+// because that helper hides the child's window on Windows, which is wrong for
+// a program the user has to interact with.
+func runInteractive(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func commandOutputInDir(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = aoprocess.WaitDelay // same pipe-holding grandchild problem, see commandOutput
 	return cmd.CombinedOutput()
 }
 
@@ -138,6 +164,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.CommandOutputInDir == nil {
 		d.CommandOutputInDir = def.CommandOutputInDir
+	}
+	if d.RunInteractive == nil {
+		d.RunInteractive = def.RunInteractive
 	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
@@ -190,6 +219,9 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newSendCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))
+	root.AddCommand(newVMCommand(ctx))
+	root.AddCommand(newSetupVMCommand(ctx))
+	root.AddCommand(newWhoamiCommand(ctx))
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newLaunchCommand(ctx))
@@ -220,8 +252,11 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// "ao daemon"/"ao start" are supervisor-driven bootstrapping, and
 	// "ao completion"/"ao help" are shell setup and self-documentation.
 	// "ao pty-host" and "ao agent-process" are internal runtime processes.
+	// "ao vm serve" is systemd-driven bootstrapping like "ao daemon", and it
+	// is also a long-running foreground process that must not depend on the
+	// loopback daemon it may be starting ahead of.
 	// None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao agent-process", "ao agent-process supervise":
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao agent-process", "ao agent-process supervise", "ao vm serve":
 		return false
 	default:
 		return true

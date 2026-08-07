@@ -19,6 +19,7 @@ import {
 	SIDEBAR_MIN_WIDTH,
 } from "./Sidebar";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import type { CreateProjectInput } from "./CreateProjectFlow";
 import { agentsQueryKey } from "../hooks/useAgentsQuery";
 import { useUiStore } from "../stores/ui-store";
 
@@ -108,13 +109,6 @@ function sidebarPR(overrides: Partial<WorkspaceSession["prs"][number]> = {}): Wo
 	};
 }
 
-type CreateProjectInput = {
-	path: string;
-	workerAgent: string;
-	orchestratorAgent: string;
-	trackerIntake?: unknown;
-	asWorkspace?: boolean;
-};
 type CreateProjectHandler = (input: CreateProjectInput) => Promise<void>;
 type InitializeProjectHandler = (path: string) => Promise<void>;
 type RemoveProjectHandler = (projectId: string) => Promise<void>;

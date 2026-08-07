@@ -418,7 +418,24 @@ func operations() []operation {
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, browserOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
+	ops = append(ops, doctorOperations()...)
 	return ops
+}
+
+// doctorOperations describes the machine-readiness surface: the same checks
+// `ao doctor` runs, served under /api/v1 so the VM gateway forwards them and
+// the desktop can read a remote machine's readiness.
+func doctorOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/doctor", id: "getDoctorReport", tag: "doctor",
+			summary: "Run this machine's health checks and return the report",
+			resps: []respUnit{
+				{http.StatusOK, controllers.DoctorReportResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+	}
 }
 
 func browserOperations() []operation {

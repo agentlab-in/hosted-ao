@@ -7,6 +7,7 @@ import type { components } from "../../api/schema";
 import { agentsQueryKey, agentsQueryOptions, refreshAgents } from "../hooks/useAgentsQuery";
 import { AGENT_OPTIONS } from "../lib/agent-options";
 import { agentLabelCompare, buildRankedAgentOptions } from "../lib/agent-select-options";
+import { cloneUrlLabel } from "../lib/clone-url";
 import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
@@ -45,6 +46,10 @@ type CreateProjectAgentSheetProps = {
 	onSubmit: (selection: CreateProjectAgentSelection) => Promise<void>;
 	open: boolean;
 	path: string | null;
+	// Set instead of `path` when the project is being cloned by URL. The daemon
+	// clones synchronously (no job model, no progress channel), so submitting
+	// can take minutes and the sheet has to keep saying so.
+	cloneUrl?: string | null;
 	repositorySetupNeeded?: boolean;
 	repositorySetupWarning?: string | null;
 };
@@ -100,6 +105,7 @@ export function CreateProjectAgentSheet({
 	onSubmit,
 	open,
 	path,
+	cloneUrl = null,
 	repositorySetupNeeded = false,
 	repositorySetupWarning = null,
 }: CreateProjectAgentSheetProps) {
@@ -166,7 +172,7 @@ export function CreateProjectAgentSheet({
 								{kind === "workspace" ? t("createProject.workspaceAgents") : t("createProject.projectAgents")}
 							</Dialog.Title>
 							<Dialog.Description className="mt-1 break-all text-xs text-[var(--color-text-agents-sheet-description)]">
-								{path ?? ""}
+								{path ?? cloneUrl ?? ""}
 							</Dialog.Description>
 						</div>
 						<Dialog.Close asChild>
@@ -265,6 +271,8 @@ export function CreateProjectAgentSheet({
 							/>
 						</div>
 
+						{cloneUrl !== null && isCreating && <CloneProgress url={cloneUrl} />}
+
 						{repositorySetupNeeded && (
 							<div className="rounded-lg border border-[var(--color-border-agents-sheet)] bg-[var(--color-bg-agents-sheet-control)]/80 px-3 py-2.5 text-xs leading-body-md text-[var(--color-text-agents-sheet-description)]">
 								<p>{t("createProject.gitSetupNotice")}</p>
@@ -321,16 +329,63 @@ export function CreateProjectAgentSheet({
 								{isInitializing
 									? t("createProject.settingUp")
 									: isCreating
-										? t("createProject.creating")
-										: kind === "workspace"
-											? t("createProject.createWorkspaceAndStart")
-											: t("createProject.createAndStart")}
+										? cloneUrl !== null
+											? t("createProject.cloning")
+											: t("createProject.creating")
+										: cloneUrl !== null
+											? t("createProject.cloneAndStart")
+											: kind === "workspace"
+												? t("createProject.createWorkspaceAndStart")
+												: t("createProject.createAndStart")}
 							</Button>
 						</div>
 					</form>
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
+	);
+}
+
+function formatElapsed(totalSeconds: number): string {
+	const minutes = Math.floor(totalSeconds / 60);
+	return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Liveness for a synchronous clone. There is no progress to report (the daemon
+ * runs `git clone` to completion and answers once), so the honest signal is an
+ * elapsed counter plus an indeterminate bar: the window is working, not hung.
+ */
+function CloneProgress({ url }: { url: string }) {
+	const { t } = useTranslation();
+	const [elapsedSeconds, setElapsedSeconds] = useState(0);
+	useEffect(() => {
+		const startedAt = Date.now();
+		const timer = window.setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+		return () => window.clearInterval(timer);
+	}, []);
+
+	return (
+		<div
+			className="space-y-2 rounded-lg border border-[var(--color-border-agents-sheet)] bg-[var(--color-bg-agents-sheet-control)]/80 px-3 py-2.5"
+			role="status"
+			aria-live="polite"
+		>
+			<div className="flex items-center justify-between gap-3 text-xs leading-body-md">
+				<span className="min-w-0 truncate font-medium text-[var(--color-text-agents-sheet-title)]">
+					{t("createProject.cloningLabel", { label: cloneUrlLabel(url) })}
+				</span>
+				<span className="shrink-0 font-mono tabular-nums text-[var(--color-text-agents-sheet-description)]">
+					{formatElapsed(elapsedSeconds)}
+				</span>
+			</div>
+			<div className="h-1 overflow-hidden rounded-full bg-[var(--color-bg-agents-sheet)]">
+				<div className="clone-progress-bar" />
+			</div>
+			<p className="text-xs leading-body-md text-[var(--color-text-agents-sheet-description)]">
+				{t("createProject.cloneProgressHint")}
+			</p>
+		</div>
 	);
 }
 

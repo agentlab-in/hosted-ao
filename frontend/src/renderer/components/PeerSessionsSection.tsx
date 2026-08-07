@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { AlertTriangle, GitBranch, Loader2 } from "lucide-react";
@@ -27,6 +28,7 @@ type RowSwitchState =
  * renders both in the same card presentation, CLOUD first.
  */
 export function CloudLocalSections({ activeBoardContent }: { activeBoardContent: ReactNode }) {
+	const { t } = useTranslation();
 	const peerQuery = usePeerWorkspacesQuery(true);
 	const activeMachineName = useActiveMachineName();
 	const [switchState, setSwitchState] = useState<RowSwitchState>({ phase: "idle" });
@@ -66,7 +68,7 @@ export function CloudLocalSections({ activeBoardContent }: { activeBoardContent:
 	);
 	const activeSection = (
 		<section
-			aria-label={`${activeRole === "CLOUD" ? "Cloud" : "Local"} sessions`}
+			aria-label={activeRole === "CLOUD" ? t("peerSessions.cloudSessionsLabel") : t("peerSessions.localSessionsLabel")}
 			className="flex min-h-0 flex-1 flex-col gap-2"
 			data-testid={activeRole === "CLOUD" ? "board-section-cloud" : "board-section-local"}
 		>
@@ -102,21 +104,29 @@ function PeerSection({
 	switchState: RowSwitchState;
 	onOpen: (session: PeerSession, projectId: string, machineId: string) => void;
 }) {
+	const { t } = useTranslation();
 	return (
 		<section
-			aria-label={`${role === "CLOUD" ? "Cloud" : "Local"} sessions`}
+			aria-label={role === "CLOUD" ? t("peerSessions.cloudSessionsLabel") : t("peerSessions.localSessionsLabel")}
 			className="flex min-h-0 flex-col gap-2"
 			data-testid={role === "CLOUD" ? "board-section-cloud" : "board-section-local"}
 		>
 			<SectionHeading kind={role} machineName={result?.state === "ok" ? result.machineName : undefined} />
 			{query.isLoading ? (
-				<PeerStatusMessage icon={Loader2} spin text={`Looking for ${role === "CLOUD" ? "cloud" : "local"} sessions...`} />
+				<PeerStatusMessage
+					icon={Loader2}
+					spin
+					text={role === "CLOUD" ? t("peerSessions.lookingForCloud") : t("peerSessions.lookingForLocal")}
+				/>
 			) : query.isError || !result ? (
-				<PeerStatusMessage icon={AlertTriangle} text={`Could not load ${role === "CLOUD" ? "cloud" : "local"} sessions.`} />
+				<PeerStatusMessage
+					icon={AlertTriangle}
+					text={role === "CLOUD" ? t("peerSessions.couldNotLoadCloud") : t("peerSessions.couldNotLoadLocal")}
+				/>
 			) : result.state === "unavailable" ? (
 				<PeerStatusMessage icon={AlertTriangle} text={result.reason} />
 			) : result.projects.every((project) => project.sessions.length === 0) ? (
-				<PeerStatusMessage text={`No ${role === "CLOUD" ? "cloud" : "local"} sessions yet.`} />
+				<PeerStatusMessage text={role === "CLOUD" ? t("peerSessions.noCloudSessions") : t("peerSessions.noLocalSessions")} />
 			) : (
 				<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto">
 					<div className="flex flex-col gap-3 pb-2">
@@ -218,6 +228,7 @@ function PeerSessionRow({
 	onOpen: (session: PeerSession, projectId: string, machineId: string) => void;
 	switchState: RowSwitchState;
 }) {
+	const { t } = useTranslation();
 	const status = toSessionStatus(session.status);
 	const badge = getSessionStatusView(status);
 	const provider = toAgentProvider(session.harness);
@@ -274,7 +285,10 @@ function PeerSessionRow({
 						{badge.label}
 					</span>
 					{session.updatedAt ? (
-						<span className="shrink-0 whitespace-nowrap font-mono text-2xs text-passive" title={`Updated ${session.updatedAt}`}>
+						<span
+							className="shrink-0 whitespace-nowrap font-mono text-2xs text-passive"
+							title={t("peerSessions.updatedAt", { time: session.updatedAt })}
+						>
 							{formatTimeCompact(session.updatedAt)}
 						</span>
 					) : null}
@@ -282,7 +296,7 @@ function PeerSessionRow({
 				{isSwitchingThis ? (
 					<span className="flex items-center gap-1.5 text-2xs text-muted-foreground" data-testid="peer-switch-progress">
 						<Loader2 className="size-icon-2xs animate-spin" aria-hidden="true" />
-						Switching to {machineName}...
+						{t("peerSessions.switchingTo", { machineName })}
 					</span>
 				) : null}
 				{rowError ? (

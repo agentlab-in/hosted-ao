@@ -42,17 +42,31 @@ const POSTHOG_ORIGINS = (() => {
 	return origins;
 })();
 
-// CSP for the built renderer. The daemon is loopback-only, so network access is
-// pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws). Injected at
+// CSP for the built renderer. The local daemon is loopback-only (REST + SSE over
+// http, terminal mux over ws), which is why 127.0.0.1 is pinned. Injected at
 // build time rather than written into index.html because the dev server needs
 // inline scripts (react-refresh preamble) that a static meta tag would block.
+//
+// https: and wss: are here for registered machines. A machine's gateway domain
+// is supplied by the operator at `ao setup-vm` time and only known at runtime,
+// so a build-time policy cannot enumerate the origins the renderer must reach:
+// switching to a machine re-points REST, the SSE stream, and the terminal mux at
+// that gateway. Without these, a packaged build cannot talk to any machine at
+// all and the board fails with a CSP violation, while dev builds appear fine
+// because Vite proxies /api to 127.0.0.1.
+//
+// ponytail: broad https:/wss:. The tight fix is a per-session CSP built in the
+// main process from the registered machine list, narrowing this to exactly the
+// account's gateway origins. Worth doing once machine switching settles.
 const CONTENT_SECURITY_POLICY = [
 	"default-src 'self'",
 	"script-src 'self'",
 	"style-src 'self' 'unsafe-inline'",
 	"img-src 'self' data:",
 	"font-src 'self' data:",
-	["connect-src", "'self'", "http://127.0.0.1:*", "ws://127.0.0.1:*", ...POSTHOG_ORIGINS].filter(Boolean).join(" "),
+	["connect-src", "'self'", "http://127.0.0.1:*", "ws://127.0.0.1:*", "https:", "wss:", ...POSTHOG_ORIGINS]
+		.filter(Boolean)
+		.join(" "),
 	"object-src 'none'",
 	"base-uri 'self'",
 	"frame-src 'none'",

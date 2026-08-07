@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -2620,11 +2621,11 @@ func isDefaultDevDataDir(dataDir string) bool {
 	if strings.TrimSpace(dataDir) == "" {
 		return false
 	}
-	home, err := os.UserHomeDir()
+	stateDir, err := config.DefaultStateDir()
 	if err != nil {
 		return false
 	}
-	want, err := filepath.Abs(filepath.Join(home, ".ao", "dev", "data"))
+	want, err := filepath.Abs(filepath.Join(stateDir, "dev", "data"))
 	if err != nil {
 		return false
 	}
