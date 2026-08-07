@@ -19,6 +19,7 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | Telemetry collection, privacy safeguards, configuration, and PostHog dashboard guidance.                              |
 | [hosted-ao-v1-build-log.md](hosted-ao-v1-build-log.md) | Hosted AO v1: batch structure, PR per spec task, and the decisions that are not derivable from the diff.              |
+| [upstream-merge-playbook.md](upstream-merge-playbook.md) | Merging `Untrivial-ai/agent-orchestrator:main` into this repo: what must not change, what is safe to take, how to sequence and verify it. |
 | [reviews/](reviews/)                                   | Preserved code-review reports, each finding mapped to the PR that fixed it.                                            |
 
 ## Mental model
