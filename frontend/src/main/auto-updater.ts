@@ -378,11 +378,14 @@ async function runRetirementPoll(stateDir: string): Promise<void> {
 }
 
 // isManifest404Error checks whether the error is a 404 on a release
-// manifest YAML file — a routine condition that should not be surfaced
+// manifest YAML file, a routine condition that should not be surfaced
 // to users as an error dialog.
 function isManifest404Error(err: unknown): boolean {
   const e = err as Error & { code?: string };
   if (e.code === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND") return true;
+  // A release repo with no published release fails before any manifest
+  // fetch; that is the same routine "nothing to update to" condition.
+  if (e.code === "ERR_UPDATER_NO_PUBLISHED_VERSIONS") return true;
   const msg = e.message ?? "";
   return msg.includes("HttpError: 404") && /\.yml\b/i.test(msg);
 }
