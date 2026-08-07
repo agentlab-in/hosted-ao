@@ -477,10 +477,10 @@ function ImportModePicker({
 					onClick={onCloneFromUrl}
 				>
 					<CloudDownload className="size-4 shrink-0" aria-hidden="true" />
-					Clone from a Git URL
+					{t("createProject.cloneFromUrl")}
 				</button>
 				<p className="text-[13px] font-normal leading-5 text-[var(--color-text-import-muted)]">
-					Not on this machine yet? AO clones the repository first, then imports it as a project.
+					{t("createProject.cloneFromUrlHint")}
 				</p>
 			</div>
 			{onClose && (
@@ -750,6 +750,7 @@ function CloneProjectDialog({
 	open: boolean;
 	url: string;
 }) {
+	const { t } = useTranslation();
 	// Validity is checked as you type, but only reported once the field has been
 	// left or a submit was attempted: no red text while typing a valid URL.
 	const [touched, setTouched] = useState(false);
@@ -777,7 +778,7 @@ function CloneProjectDialog({
 							<button
 								type="button"
 								className="grid size-8 shrink-0 place-items-center rounded-lg border border-[var(--color-border-import-modal)] text-[var(--color-text-import-muted)] transition hover:bg-[var(--color-bg-import-card-hover)] hover:text-[var(--color-text-import-title)] disabled:pointer-events-none disabled:opacity-50"
-								aria-label="Back to import type"
+								aria-label={t("createProject.backToType")}
 								disabled={disabled}
 								onClick={onBack}
 							>
@@ -785,17 +786,17 @@ function CloneProjectDialog({
 							</button>
 							<div className="min-w-0 flex-1">
 								<Dialog.Title className="text-[18px] font-semibold text-[var(--color-text-import-title)]">
-									Clone a repository
+									{t("createProject.cloneTitle")}
 								</Dialog.Title>
 								<Dialog.Description className="mt-1 max-w-[440px] text-[13px] font-medium leading-5 text-[var(--color-text-import-muted)]">
-									AO clones the repository onto the machine running it, then imports the clone as a project.
+									{t("createProject.cloneDescription")}
 								</Dialog.Description>
 							</div>
 							<Dialog.Close asChild>
 								<button
 									type="button"
 									className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--color-text-import-muted)] transition hover:bg-[var(--color-bg-import-card-hover)] hover:text-[var(--color-text-import-title)] disabled:pointer-events-none disabled:opacity-50"
-									aria-label="Close clone dialog"
+									aria-label={t("createProject.closeCloneDialog")}
 									disabled={disabled}
 								>
 									<X className="size-4" aria-hidden="true" />
@@ -809,7 +810,7 @@ function CloneProjectDialog({
 									htmlFor="cloneProjectUrl"
 									className="text-[12px] font-medium text-[var(--color-text-import-muted)]"
 								>
-									Repository URL
+									{t("createProject.repositoryUrlLabel")}
 								</Label>
 								<Input
 									id="cloneProjectUrl"
@@ -844,8 +845,8 @@ function CloneProjectDialog({
 							    screen: the daemon's own remediation supersedes it. */}
 							{!error && (
 								<div className="rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-4 py-3 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-									A large repository can take a few minutes to clone. A private one needs git credentials on that
-									machine: run <RemediationText text="`gh auth login`" /> there first.
+									{t("createProject.cloneHintBefore")} <RemediationText text="`gh auth login`" />{" "}
+									{t("createProject.cloneHintAfter")}
 								</div>
 							)}
 
@@ -871,10 +872,10 @@ function CloneProjectDialog({
 							</p>
 							<div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
 								<Button type="button" variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
-									Cancel
+									{t("createProject.cancel")}
 								</Button>
 								<Button type="submit" variant="primary" disabled={disabled || target === null}>
-									Continue
+									{t("createProject.continue")}
 								</Button>
 							</div>
 						</div>
