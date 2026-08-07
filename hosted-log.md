@@ -115,6 +115,8 @@ story; the seven translated upstream READMEs removed.
 - The auto-updater 404s against a stale nightly tag; silence or point it at a
   real release.
 - Old branch/tag objects may persist in GitHub caches until a support gc.
+- Dependabot reports 56 vulnerabilities on develop (19 high), inherited with
+  upstream's dependency tree in the merge; needs a triage pass.
 
 # 2026-07-31: v1 verified end to end
 
