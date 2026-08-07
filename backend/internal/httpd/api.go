@@ -101,9 +101,9 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 		// The doctor route has no service behind it: it probes the machine
 		// this daemon runs on, so it is always available rather than 501 on a
 		// missing dependency.
-		doctor:        &controllers.DoctorController{},
-		browser:       &controllers.BrowserController{Svc: deps.Browser},
-		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
+		doctor:  &controllers.DoctorController{},
+		browser: &controllers.BrowserController{Svc: deps.Browser},
+		events:  &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
 }
 
