@@ -3,6 +3,7 @@ import type { AoAccountState } from "../../shared/ao-account";
 import { LOCAL_MACHINE_ID, localMachine, type AoMachinesState } from "../../shared/ao-machines";
 import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 import type { PeerWorkspacesResult } from "../../shared/peer-workspaces";
+import "../i18n";
 
 const signedOutAoAccount: AoAccountState = { status: "signed-out", controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL };
 
@@ -78,12 +79,17 @@ if (typeof window !== "undefined") {
 			chooseDirectory: async () => null,
 			openExternal: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
+			checkAncestorRepo: async () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
+			onCloseShellTerminalShortcut: () => () => undefined,
+			setCloseShellTerminalShortcutEnabled: () => undefined,
 			onOpenSettingsShortcut: () => () => undefined,
 			onPreviousSessionShortcut: () => () => undefined,
 			onNextSessionShortcut: () => () => undefined,
+			onPreviousTabShortcut: () => () => undefined,
+			onNextTabShortcut: () => () => undefined,
 			onFocusTerminalShortcut: () => () => undefined,
 		},
 		terminal: {
@@ -109,6 +115,7 @@ if (typeof window !== "undefined") {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
 			stop: async () => ({ state: "stopped" }),
+			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
 		telemetry: {
@@ -174,15 +181,26 @@ if (typeof window !== "undefined") {
 				canGoForward: false,
 				isLoading: false,
 			}),
+			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
+			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
+			closeTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
 			destroy: () => undefined,
 			setAnnotationMode: async () => undefined,
 			onNavState: () => () => undefined,
+			onTabsState: () => () => undefined,
+			onAgentActivity: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 		},
 		notifications: {
 			show: async () => undefined,
+			setBadge: async () => undefined,
+			devBounce: async () => undefined,
 			onClick: () => () => undefined,
+		},
+		tray: {
+			setAttentionState: () => undefined,
+			onOpenSession: () => () => undefined,
 		},
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
@@ -192,6 +210,17 @@ if (typeof window !== "undefined") {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null }),
 			set: async () => undefined,
 		},
+		uiSettings: {
+			get: async () => ({ locale: "en" as const }),
+			set: async (settings: { locale: string }) => ({
+				locale: settings.locale as "en",
+			}),
+		},
+		keybindings: {
+			get: async () => ({}),
+			set: async (overrides) => overrides,
+			setRecording: async () => undefined,
+		},
 		updates: {
 			getStatus: async () => ({ state: "idle" }),
 			check: async () => undefined,
@@ -199,6 +228,7 @@ if (typeof window !== "undefined") {
 			download: async () => undefined,
 			install: async () => undefined,
 			onStatus: () => () => undefined,
+		onTelemetry: () => () => undefined,
 		},
 		featureBuilds: {
 			list: async () => [],

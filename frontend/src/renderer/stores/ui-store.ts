@@ -1,19 +1,40 @@
 import { create } from "zustand";
+import type { TerminalTarget } from "../types/terminal";
 import {
+	applyDocumentTheme,
+	applyDocumentThemeStyle,
 	readStoredThemePreference,
+	readStoredThemeStyle,
 	resolveTheme,
+	runThemeTransition,
 	systemTheme,
 	themeStorageKey,
+	themeStyleStorageKey,
 	type Theme,
 	type ThemePreference,
+	type ThemeStyle,
 } from "../lib/theme";
 
-export type { Theme, ThemePreference } from "../lib/theme";
-export { readStoredThemePreference, resolveTheme } from "../lib/theme";
+export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
+export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
+
+export type SettingsModal =
+	| { scope: "global" }
+	| {
+			scope: "project";
+			projectId: string;
+	  };
+
+export type DevSettings = {
+	/** Number of fixture sessions to generate per attention zone (0 = off). */
+	fixtureCount: number;
+	/** Number of minutes of random activity to spread sessions across. */
+	randomSpreadMinutes: number;
+};
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "files";
+export type InspectorView = "summary" | "browser" | "files";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
@@ -34,15 +55,18 @@ type UiState = {
 	isSidebarOpen: boolean;
 	inspectorSessions: Record<string, InspectorSessionState>;
 	isCommandPaletteOpen: boolean;
+	settingsModal: SettingsModal | null;
 	themePreference: ThemePreference;
 	/** Resolved light/dark for React consumers; may track OS while preference is system. */
 	resolvedTheme: Theme;
+	/** Named color style theme (e.g. "catppuccin", "nord") — independent of light/dark mode. */
+	themeStyle: ThemeStyle;
 	/** When true, developer-only surfaces (e.g. Feature Releases) are revealed. Default off. */
 	developerMode: boolean;
 	/** When true, the board shows CLOUD and LOCAL session sections side by side. Default off. */
 	cloudEnabled: boolean;
 	restartingProjectIds: ReadonlySet<string>;
-	orchestratorReplacementErrors: Record<string, string>;
+	orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
 	orchestratorStartupErrors: Record<string, string>;
 	// Transient "open the New Task dialog for this project" signal. The nonce
 	// bumps on every request so a repeat press (even for the same project) still
@@ -62,8 +86,21 @@ type UiState = {
 	// session view (tabs beside the session's pane) and the standalone terminals
 	// view read it, so whichever one is on screen shows the same shell.
 	activeShellTerminalHandleId: string | null;
+	// Which terminal each mounted session is actually showing. The session pane
+	// renders one terminal at a time, so opening a shell or the reviewer swaps
+	// the agent's terminal off screen even though the route still points at that
+	// session. Surfaces outside the session subtree (the notification runtime)
+	// need that distinction, and SessionView's own target is local state.
+	visibleTerminalKindBySession: Record<string, TerminalTarget["kind"]>;
+	/** Dev-only settings persisted to localStorage. */
+	devSettings: DevSettings;
 	setWorkbenchTab: (tab: WorkbenchTab) => void;
 	setThemePreference: (theme: ThemePreference) => void;
+	setThemeStyle: (style: ThemeStyle) => void;
+	openGlobalSettings: () => void;
+	openProjectSettings: (projectId: string) => void;
+	closeSettings: () => void;
+	setDevSettings: (devSettings: DevSettings) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setCloudEnabled: (enabled: boolean) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
@@ -76,17 +113,41 @@ type UiState = {
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean) => void;
-	setOrchestratorReplacementError: (projectId: string, message: string | null) => void;
+	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
 	setOrchestratorStartupError: (projectId: string, message: string | null) => void;
 	requestNewTask: (projectId: string) => void;
 	requestCreateProject: () => void;
 	requestNewShellTerminal: () => void;
 	setActiveShellTerminal: (handleId: string | null) => void;
+	setVisibleTerminalKind: (sessionId: string, kind: TerminalTarget["kind"]) => void;
+	clearVisibleTerminalKind: (sessionId: string) => void;
+};
+
+export type OrchestratorReplacementFailure = {
+	message: string;
+	code?: string;
+	requestId?: string;
 };
 
 const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
 const cloudEnabledStorageKey = "ao.cloudEnabled";
+const devSettingsStorageKey = "ao.devSettings";
+const defaultDevSettings: DevSettings = { fixtureCount: 8, randomSpreadMinutes: 120 };
+
+function initialDevSettings(): DevSettings {
+	try {
+		const raw = getLocalStorage()?.getItem(devSettingsStorageKey);
+		if (raw) {
+			const parsed = JSON.parse(raw) as Partial<DevSettings>;
+			return {
+				fixtureCount: typeof parsed.fixtureCount === "number" ? parsed.fixtureCount : defaultDevSettings.fixtureCount,
+				randomSpreadMinutes: typeof parsed.randomSpreadMinutes === "number" ? parsed.randomSpreadMinutes : defaultDevSettings.randomSpreadMinutes,
+			};
+		}
+	} catch { /* use defaults */ }
+	return defaultDevSettings;
+}
 
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
@@ -110,14 +171,17 @@ function inspectorState(sessions: Record<string, InspectorSessionState>, session
 }
 
 const initialThemePreference = readStoredThemePreference();
+const initialThemeStyle = readStoredThemeStyle();
 
-export const useUiStore = create<UiState>((set) => ({
+export const useUiStore = create<UiState>((set, get) => ({
 	workbenchTab: "changes",
 	isSidebarOpen: initialSidebarOpen(),
 	inspectorSessions: {},
 	isCommandPaletteOpen: false,
+	settingsModal: null,
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
+	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperMode(),
 	cloudEnabled: initialCloudEnabled(),
 	restartingProjectIds: new Set<string>(),
@@ -127,10 +191,32 @@ export const useUiStore = create<UiState>((set) => ({
 	createProjectNonce: 0,
 	newShellTerminalNonce: 0,
 	activeShellTerminalHandleId: null,
+	visibleTerminalKindBySession: {},
+	devSettings: initialDevSettings(),
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
-		getLocalStorage()?.setItem(themeStorageKey, themePreference);
-		set({ themePreference, resolvedTheme: resolveTheme(themePreference) });
+		if (get().themePreference === themePreference) return;
+		runThemeTransition(() => {
+			const resolvedTheme = resolveTheme(themePreference);
+			getLocalStorage()?.setItem(themeStorageKey, themePreference);
+			applyDocumentTheme(resolvedTheme);
+			set({ themePreference, resolvedTheme });
+		});
+	},
+	setThemeStyle: (themeStyle) => {
+		if (get().themeStyle === themeStyle) return;
+		runThemeTransition(() => {
+			getLocalStorage()?.setItem(themeStyleStorageKey, themeStyle);
+			applyDocumentThemeStyle(themeStyle);
+			set({ themeStyle });
+		});
+	},
+	openGlobalSettings: () => set({ settingsModal: { scope: "global" } }),
+	openProjectSettings: (projectId) => set({ settingsModal: { scope: "project", projectId } }),
+	closeSettings: () => set({ settingsModal: null }),
+	setDevSettings: (devSettings) => {
+		getLocalStorage()?.setItem(devSettingsStorageKey, JSON.stringify(devSettings));
+		set({ devSettings });
 	},
 	setDeveloperMode: (developerMode) => {
 		getLocalStorage()?.setItem(developerModeStorageKey, String(developerMode));
@@ -140,12 +226,16 @@ export const useUiStore = create<UiState>((set) => ({
 		getLocalStorage()?.setItem(cloudEnabledStorageKey, String(cloudEnabled));
 		set({ cloudEnabled });
 	},
-	syncSystemTheme: () =>
-		set((state) => {
-			if (state.themePreference !== "system") return state;
-			const next = systemTheme();
-			return next === state.resolvedTheme ? state : { resolvedTheme: next };
-		}),
+	syncSystemTheme: () => {
+		const { themePreference, resolvedTheme } = get();
+		if (themePreference !== "system") return;
+		const next = systemTheme();
+		if (next === resolvedTheme) return;
+		runThemeTransition(() => {
+			applyDocumentTheme(next);
+			set({ resolvedTheme: next });
+		});
+	},
 	toggleSidebar: () =>
 		set((state) => {
 			const isSidebarOpen = !state.isSidebarOpen;
@@ -216,11 +306,11 @@ export const useUiStore = create<UiState>((set) => ({
 			}
 			return { restartingProjectIds };
 		}),
-	setOrchestratorReplacementError: (projectId, message) =>
+	setOrchestratorReplacementError: (projectId, failure) =>
 		set((state) => {
 			const orchestratorReplacementErrors = { ...state.orchestratorReplacementErrors };
-			if (message) {
-				orchestratorReplacementErrors[projectId] = message;
+			if (failure) {
+				orchestratorReplacementErrors[projectId] = failure;
 			} else {
 				delete orchestratorReplacementErrors[projectId];
 			}
@@ -241,6 +331,19 @@ export const useUiStore = create<UiState>((set) => ({
 	requestCreateProject: () => set((state) => ({ createProjectNonce: state.createProjectNonce + 1 })),
 	requestNewShellTerminal: () => set((state) => ({ newShellTerminalNonce: state.newShellTerminalNonce + 1 })),
 	setActiveShellTerminal: (activeShellTerminalHandleId) => set({ activeShellTerminalHandleId }),
+	setVisibleTerminalKind: (sessionId, kind) =>
+		set((state) =>
+			state.visibleTerminalKindBySession[sessionId] === kind
+				? state
+				: { visibleTerminalKindBySession: { ...state.visibleTerminalKindBySession, [sessionId]: kind } },
+		),
+	clearVisibleTerminalKind: (sessionId) =>
+		set((state) => {
+			if (!(sessionId in state.visibleTerminalKindBySession)) return state;
+			const visibleTerminalKindBySession = { ...state.visibleTerminalKindBySession };
+			delete visibleTerminalKindBySession[sessionId];
+			return { visibleTerminalKindBySession };
+		}),
 }));
 
 export function useResolvedTheme(): Theme {

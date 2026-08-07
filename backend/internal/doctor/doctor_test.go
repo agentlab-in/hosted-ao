@@ -117,13 +117,17 @@ func TestChecksHarnessVersions(t *testing.T) {
 		"git":    "/bin/git",
 		"claude": "/bin/claude",
 		"codex":  "/bin/codex",
+		"muse":   "/bin/muse",
 	}
 	deps := testDeps(t, cmdPath, func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "/bin/git":
 			return []byte("git version 2.43.0\n"), nil
-		case "/bin/claude", "/bin/codex":
+		case "/bin/claude", "/bin/codex", "/bin/muse":
 			if len(args) == 1 && args[0] == "--version" {
+				if name == "/bin/muse" {
+					return []byte("Muse Code 0.1.0 (0.1.0-R708.1)\n"), nil
+				}
 				return []byte(strings.TrimPrefix(name, "/bin/") + " 1.2.3\n"), nil
 			}
 			// The claude-auth readiness check probes the same binary.
@@ -143,11 +147,29 @@ func TestChecksHarnessVersions(t *testing.T) {
 	})
 
 	checks := Run(context.Background(), deps)
-	for _, name := range []string{"claude-code", "codex"} {
+	for _, name := range []string{"claude-code", "codex", "muse"} {
 		check := findCheck(t, checks, name)
 		if check.Level != Pass || !strings.Contains(check.Message, "resolves to") {
 			t.Fatalf("%s check = %+v, want PASS with path/version", name, check)
 		}
+	}
+}
+
+// TestRejectsUnrelatedMuseBinary covers a binary named `muse` on PATH that is
+// not the harness (a naming collision), so the check must not report it as a
+// signal of readiness just because the binary resolved and produced output.
+func TestRejectsUnrelatedMuseBinary(t *testing.T) {
+	setConfigEnv(t)
+	deps := testDeps(t, map[string]string{"git": "/bin/git", "muse": "/bin/muse"}, func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "/bin/git" {
+			return []byte("git version 2.43.0\n"), nil
+		}
+		return []byte("unrelated muse 1.0\n"), nil
+	})
+
+	check := findCheck(t, Run(context.Background(), deps), "muse")
+	if check.Level != Warn || !strings.Contains(check.Message, "does not identify the expected CLI") {
+		t.Fatalf("muse check = %+v, want WARN for unrelated binary", check)
 	}
 }
 

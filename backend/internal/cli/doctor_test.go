@@ -73,7 +73,7 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor failed: %v\nstderr=%s\nstdout=%s", err, errOut, out)
 	}
-	for _, want := range []string{"Core:\nPASS config:", "Tools:\nPASS git:", "Agent harnesses:\nWARN claude-code:", "WARN codex:", "GitHub:\nWARN github-token:"} {
+	for _, want := range []string{"Core:\nPASS config:", "Tools:\nPASS git:", "Agent harnesses:\nWARN claude-code:", "WARN codex:", "WARN muse:", "GitHub:\nWARN github-token:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
 		}

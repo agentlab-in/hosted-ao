@@ -1,4 +1,4 @@
-import { COMPANY } from "@superset/shared/constants";
+import { COMPANY } from "@ao/shared/constants";
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import { IBM_Plex_Mono } from "next/font/google";
@@ -29,8 +29,8 @@ const siteDescription =
 export const metadata: Metadata = {
   metadataBase: new URL(COMPANY.MARKETING_URL),
   title: {
-    default: `${COMPANY.SHORT_NAME}: Run coding agents in parallel`,
-    template: `%s | ${COMPANY.SHORT_NAME}`,
+    default: `Run Coding Agents in Parallel | ${COMPANY.NAME}`,
+    template: `%s | ${COMPANY.NAME}`,
   },
   description: siteDescription,
   keywords: [
@@ -54,20 +54,20 @@ export const metadata: Metadata = {
     locale: "en_US",
     url: COMPANY.MARKETING_URL,
     siteName: COMPANY.NAME,
-    title: `${COMPANY.SHORT_NAME}: Run coding agents in parallel`,
+    title: COMPANY.NAME,
     description: siteDescription,
     images: [
       {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: `${COMPANY.SHORT_NAME}: Run coding agents in parallel`,
+        alt: COMPANY.NAME,
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: `${COMPANY.SHORT_NAME}: Run coding agents in parallel`,
+    title: COMPANY.NAME,
     description: siteDescription,
     images: ["/og-image.png"],
     creator: "@aoagents",
@@ -106,6 +106,22 @@ export default function RootLayout({
         <OrganizationJsonLd />
         <SoftwareApplicationJsonLd />
         <WebsiteJsonLd />
+        <link rel="preload" as="image" href="/optimized/hero-background.webp" type="image/webp" />
+        <link rel="preload" as="image" href="/optimized/feature.webp" type="image/webp" />
+        <link rel="preload" as="image" href="/optimized/feature2.webp" type="image/webp" />
+        <link rel="preload" as="image" href="/optimized/feature3.webp" type="image/webp" />
+        <link rel="preload" as="image" href="/optimized/feature4.webp" type="image/webp" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                var ua = navigator.userAgent || "";
+                document.documentElement.dataset.landingPlatform =
+                  /mac os x|macintosh/i.test(ua) ? "mac" : "other";
+              })();
+            `,
+          }}
+        />
       </head>
       <body className="relative overscroll-none font-sans antialiased">
         <Providers>

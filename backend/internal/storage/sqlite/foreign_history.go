@@ -28,10 +28,12 @@ import (
 // not have. Versions ahead of ours are normal across nightlies of the same
 // lineage and are exactly what WithAllowMissing exists to tolerate.
 //
-// Extend this when a new migration creates or alters one of these tables.
+// Extend this when a new migration creates or alters one of these tables, and
+// REMOVE a table when a later migration drops it: once our own history can
+// legitimately leave the table absent (worker_idle_events, dropped by 0037),
+// its absence proves nothing.
 var tableVersions = map[string][]int64{
-	"shell_terminals":    {27, 36},
-	"worker_idle_events": {25},
+	"shell_terminals": {27, 36},
 }
 
 // checkForeignHistory runs before goose.Up and reports a database whose

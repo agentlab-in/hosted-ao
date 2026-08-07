@@ -4,21 +4,24 @@ import { FeatureDemo } from "./components/FeatureDemo";
 import { DelegationDemo } from "./components/DelegationDemo/DelegationDemo";
 import { FeedbackLoopDemo } from "./components/FeedbackLoopDemo/FeedbackLoopDemo";
 import { FleetBoardDemo } from "./components/FleetBoardDemo/FleetBoardDemo";
-import { HarnessCoverageDemo } from "./components/HarnessCoverageDemo/HarnessCoverageDemo";
+import { MobileAppDemo } from "./components/MobileAppDemo/MobileAppDemo";
+import { ProjectAgentsDemo } from "./components/ProjectAgentsDemo/ProjectAgentsDemo";
 import { FEATURES } from "./constants";
 
 const DEMO_COMPONENTS = [
 	DelegationDemo,
 	FleetBoardDemo,
 	FeedbackLoopDemo,
-	HarnessCoverageDemo,
+	ProjectAgentsDemo,
+	MobileAppDemo,
 ];
 
 const FEATURE_BACKGROUNDS = [
-	"/feature3.png",
-	"/feature.png",
-	"/feature4.png",
-	"/feature2.png",
+	"/optimized/feature3.webp",
+	"/optimized/feature.webp",
+	"/optimized/feature4.webp",
+	"/optimized/feature2.webp",
+	"/optimized/feature3.webp",
 ] as const;
 
 export function FeaturesSection() {
@@ -45,12 +48,12 @@ export function FeaturesSection() {
 										<span className="text-sm font-mono text-muted-foreground tracking-[0.5px]">
 											{feature.tag}
 										</span>
-										<h3 className="text-2xl sm:text-3xl lg:text-4xl font-medium tracking-[-0.5px] text-foreground">
+										<h3 className="text-balance text-2xl sm:text-3xl lg:text-4xl font-medium tracking-[-0.5px] text-foreground">
 											{feature.title}
 										</h3>
 									</div>
 									<p
-										className={`text-base sm:text-lg text-muted-foreground leading-relaxed max-w-[500px] ${isReversed ? "xl:ml-auto" : ""}`}
+										className={`max-w-[500px] text-pretty text-base sm:text-lg text-muted-foreground leading-relaxed ${isReversed ? "xl:ml-auto" : ""}`}
 									>
 										{feature.description}
 									</p>
@@ -62,6 +65,7 @@ export function FeaturesSection() {
 										backgroundImage={
 											FEATURE_BACKGROUNDS[index % FEATURE_BACKGROUNDS.length]
 										}
+										preload
 									>
 										{DemoComponent && <DemoComponent />}
 									</FeatureDemo>

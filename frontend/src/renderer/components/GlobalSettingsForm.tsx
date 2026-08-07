@@ -1,6 +1,6 @@
-import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { Mail } from "lucide-react";
+import { Keyboard, Mail } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { ConnectMobileModal } from "./ConnectMobileModal";
 import { AccountSection } from "./settings/AccountSection";
 import { CloudSection } from "./settings/CloudSection";
@@ -9,33 +9,71 @@ import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
 import { MachinesSection } from "./settings/MachinesSection";
 import { ReportProblemDialog } from "./settings/ReportProblemDialog";
 import { SettingsLinkRow } from "./settings/SettingsRow";
-import { SettingsPageShell } from "./settings/SettingsPageShell";
-import { SettingsPanel } from "./settings/SettingsPanel";
 import { SettingsSection } from "./settings/SettingsSection";
 import { UpdatesSection } from "./settings/UpdatesSection";
+import { DevSettingsSection } from "./settings/DevSettingsSection";
+import { KeyboardShortcutsSettingsDialog } from "./settings/KeyboardShortcutsSettingsDialog";
 
-export function GlobalSettingsForm() {
-	const navigate = useNavigate();
+// ponytail: AO account/machines/cloud settings are hosted-only and not yet
+// wired into react-i18next (their copy is hardcoded English below, matching
+// the section components themselves). Localize together if/when the rest of
+// the hosted settings UI gets translated.
+
+export type GlobalSettingsSection = "general" | "updates" | "developer" | "help" | "all";
+
+export function GlobalSettingsForm({ section = "all" }: { section?: GlobalSettingsSection }) {
+	const { t } = useTranslation();
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const [reportProblemOpen, setReportProblemOpen] = useState(false);
+	const [keyboardShortcutsOpen, setKeyboardShortcutsOpen] = useState(false);
+	// One section per page means the dialog header already names it, so the
+	// page's leading heading would just repeat that title.
+	const leadingTitleHidden = section !== "all";
 
 	return (
 		<>
-			<SettingsPageShell>
-				<SettingsPanel onClose={() => navigate({ to: "/" })}>
-					<GeneralSettingsSection onConnectMobile={() => setMobileOpen(true)} />
-					<AccountSection />
-					<MachinesSection />
-					<CloudSection />
-					<UpdatesSection />
-					<DeveloperModeSection />
-					<SettingsSection title="Get help">
-						<SettingsLinkRow icon={Mail} label="Report a problem" onClick={() => setReportProblemOpen(true)} />
+			<div
+				aria-label={t("settings.title")}
+				className="flex w-full flex-col gap-(--size-settings-section-gap)"
+				data-testid="settings-page"
+			>
+				{(section === "all" || section === "general") && (
+					<>
+						<GeneralSettingsSection
+							onConnectMobile={() => setMobileOpen(true)}
+							titleHidden={leadingTitleHidden}
+						/>
+						<AccountSection />
+						<MachinesSection />
+						<CloudSection />
+						<SettingsSection title={t("settings.preferences")}>
+							<SettingsLinkRow
+								icon={Keyboard}
+								label={t("settings.keyboardShortcuts")}
+								onClick={() => setKeyboardShortcutsOpen(true)}
+							/>
+						</SettingsSection>
+					</>
+				)}
+				{(section === "all" || section === "updates") && <UpdatesSection titleHidden={leadingTitleHidden} />}
+				{(section === "all" || section === "developer") && (
+					<>
+						<DeveloperModeSection titleHidden={leadingTitleHidden} />
+						<DevSettingsSection titleHidden={leadingTitleHidden} />
+					</>
+				)}
+				{(section === "all" || section === "help") && (
+					<SettingsSection title={t("settings.getHelp")} titleHidden={leadingTitleHidden}>
+						<SettingsLinkRow icon={Mail} label={t("settings.reportProblem")} onClick={() => setReportProblemOpen(true)} />
 					</SettingsSection>
-				</SettingsPanel>
-			</SettingsPageShell>
+				)}
+			</div>
 			<ConnectMobileModal open={mobileOpen} onOpenChange={setMobileOpen} />
 			<ReportProblemDialog open={reportProblemOpen} onOpenChange={setReportProblemOpen} />
+			<KeyboardShortcutsSettingsDialog
+				open={keyboardShortcutsOpen}
+				onOpenChange={setKeyboardShortcutsOpen}
+			/>
 		</>
 	);
 }

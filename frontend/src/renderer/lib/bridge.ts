@@ -11,6 +11,7 @@ import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 import { machineDaemonStatus } from "../../shared/remote-daemon";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import type { PeerProject, PeerWorkspacesResult } from "../../shared/peer-workspaces";
+import { coerceLocale } from "../../shared/ui-locale";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 const BROWSER_PREVIEW_ACCOUNT_STATE: AoAccountState = {
@@ -143,12 +144,17 @@ export const aoBridge: AoBridge =
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
+			checkAncestorRepo: async () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
+			onCloseShellTerminalShortcut: () => () => undefined,
+			setCloseShellTerminalShortcutEnabled: () => undefined,
 			onOpenSettingsShortcut: () => () => undefined,
 			onPreviousSessionShortcut: () => () => undefined,
 			onNextSessionShortcut: () => () => undefined,
+			onPreviousTabShortcut: () => () => undefined,
+			onNextTabShortcut: () => () => undefined,
 			onFocusTerminalShortcut: () => () => undefined,
 		},
 		terminal: {
@@ -178,6 +184,7 @@ export const aoBridge: AoBridge =
 			getStatus: async () => browserPreviewDaemonStatus(),
 			start: async () => ({ state: "starting" }),
 			stop: async () => ({ state: "stopped" }),
+			restart: async () => ({ state: "starting" }),
 			onStatus: (listener: (status: DaemonStatus) => void) => {
 				previewDaemonStatusListeners.add(listener);
 				return () => previewDaemonStatusListeners.delete(listener);
@@ -244,17 +251,28 @@ export const aoBridge: AoBridge =
 				canGoForward: false,
 				isLoading: false,
 			}),
+			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
+			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
+			closeTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
 			destroy: () => undefined,
 			capture: async () => "",
 			requestMirror: async () => false,
 			setAnnotationMode: async () => undefined,
 			onNavState: () => () => undefined,
+			onTabsState: () => () => undefined,
+			onAgentActivity: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 		},
 		notifications: {
 			show: async () => undefined,
+			setBadge: async () => undefined,
+			devBounce: async () => undefined,
 			onClick: () => () => undefined,
+		},
+		tray: {
+			setAttentionState: () => undefined,
+			onOpenSession: () => () => undefined,
 		},
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
@@ -264,6 +282,15 @@ export const aoBridge: AoBridge =
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null }),
 			set: async () => undefined,
 		},
+		uiSettings: {
+			get: async () => ({ locale: "en" as const }),
+			set: async (settings) => ({ locale: coerceLocale(settings.locale) }),
+		},
+		keybindings: {
+			get: async () => ({}),
+			set: async (overrides) => overrides,
+			setRecording: async () => undefined,
+		},
 		updates: {
 			getStatus: async () => ({ state: "idle" }),
 			check: async () => undefined,
@@ -271,6 +298,7 @@ export const aoBridge: AoBridge =
 			download: async () => undefined,
 			install: async () => undefined,
 			onStatus: () => () => undefined,
+			onTelemetry: () => () => undefined,
 		},
 		featureBuilds: {
 			list: async () => [],

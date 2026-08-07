@@ -15,9 +15,11 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [architecture.md](architecture.md)                     | Current backend model, package layout, status derivation, persistence/CDC, and load-bearing rules.                    |
 | [backend-code-structure.md](backend-code-structure.md) | Package ownership rules for the Go backend: domain, services, ports, adapters, storage, HTTP, CLI, and daemon wiring. |
 | [cli/README.md](cli/README.md)                         | CLI commands and daemon control surface.                                                                              |
+| [development.md](development.md)                       | Prerequisites, build steps, running tests, and troubleshooting for local development.                                 |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | Telemetry collection, privacy safeguards, configuration, and PostHog dashboard guidance.                              |
+| [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
 | [hosted-ao-v1-build-log.md](hosted-ao-v1-build-log.md) | Hosted AO v1: batch structure, PR per spec task, and the decisions that are not derivable from the diff.              |
 | [upstream-merge-playbook.md](upstream-merge-playbook.md) | Merging `Untrivial-ai/agent-orchestrator:main` into this repo: what must not change, what is safe to take, how to sequence and verify it. |
 | [reviews/](reviews/)                                   | Preserved code-review reports, each finding mapped to the PR that fixed it.                                            |

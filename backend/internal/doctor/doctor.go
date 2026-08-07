@@ -114,11 +114,17 @@ type harnessProbe struct {
 	Name       string
 	BinaryName string
 	VersionArg string
+	// ExpectedVersionPrefix, when set, is the prefix the harness's version
+	// output must start with to be trusted as that harness. Some CLIs (muse)
+	// share a binary name convention loosely enough that a same-named but
+	// unrelated binary on PATH would otherwise pass silently.
+	ExpectedVersionPrefix string
 }
 
 var harnesses = []harnessProbe{
 	{Name: "claude-code", BinaryName: ClaudeHarnessName, VersionArg: "--version"},
 	{Name: "codex", BinaryName: "codex", VersionArg: "--version"},
+	{Name: "muse", BinaryName: "muse", VersionArg: "--version", ExpectedVersionPrefix: "Muse Code "},
 }
 
 // Deps holds the side effects the checks need, so both callers can inject
@@ -515,6 +521,12 @@ func (d Deps) checkHarness(ctx context.Context, harness harnessProbe) Check {
 	version := FirstOutputLine(out)
 	if version == "" {
 		version = "version output was empty"
+	}
+	if harness.ExpectedVersionPrefix != "" && !strings.HasPrefix(version, harness.ExpectedVersionPrefix) {
+		return Check{
+			Level: Warn, Section: SectionAgents, Name: harness.Name,
+			Message: fmt.Sprintf("%s resolves to %s, but its version output %q does not identify the expected CLI (%q prefix)", harness.BinaryName, path, version, harness.ExpectedVersionPrefix),
+		}
 	}
 	return Check{Level: Pass, Section: SectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s (%s)", harness.BinaryName, path, version)}
 }
