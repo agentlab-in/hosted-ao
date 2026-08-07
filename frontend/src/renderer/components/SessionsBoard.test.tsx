@@ -1,15 +1,27 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import type { PeerWorkspacesResult } from "../../shared/peer-workspaces";
+import { useUiStore } from "../stores/ui-store";
 
-const { navigateMock, notificationShowMock, postMock, workspaceQueryMock, boardActionsInPanelMock } = vi.hoisted(() => ({
+const {
+	navigateMock,
+	notificationShowMock,
+	postMock,
+	workspaceQueryMock,
+	boardActionsInPanelMock,
+	machinesRefreshMock,
+	peerWorkspacesMock,
+} = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
+	machinesRefreshMock: vi.fn(),
+	peerWorkspacesMock: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -33,6 +45,10 @@ vi.mock("../lib/bridge", () => ({
 		},
 		notifications: {
 			show: (...args: unknown[]) => notificationShowMock(...args),
+		},
+		machines: {
+			refresh: (...args: unknown[]) => machinesRefreshMock(...args),
+			peerWorkspaces: (...args: unknown[]) => peerWorkspacesMock(...args),
 		},
 	},
 }));
@@ -65,6 +81,8 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 	);
 }
 
+const unavailablePeer: PeerWorkspacesResult = { state: "unavailable", reason: "No cloud machine registered." };
+
 beforeEach(() => {
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
@@ -72,6 +90,16 @@ beforeEach(() => {
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
+	machinesRefreshMock.mockReset().mockResolvedValue({
+		status: "ready",
+		machines: [{ id: "local", name: "This Mac", baseUrl: "", local: true, createdAt: null, lastSeen: null, reachability: "online", harness: "ready", harnessCommand: null }],
+		activeMachineId: "local",
+	});
+	peerWorkspacesMock.mockReset().mockResolvedValue(unavailablePeer);
+});
+
+afterEach(() => {
+	useUiStore.getState().setCloudEnabled(false);
 });
 
 describe("SessionsBoard", () => {
@@ -1002,3 +1030,56 @@ function terminatedSession(overrides: Partial<WorkspaceSession> = {}): Workspace
 		...overrides,
 	};
 }
+
+describe("SessionsBoard Cloud toggle", () => {
+	it("issues no peer fetch and shows no Cloud/Local sections while the toggle is off", async () => {
+		renderBoard();
+
+		expect(screen.queryByTestId("board-section-cloud")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("board-section-local")).not.toBeInTheDocument();
+		expect(peerWorkspacesMock).not.toHaveBeenCalled();
+	});
+
+	it("renders both a CLOUD and a LOCAL section once the toggle is on", async () => {
+		peerWorkspacesMock.mockResolvedValue({
+			state: "ok",
+			machineId: "mch_1",
+			machineName: "ao-build-01",
+			isRemote: true,
+			projects: [],
+		} satisfies PeerWorkspacesResult);
+		useUiStore.getState().setCloudEnabled(true);
+
+		renderBoard();
+
+		expect(await screen.findByTestId("board-section-cloud")).toBeInTheDocument();
+		expect(screen.getByTestId("board-section-local")).toBeInTheDocument();
+	});
+
+	it("shows the peer's reason when the peer is unavailable", async () => {
+		peerWorkspacesMock.mockResolvedValue({
+			state: "unavailable",
+			reason: "No cloud machine registered.",
+		} satisfies PeerWorkspacesResult);
+		useUiStore.getState().setCloudEnabled(true);
+
+		renderBoard();
+
+		expect(await screen.findByText("No cloud machine registered.")).toBeInTheDocument();
+	});
+
+	it("shows an empty state when the peer has zero sessions", async () => {
+		peerWorkspacesMock.mockResolvedValue({
+			state: "ok",
+			machineId: "mch_1",
+			machineName: "ao-build-01",
+			isRemote: true,
+			projects: [{ id: "p1", name: "solkit-ui", sessions: [] }],
+		} satisfies PeerWorkspacesResult);
+		useUiStore.getState().setCloudEnabled(true);
+
+		renderBoard();
+
+		expect(await screen.findByText("No cloud sessions yet.")).toBeInTheDocument();
+	});
+});

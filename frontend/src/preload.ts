@@ -3,6 +3,7 @@ import { FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_
 import type { BrowserNavState, BrowserRect } from "./main/browser-view-host";
 import type { AoAccountState } from "./shared/ao-account";
 import type { AoMachinesState } from "./shared/ao-machines";
+import type { PeerWorkspacesResult } from "./shared/peer-workspaces";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
@@ -246,6 +247,10 @@ const api = {
 		// It is a fifteen minute token scoped to one machine; the refresh token it
 		// descends from never leaves the main process.
 		gatewayToken: () => ipcRenderer.invoke("aoMachines:gatewayToken") as Promise<string | null>,
+		// Read-only: the peer (non-active) daemon's projects and sessions, for
+		// listing alongside the active machine's. No URL or token here either;
+		// the main process fetches it and shapes the result.
+		peerWorkspaces: () => ipcRenderer.invoke("aoMachines:peerWorkspaces") as Promise<PeerWorkspacesResult>,
 	},
 };
 

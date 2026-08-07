@@ -174,6 +174,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					refresh: async () => signedOutAoMachines,
 					select: async () => signedOutAoMachines,
 					gatewayToken: async () => null,
+					// Signed out, so there is no peer daemon to list. Matches the
+					// rest of this harness: no main process, so no second daemon.
+					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
@@ -557,6 +560,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					refresh: async () => signedOutAoMachines,
 					select: async () => signedOutAoMachines,
 					gatewayToken: async () => null,
+					// Signed out, so there is no peer daemon to list. Matches the
+					// rest of this harness: no main process, so no second daemon.
+					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
