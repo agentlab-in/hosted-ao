@@ -357,6 +357,7 @@ function formatElapsed(totalSeconds: number): string {
  * elapsed counter plus an indeterminate bar: the window is working, not hung.
  */
 function CloneProgress({ url }: { url: string }) {
+	const { t } = useTranslation();
 	const [elapsedSeconds, setElapsedSeconds] = useState(0);
 	useEffect(() => {
 		const startedAt = Date.now();
@@ -372,7 +373,7 @@ function CloneProgress({ url }: { url: string }) {
 		>
 			<div className="flex items-center justify-between gap-3 text-xs leading-body-md">
 				<span className="min-w-0 truncate font-medium text-[var(--color-text-agents-sheet-title)]">
-					Cloning {cloneUrlLabel(url)}...
+					{t("createProject.cloningUrl", { url: cloneUrlLabel(url) })}
 				</span>
 				<span className="shrink-0 font-mono tabular-nums text-[var(--color-text-agents-sheet-description)]">
 					{formatElapsed(elapsedSeconds)}
@@ -382,7 +383,7 @@ function CloneProgress({ url }: { url: string }) {
 				<div className="clone-progress-bar" />
 			</div>
 			<p className="text-xs leading-body-md text-[var(--color-text-agents-sheet-description)]">
-				A large repository can take a few minutes. Keep this window open.
+				{t("createProject.cloningHint")}
 			</p>
 		</div>
 	);

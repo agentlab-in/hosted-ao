@@ -20,7 +20,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"Local: http://localhost:5173/",
 	],
 	"components/CenterPane.tsx": ["px"],
-	"components/CreateProjectFlow.tsx": ["my-workspace/", "web-app", "main"],
+	"components/CreateProjectFlow.tsx": ["my-workspace/", "web-app", "main", "https://github.com/owner/repo.git"],
 	"components/DaemonStartupLoader.tsx": ["Agent Orchestrator"],
 	"components/ProjectSettingsForm.tsx": [
 		"main", "ao",
@@ -64,6 +64,14 @@ const deferredLocalizationFiles = new Set([
 	"components/chat/SessionChatSurface.tsx",
 	"components/chat/TurnPlan.tsx",
 	"components/chat/TurnSettingsBar.tsx",
+	// The AO account, cloud toggle, machine list, and peer-sessions surfaces predate
+	// this coverage gate too (it arrived with the upstream merge, after these
+	// hosted-only features already shipped). Deferred the same way as the Chat
+	// surface above; localizing them is a separate follow-up.
+	"components/settings/AccountSection.tsx",
+	"components/settings/CloudSection.tsx",
+	"components/settings/MachinesSection.tsx",
+	"components/PeerSessionsSection.tsx",
 ]);
 
 function rendererFiles(directory: string): string[] {
