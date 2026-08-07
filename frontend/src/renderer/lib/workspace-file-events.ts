@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
@@ -73,6 +74,9 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 		try {
 			const source = new EventSource(
 				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
+				// A remote machine authenticates EventSource with the gateway cookie;
+				// EventSource cannot carry an Authorization header.
+				{ withCredentials: isRemoteDaemonBaseUrl(baseUrl) },
 			);
 			stream.source = source;
 			source.onopen = () => {

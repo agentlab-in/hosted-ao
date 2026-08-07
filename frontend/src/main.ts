@@ -273,9 +273,17 @@ function focusMainWindow(): void {
 }
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
+	// Push only on actual change. A remote machine's status is rebuilt (same
+	// content, new object) on every read, and the renderer invalidates queries
+	// on every push, so an unconditional send here closes a feedback loop:
+	// status read -> push -> invalidate -> refetch -> status read, saturating
+	// IPC and hammering the machine's gateway with hundreds of requests/s.
+	const changed = JSON.stringify(nextStatus) !== JSON.stringify(daemonStatus);
 	daemonStatus = nextStatus;
-	mainWindow?.webContents.send("daemon:status", daemonStatus);
-	if (nextStatus.state === "ready" && browserViewHost) {
+	if (changed) {
+		mainWindow?.webContents.send("daemon:status", daemonStatus);
+	}
+	if (changed && nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
 	}
 }

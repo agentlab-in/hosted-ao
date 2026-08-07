@@ -25,6 +25,10 @@ const muxPath = "/mux"
 // so this is the second and last route where the cookie may authenticate.
 const eventsPath = "/api/v1/events"
 
+// notificationsStreamPath is the daemon's live notification EventSource; like
+// eventsPath it can only carry the token in the gateway cookie.
+const notificationsStreamPath = "/api/v1/notifications/stream"
+
 // upstreamCORSHeaders are the response headers the daemon sets for itself
 // (internal/httpd/cors.go) and that the gateway must own instead. See
 // dropUpstreamCORS.
@@ -257,7 +261,24 @@ func cookieAuthAllowed(r *http.Request) bool {
 	if r.URL.Path == muxPath {
 		return true
 	}
-	return r.Method == http.MethodGet && r.URL.Path == eventsPath
+	return r.Method == http.MethodGet && isCookieAuthStreamPath(r.URL.Path)
+}
+
+// isCookieAuthStreamPath names the EventSource routes the renderer opens.
+// EventSource cannot send an Authorization header, so these and only these
+// GET paths may authenticate with the gateway cookie. Extend this when the
+// renderer grows a new EventSource stream; everything else keeps requiring
+// the Bearer header.
+func isCookieAuthStreamPath(path string) bool {
+	if path == eventsPath || path == notificationsStreamPath {
+		return true
+	}
+	rest, ok := strings.CutPrefix(path, "/api/v1/sessions/")
+	if !ok {
+		return false
+	}
+	sessionID, tail, ok := strings.Cut(rest, "/")
+	return ok && sessionID != "" && tail == "workspace/events"
 }
 
 func unauthorized(w http.ResponseWriter, r *http.Request) {

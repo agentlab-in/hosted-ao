@@ -325,7 +325,36 @@ func TestGateway_Events_AcceptsCookie(t *testing.T) {
 	}
 }
 
-// The cookie is ambient, so widening it beyond the two routes that cannot
+func TestGateway_EventSourceStreams_AcceptCookie(t *testing.T) {
+	for _, path := range []string{
+		notificationsStreamPath,
+		"/api/v1/sessions/sess-1/workspace/events",
+	} {
+		tg := newTestGateway(t)
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Origin", testOrigin) // EventSource always sends one
+		req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: tg.validToken(t)})
+		rec := httptest.NewRecorder()
+
+		tg.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s with the gateway cookie: status = %d, want 200", path, rec.Code)
+		}
+	}
+	// Nested-but-different session subpaths stay Bearer-only.
+	tg := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/workspace/other", nil)
+	req.Header.Set("Origin", testOrigin)
+	req.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: tg.validToken(t)})
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET workspace/other with only the cookie: status = %d, want 401", rec.Code)
+	}
+}
+
+// The cookie is ambient, so widening it beyond the routes that cannot
 // send a header would make corsGate the only CSRF defence.
 func TestGateway_Cookie_RejectedOnEveryOtherRoute(t *testing.T) {
 	tg := newTestGateway(t)
