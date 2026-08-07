@@ -20,7 +20,14 @@ export const aoMachinesQueryKey = ["ao-machines"] as const;
  */
 export function MachinesSection() {
 	const queryClient = useQueryClient();
-	const query = useQuery({ queryKey: aoMachinesQueryKey, queryFn: () => aoBridge.machines.refresh() });
+	// One retry, then report. The refresh is deadlined in the main process
+	// (request-deadline.ts), so a failure arrives as a rejection rather than as
+	// an endless pending promise, and this pane must show it rather than spin.
+	const query = useQuery({
+		queryKey: aoMachinesQueryKey,
+		queryFn: () => aoBridge.machines.refresh(),
+		retry: 1,
+	});
 	const apply = (next: AoMachinesState) => queryClient.setQueryData(aoMachinesQueryKey, next);
 
 	const select = useMutation({
@@ -32,7 +39,12 @@ export function MachinesSection() {
 	const machines = state?.machines ?? [];
 	const activeMachineId = state?.activeMachineId ?? "";
 	const mutationError = select.error instanceof Error ? select.error.message : null;
-	const error = state?.error ?? mutationError;
+	// A rejected refresh carries its reason on the query, not in `state`, which
+	// is undefined in that case. Without this the pane rendered nothing at all
+	// for a failed refresh, which is how a stalled control plane read as a
+	// permanent "Looking for machines..." spinner.
+	const refreshError = query.error instanceof Error ? query.error.message : null;
+	const error = state?.error ?? refreshError ?? mutationError;
 
 	return (
 		<SettingsSection title="Machines" sectionId="machines">

@@ -155,3 +155,63 @@ test("clear drops the cached token, so sign-out leaves nothing behind", async ()
 	await tokens.get();
 	expect(fetchImpl).toHaveBeenCalledTimes(2);
 });
+
+// Regression: a stalled exchange used to poison this source permanently.
+//
+// `inFlight` is handed to every later caller and cleared in a `.finally`, which
+// only runs when the promise settles. A control-plane request that never
+// settled therefore wedged the source for the life of the process: the machine
+// list spun forever with no request in flight and no error, recoverable only by
+// restarting the app. Observed in the wild when the control plane's public IP
+// changed and the old address blackholed packets instead of refusing them.
+test("a stalled exchange times out and does not wedge later calls", async () => {
+	await writeStoredAccount(stateDir, safeStorage, { account, refreshToken: "rt_1" });
+	// Ignores the abort signal entirely, which is the worst case: nothing but a
+	// race can rescue a caller from it.
+	const stalls: typeof fetch = () => new Promise<Response>(() => {});
+	const tokens = createControlPlaneTokenSource({
+		stateDir,
+		controlPlaneUrl: CONTROL_PLANE,
+		safeStorage,
+		fetchImpl: stalls,
+		now: () => 0,
+		timeoutMs: 20,
+	});
+
+	await expect(tokens.get()).rejects.toThrow(/timed out/);
+
+	// The wedge: before the deadline, this second call returned the same dead
+	// promise and never settled. It must now be able to succeed.
+	const ok = vi.fn(async () => tokenResponse({ access_token: "at_2", expires_in: 900, refresh_token: "rt_2" }));
+	const recovered = createControlPlaneTokenSource({
+		stateDir,
+		controlPlaneUrl: CONTROL_PLANE,
+		safeStorage,
+		fetchImpl: ok as unknown as typeof fetch,
+		now: () => 0,
+		timeoutMs: 1000,
+	});
+	await expect(recovered.get()).resolves.toBe("at_2");
+});
+
+test("a second call after a stall on the SAME source is not the dead promise", async () => {
+	await writeStoredAccount(stateDir, safeStorage, { account, refreshToken: "rt_1" });
+	let calls = 0;
+	const stallThenSucceed: typeof fetch = () => {
+		calls += 1;
+		if (calls === 1) return new Promise<Response>(() => {});
+		return Promise.resolve(tokenResponse({ access_token: "at_3", expires_in: 900, refresh_token: "rt_2" }));
+	};
+	const tokens = createControlPlaneTokenSource({
+		stateDir,
+		controlPlaneUrl: CONTROL_PLANE,
+		safeStorage,
+		fetchImpl: stallThenSucceed,
+		now: () => 0,
+		timeoutMs: 20,
+	});
+
+	await expect(tokens.get()).rejects.toThrow(/timed out/);
+	await expect(tokens.get()).resolves.toBe("at_3");
+	expect(calls).toBe(2);
+});

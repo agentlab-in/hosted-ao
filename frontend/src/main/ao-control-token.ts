@@ -1,4 +1,5 @@
 import { readStoredAccount, writeStoredAccount, type SafeStorageLike } from "./ao-account-store";
+import { CONTROL_PLANE_TIMEOUT_MS, fetchWithDeadline, withDeadline } from "./request-deadline";
 
 /**
  * The desktop install's control-plane-audience access token.
@@ -46,6 +47,8 @@ export type ControlPlaneTokenDeps = {
 	safeStorage: SafeStorageLike;
 	fetchImpl?: typeof fetch;
 	now?: () => number;
+	/** Deadline for the token exchange. See request-deadline.ts. */
+	timeoutMs?: number;
 };
 
 export type ControlPlaneTokenSource = {
@@ -74,6 +77,7 @@ function exchangeFailure(status: number, body: unknown): Error {
 export function createControlPlaneTokenSource(deps: ControlPlaneTokenDeps): ControlPlaneTokenSource {
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const now = deps.now ?? Date.now;
+	const timeoutMs = deps.timeoutMs ?? CONTROL_PLANE_TIMEOUT_MS;
 
 	let cached: { token: string; expiresAt: number } | null = null;
 	let inFlight: Promise<string | null> | null = null;
@@ -82,17 +86,23 @@ export function createControlPlaneTokenSource(deps: ControlPlaneTokenDeps): Cont
 		const stored = await readStoredAccount(deps.stateDir, deps.safeStorage);
 		if (!stored) return null;
 
-		const response = await fetchImpl(`${deps.controlPlaneUrl}/api/v1/token`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
-				Accept: "application/json",
+		const response = await fetchWithDeadline(
+			fetchImpl,
+			`${deps.controlPlaneUrl}/api/v1/token`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/x-www-form-urlencoded",
+					Accept: "application/json",
+				},
+				body: new URLSearchParams({
+					grant_type: "refresh_token",
+					refresh_token: stored.refreshToken,
+				}).toString(),
 			},
-			body: new URLSearchParams({
-				grant_type: "refresh_token",
-				refresh_token: stored.refreshToken,
-			}).toString(),
-		});
+			timeoutMs,
+			"Refreshing this computer's sign-in",
+		);
 
 		// Bodies here carry a refresh token, so nothing about them is logged.
 		let body: unknown = null;
@@ -135,8 +145,14 @@ export function createControlPlaneTokenSource(deps: ControlPlaneTokenDeps): Cont
 			// One exchange at a time. A second concurrent exchange would present a
 			// refresh token the first one had already rotated away.
 			if (inFlight) return inFlight;
-			const attempt = Promise.resolve()
-				.then(exchange)
+			// Deadlined around the WHOLE exchange, not just its fetch. `inFlight` is
+			// handed to every later caller, and it is cleared in the `.finally`
+			// below, which only runs when the promise settles. So a single exchange
+			// that never settles would poison this source for the life of the
+			// process: the machine list would spin forever with no request in
+			// flight and no error, recoverable only by restarting the app. The race
+			// guarantees settlement even if something other than the fetch hangs.
+			const attempt = withDeadline(Promise.resolve().then(exchange), timeoutMs, "Refreshing this computer's sign-in")
 				.finally(() => {
 					inFlight = null;
 				});

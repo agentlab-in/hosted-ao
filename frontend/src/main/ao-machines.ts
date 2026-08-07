@@ -14,6 +14,7 @@ import {
 import { readControlPlaneUrl } from "../shared/control-plane";
 import { createControlPlaneTokenSource, type ControlPlaneTokenSource } from "./ao-control-token";
 import type { SafeStorageLike } from "./ao-account-store";
+import { CONTROL_PLANE_TIMEOUT_MS, fetchWithDeadline } from "./request-deadline";
 
 /**
  * Main-process owner of the machine list and of which machine is active.
@@ -73,6 +74,8 @@ export type AoMachinesControllerDeps = {
 	onActiveChange: (machine: AoMachine | null) => void;
 	fetchImpl?: typeof fetch;
 	probeTimeoutMs?: number;
+	/** Deadline for control-plane calls. See request-deadline.ts. */
+	controlPlaneTimeoutMs?: number;
 	/** Test seam, so a controller can be driven without a real token exchange. */
 	tokenSource?: ControlPlaneTokenSource;
 };
@@ -172,6 +175,7 @@ function machineFromPersisted(persisted: PersistedMachine): AoMachine {
 export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMachinesController {
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+	const controlPlaneTimeoutMs = deps.controlPlaneTimeoutMs ?? CONTROL_PLANE_TIMEOUT_MS;
 
 	// Resolved once, like the account controller: a bad AO_CONTROL_URL must be
 	// visible rather than silently falling back to the production control plane.
@@ -234,9 +238,16 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 	}
 
 	async function fetchMachines(token: string): Promise<AoMachine[]> {
-		const response = await fetchImpl(`${controlPlaneUrl}/api/v1/machines`, {
-			headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-		});
+		// Deadlined: this is what the machine list awaits, and an unbounded stall
+		// here leaves the settings pane spinning forever with nothing to show and
+		// no way back except restarting the app. See request-deadline.ts.
+		const response = await fetchWithDeadline(
+			fetchImpl,
+			`${controlPlaneUrl}/api/v1/machines`,
+			{ headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+			controlPlaneTimeoutMs,
+			"Listing machines",
+		);
 		if (response.status === 401) {
 			throw new Error("The control plane rejected this computer's sign-in. Sign in again.");
 		}
