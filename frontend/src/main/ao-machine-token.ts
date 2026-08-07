@@ -1,4 +1,5 @@
 import type { ControlPlaneTokenSource } from "./ao-control-token";
+import { CONTROL_PLANE_TIMEOUT_MS, fetchWithDeadline, withDeadline } from "./request-deadline";
 
 /**
  * The machine-audience access token for one registered machine.
@@ -61,6 +62,8 @@ export type MachineTokenSourceDeps = {
 	controlToken: ControlPlaneTokenSource;
 	fetchImpl?: typeof fetch;
 	now?: () => number;
+	/** Deadline for the mint call. See request-deadline.ts. */
+	timeoutMs?: number;
 };
 
 export type MachineTokenSource = {
@@ -88,6 +91,7 @@ type MachineTokenResponse = {
 export function createMachineTokenSource(deps: MachineTokenSourceDeps): MachineTokenSource {
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const now = deps.now ?? Date.now;
+	const timeoutMs = deps.timeoutMs ?? CONTROL_PLANE_TIMEOUT_MS;
 
 	let cached: MachineAccessToken | null = null;
 	let inFlight: Promise<MachineAccessToken | null> | null = null;
@@ -98,12 +102,15 @@ export function createMachineTokenSource(deps: MachineTokenSourceDeps): MachineT
 		// account, and the caller turns this into a status rather than a retry.
 		if (!controlToken) return null;
 
-		const response = await fetchImpl(
+		const response = await fetchWithDeadline(
+			fetchImpl,
 			`${deps.controlPlaneUrl}/api/v1/machines/${encodeURIComponent(deps.machineId)}/token`,
 			{
 				method: "POST",
 				headers: { Authorization: `Bearer ${controlToken}`, Accept: "application/json" },
 			},
+			timeoutMs,
+			"Minting a machine token",
 		);
 		if (response.status === 404) throw new MachineUnavailableError();
 		if (response.status === 401) throw new Error(SIGN_IN_REJECTED_MESSAGE);
@@ -133,11 +140,13 @@ export function createMachineTokenSource(deps: MachineTokenSourceDeps): MachineT
 	// of firing one request per call.
 	function force(): Promise<MachineAccessToken | null> {
 		if (inFlight) return inFlight;
-		const attempt = Promise.resolve()
-			.then(mint)
-			.finally(() => {
-				inFlight = null;
-			});
+		// Deadlined around the whole mint, for the same reason as the control-plane
+		// source: `inFlight` is shared with every later caller and only cleared when
+		// this settles, so one mint that never settles would strand every machine
+		// token for the life of the process. See request-deadline.ts.
+		const attempt = withDeadline(Promise.resolve().then(mint), timeoutMs, "Minting a machine token").finally(() => {
+			inFlight = null;
+		});
 		inFlight = attempt;
 		return attempt;
 	}

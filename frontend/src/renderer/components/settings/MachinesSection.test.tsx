@@ -163,3 +163,23 @@ test("a failure to list is shown, and this computer stays available", async () =
 	expect(await screen.findByTestId("ao-machines-error")).toHaveTextContent(/503 listing machines/);
 	expect(within(machineRow(LOCAL_MACHINE_ID)).getByText("This Mac")).toBeInTheDocument();
 });
+
+// Regression: a failed refresh used to render nothing at all.
+//
+// The error line read `state?.error`, and on a rejected query `state` is
+// undefined, so the reason never reached the pane. Combined with an unbounded
+// request in the main process, that presented as a permanent "Looking for
+// machines registered to your account..." spinner with no way forward. The
+// main-process half is fixed in request-deadline.ts; this is the UI half.
+test("shows the reason when the refresh fails, instead of spinning forever", async () => {
+	refresh.mockRejectedValue(new Error("Listing machines timed out after 15s. The control plane may be unreachable."));
+
+	renderSection();
+
+	// Generous timeout on purpose: the pane retries once before reporting, so a
+	// failure is expected to take a beat rather than appear instantly.
+	const error = await screen.findByTestId("ao-machines-error", {}, { timeout: 5000 });
+	expect(error).toHaveTextContent("Listing machines timed out after 15s.");
+	// The spinner must be gone: it is what the user stared at for an hour.
+	expect(screen.queryByText(/Looking for machines registered to your account/)).not.toBeInTheDocument();
+});
