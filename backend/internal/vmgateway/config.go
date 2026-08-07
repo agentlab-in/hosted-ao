@@ -3,7 +3,7 @@
 // user-owned hosted VM. It obtains a Let's Encrypt certificate for the
 // configured domain, verifies the AO access token on every request against a
 // cached JWKS, and proxies authenticated requests to the daemon. See
-// docs/adr/0002-hosted-public-gateway.md and controlplane/TOKEN_CONTRACT.md,
+// docs/adr/0002-hosted-public-gateway.md and TOKEN_CONTRACT.md in agentlab-in/ao-controlplane,
 // which this package must stay in sync with.
 package vmgateway
 

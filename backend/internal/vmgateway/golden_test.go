@@ -19,12 +19,13 @@ import (
 // paths (keys.Manager.JWKS and tokens.Issuer.IssueAccessToken) and committed,
 // which is the only way an issuer artifact can reach this module.
 //
-// Regenerate them with:
+// Regenerate them in agentlab-in/ao-controlplane with:
 //
-//	cd controlplane && go test ./internal/tokens/ -run TestGoldenFixtures -update
+//	go test ./internal/tokens/ -run TestGoldenFixtures -update
 //
-// See controlplane/internal/tokens/golden_test.go, which owns the generator,
-// and controlplane/TOKEN_CONTRACT.md, which these fixtures make executable.
+// then copy the fixtures into testdata here.
+// See the ao-controlplane repo (internal/tokens/golden_test.go), which owns the generator,
+// and TOKEN_CONTRACT.md in agentlab-in/ao-controlplane, which these fixtures make executable.
 
 // The claims the fixtures were minted with, pinned here independently of the
 // generator rather than read out of a fixture file: a token that agrees with
@@ -39,7 +40,7 @@ func readGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Fatalf("read golden fixture: %v\nRegenerate with:\n  cd controlplane && go test ./internal/tokens/ -run TestGoldenFixtures -update", err)
+		t.Fatalf("read golden fixture: %v\nRegenerate in agentlab-in/ao-controlplane with:\n  go test ./internal/tokens/ -run TestGoldenFixtures -update\nand copy the fixtures into this testdata directory.", err)
 	}
 	return data
 }
@@ -82,7 +83,7 @@ func TestGolden_ControlPlaneTokenVerifies(t *testing.T) {
 
 	claims, err := VerifyToken(token, ks, goldenOptions())
 	if err != nil {
-		t.Fatalf("VerifyToken on a real control-plane token: %v\nThe issuer and this verifier have diverged. Compare controlplane/internal/tokens/access.go and controlplane/internal/keys/jwks.go against this package, then see controlplane/TOKEN_CONTRACT.md.", err)
+		t.Fatalf("VerifyToken on a real control-plane token: %v\nThe issuer and this verifier have diverged. Compare the issuer (ao-controlplane: internal/tokens/access.go, internal/keys/jwks.go) against this package, then see TOKEN_CONTRACT.md in agentlab-in/ao-controlplane.", err)
 	}
 	if claims.Issuer != goldenIssuer || claims.Audience != goldenMachineID || claims.Subject != goldenAccountID {
 		t.Fatalf("claims = %+v, want iss %s, aud %s, sub %s", claims, goldenIssuer, goldenMachineID, goldenAccountID)
