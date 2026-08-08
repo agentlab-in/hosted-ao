@@ -1,11 +1,16 @@
 package vmgateway
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"runtime/debug"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
@@ -52,53 +57,201 @@ var blockedAPIPrefixes = []string{
 	"/api/v1/dev",
 }
 
-// NewHandler assembles the gateway's HTTP handler: CORS preflight, a
-// deny-by-default path allowlist, AO token verification, then a reverse
-// proxy onto the loopback daemon at daemonAddr. Middleware order (outermost
-// first): CORS answers preflights and gates disallowed origins before
-// anything else runs — this also is the only Origin check a WebSocket
-// upgrade to /mux ever gets, since browsers do not enforce same-origin on
-// WebSocket connections themselves and /mux's cookie is ambient
-// (browser-attached) credential; deny-by-default rejects any path outside
-// the proxyable set with 404, so an unrecognised or loopback-only route
-// never reaches the daemon regardless of auth; token verification rejects an
-// unauthenticated or invalid request with 401 before the daemon ever sees
-// it.
-func NewHandler(daemonAddr string, jwks *JWKSCache, verify VerifyOptions, allowedOrigins []string, log *slog.Logger) (http.Handler, error) {
-	target, err := url.Parse("http://" + daemonAddr)
-	if err != nil {
+// maxRequestBodyBytes bounds a proxied request body before httputil.ReverseProxy
+// ever streams it to the daemon; see limitBody. It mirrors maxSpawnBodyBytes in
+// internal/httpd/controllers/sessions.go, the daemon's own cap and the largest
+// legitimate payload the API accepts today (spawn/delegate/conversation bodies
+// carrying base64-inlined file attachments): 25 MiB of attachments inflated by
+// ~4/3 for base64, plus 2 MiB of headroom for the prompt and JSON envelope. The
+// value is duplicated rather than imported: vmgateway is a separate process
+// from the daemon, and importing internal/httpd/controllers would pull that
+// package's whole service-layer dependency graph into the gateway binary for
+// one constant. If the daemon's cap changes, this one must move with it.
+//
+// A var rather than a const only so a test can shrink it instead of
+// generating a ~35 MiB body, mirroring cloneTimeout in
+// internal/service/project/clone.go.
+var maxRequestBodyBytes int64 = 25<<20*4/3 + (2 << 20) // ~37,049,685 bytes, ~35.3 MiB
+
+// upstreamResponseHeaderTimeout bounds how long the gateway waits for the
+// daemon to send response headers before treating it as wedged (as opposed to
+// merely down, which the daemon refusing the connection already handles via
+// ErrorHandler's 502) and returning 502 itself rather than blocking the
+// serving goroutine forever. It must clear the daemon's own longest
+// legitimate synchronous call: project.Add's clone-by-URL path runs `git
+// clone` synchronously under a 5 minute cloneTimeout
+// (internal/service/project/clone.go), deliberately decoupled from the
+// daemon's own 60s REST request timeout so the clone can run that long, plus
+// up to cloneWaitDelay (5s) waiting on a killed process's output pipes. This
+// only bounds time to the first response header, never the response body, so
+// it does not cut off the mux WebSocket or an SSE stream once the daemon has
+// answered; see newReverseProxy.
+const upstreamResponseHeaderTimeout = 6 * time.Minute
+
+// NewHandler assembles the gateway's HTTP handler: panic recovery, CORS
+// preflight, a deny-by-default path allowlist, AO token verification, a
+// request body size cap, then a reverse proxy onto the loopback daemon,
+// initially at daemonAddr. Middleware order (outermost first): panic recovery
+// guards every layer below it so a panic anywhere in the chain logs and
+// returns a clean 500 instead of dropping the connection with nothing in
+// slog; CORS answers preflights and gates disallowed origins before anything
+// else runs — this also is the only Origin check a WebSocket upgrade to /mux
+// ever gets, since browsers do not enforce same-origin on WebSocket
+// connections themselves and /mux's cookie is ambient (browser-attached)
+// credential; deny-by-default rejects any path outside the proxyable set with
+// 404, so an unrecognised or loopback-only route never reaches the daemon
+// regardless of auth; token verification rejects an unauthenticated or
+// invalid request with 401 before the daemon ever sees it; the body size cap
+// applies only once a request is authenticated, so an anonymous flood cannot
+// use it to force allocation.
+//
+// resolveDaemonAddr, when non-nil, is consulted by the reverse proxy's
+// ErrorHandler after a failed round trip to re-read the daemon's current
+// address (see internal/cli/vm.go's discoverDaemonAddr) so the gateway
+// recovers on its own if the daemon was not up yet at gateway boot or later
+// restarted onto a different port. Pass nil when daemonAddr was pinned
+// explicitly (a flag or environment variable), so a re-resolve never
+// silently overrides an operator's explicit choice.
+func NewHandler(daemonAddr string, resolveDaemonAddr func() (string, bool), jwks *JWKSCache, verify VerifyOptions, allowedOrigins []string, log *slog.Logger) (http.Handler, error) {
+	if _, err := url.Parse("http://" + daemonAddr); err != nil {
 		return nil, err
 	}
 
-	h := http.Handler(newReverseProxy(target, log))
+	h := http.Handler(newReverseProxy(daemonAddr, resolveDaemonAddr, log))
+	h = limitBody(h)
 	h = requireToken(jwks, verify, log)(h)
 	h = denyByDefault(h)
 	h = corsGate(allowedOrigins)(h)
+	h = recoverAndLog(log)(h)
 	return h, nil
 }
 
-// newReverseProxy proxies to target, flushing immediately (required for SSE
-// and for responsive WebSocket framing on /mux) and stripping the
+// daemonTarget holds the reverse proxy's current upstream host:port, updated
+// in place when ErrorHandler's resolveDaemonAddr callback finds a new one.
+// Reads happen on every proxied request; writes happen only on a proxy
+// error, so a mutex (rather than atomic.Value, which would need a wrapper
+// struct anyway to swap a string) is the plain, adequate tool here.
+type daemonTarget struct {
+	mu   sync.RWMutex
+	host string
+}
+
+func (d *daemonTarget) get() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.host
+}
+
+func (d *daemonTarget) set(host string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.host = host
+}
+
+// newReverseProxy proxies to daemonAddr, flushing immediately (required for
+// SSE and for responsive WebSocket framing on /mux) and stripping the
 // credentials the gateway itself consumed so they are never forwarded to,
 // logged by, or otherwise exposed on the loopback daemon side, which has no
 // use for them.
-func newReverseProxy(target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
-	proxy := httputil.NewSingleHostReverseProxy(target)
+func newReverseProxy(daemonAddr string, resolveDaemonAddr func() (string, bool), log *slog.Logger) *httputil.ReverseProxy {
+	target := &daemonTarget{host: daemonAddr}
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: daemonAddr})
 	proxy.FlushInterval = -1
+
+	// An explicit Transport, cloned from the default so dial/keep-alive/idle
+	// behavior is unchanged, adds ResponseHeaderTimeout: NewSingleHostReverseProxy
+	// leaves Transport nil, which falls back to http.DefaultTransport with no
+	// such bound, so a daemon that accepts the connection but then wedges
+	// mid-handler (as opposed to one that is simply down, already handled by
+	// ErrorHandler's 502 below) would block this goroutine forever.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = upstreamResponseHeaderTimeout
+	proxy.Transport = transport
 
 	director := proxy.Director
 	proxy.Director = func(r *http.Request) {
 		director(r)
+		// Overwrite with the live target: the base director above baked in
+		// daemonAddr as it was at construction time, but target.host may have
+		// moved since, via ErrorHandler's resolveDaemonAddr call below.
+		r.URL.Host = target.get()
 		stripCredentials(r)
 		stripForwardedFor(r)
 	}
 	proxy.ModifyResponse = dropUpstreamCORS
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if isBodyTooLarge(err) {
+			// limitBody's http.MaxBytesReader cut the body short; this is the
+			// client's fault, not the daemon's, so it must not be reported (or
+			// treated, by re-resolving below) as a daemon connectivity failure.
+			log.Warn("vm gateway: request body too large", "path", r.URL.Path, "limit", maxRequestBodyBytes)
+			envelope.WriteAPIError(w, r, http.StatusRequestEntityTooLarge, "payload_too_large", "PAYLOAD_TOO_LARGE",
+				"request body exceeds the maximum allowed size", nil)
+			return
+		}
 		log.Warn("vm gateway: proxy error", "err", err, "path", r.URL.Path)
+		// A lazy re-read on failure, not a polling loop: the next request (not
+		// this one, which still 502s) picks up whatever address running.json
+		// names now. If the daemon was simply down, discoverDaemonAddr fails the
+		// same way it did at gateway boot and target is left unchanged, so this
+		// never turns a real outage into a wrong-but-different dead address.
+		if resolveDaemonAddr != nil {
+			if addr, ok := resolveDaemonAddr(); ok && addr != "" {
+				target.set(addr)
+			}
+		}
 		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "DAEMON_UNREACHABLE",
 			"the local daemon is not reachable", nil)
 	}
 	return proxy
+}
+
+// isBodyTooLarge reports whether err, surfaced from the reverse proxy's round
+// trip to the daemon, stems from limitBody's http.MaxBytesReader cutting off
+// an oversized request body rather than a real daemon-connectivity failure.
+func isBodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
+}
+
+// limitBody caps a request body at maxRequestBodyBytes before the reverse
+// proxy streams it on to the daemon. http.MaxBytesReader stops the read past
+// the limit (and tells the ResponseWriter to close the connection) rather
+// than buffering an oversized body in full first; see isBodyTooLarge for how
+// the resulting error is turned into a clean 413.
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// recoverAndLog is the outermost layer of the gateway's middleware chain, so
+// a panic anywhere below it (in corsGate, denyByDefault, requireToken,
+// extractToken/VerifyToken, or the reverse proxy's Director/ModifyResponse)
+// is caught before it can drop the connection with nothing in slog. Mirrors
+// recoverTelemetry in internal/httpd/recover.go, minus the telemetry sink:
+// the gateway is its own process (docs/adr/0002-hosted-public-gateway.md)
+// with no ports.EventSink wired to it, and adding one here would be a new
+// coupling this package does not already establish.
+func recoverAndLog(log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Error("vm gateway: handler panic",
+						"method", r.Method,
+						"path", r.URL.Path,
+						"panic", fmt.Sprint(rec),
+						"stack", string(debug.Stack()),
+					)
+					envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal_error", "INTERNAL_ERROR",
+						"internal server error", nil)
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // dropUpstreamCORS removes the CORS headers the daemon set for itself before
@@ -187,10 +340,22 @@ func notFoundJSON(w http.ResponseWriter, r *http.Request) {
 // cached fails closed: every request is rejected, never treated as
 // authenticated.
 func requireToken(jwks *JWKSCache, verify VerifyOptions, log *slog.Logger) func(http.Handler) http.Handler {
+	// One limiter per handler chain (built once by NewHandler, not per
+	// request), so it throttles across the gateway's whole lifetime rather
+	// than resetting on every call.
+	limiter := &bareRequestLogLimiter{}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := extractToken(r)
 			if !ok {
+				// This branch used to reject silently: a storm of bare requests
+				// (issue #82) left a completely clean journal, with nothing to
+				// tell it apart from a quiet, healthy gateway. Log it at the same
+				// level and shape as the two sibling rejections below, minus the
+				// token itself (never logged, here or anywhere in this package).
+				if n, ok := limiter.allow(time.Now()); ok {
+					log.Warn("vm gateway: token rejected", "reason", missingTokenReason(r), "path", r.URL.Path, "suppressed", n)
+				}
 				unauthorized(w, r)
 				return
 			}
@@ -208,6 +373,71 @@ func requireToken(jwks *JWKSCache, verify VerifyOptions, log *slog.Logger) func(
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// missingTokenReason classifies why extractToken found nothing usable,
+// without ever inspecting header or cookie content beyond a presence/shape
+// check: issue #82 needed exactly this distinction; "no header at all"
+// (a scanner or a client that never attaches credentials) reads very
+// differently from "sent something, but not a bearer token" (a client with a
+// real, fixable bug) or "sent an empty bearer token" (a client bug of a
+// different shape).
+func missingTokenReason(r *http.Request) string {
+	if cookieAuthAllowed(r) {
+		if c, err := r.Cookie(gatewayCookieName); err == nil {
+			if c.Value == "" {
+				return "empty gateway cookie, no authorization header"
+			}
+			// A non-empty cookie means extractToken only failed because this
+			// request also lacked a usable Authorization header; fall through
+			// to classify that instead of double-reporting the cookie as fine.
+		}
+	}
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		return "no authorization header"
+	}
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return "malformed authorization header"
+	}
+	return "empty bearer token"
+}
+
+// bareRequestLogWindow bounds how often requireToken logs a missing-token
+// rejection; see bareRequestLogLimiter. A var rather than a const only so a
+// test can shrink it instead of sleeping out a full second, mirroring
+// cloneTimeout in internal/service/project/clone.go.
+var bareRequestLogWindow = time.Second
+
+// bareRequestLogLimiter throttles the missing-token log line to at most once
+// per bareRequestLogWindow, carrying forward how many rejections it
+// suppressed since the last line. The gateway sits on the open internet,
+// where a constant trickle of scanners and misconfigured clients send bare
+// requests; logging every single one at Warn would trade the silence issue
+// #82 found (a request storm with nothing in the journal at all) for the
+// opposite failure, a journal so noisy during a real storm that the signal
+// drowns in volume. One line per window, carrying a suppressed count, keeps
+// the signal issue #82 needed (that bare requests are happening, and
+// roughly how many) without either extreme.
+type bareRequestLogLimiter struct {
+	mu         sync.Mutex
+	windowEnd  time.Time
+	suppressed int
+}
+
+// allow reports whether the caller should log now, and if so, how many prior
+// rejections were suppressed since the last logged line.
+func (l *bareRequestLogLimiter) allow(now time.Time) (suppressed int, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now.Before(l.windowEnd) {
+		l.suppressed++
+		return 0, false
+	}
+	suppressed = l.suppressed
+	l.suppressed = 0
+	l.windowEnd = now.Add(bareRequestLogWindow)
+	return suppressed, true
 }
 
 // extractToken reads the token per TOKEN_CONTRACT.md's transport rule:

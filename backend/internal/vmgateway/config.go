@@ -167,11 +167,33 @@ func Resolve(opts Options, dataDir string) (Config, error) {
 	}
 	cfg.Domain = domain
 
-	if _, _, err := net.SplitHostPort(cfg.DaemonAddr); err != nil {
-		return Config{}, fmt.Errorf("invalid daemon address %q: %w", cfg.DaemonAddr, err)
+	if err := validateHostPort("daemon address", cfg.DaemonAddr); err != nil {
+		return Config{}, err
+	}
+	// HTTPAddr/HTTPSAddr get the same check as DaemonAddr for the same reason:
+	// net.Listen on a colon-less value like "443" (the AO_VM_HTTPS_ADDR=443
+	// mistake, missing the leading colon) passes straight through Resolve and
+	// only fails later, deep inside http.Server.ListenAndServeTLS, with a raw
+	// "missing port in address" net error and no indication which flag or
+	// variable caused it.
+	if err := validateHostPort("http listener address", cfg.HTTPAddr); err != nil {
+		return Config{}, err
+	}
+	if err := validateHostPort("https listener address", cfg.HTTPSAddr); err != nil {
+		return Config{}, err
 	}
 
 	return cfg, nil
+}
+
+// validateHostPort rejects addr unless it splits into a host and a port, the
+// shape every net.Listen/http.Server.Addr field here requires. label names
+// the field in the error so it points at what the operator has to fix.
+func validateHostPort(label, addr string) error {
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return fmt.Errorf("invalid %s %q: %w", label, addr, err)
+	}
+	return nil
 }
 
 // normalizeDomain reduces a configured domain to the bare hostname

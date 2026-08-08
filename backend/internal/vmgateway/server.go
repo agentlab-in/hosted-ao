@@ -47,6 +47,17 @@ func NewServer(cfg Config, handler http.Handler, log *slog.Logger) (*Server, err
 	}
 
 	log = loggerOrDefault(log)
+	// net/http writes its own internal errors (failed TLS handshakes,
+	// autocert/ACME failures such as a blocked :80, a rate-limited Let's
+	// Encrypt account, or an unroutable DNS record) to ErrorLog, which
+	// defaults to log.Default() on raw stderr rather than this process's
+	// structured logger. Without this, certificate breakage on a
+	// systemd-managed, internet-facing gateway is invisible to anyone reading
+	// slog output. Warn (not Error) because most of what lands here is
+	// ordinary internet noise (a client resetting a handshake mid-flight) that
+	// happens to be routed through the same hook as a real ACME failure; the
+	// gateway has no way to tell them apart from the message alone.
+	errLog := slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 	s := &Server{cfg: &cfg, log: log}
 	s.httpSrv = &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -54,12 +65,30 @@ func NewServer(cfg Config, handler http.Handler, log *slog.Logger) (*Server, err
 		// https, never served plaintext.
 		Handler:           manager.HTTPHandler(nil),
 		ReadHeaderTimeout: 10 * time.Second,
+		// IdleTimeout reclaims the goroutine and fd of a keep-alive connection
+		// that finished a request and then never sends another one, an
+		// internet-facing listener's other slowloris shape besides a slow
+		// header. 2 minutes is generous for normal REST reuse (the renderer's
+		// client keeps reissuing requests far more often than that) while still
+		// bounding an attacker who opens many connections and lets them sit
+		// idle. WriteTimeout and ReadTimeout are deliberately left unset: both
+		// set an absolute deadline on the connection before the handler runs,
+		// and net/http does not clear it on Hijack, so either one would also
+		// cut off the /mux WebSocket tunnel (hijacked wholesale by
+		// httputil.ReverseProxy's upgrade handling) and the SSE routes'
+		// long-lived response writes once the deadline elapsed, regardless of
+		// whether the stream was still healthy. IdleTimeout only fires between
+		// requests, never during one already being served, so it cannot do that.
+		IdleTimeout: 2 * time.Minute,
+		ErrorLog:    errLog,
 	}
 	s.httpsSrv = &http.Server{
 		Addr:              cfg.HTTPSAddr,
 		Handler:           handler,
 		TLSConfig:         manager.TLSConfig(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		ErrorLog:          errLog,
 	}
 	return s, nil
 }

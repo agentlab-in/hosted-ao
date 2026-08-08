@@ -1,12 +1,15 @@
 package vmgateway
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -73,7 +76,7 @@ func newTestGateway(t *testing.T) *testGateway {
 		Now:      func() time.Time { return tg.now },
 	}
 
-	h, err := NewHandler(daemonURL.Host, cache, verify, []string{testOrigin}, discardLogger())
+	h, err := NewHandler(daemonURL.Host, nil, cache, verify, []string{testOrigin}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -463,6 +466,250 @@ func TestGateway_PreflightOnBlockedPath_Is404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("preflight status = %d, want 404: a 204 confirms a route every real method 404s", rec.Code)
+	}
+}
+
+// unauthenticatedHandler builds a handler that only exercises requireToken:
+// the daemon address is never dialed because an unauthenticated request must
+// never reach the proxy.
+func unauthenticatedHandler(t *testing.T, log *slog.Logger) http.Handler {
+	t.Helper()
+	pub, _, _ := ed25519.GenerateKey(nil)
+	cache := &JWKSCache{
+		ttl: time.Hour, client: http.DefaultClient, now: time.Now,
+		keys: &KeySet{byKID: map[string]ed25519.PublicKey{testKid: pub}}, fetchedAt: time.Now(),
+	}
+	verify := VerifyOptions{Issuer: testIssuer, Audience: testAud, Subject: testSub, Skew: DefaultSkew}
+	h, err := NewHandler("127.0.0.1:1", nil, cache, verify, []string{testOrigin}, log)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	return h
+}
+
+// TestRequireToken_MissingToken_Logged pins the fix for issue #82: a storm of
+// bare requests (no Authorization header, no cookie) used to reject with 401
+// and log nothing, leaving a clean journal indistinguishable from a healthy,
+// idle gateway. The rejection must now log at Warn, like its two sibling
+// rejection paths, distinguishing "no header at all" from "sent something
+// malformed" without ever logging token material.
+func TestRequireToken_MissingToken_Logged(t *testing.T) {
+	cases := []struct {
+		name      string
+		setHeader func(r *http.Request)
+		wantIn    string
+	}{
+		{name: "no header at all", setHeader: func(*http.Request) {}, wantIn: "no authorization header"},
+		{name: "malformed header", setHeader: func(r *http.Request) { r.Header.Set("Authorization", "Basic dXNlcjpwYXNz") }, wantIn: "malformed authorization header"},
+		{name: "empty bearer token", setHeader: func(r *http.Request) { r.Header.Set("Authorization", "Bearer ") }, wantIn: "empty bearer token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			h := unauthenticatedHandler(t, log)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+			tc.setHeader(req)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			got := buf.String()
+			if !strings.Contains(got, "vm gateway: token rejected") {
+				t.Fatalf("log does not contain the rejection line:\n%s", got)
+			}
+			if !strings.Contains(got, tc.wantIn) {
+				t.Errorf("log = %q, want it to contain %q", got, tc.wantIn)
+			}
+			if !strings.Contains(got, "/api/v1/projects") {
+				t.Errorf("log = %q, want the request path", got)
+			}
+		})
+	}
+}
+
+// TestRequireToken_MissingToken_LogSampling proves the log line added for
+// issue #82 cannot itself become a new incident: a gateway on the open
+// internet gets a constant trickle of bare requests from scanners, and
+// logging every single one at Warn would make a real storm just as hard to
+// read as the silence it replaces. Rapid repeats within one window must
+// collapse into a single line carrying a suppressed count.
+func TestRequireToken_MissingToken_LogSampling(t *testing.T) {
+	original := bareRequestLogWindow
+	bareRequestLogWindow = 50 * time.Millisecond
+	t.Cleanup(func() { bareRequestLogWindow = original })
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	h := unauthenticatedHandler(t, log)
+
+	const burst = 5
+	for range burst {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+	}
+	if n := strings.Count(buf.String(), "vm gateway: token rejected"); n != 1 {
+		t.Fatalf("log lines after a %d-request burst = %d, want 1 (the rest must be throttled within one window):\n%s", burst, n, buf.String())
+	}
+
+	// Once the window has passed, the next rejection logs again, and its
+	// suppressed count must account for the throttled requests in between.
+	time.Sleep(bareRequestLogWindow + 20*time.Millisecond)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	got := buf.String()
+	if n := strings.Count(got, "vm gateway: token rejected"); n != 2 {
+		t.Fatalf("log lines after the window elapsed = %d, want 2:\n%s", n, got)
+	}
+	if !strings.Contains(got, "suppressed=4") {
+		t.Errorf("log = %q, want the second line to report the 4 requests suppressed during the burst", got)
+	}
+}
+
+// TestMissingTokenReason pins the classification requireToken logs, in the
+// exact shape issue #82 needed: distinguishing an absent header from a
+// malformed one, without ever reading header or cookie content beyond a
+// presence/shape check.
+func TestMissingTokenReason(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func(r *http.Request)
+		want  string
+	}{
+		{name: "nothing at all", build: func(*http.Request) {}, want: "no authorization header"},
+		{name: "wrong auth scheme", build: func(r *http.Request) { r.Header.Set("Authorization", "Token abc") }, want: "malformed authorization header"},
+		{name: "empty bearer token", build: func(r *http.Request) { r.Header.Set("Authorization", "Bearer ") }, want: "empty bearer token"},
+		{name: "empty gateway cookie on mux", build: func(r *http.Request) {
+			r.Header.Set("Origin", testOrigin)
+			r.URL.Path = muxPath
+			r.AddCookie(&http.Cookie{Name: gatewayCookieName, Value: ""})
+		}, want: "empty gateway cookie, no authorization header"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+			tc.build(req)
+			if got := missingTokenReason(req); got != tc.want {
+				t.Errorf("missingTokenReason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoverAndLog_PanicYields500AndLogs pins the gateway's own panic
+// recovery: today, a panic anywhere in the middleware chain drops the
+// connection with nothing in slog, unlike the daemon it fronts (see
+// recoverTelemetry in internal/httpd/recover.go). recoverAndLog must catch
+// it, answer with a clean 500 instead of a dropped connection, and log the
+// panic.
+func TestRecoverAndLog_PanicYields500AndLogs(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	panicky := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+	h := recoverAndLog(log)(panicky)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "INTERNAL_ERROR") {
+		t.Errorf("body = %q, want a clean INTERNAL_ERROR envelope", rec.Body.String())
+	}
+	got := buf.String()
+	if !strings.Contains(got, "vm gateway: handler panic") || !strings.Contains(got, "boom") {
+		t.Fatalf("log does not contain the panic line:\n%s", got)
+	}
+}
+
+// TestGateway_OversizedBody_Rejected pins the request body cap: without it,
+// an oversized proxied body is read in full before anything rejects it.
+// maxRequestBodyBytes is shrunk for the test so it does not have to build a
+// ~35 MiB body to exercise the limit.
+func TestGateway_OversizedBody_Rejected(t *testing.T) {
+	original := maxRequestBodyBytes
+	maxRequestBodyBytes = 16
+	t.Cleanup(func() { maxRequestBodyBytes = original })
+
+	tg := newTestGateway(t)
+	body := bytes.Repeat([]byte("a"), 64)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.Header.Set("Authorization", "Bearer "+tg.validToken(t))
+	rec := httptest.NewRecorder()
+
+	tg.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413, body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGateway_ReresolvesDaemonAddrAfterFailure pins the self-healing fix: a
+// gateway proxying to a dead daemon address (the daemon was not up yet at
+// gateway boot, or has since restarted onto a different port) must not stay
+// broken until an operator restarts it. On a failed round trip, the next
+// request re-reads the daemon address via resolveDaemonAddr and succeeds.
+func TestGateway_ReresolvesDaemonAddrAfterFailure(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(daemon.Close)
+	daemonURL, err := url.Parse(daemon.URL)
+	if err != nil {
+		t.Fatalf("parse daemon url: %v", err)
+	}
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	now := time.Now()
+	cache := &JWKSCache{
+		ttl: time.Hour, client: http.DefaultClient, now: func() time.Time { return now },
+		keys: &KeySet{byKID: map[string]ed25519.PublicKey{testKid: pub}}, fetchedAt: now,
+	}
+	verify := VerifyOptions{Issuer: testIssuer, Audience: testAud, Subject: testSub, Skew: DefaultSkew, Now: func() time.Time { return now }}
+	token := signToken(t, priv, map[string]any{"alg": "EdDSA", "kid": testKid}, validClaims(now))
+
+	var resolveCalls int32
+	resolve := func() (string, bool) {
+		atomic.AddInt32(&resolveCalls, 1)
+		return daemonURL.Host, true
+	}
+
+	// 127.0.0.1:1 refuses the connection immediately (nothing listens there
+	// without root), standing in for a daemon that has not started yet.
+	h, err := NewHandler("127.0.0.1:1", resolve, cache, verify, nil, discardLogger())
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("first request status = %d, want 502 against a dead daemon address, body: %s", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&resolveCalls); got != 1 {
+		t.Fatalf("resolveDaemonAddr calls = %d, want 1 after the failed round trip", got)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second request status = %d, want 200 once re-resolved to the live daemon, body: %s", rec2.Code, rec2.Body.String())
 	}
 }
 
