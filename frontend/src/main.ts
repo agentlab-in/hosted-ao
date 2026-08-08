@@ -272,18 +272,27 @@ function focusMainWindow(): void {
 	mainWindow.focus();
 }
 
+// The last status actually DELIVERED to a renderer, distinct from daemonStatus
+// (the current status). Deduping against daemonStatus conflated the two: a push
+// that found no window to receive it still counted as sent, so the next
+// identical status was suppressed and the renderer never learned of the
+// transition (issue #82).
+let lastSentDaemonStatus: string | undefined;
+
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	// Push only on actual change. A remote machine's status is rebuilt (same
 	// content, new object) on every read, and the renderer invalidates queries
 	// on every push, so an unconditional send here closes a feedback loop:
 	// status read -> push -> invalidate -> refetch -> status read, saturating
 	// IPC and hammering the machine's gateway with hundreds of requests/s.
-	const changed = JSON.stringify(nextStatus) !== JSON.stringify(daemonStatus);
 	daemonStatus = nextStatus;
-	if (changed) {
-		mainWindow?.webContents.send("daemon:status", daemonStatus);
-	}
-	if (changed && nextStatus.state === "ready" && browserViewHost) {
+	const encoded = JSON.stringify(nextStatus);
+	if (encoded === lastSentDaemonStatus) return;
+	const contents = mainWindow?.webContents;
+	if (!contents || contents.isDestroyed()) return;
+	contents.send("daemon:status", daemonStatus);
+	lastSentDaemonStatus = encoded;
+	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
 	}
 }
