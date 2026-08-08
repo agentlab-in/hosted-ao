@@ -83,6 +83,8 @@ export type MachineTransportDeps = {
 	onMachineGone: () => void;
 	fetchImpl?: typeof fetch;
 	now?: () => number;
+	/** Monotonic clock for refresh-delay math; defaults to performance.now(). */
+	monotonicNow?: () => number;
 	/** Test seam, so a transport can be driven without a real token endpoint. */
 	createTokenSource?: (deps: MachineTokenSourceDeps) => MachineTokenSource;
 };
@@ -90,14 +92,23 @@ export type MachineTransportDeps = {
 export type MachineTransport = {
 	/** Point the transport at a machine, or at null for this computer. */
 	setMachine: (machine: AoMachine | null) => void;
-	/** The gateway bearer for a REST call, or null when there is none. */
-	token: () => Promise<string | null>;
+	/**
+	 * The gateway bearer for a REST call, or null when there is none.
+	 *
+	 * Pass forceRefresh after the gateway itself has already 401/403'd a
+	 * request made with a token that looked unexpired client-side (revocation,
+	 * key rotation, clock skew): it drops the cached token before asking, so
+	 * this mints a genuinely fresh one instead of handing back the same
+	 * doomed bearer.
+	 */
+	token: (forceRefresh?: boolean) => Promise<string | null>;
 };
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 export function createMachineTransport(deps: MachineTransportDeps): MachineTransport {
 	const now = deps.now ?? Date.now;
+	const monotonicNow = deps.monotonicNow ?? (() => performance.now());
 	const createTokenSource = deps.createTokenSource ?? createMachineTokenSource;
 
 	let target: AoMachine | null = null;
@@ -146,9 +157,31 @@ export function createMachineTransport(deps: MachineTransportDeps): MachineTrans
 		}
 	}
 
-	function scheduleRefresh(startedAt: number, expiresAt: number, delayMs?: number): void {
+	/**
+	 * mintAnchor pairs a wall-clock reading with a monotonic one, both taken at
+	 * the moment a token was minted (see acquire()). The delay to the next
+	 * refresh is then derived from monotonic elapsed time since that anchor
+	 * rather than a fresh wall-clock read: acquire() awaits installCookie()
+	 * (an Electron IPC round trip) between minting and calling this function,
+	 * and a backward NTP correction landing in that gap would otherwise inflate
+	 * expiresAt - REFRESH_LEAD_MS - now() and schedule the refresh later than
+	 * the token's real expiry, so the next request 401s. Omitted when delayMs
+	 * is given (the quiet-retry path reuses a previously installed expiry with
+	 * no new mint to anchor to).
+	 */
+	function scheduleRefresh(
+		startedAt: number,
+		expiresAt: number,
+		delayMs?: number,
+		mintAnchor?: { wallMs: number; monotonicMs: number },
+	): void {
 		stopRefresh();
-		const delay = delayMs ?? Math.max(expiresAt - REFRESH_LEAD_MS - now(), MIN_REFRESH_DELAY_MS);
+		let delay = delayMs;
+		if (delay === undefined) {
+			const anchor = mintAnchor ?? { wallMs: now(), monotonicMs: monotonicNow() };
+			const elapsedSinceMint = monotonicNow() - anchor.monotonicMs;
+			delay = Math.max(expiresAt - anchor.wallMs - REFRESH_LEAD_MS - elapsedSinceMint, MIN_REFRESH_DELAY_MS);
+		}
 		refreshTimer = setTimeout(() => {
 			refreshTimer = undefined;
 			void acquire(startedAt, "refresh");
@@ -176,13 +209,17 @@ export function createMachineTransport(deps: MachineTransportDeps): MachineTrans
 				deps.onStatus(machineAuthFailedStatus(machine, SIGNED_OUT_REASON));
 				return;
 			}
+			// Anchor before the installCookie await below (see scheduleRefresh's
+			// mintAnchor doc comment): that is the gap a backward clock jump could
+			// land in between now and the delay computation.
+			const mintAnchor = { wallMs: now(), monotonicMs: monotonicNow() };
 			await installCookie(machine, minted.token);
 			if (generation !== startedAt) return;
 			installedExpiresAt = minted.expiresAt;
 			// The cookie is in place before the base URL is, so the renderer cannot
 			// open the SSE stream or the terminal mux without a credential.
 			if (announce) deps.onStatus(machineDaemonStatus(machine));
-			scheduleRefresh(startedAt, minted.expiresAt);
+			scheduleRefresh(startedAt, minted.expiresAt, undefined, mintAnchor);
 		} catch (err) {
 			if (generation !== startedAt) return;
 			if (err instanceof MachineUnavailableError) {
@@ -239,9 +276,13 @@ export function createMachineTransport(deps: MachineTransportDeps): MachineTrans
 			void acquire(startedAt, "connect");
 		},
 
-		async token(): Promise<string | null> {
+		async token(forceRefresh = false): Promise<string | null> {
 			const source = tokens;
 			if (!source) return null;
+			// Drop the cached token first: it looked unexpired client-side (that is
+			// exactly why the caller is here after a 401/403), so get() below would
+			// otherwise just hand the same doomed bearer straight back.
+			if (forceRefresh) source.clear();
 			try {
 				return (await source.get())?.token ?? null;
 			} catch {

@@ -106,8 +106,56 @@ backups in `~/hosted-ao-branch-backup-20260808.txt` and
 `~/hosted-ao-tags-backup-20260808.txt`. README rewritten for the Hosted AO
 story; the seven translated upstream READMEs removed.
 
+## Cloud hardening pass
+
+An audit of every cloud-mode surface, then the fixes, across both repos:
+hosted-ao PR #84 (5 commits) and ao-controlplane PR #1 (3 commits). Roughly
+50 findings, ranked; the audit notes stay untracked as `cloud-hardening-audit.md`
+and `hardening-audit.md`.
+
+Both open halves of issue #82 are closed. The gateway's bare-request 401 now
+logs (sampled), which is why the earlier storm left a clean journal. And the
+`ao-machine.json` deletion finally has a mechanism, three defects compounding:
+`readStoredAccount` caught every read error rather than just a missing file, so
+a transient EPERM looked like "signed out" and `refresh()` deleted the binding;
+`writePersisted` had no try/catch, cleanup, or fsync and ran on every refresh,
+and Node's `writeFile` creates its temp at zero bytes before writing, which is
+exactly the 12 orphaned temps found on disk; and absence from one 200 response
+counted as revocation even though `parseMachine` silently drops unparsable rows.
+
+Two control-plane findings were the ones that could not be undone. There was no
+backup of anything, and the SQLite database and the EdDSA signing keys share one
+disk: losing it destroyed every account, binding, and refresh token with nothing
+to restore from. And signing keys were written with a bare `os.WriteFile`, so a
+crash mid-write left truncated JSON and the next boot `log.Fatal`ed, refusing to
+start for the entire fleet. Refresh rotation also had no grace window, so a
+response lost in flight permanently locked an install out.
+
+Verified against what CI actually runs, not a subset: gofmt, `go vet ./...`,
+golangci-lint v2.12.2 at 0 issues, `typecheck` and `typecheck:e2e`, and the full
+2272-test vitest suite. Running the real CI commands is what caught 4 lint
+issues and 3 broken SessionInspector assertions that targeted runs had missed.
+
+The desktop app in /Applications was rebuilt on this branch and runs it. Note
+that `npm run package` silently produces no `.app` on Node 26: it exits 0 with
+green checks and an empty output dir. Build with Node 22.
+
 ## Open
 
+- The machine-removal fallback surfaces as "This machine's sign-in is not
+  available right now. Reconnecting." A revoked machine should read as a
+  removal notice, not an auth failure, and the renderer should re-point
+  promptly instead of looping.
+- The shared VM is currently unbound (`ao-machine.json` absent), so cloud mode
+  has nothing to talk to until it is re-bound.
+- The gateway's systemd start limit is 4 attempts per 5 minutes, tighter than
+  its own rationale justifies: autocert is lazy via `GetCertificate`, so a
+  gateway that crash-loops before serving never orders a certificate. Loosen.
+- The 401-retry and machine-switch paths are still untested against a real
+  bound machine.
+- The auto-updater throws `ERR_XML_MISSED_ELEMENT` against the empty release
+  repo, a sibling of the `ERR_UPDATER_NO_PUBLISHED_VERSIONS` case PR #77 fixed.
+- The control plane's browser pages are still bare; a visual pass is wanted.
 - `main` still points at the old lineage (control plane included); repoint or
   delete.
 - Six clone-UI strings are hardcoded English; the i18n coverage test is the

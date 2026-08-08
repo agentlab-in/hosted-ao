@@ -287,11 +287,22 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 	// IPC and hammering the machine's gateway with hundreds of requests/s.
 	daemonStatus = nextStatus;
 	const encoded = JSON.stringify(nextStatus);
-	if (encoded === lastSentDaemonStatus) return;
-	const contents = mainWindow?.webContents;
-	if (!contents || contents.isDestroyed()) return;
-	contents.send("daemon:status", daemonStatus);
-	lastSentDaemonStatus = encoded;
+	if (encoded !== lastSentDaemonStatus) {
+		const contents = mainWindow?.webContents;
+		if (contents && !contents.isDestroyed()) {
+			contents.send("daemon:status", daemonStatus);
+			lastSentDaemonStatus = encoded;
+		}
+	}
+	// Attempt the browser runtime link whenever we are ready and no link exists
+	// yet, independent of the delivery dedupe above (issue #82 follow-up). The
+	// first "ready" push can race the daemon publishing its browser runtime
+	// address to running.json; establishBrowserRuntimeLink() then no-ops with
+	// only a console.warn. If that push were the only trigger gated behind a
+	// status CHANGE, no later identical "ready" push could ever retry it, and
+	// the browser/preview panel would stay dead for the rest of the session.
+	// establishBrowserRuntimeLink() itself is a no-op once a link exists, so
+	// this is safe to call on every ready push.
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
 	}
@@ -1652,7 +1663,11 @@ ipcMain.handle("aoMachines:refresh", () => aoMachines().refresh());
 ipcMain.handle("aoMachines:select", (_event, machineId: string) => aoMachines().select(machineId));
 // Read from the already-built transport rather than machineTransport(), so a
 // local-only install never constructs one just to be told there is no token.
-ipcMain.handle("aoMachines:gatewayToken", () => machineTransportInstance?.token() ?? null);
+// forceRefresh: the renderer's runtimeFetch sends this after the gateway
+// itself 401/403s a request, so a revoked/rotated token is not repeated verbatim.
+ipcMain.handle("aoMachines:gatewayToken", (_event, forceRefresh?: boolean) =>
+	machineTransportInstance?.token(forceRefresh) ?? null,
+);
 ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());

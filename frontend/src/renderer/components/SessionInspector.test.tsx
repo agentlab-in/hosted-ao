@@ -290,6 +290,7 @@ describe("SessionInspector tabs", () => {
 		await waitFor(() =>
 			expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: "sess-1" } },
+				signal: expect.any(AbortSignal),
 			}),
 		);
 	});
@@ -905,6 +906,7 @@ describe("SessionInspector Usage & cost section", () => {
 		await waitFor(() =>
 			expect(getMock).toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", {
 				params: { path: { sessionId: "sess-1" } },
+				signal: expect.any(AbortSignal),
 			}),
 		);
 		expect(screen.queryByText("Usage & cost")).not.toBeInTheDocument();
@@ -1052,6 +1054,7 @@ describe("SessionInspector Usage & cost section", () => {
 		expect(sectionTitles.indexOf("Usage & cost")).toBe(sectionTitles.indexOf("Activity") + 1);
 		expect(getMock).toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", {
 			params: { path: { sessionId: "sess-1" } },
+			signal: expect.any(AbortSignal),
 		});
 	});
 

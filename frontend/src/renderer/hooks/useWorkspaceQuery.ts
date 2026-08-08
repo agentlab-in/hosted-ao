@@ -45,7 +45,7 @@ function reportUnknownSessionField(field: "status" | "activity", value?: string)
 // and always hits the real daemon.
 type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
-async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
+async function fetchWorkspaces(signal?: AbortSignal): Promise<WorkspaceSummary[]> {
 	if (usesPreviewWorkspaceData) {
 		const fake =
 			typeof window !== "undefined"
@@ -58,7 +58,10 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 	}
 
 	const [{ data: projectsData, error: projectsError }, { data: sessionsData, error: sessionsError }] =
-		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions")]);
+		await Promise.all([
+			apiClient.GET("/api/v1/projects", { signal }),
+			apiClient.GET("/api/v1/sessions", { signal }),
+		]);
 
 	if (projectsError || sessionsError) throw projectsError ?? sessionsError;
 
@@ -122,7 +125,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 // with the router's defaultPreload: "intent") and the hook reads the same cache.
 export const workspaceQueryOptions = {
 	queryKey: workspaceQueryKey,
-	queryFn: fetchWorkspaces,
+	queryFn: ({ signal }: { signal: AbortSignal }) => fetchWorkspaces(signal),
 	retry: 1,
 	refetchInterval: 15_000,
 };

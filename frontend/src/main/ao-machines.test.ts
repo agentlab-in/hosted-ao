@@ -47,6 +47,27 @@ function fakeFetch(rows: Array<Record<string, unknown>>, up: Record<string, bool
 	});
 }
 
+/**
+ * Like fakeFetch, but the list route answers with a different set of rows on
+ * each successive call (repeating the last one once `steps` runs out), so a
+ * test can simulate the control plane's answer changing between refreshes.
+ */
+function sequencedFetch(steps: Array<Array<Record<string, unknown>>>, up: Record<string, boolean> = {}) {
+	let call = 0;
+	return vi.fn(async (input: string, init?: RequestInit) => {
+		const url = String(input);
+		if (url.endsWith("/api/v1/machines")) {
+			expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer cp_access_token");
+			const rows = steps[Math.min(call, steps.length - 1)];
+			call += 1;
+			return listResponse(...rows);
+		}
+		const origin = new URL(url).origin;
+		if (up[origin]) return new Response("not found", { status: 404 });
+		throw new Error("connect ECONNREFUSED");
+	});
+}
+
 let stateDir = "";
 let active: Array<AoMachine | null> = [];
 
@@ -169,6 +190,10 @@ test("a revoked machine drops out of the list and the app falls back to this com
 		tokenSource: signedIn,
 	});
 	await revoked.restore();
+	// One absent response alone is not enough (see the absence-corroboration
+	// tests below): it must survive a first miss before the second confirms it.
+	const firstMiss = await revoked.refresh();
+	expect(firstMiss.activeMachineId).toBe("mch_1");
 	const state = await revoked.refresh();
 
 	expect(state.activeMachineId).toBe(LOCAL_MACHINE_ID);
@@ -319,4 +344,101 @@ test("has no credential to hand out when the ~/.ao state dir is unresolvable", (
 	});
 
 	expect(machines.credential()).toBeNull();
+});
+
+test("an absent machine survives one missed refresh, and only drops after two in a row", async () => {
+	const fetchImpl = sequencedFetch([[machineRow()], [], []], { "https://vm.example.com": true });
+	const machines = controller(fetchImpl);
+	await machines.refresh();
+	await machines.select("mch_1");
+
+	// First miss: the account's next answer omitted it, but that alone reads as
+	// a possibly-malformed row (see shared/ao-machines.ts), not a revocation.
+	let state = await machines.refresh();
+	expect(state.activeMachineId).toBe("mch_1");
+	expect(state.machines.map((machine) => machine.id)).toContain("mch_1");
+	await expect(readFile(path.join(stateDir, AO_MACHINE_FILE_NAME), "utf8")).resolves.toContain("mch_1");
+
+	// Second consecutive miss: now it is treated as revoked.
+	state = await machines.refresh();
+	expect(state.activeMachineId).toBe(LOCAL_MACHINE_ID);
+	expect(state.machines.map((machine) => machine.id)).toEqual([LOCAL_MACHINE_ID]);
+	await expect(readFile(path.join(stateDir, AO_MACHINE_FILE_NAME), "utf8")).rejects.toThrow();
+});
+
+test("a reappearance between misses resets the absence streak", async () => {
+	const fetchImpl = sequencedFetch([[machineRow()], [], [machineRow()], [], []], { "https://vm.example.com": true });
+	const machines = controller(fetchImpl);
+	await machines.refresh(); // present
+	await machines.select("mch_1");
+
+	await machines.refresh(); // miss #1
+	const reappeared = await machines.refresh(); // present again: streak resets to zero
+	expect(reappeared.activeMachineId).toBe("mch_1");
+
+	const missAgain = await machines.refresh(); // miss #1 of a fresh streak
+	expect(missAgain.activeMachineId).toBe("mch_1");
+
+	const droppedNow = await machines.refresh(); // miss #2 of the fresh streak
+	expect(droppedNow.activeMachineId).toBe(LOCAL_MACHINE_ID);
+});
+
+test("two overlapping refreshes share one fetch and settle on the same state", async () => {
+	let releaseList = (): void => undefined;
+	const listGate = new Promise<void>((resolve) => {
+		releaseList = resolve;
+	});
+	let listCalls = 0;
+	const fetchImpl = vi.fn(async (input: string) => {
+		const url = String(input);
+		if (url.endsWith("/api/v1/machines")) {
+			listCalls += 1;
+			await listGate;
+			return listResponse(machineRow());
+		}
+		return new Response("not found", { status: 404 });
+	});
+	const machines = controller(fetchImpl as unknown as ReturnType<typeof fakeFetch>);
+
+	const first = machines.refresh();
+	const second = machines.refresh();
+	releaseList();
+	const [firstState, secondState] = await Promise.all([first, second]);
+
+	expect(listCalls).toBe(1);
+	expect(firstState).toEqual(secondState);
+	expect(firstState.machines.map((machine) => machine.id)).toEqual([LOCAL_MACHINE_ID, "mch_1"]);
+});
+
+test("an explicit select is not overwritten by a refresh that was already in flight", async () => {
+	let releaseList = (): void => undefined;
+	const listGate = new Promise<void>((resolve) => {
+		releaseList = resolve;
+	});
+	let listCalls = 0;
+	const fetchImpl = vi.fn(async (input: string) => {
+		const url = String(input);
+		if (url.endsWith("/api/v1/machines")) {
+			listCalls += 1;
+			if (listCalls === 1) return listResponse(machineRow({ id: "mch_1" }), machineRow({ id: "mch_2", public_url: "https://vm2.example.com" }));
+			// This second request was already on the wire before the user clicked,
+			// so its answer reflects the account as it was then.
+			await listGate;
+			return listResponse(machineRow({ id: "mch_1" }));
+		}
+		return new Response("not found", { status: 404 });
+	});
+	const machines = controller(fetchImpl as unknown as ReturnType<typeof fakeFetch>);
+	await machines.refresh(); // discovers both mch_1 and mch_2
+	await machines.select("mch_1");
+
+	const inFlight = machines.refresh(); // sent while mch_2 still existed
+	const selected = await machines.select("mch_2"); // the user's explicit choice
+	releaseList();
+	await inFlight;
+
+	expect(selected.activeMachineId).toBe("mch_2");
+	expect(machines.getState().activeMachineId).toBe("mch_2");
+	const onDisk = JSON.parse(await readFile(path.join(stateDir, AO_MACHINE_FILE_NAME), "utf8"));
+	expect(onDisk.machine).toMatchObject({ id: "mch_2" });
 });

@@ -40,14 +40,14 @@ function toShellTerminal(t: components["schemas"]["ShellTerminalResponse"]): She
 let previewShellTerminals: ShellTerminal[] = [...mockShellTerminals];
 let previewShellSeq = 0;
 
-async function fetchShellTerminals(): Promise<ShellTerminal[]> {
+async function fetchShellTerminals(signal?: AbortSignal): Promise<ShellTerminal[]> {
 	if (usePreviewData) {
 		return previewShellTerminals;
 	}
 	if (!hasTrustedApiBaseUrl()) {
 		return [];
 	}
-	const { data, error } = await apiClient.GET("/api/v1/shell-terminals");
+	const { data, error } = await apiClient.GET("/api/v1/shell-terminals", { signal });
 	if (error) throw error;
 	return (data?.shellTerminals ?? []).map(toShellTerminal);
 }
@@ -57,7 +57,7 @@ async function fetchShellTerminals(): Promise<ShellTerminal[]> {
 // liveness probe per shell per interval for no new information.
 export const shellTerminalsQueryOptions = {
 	queryKey: shellTerminalsQueryKey,
-	queryFn: fetchShellTerminals,
+	queryFn: ({ signal }: { signal: AbortSignal }) => fetchShellTerminals(signal),
 	retry: 1,
 };
 

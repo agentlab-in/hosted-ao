@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
 	HARNESS_SETUP_COMMAND,
 	LOCAL_MACHINE_ID,
@@ -103,6 +103,24 @@ describe("parseMachinesResponse", () => {
 	test("a body without a machines array is an empty list, not a throw", () => {
 		for (const body of [null, undefined, {}, { machines: null }, { machines: "nope" }]) {
 			expect(parseMachinesResponse(body)).toEqual([]);
+		}
+	});
+
+	// A dropped row used to just vanish: the caller had no way to tell "the
+	// account has no more machines" apart from "one row failed to parse". That
+	// ambiguity is exactly what makes the absence-corroboration streak in
+	// ao-machines.ts dangerous, so every drop must leave a trace.
+	test("a dropped row is diagnosable, not just silently absent", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		try {
+			const result = parseMachinesResponse({
+				machines: [row({ id: "mch_ok" }), row({ id: "", public_url: "https://a.example.com" })],
+			});
+			expect(result.map((machine) => machine.id)).toEqual(["mch_ok"]);
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(warn.mock.calls[0]?.[0]).toMatch(/dropped a machine row/);
+		} finally {
+			warn.mockRestore();
 		}
 	});
 });

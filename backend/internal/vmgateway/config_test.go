@@ -237,6 +237,35 @@ func TestResolve_InvalidDaemonAddr(t *testing.T) {
 	}
 }
 
+// TestResolve_InvalidListenerAddr pins that HTTPAddr and HTTPSAddr get the
+// same net.SplitHostPort check DaemonAddr already had. Without it, the
+// AO_VM_HTTPS_ADDR=443 mistake (missing the leading colon) passed straight
+// through Resolve and only failed later, deep inside
+// http.Server.ListenAndServeTLS, with a raw net error instead of a message
+// naming the flag or variable to fix.
+func TestResolve_InvalidListenerAddr(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+	}{
+		{name: "http addr missing colon", opts: Options{HTTPAddr: "80"}},
+		{name: "https addr missing colon", opts: Options{HTTPSAddr: "443"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := tc.opts
+			opts.Domain = "vm.example.com"
+			opts.MachineID = "machine-1"
+			opts.AccountID = "account-1"
+			opts.MachineFile = filepath.Join(t.TempDir(), "missing.json")
+
+			_, err := Resolve(opts, t.TempDir())
+			if err == nil {
+				t.Fatal("expected an error for a listener address missing its port separator")
+			}
+		})
+	}
+}
+
 func TestResolve_CertDirDefaultsUnderDataDir(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg, err := Resolve(Options{

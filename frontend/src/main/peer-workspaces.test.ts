@@ -211,6 +211,28 @@ describe("remote peer (this computer is active)", () => {
 		expect(tokens.state.created).toEqual([REMOTE_MACHINE.id]);
 	});
 
+	// Regression: `tokenSources` was only ever added to, so an entry accumulated
+	// for every machine id ever seen as a peer, for the life of the process.
+	it("evicts a departed machine's token source, minting fresh if it comes back", async () => {
+		let machinesState = REMOTE_ACTIVE_STATE;
+		const { controller, tokens } = harness({ getMachinesState: () => machinesState });
+
+		await controller.get();
+		expect(tokens.state.created).toEqual([REMOTE_MACHINE.id]);
+
+		// The registered machine drops out of the known machines list entirely
+		// (deregistered, or this account switched to a different one).
+		machinesState = localState();
+		await controller.get();
+
+		// It comes back. Without eviction, tokenSourceFor would still find the
+		// stale cached source and never call createTokenSource again.
+		machinesState = REMOTE_ACTIVE_STATE;
+		await controller.get();
+
+		expect(tokens.state.created).toEqual([REMOTE_MACHINE.id, REMOTE_MACHINE.id]);
+	});
+
 	it("returns unavailable when no registered machine is online", async () => {
 		const { controller } = harness({ getMachinesState: () => localState() });
 

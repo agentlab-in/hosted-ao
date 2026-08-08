@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import {
 	LOCAL_MACHINE_ID,
@@ -37,6 +37,17 @@ const SCHEMA_VERSION = 1;
 
 /** A machine that has not answered within this is reported offline. */
 const DEFAULT_PROBE_TIMEOUT_MS = 4000;
+
+/**
+ * How many consecutive refreshes must list the account's machines without the
+ * active one before its binding is treated as revoked. shared/ao-machines
+ * `parseMachine` drops any row whose id or public_url fails to parse, so one
+ * transiently malformed row, or an incomplete-but-200 response, looks
+ * identical to the machine having been removed. Two in a row is the simplest
+ * guard that survives a single bad response while still reacting to a real
+ * revocation on the next refresh.
+ */
+const ABSENCE_CONFIRMATIONS_REQUIRED = 2;
 
 /**
  * What is persisted about the active machine.
@@ -148,13 +159,28 @@ async function writePersisted(stateDir: string, machine: PersistedMachine | null
 		return;
 	}
 	const file: MachineFile = { version: SCHEMA_VERSION, machine };
-	// Atomic write, mirroring app-state.json and ao-account.json.
+	// Atomic write, mirroring ao-account.json's writeStoredAccount exactly: open
+	// with "wx" so `mode` applies (it only takes effect on create), fsync before
+	// the rename so a crash between write and rename cannot leave a zero-byte
+	// temp masquerading as the real file, and clean the temp up on any failure so
+	// a bad write does not orphan a `.ao-machine-<hex>.json` next to it forever.
 	await mkdir(stateDir, { recursive: true, mode: 0o750 });
 	// Random, not the pid: `mode` applies only on create, so a stale temp from a
 	// crashed run with the same pid would be reused with whatever mode it had.
 	const tmp = path.join(stateDir, `.ao-machine-${randomBytes(8).toString("hex")}.json`);
-	await writeFile(tmp, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-	await rename(tmp, machineFilePath(stateDir));
+	try {
+		const handle = await open(tmp, "wx", 0o600);
+		try {
+			await handle.writeFile(`${JSON.stringify(file, null, 2)}\n`);
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		await rename(tmp, machineFilePath(stateDir));
+	} catch (err) {
+		await rm(tmp, { force: true });
+		throw err;
+	}
 }
 
 /** The remembered machine as a list entry, before the control plane is reached. */
@@ -205,12 +231,18 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 	let lastError: string | null = null;
 
 	/**
-	 * Bumped by anything that decides what is active out of band, which today is
-	 * sign-out. A refresh that was already past `tokenSource.get()` when the user
-	 * signed out still holds a usable token and would otherwise finish by writing
-	 * ao-machine.json for an install that has no account left.
+	 * Bumped by anything that decides what is active out of band of a refresh
+	 * already in flight: sign-out, and an explicit select(). A refresh that was
+	 * already past `tokenSource.get()` when the user signed out still holds a
+	 * usable token and would otherwise finish by writing ao-machine.json for an
+	 * install that has no account left. Likewise a refresh that was already past
+	 * its list fetch when the user picked a different machine would otherwise
+	 * finish by writing the stale target over the user's explicit choice.
 	 */
 	let generation = 0;
+
+	/** Absence streak for the current `active` machine. See ABSENCE_CONFIRMATIONS_REQUIRED. */
+	let pendingAbsence: { id: string; misses: number } | null = null;
 
 	function currentState(): AoMachinesState {
 		const local = localMachine(deps.localMachineName);
@@ -222,15 +254,30 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 		};
 	}
 
+	function toPersisted(machine: AoMachine | null): PersistedMachine | null {
+		return machine ? { id: machine.id, name: machine.name, baseUrl: machine.baseUrl, lastSeen: machine.lastSeen } : null;
+	}
+
 	async function setActive(machine: AoMachine | null): Promise<void> {
 		const sameMachine = (active?.id ?? null) === (machine?.id ?? null);
 		const sameUrl = (active?.baseUrl ?? "") === (machine?.baseUrl ?? "");
+		const previous = active;
+		const next = toPersisted(machine);
+		// Every successful refresh calls this, most of the time with nothing
+		// changed, so a byte-identical record skips the write rather than making
+		// it a hot path (open/fsync/rename on every poll).
+		const identical = JSON.stringify(next) === JSON.stringify(toPersisted(previous));
 		active = machine;
-		if (deps.stateDir) {
-			await writePersisted(
-				deps.stateDir,
-				machine ? { id: machine.id, name: machine.name, baseUrl: machine.baseUrl, lastSeen: machine.lastSeen } : null,
-			);
+		if (deps.stateDir && !identical) {
+			try {
+				await writePersisted(deps.stateDir, next);
+			} catch (err) {
+				// Roll memory back so a write failure cannot leave `active` pointed
+				// somewhere disk disagrees with. select() has no other way to catch
+				// this: it just awaits setActive and would otherwise report success.
+				active = previous;
+				throw err;
+			}
 		}
 		// Re-point the renderer only when the target actually moved, so a periodic
 		// refresh does not churn every long-lived connection.
@@ -295,7 +342,7 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 		if (moved) deps.onActiveChange(refreshed);
 	}
 
-	async function refresh(): Promise<AoMachinesState> {
+	async function performRefresh(): Promise<AoMachinesState> {
 		const startedAt = generation;
 		const superseded = (): boolean => generation !== startedAt;
 
@@ -342,10 +389,30 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 			});
 			status = "ready";
 			const stillRegistered = active ? (remote.find((machine) => machine.id === active?.id) ?? null) : null;
-			// A revoked machine is absent from the list. Falling back to this
-			// computer beats staying pointed at something the account no longer owns.
-			if (active && !stillRegistered) await setActive(null);
-			else if (stillRegistered) await setActive(stillRegistered);
+			if (active && !stillRegistered) {
+				// Absent from one 200 response is not enough to call it a revocation:
+				// parseMachine drops any row it cannot parse, so a transiently
+				// malformed row looks identical to the machine having been removed.
+				// Require ABSENCE_CONFIRMATIONS_REQUIRED consecutive refreshes that
+				// agree before deleting the binding.
+				const misses = (pendingAbsence && pendingAbsence.id === active.id ? pendingAbsence.misses : 0) + 1;
+				if (misses >= ABSENCE_CONFIRMATIONS_REQUIRED) {
+					pendingAbsence = null;
+					// A revoked machine is absent from the list. Falling back to this
+					// computer beats staying pointed at something the account no longer owns.
+					await setActive(null);
+				} else {
+					pendingAbsence = { id: active.id, misses };
+					// Grace period: keep the machine in the list and under the probe
+					// below rather than letting it vanish on a single absent response.
+					remote = [...remote, active];
+				}
+			} else if (stillRegistered) {
+				// It reappeared, or was never actually missing this round: the streak
+				// is about consecutive misses, so seeing it resets the count to zero.
+				pendingAbsence = null;
+				await setActive(stillRegistered);
+			}
 		} catch (err) {
 			if (superseded()) return currentState();
 			// The control plane is unreachable or refused the token. Keep the machine
@@ -360,6 +427,30 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 		return currentState();
 	}
 
+	/**
+	 * One refresh at a time. Two overlapping refreshes would each fetch and
+	 * each write, and the slower, staler one could still win the setActive
+	 * rename after the faster one finished; sharing one in-flight refresh
+	 * removes the race instead of trying to order it.
+	 *
+	 * Unlike ao-control-token.ts's `inFlight`, this is not wrapped in its own
+	 * `withDeadline`: every await inside performRefresh is already bounded
+	 * (tokenSource.get() and fetchMachines() via fetchWithDeadline/withDeadline,
+	 * probe() via its own AbortController timeout), so the attempt promise is
+	 * already guaranteed to settle. The `.finally` still runs unconditionally,
+	 * so a caller here can never be left holding a promise that never resolves.
+	 */
+	let refreshInFlight: Promise<AoMachinesState> | null = null;
+
+	async function refresh(): Promise<AoMachinesState> {
+		if (refreshInFlight) return refreshInFlight;
+		const attempt = performRefresh().finally(() => {
+			refreshInFlight = null;
+		});
+		refreshInFlight = attempt;
+		return attempt;
+	}
+
 	return {
 		getState: currentState,
 		credential: () => (tokenSource && !configError ? { controlPlaneUrl, token: tokenSource } : null),
@@ -367,6 +458,11 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 
 		async select(machineId: string): Promise<AoMachinesState> {
 			if (machineId === LOCAL_MACHINE_ID) {
+				// Bumped before the write: an explicit choice must win over a refresh
+				// that was already in flight when the user clicked, the same
+				// protection reset() already gives sign-out. See `generation`.
+				generation += 1;
+				pendingAbsence = null;
 				await setActive(null);
 				return currentState();
 			}
@@ -375,6 +471,8 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 				lastError = "That machine is no longer in this account's list.";
 				return currentState();
 			}
+			generation += 1;
+			pendingAbsence = null;
 			await setActive(machine);
 			return currentState();
 		},
@@ -392,6 +490,7 @@ export function createAoMachinesController(deps: AoMachinesControllerDeps): AoMa
 
 		async reset(): Promise<void> {
 			generation += 1;
+			pendingAbsence = null;
 			tokenSource?.clear();
 			remote = [];
 			status = "signed-out";

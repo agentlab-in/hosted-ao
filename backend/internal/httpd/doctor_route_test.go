@@ -55,7 +55,7 @@ func TestDoctorRouteIsGatewayProxyable(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	// The daemon address is never dialled: every request here stops at the
 	// gateway's path allowlist or its token check, well before the proxy.
-	gateway, err := vmgateway.NewHandler("127.0.0.1:1", nil, vmgateway.VerifyOptions{}, nil, log)
+	gateway, err := vmgateway.NewHandler("127.0.0.1:1", nil, nil, vmgateway.VerifyOptions{}, nil, log)
 	if err != nil {
 		t.Fatalf("build gateway handler: %v", err)
 	}

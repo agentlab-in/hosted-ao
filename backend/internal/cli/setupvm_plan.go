@@ -37,6 +37,79 @@ const (
 	setupVMKeyringPath    = "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
 	setupVMSourceListPath = "/etc/apt/sources.list.d/github-cli.list"
 	setupVMKeyringURL     = "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+	// setupVMFileMode is the mode every file writeSetupFile installs as root:
+	// systemd units, the apt source list, and the apt keyring are all read by
+	// daemons running as other users, so they are world readable and root
+	// writable. None of them ever carries a secret, so there is nothing here
+	// that wants a tighter mode; machine.json, which does, is written by
+	// writeMachineFile at 0600 instead.
+	setupVMFileMode = "0644"
+)
+
+const (
+	// setupVMStartLimitIntervalSec and setupVMStartLimitBurst replace the old
+	// StartLimitIntervalSec=0 (retry forever, never enter failed). The gateway
+	// is the case that makes "forever" actively harmful: a persistently broken
+	// config would re-order a certificate every RestartSec, and Let's Encrypt
+	// fails a validation attempt at 5 per account/hostname/hour, so hammering
+	// it turns a transient misconfiguration into that rate limit tripping and
+	// an hour-plus outage with no signal beyond journalctl. Burst=4 inside a 5
+	// minute window still gives an ordinary transient crash, a slow boot or a
+	// DNS blip, several fast retries (see the growing RestartSec below), then
+	// lands the unit in `failed` after at most 4 real attempts: comfortably
+	// under Let's Encrypt's threshold, and reached in well under a minute, so a
+	// human finds a unit waiting in `failed` rather than one still quietly
+	// hammering an hour later.
+	setupVMStartLimitIntervalSec = "300"
+	setupVMStartLimitBurst       = "4"
+	// setupVMRestartSteps and setupVMRestartMaxDelaySec grow RestartSec from 5s
+	// toward this ceiling instead of retrying flat-out, needing systemd 254+
+	// (Ubuntu 24.04 and newer); older systemd (Ubuntu 22.04's 249) ignores both
+	// directives with a log line and keeps the flat 5s delay, which the start
+	// limit above still bounds. Fast at first because most crashes are
+	// transient and the box should heal itself quickly; slower later so a unit
+	// that is still failing does not spend its whole start-limit budget in the
+	// first few seconds.
+	setupVMRestartSteps       = "4"
+	setupVMRestartMaxDelaySec = "60"
+
+	// setupVMLogRateLimitIntervalSec and setupVMLogRateLimitBurst are generous
+	// enough that a crash loop, exactly the scenario the start-limit policy
+	// above exists for, never has journald drop the very lines this tool tells
+	// the operator to go read (renderSetupSummary's journalctl line).
+	setupVMLogRateLimitIntervalSec = "60"
+	setupVMLogRateLimitBurst       = "10000"
+)
+
+const (
+	// setupVMDaemonMemoryMax caps the daemon's cgroup at 85% of this machine's
+	// RAM. The daemon spawns arbitrary, user-driven agent subprocesses, so one
+	// runaway or fork-bombing session must not be able to take the whole box's
+	// memory with it: kept inside this ceiling, the kernel OOM-kills something
+	// inside the daemon's own slice instead, and the 15% left over is enough
+	// for ao-gateway.service, sshd, and the kernel itself to keep answering.
+	// Expressed as a percentage, not an absolute number, so it scales with
+	// whatever VM size was actually provisioned instead of being wrong for
+	// either a small box or a large one.
+	setupVMDaemonMemoryMax = "85%"
+	// setupVMDaemonCPUQuota is a no-op on anything up to 4 vCPUs, which covers
+	// the common size for this workload, and only bites on a larger box, where
+	// it stops one session's compute from starving the gateway's own CPU time.
+	setupVMDaemonCPUQuota = "400%"
+	// setupVMDaemonTasksMax bounds the daemon's process and thread count. A
+	// real fork bomb blows past this in well under a second; dozens of
+	// concurrent agent sessions, each with the usual handful of worker
+	// threads, stay far under it.
+	setupVMDaemonTasksMax = "4096"
+
+	// setupVMGatewayMemoryMax, setupVMGatewayCPUQuota, and setupVMGatewayTasksMax
+	// are far smaller than the daemon's: the gateway is one Go binary doing TLS
+	// termination, ACME, and reverse proxying, with no subprocess spawning of
+	// its own, so its ceiling only has to cover a leak or a bug, not legitimate
+	// growth.
+	setupVMGatewayMemoryMax = "256M"
+	setupVMGatewayCPUQuota  = "100%"
+	setupVMGatewayTasksMax  = "128"
 )
 
 // setupVMPackages are the apt packages the VM needs. Agent harnesses are
@@ -830,7 +903,14 @@ type systemdUnit struct {
 	// exit still comes back; the daemon supervises live agent sessions, so its
 	// deliberate exits are left alone.
 	Restart string
-	Comment []string
+	// MemoryMax, CPUQuota, and TasksMax are the cgroup ceilings for this unit's
+	// whole process tree, including everything the daemon spawns. Empty means
+	// unset, which renderSystemdUnit skips rather than writing an empty value
+	// systemd would reject.
+	MemoryMax string
+	CPUQuota  string
+	TasksMax  string
+	Comment   []string
 }
 
 // renderSystemdUnit writes a unit file.
@@ -859,13 +939,10 @@ func renderSystemdUnit(u systemdUnit) string {
 	if len(u.After) > 0 {
 		fmt.Fprintf(&b, "After=%s\n", strings.Join(u.After, " "))
 	}
-	// systemd's default start rate limit is 5 starts in 10 seconds, and with
-	// RestartSec=5 a unit that fails at boot burns that budget in 30 seconds and
-	// enters failed, where nothing retries it until a human runs
-	// systemctl reset-failed. A gateway that cannot bind :443 for the first half
-	// minute after boot, or that hits one transient ACME error, would stop for
-	// good on an unattended VM. Turning the limit off keeps systemd retrying.
-	b.WriteString("StartLimitIntervalSec=0\n")
+	// See the setupVMStartLimit* constants for why this is a real policy now,
+	// not StartLimitIntervalSec=0 (retry forever).
+	fmt.Fprintf(&b, "StartLimitIntervalSec=%s\n", setupVMStartLimitIntervalSec)
+	fmt.Fprintf(&b, "StartLimitBurst=%s\n", setupVMStartLimitBurst)
 
 	b.WriteString("\n[Service]\n")
 	b.WriteString("Type=simple\n")
@@ -881,14 +958,38 @@ func renderSystemdUnit(u systemdUnit) string {
 		fmt.Fprintf(&b, "CapabilityBoundingSet=%s\n", strings.Join(u.AmbientCaps, " "))
 		b.WriteString("NoNewPrivileges=yes\n")
 	}
+	// Cgroup ceilings for this unit's whole process tree. See the
+	// setupVMDaemonMemoryMax / setupVMGatewayMemoryMax constants (and their
+	// CPUQuota and TasksMax siblings) for the numbers and the reasoning behind
+	// each: the daemon spawns arbitrary agent subprocesses and needs enough
+	// room for real multi-session work, the gateway is one small Go binary and
+	// does not.
+	if u.MemoryMax != "" {
+		fmt.Fprintf(&b, "MemoryMax=%s\n", u.MemoryMax)
+	}
+	if u.CPUQuota != "" {
+		fmt.Fprintf(&b, "CPUQuota=%s\n", u.CPUQuota)
+	}
+	if u.TasksMax != "" {
+		fmt.Fprintf(&b, "TasksMax=%s\n", u.TasksMax)
+	}
 	restart := u.Restart
 	if restart == "" {
 		restart = "on-failure"
 	}
 	fmt.Fprintf(&b, "Restart=%s\n", restart)
 	b.WriteString("RestartSec=5\n")
+	// See the setupVMRestartSteps / setupVMRestartMaxDelaySec constants for why
+	// RestartSec grows instead of staying flat, and what happens on a systemd
+	// too old to understand these two directives.
+	fmt.Fprintf(&b, "RestartSteps=%s\n", setupVMRestartSteps)
+	fmt.Fprintf(&b, "RestartMaxDelaySec=%s\n", setupVMRestartMaxDelaySec)
 	b.WriteString("KillSignal=SIGTERM\n")
 	b.WriteString("TimeoutStopSec=30\n")
+	// See the setupVMLogRateLimit* constants: generous enough that a crash loop
+	// never has journald drop the lines this tool tells the operator to read.
+	fmt.Fprintf(&b, "LogRateLimitIntervalSec=%s\n", setupVMLogRateLimitIntervalSec)
+	fmt.Fprintf(&b, "LogRateLimitBurst=%s\n", setupVMLogRateLimitBurst)
 
 	b.WriteString("\n[Install]\n")
 	b.WriteString("WantedBy=multi-user.target\n")
@@ -938,6 +1039,9 @@ func renderDaemonUnit(p setupPlan) string {
 		WorkingDir:  p.DataDir,
 		Env:         append(p.unitEnvironment(), [2]string{"PATH", p.daemonPath()}),
 		ExecStart:   p.BinaryPath + " daemon",
+		MemoryMax:   setupVMDaemonMemoryMax,
+		CPUQuota:    setupVMDaemonCPUQuota,
+		TasksMax:    setupVMDaemonTasksMax,
 	})
 }
 
@@ -971,7 +1075,10 @@ func renderGatewayUnit(p setupPlan) string {
 		// The gateway holds no session state, and a stopped gateway is a machine
 		// that shows Offline in the desktop for no visible reason, so every exit
 		// earns a restart.
-		Restart: "always",
+		Restart:   "always",
+		MemoryMax: setupVMGatewayMemoryMax,
+		CPUQuota:  setupVMGatewayCPUQuota,
+		TasksMax:  setupVMGatewayTasksMax,
 	})
 }
 
@@ -1144,6 +1251,17 @@ func normalizeSetupDomain(raw string) (string, error) {
 // the fully-installed status means the package still has to be installed.
 func dpkgInstalled(out string) bool {
 	return strings.Contains(out, "install ok installed")
+}
+
+// setupNeedsGitHubCLIRefresh decides whether ensureGitHubCLIRepo has to run
+// before the apt-get update that follows it. gh missing is the obvious case,
+// but a source list already on disk from an earlier run needs it too: that
+// update reads the file, GitHub rotates the signing key it names, and a stale
+// key fails the whole update, for every package in missing, not only gh. Once
+// gh itself is installed, "gh is missing" alone never asks this question
+// again, which is what let a rotated key stay stale forever.
+func setupNeedsGitHubCLIRefresh(missing []string, sourceListExists bool) bool {
+	return slices.Contains(missing, "gh") || sourceListExists
 }
 
 // githubCLISourceList is the apt source GitHub documents for gh, used only

@@ -22,8 +22,8 @@ export interface Settings {
 export function useSettings() {
 	const query = useQuery({
 		queryKey: settingsQueryKey,
-		queryFn: async (): Promise<Settings> => {
-			const { data, error } = await apiClient.GET("/api/v1/settings");
+		queryFn: async ({ signal }): Promise<Settings> => {
+			const { data, error } = await apiClient.GET("/api/v1/settings", { signal });
 			if (error) throw error;
 			return {
 				defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,

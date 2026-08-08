@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { gatewayTokenMock } = vi.hoisted(() => ({ gatewayTokenMock: vi.fn<() => Promise<string | null>>() }));
+const { gatewayTokenMock } = vi.hoisted(() => ({
+	gatewayTokenMock: vi.fn<(forceRefresh?: boolean) => Promise<string | null>>(),
+}));
 
 vi.mock("./bridge", () => ({
 	aoBridge: { machines: { gatewayToken: gatewayTokenMock } },
@@ -105,6 +107,66 @@ describe("apiClient runtime base URL", () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 		expect(response?.status).toBe(503);
 		expect(error).toMatchObject({ code: "machine_token_unavailable" });
+	});
+
+	// Regression: a 401/403 from the gateway used to be treated like any other
+	// HTTP error. The token source only re-mints when its own clock says the
+	// token is near expiry, so a server-side revocation, key rotation, or clock
+	// skew meant every retry for up to the refresh lead time resent the same
+	// doomed bearer.
+	it("re-mints once and retries once after a 401, then succeeds", async () => {
+		gatewayTokenMock.mockResolvedValueOnce("stale.jwt").mockResolvedValueOnce("fresh.jwt");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ projects: [] }), { status: 200 }));
+
+		setApiBaseUrl("https://vm.example.com");
+		const { error } = await apiClient.GET("/api/v1/projects");
+
+		expect(error).toBeUndefined();
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		expect(new Headers(fetchSpy.mock.calls[0][1]?.headers).get("authorization")).toBe("Bearer stale.jwt");
+		expect(new Headers(fetchSpy.mock.calls[1][1]?.headers).get("authorization")).toBe("Bearer fresh.jwt");
+		// The second call asked the main process to invalidate and re-mint.
+		expect(gatewayTokenMock).toHaveBeenNthCalledWith(2, true);
+	});
+
+	it("surfaces a second 401 without looping past one retry", async () => {
+		gatewayTokenMock.mockResolvedValueOnce("stale.jwt").mockResolvedValueOnce("still.stale.jwt");
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("unauthorized", { status: 401 }));
+
+		setApiBaseUrl("https://vm.example.com");
+		const { response } = await apiClient.GET("/api/v1/projects");
+
+		expect(response?.status).toBe(401);
+		// Exactly one retry: two sends, one re-mint, no third attempt.
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		expect(gatewayTokenMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("falls back to the local machine_token_unavailable response when the re-mint after a 401 fails", async () => {
+		gatewayTokenMock.mockResolvedValueOnce("stale.jwt").mockResolvedValueOnce(null);
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("unauthorized", { status: 401 }));
+
+		setApiBaseUrl("https://vm.example.com");
+		const { response, error } = await apiClient.GET("/api/v1/projects");
+
+		expect(response?.status).toBe(503);
+		expect(error).toMatchObject({ code: "machine_token_unavailable" });
+		// No bare retry: the failed re-mint short-circuits before a second fetch.
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not retry a 401 from the loopback daemon (no machine token to re-mint)", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("unauthorized", { status: 401 }));
+
+		setApiBaseUrl("http://127.0.0.1:3037");
+		const { response } = await apiClient.GET("/api/v1/projects");
+
+		expect(response?.status).toBe(401);
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(gatewayTokenMock).not.toHaveBeenCalled();
 	});
 
 	it("does not ask for a machine token for a loopback daemon", async () => {
@@ -223,6 +285,48 @@ describe("apiClient runtime base URL", () => {
 		const { error } = await apiClient.GET("/api/v1/projects");
 
 		expect(error).toEqual({ code: "exited", message: "AO daemon exited with code 1" });
+	});
+});
+
+describe("runtimeFetch timeout", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		setApiBaseUrl("http://127.0.0.1:3001");
+	});
+
+	// Regression: runtimeFetch applied no timeout of its own and passed the
+	// caller's signal through verbatim, and no call site supplied one — a
+	// blackholed connection hung forever, with no error and no reportApiError,
+	// showing an indefinite loading state. AbortSignal.timeout's own internal
+	// timer cannot be driven by fake timers (verified: vi.advanceTimersByTimeAsync
+	// does not fire it), so this test replaces AbortSignal.timeout itself with a
+	// controllable signal rather than waiting out the real bound.
+	it("rejects a hung request once the bounded timeout fires, instead of hanging forever", async () => {
+		const timeoutController = new AbortController();
+		vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+		vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(() => {}));
+
+		// Same-origin as the request itself, so runtimeFetch takes the passthrough
+		// path (`raceAbort(fetch(input), signal)`), which is the one path that
+		// cannot rely on the native fetch implementation honouring an init signal.
+		setApiBaseUrl(window.location.origin);
+
+		const pending = apiClient.GET("/api/v1/projects");
+		let settled = false;
+		// Swallow the rejection here on purpose: this promise only tracks whether
+		// `pending` has settled yet, and the real assertion below awaits `pending`
+		// itself (and its expected rejection) directly.
+		pending.finally(() => {
+			settled = true;
+		}).catch(() => {});
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(settled).toBe(false);
+
+		timeoutController.abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+		await expect(pending).rejects.toThrow();
+		expect(settled).toBe(true);
 	});
 });
 

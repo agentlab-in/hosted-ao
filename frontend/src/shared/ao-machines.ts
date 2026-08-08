@@ -160,15 +160,36 @@ export function readMachineHarness(row: { doctor?: unknown }): HarnessReadiness 
 	return harnessFromDoctorChecks(row.doctor);
 }
 
+/**
+ * Log a row `parseMachine` could not use, so a transiently malformed
+ * `public_url` or an empty id is diagnosable instead of just vanishing from
+ * the list. `console` is the one logging surface both processes already have
+ * (main is Node, the renderer is a browser), so it needs no new dependency
+ * and no change to `parseMachinesResponse`'s return type, which existing
+ * callers already rely on being just the usable rows.
+ */
+function warnDroppedMachine(reason: string, row: unknown): void {
+	console.warn(`[ao-machines] dropped a machine row: ${reason}`, row);
+}
+
 function parseMachine(raw: unknown): AoMachine | null {
-	if (!raw || typeof raw !== "object") return null;
+	if (!raw || typeof raw !== "object") {
+		warnDroppedMachine("row is not an object", raw);
+		return null;
+	}
 	const row = raw as Record<string, unknown>;
 	const id = typeof row.id === "string" ? row.id.trim() : "";
-	if (!id || id === LOCAL_MACHINE_ID) return null;
+	if (!id || id === LOCAL_MACHINE_ID) {
+		warnDroppedMachine(id === LOCAL_MACHINE_ID ? "id collides with the reserved local machine id" : "missing id", row);
+		return null;
+	}
 	const baseUrl = parseMachineOrigin(row.public_url);
 	// A row the app cannot point itself at is not offerable, and offering it
 	// would mean a picker entry that silently does nothing when clicked.
-	if (!baseUrl) return null;
+	if (!baseUrl) {
+		warnDroppedMachine(`unusable public_url: ${JSON.stringify(row.public_url)}`, row);
+		return null;
+	}
 	const name = typeof row.name === "string" && row.name.trim() ? row.name.trim() : new URL(baseUrl).hostname;
 	return {
 		id,
@@ -186,7 +207,9 @@ function parseMachine(raw: unknown): AoMachine | null {
 /**
  * Parse the `GET /api/v1/machines` body. Unusable rows are dropped rather than
  * failing the whole list, so one malformed registration does not hide every
- * other machine the account owns.
+ * other machine the account owns. Each drop still reaches `console.warn` via
+ * `parseMachine`, so a dropped machine is a visible log line rather than a
+ * silent gap between what the control plane has and what the app shows.
  */
 export function parseMachinesResponse(body: unknown): AoMachine[] {
 	const rows = (body as { machines?: unknown } | null | undefined)?.machines;

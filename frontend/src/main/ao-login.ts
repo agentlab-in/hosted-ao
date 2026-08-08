@@ -10,6 +10,7 @@ import {
 } from "./ao-pkce";
 import { startLoopbackCallback, type LoopbackCallback } from "./loopback-callback";
 import type { StoredAoAccount } from "./ao-account-store";
+import { CONTROL_PLANE_TIMEOUT_MS, fetchWithDeadline } from "./request-deadline";
 
 /**
  * The desktop sign-in flow: system browser, PKCE, loopback redirect (RFC 8252).
@@ -27,6 +28,8 @@ export type DesktopLoginDeps = {
 	/** Injected for tests; defaults to the real loopback listener. */
 	startCallback?: (expectedState: string) => Promise<LoopbackCallback>;
 	fetchImpl?: typeof fetch;
+	/** Deadline for the token exchange. See request-deadline.ts. Test seam. */
+	timeoutMs?: number;
 };
 
 type TokenResponse = {
@@ -58,6 +61,7 @@ export async function runDesktopLogin(deps: DesktopLoginDeps): Promise<StoredAoA
 			codeVerifier: verifier,
 			redirectUri: callback.redirectUri,
 			fetchImpl: deps.fetchImpl ?? fetch,
+			timeoutMs: deps.timeoutMs ?? CONTROL_PLANE_TIMEOUT_MS,
 		});
 	} finally {
 		// The listener closes itself on a delivered callback; this covers the abort
@@ -72,6 +76,7 @@ type ExchangeInput = {
 	codeVerifier: string;
 	redirectUri: string;
 	fetchImpl: typeof fetch;
+	timeoutMs: number;
 };
 
 async function exchangeCode(input: ExchangeInput): Promise<StoredAoAccount> {
@@ -85,11 +90,23 @@ async function exchangeCode(input: ExchangeInput): Promise<StoredAoAccount> {
 
 	let response: Response;
 	try {
-		response = await input.fetchImpl(`${input.controlPlaneUrl}${TOKEN_PATH}`, {
-			method: "POST",
-			headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-			body: body.toString(),
-		});
+		// Deadlined like every other control-plane call (request-deadline.ts): this
+		// is the one that used to be a bare fetch with no AbortController. ao-account.ts
+		// holds a single `inFlight` promise for sign-in, cleared only in a `finally`,
+		// so a blackholed token POST would otherwise never settle and would poison
+		// sign-in for the rest of the process's life, exactly like the hazard
+		// ao-control-token.ts's `inFlight` already guards against.
+		response = await fetchWithDeadline(
+			input.fetchImpl,
+			`${input.controlPlaneUrl}${TOKEN_PATH}`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+				body: body.toString(),
+			},
+			input.timeoutMs,
+			"Signing in",
+		);
 	} catch {
 		// Spec: control plane unreachable at login is reported plainly, and local
 		// mode still works without it.

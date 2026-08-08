@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -65,6 +66,13 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 		return err
 	}
 
+	// pinnedDaemonAddr is true when the operator supplied --daemon-addr or
+	// AO_VM_DAEMON_ADDR explicitly, as opposed to letting it default from
+	// running.json (below) or vmgateway.Resolve's own DefaultDaemonAddr
+	// fallback. Only in the unpinned case does resolveDaemonAddr get wired up
+	// below: re-resolving on a proxy failure must never silently override an
+	// address the operator chose on purpose.
+	pinnedDaemonAddr := opts.DaemonAddr != "" || os.Getenv("AO_VM_DAEMON_ADDR") != ""
 	if opts.DaemonAddr == "" {
 		if addr, ok := discoverDaemonAddr(cfg.RunFilePath); ok {
 			opts.DaemonAddr = addr
@@ -88,7 +96,19 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 		Skew:     vmgateway.DefaultSkew,
 	}
 	jwks := vmgateway.NewJWKSCache(gwCfg.JWKSURL, nil)
-	handler, err := vmgateway.NewHandler(gwCfg.DaemonAddr, jwks, verify, cfg.AllowedOrigins, log)
+
+	// resolveDaemonAddr lets the gateway recover on its own if the daemon was
+	// not up yet at gateway boot (discoverDaemonAddr returned nothing, so
+	// gwCfg.DaemonAddr is DefaultDaemonAddr) or later restarts onto a
+	// different port: NewHandler's proxy re-reads running.json after a
+	// connection failure instead of proxying to a dead port until this
+	// process is restarted. nil when the address was pinned, so a re-resolve
+	// never overrides it.
+	var resolveDaemonAddr func() (string, bool)
+	if !pinnedDaemonAddr {
+		resolveDaemonAddr = func() (string, bool) { return discoverDaemonAddr(cfg.RunFilePath) }
+	}
+	handler, err := vmgateway.NewHandler(gwCfg.DaemonAddr, resolveDaemonAddr, jwks, verify, cfg.AllowedOrigins, log)
 	if err != nil {
 		return fmt.Errorf("build gateway handler: %w", err)
 	}
@@ -171,7 +191,10 @@ func (c *commandContext) runVMSetupHarness(cmd *cobra.Command, harness string) e
 // to find the port it actually bound, the same source the rest of the CLI
 // uses (see client.go). A missing or unreadable run-file is not fatal here:
 // the daemon may simply not be up yet when the gateway starts under
-// systemd, and the reverse proxy will just return 502 until it is.
+// systemd, and the reverse proxy will just return 502 until it is. Used both
+// for the gateway's initial daemon address and, via resolveDaemonAddr in
+// runVMServe, as the callback the gateway's proxy re-runs after a connection
+// failure to pick up a daemon that started late or moved to a new port.
 func discoverDaemonAddr(runFilePath string) (string, bool) {
 	info, err := runfile.Read(runFilePath)
 	if err != nil || info == nil || info.Port <= 0 {

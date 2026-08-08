@@ -62,6 +62,8 @@ export type MachineTokenSourceDeps = {
 	controlToken: ControlPlaneTokenSource;
 	fetchImpl?: typeof fetch;
 	now?: () => number;
+	/** Monotonic clock for the cache-freshness check; defaults to performance.now(). */
+	monotonicNow?: () => number;
 	/** Deadline for the mint call. See request-deadline.ts. */
 	timeoutMs?: number;
 };
@@ -91,9 +93,18 @@ type MachineTokenResponse = {
 export function createMachineTokenSource(deps: MachineTokenSourceDeps): MachineTokenSource {
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const now = deps.now ?? Date.now;
+	const monotonicNow = deps.monotonicNow ?? (() => performance.now());
 	const timeoutMs = deps.timeoutMs ?? CONTROL_PLANE_TIMEOUT_MS;
 
 	let cached: MachineAccessToken | null = null;
+	// Paired with `cached` at mint time. get() judges freshness off elapsed
+	// monotonic time since the mint rather than a fresh Date.now() read against
+	// the (wall-clock) expiresAt above: a backward NTP correction between mint
+	// and a later get() would otherwise make an actually-spent token look
+	// fresher than it is, delaying the caller's own refresh past the token's
+	// real expiry.
+	let cachedTtlMs = 0;
+	let cachedMintedAtMonotonic = 0;
 	let inFlight: Promise<MachineAccessToken | null> | null = null;
 
 	async function mint(): Promise<MachineAccessToken | null> {
@@ -131,7 +142,9 @@ export function createMachineTokenSource(deps: MachineTokenSourceDeps): MachineT
 			throw new Error("The control plane did not return a machine access token.");
 		}
 		const ttlSeconds = typeof expiresIn === "number" && expiresIn > 0 ? expiresIn : DEFAULT_TTL_SECONDS;
-		cached = { token: accessToken, expiresAt: now() + ttlSeconds * 1000 };
+		cachedTtlMs = ttlSeconds * 1000;
+		cachedMintedAtMonotonic = monotonicNow();
+		cached = { token: accessToken, expiresAt: now() + cachedTtlMs };
 		return cached;
 	}
 
@@ -153,7 +166,7 @@ export function createMachineTokenSource(deps: MachineTokenSourceDeps): MachineT
 
 	return {
 		async get(): Promise<MachineAccessToken | null> {
-			if (cached && cached.expiresAt - EXPIRY_SKEW_MS > now()) return cached;
+			if (cached && cachedTtlMs - EXPIRY_SKEW_MS > monotonicNow() - cachedMintedAtMonotonic) return cached;
 			return force();
 		},
 

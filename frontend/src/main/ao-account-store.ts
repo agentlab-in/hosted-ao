@@ -54,6 +54,13 @@ function accountFilePath(stateDir: string): string {
  * Throws when a stored token exists but cannot be decrypted (no credential store,
  * or a keychain the OS re-keyed). The caller surfaces that as signed-out with the
  * reason instead of pretending the file is absent.
+ *
+ * Also throws on any read failure other than the file being absent. A transient
+ * EPERM/EMFILE/EIO reading the file is not "no account stored", and treating it
+ * as one turns a filesystem hiccup into a false sign-out: ao-control-token.ts
+ * reads a null here as "not signed in" and ao-machines.ts refresh() reads a null
+ * token the same way, and deletes the machine binding on disk as a result. Only
+ * ENOENT and ENOTDIR mean the file really is not there.
  */
 export async function readStoredAccount(
 	stateDir: string,
@@ -62,8 +69,10 @@ export async function readStoredAccount(
 	let raw: string;
 	try {
 		raw = await readFile(accountFilePath(stateDir), "utf8");
-	} catch {
-		return null;
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ENOTDIR") return null;
+		throw err;
 	}
 
 	let parsed: Partial<AccountFile>;

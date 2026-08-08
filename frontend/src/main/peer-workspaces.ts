@@ -154,6 +154,21 @@ export function createPeerWorkspacesController(deps: PeerWorkspacesDeps): PeerWo
 		return source;
 	}
 
+	/**
+	 * Drop a token source for any machine id no longer in the known machines
+	 * list (deregistered, or this account signed into a different one). Without
+	 * this, `tokenSources` only ever grows: an entry accumulates for every
+	 * machine id this process has ever seen as a peer, for the life of the
+	 * process. Mirrors machine-transport.ts, which drops its one token source
+	 * on setMachine when the target changes.
+	 */
+	function evictDepartedTokenSources(machines: AoMachine[]): void {
+		const known = new Set(machines.map((machine) => machine.id));
+		for (const machineId of tokenSources.keys()) {
+			if (!known.has(machineId)) tokenSources.delete(machineId);
+		}
+	}
+
 	async function fetchJson(url: string, headers: Record<string, string>): Promise<unknown> {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -224,6 +239,7 @@ export function createPeerWorkspacesController(deps: PeerWorkspacesDeps): PeerWo
 	return {
 		async get(): Promise<PeerWorkspacesResult> {
 			const machinesState = deps.getMachinesState();
+			evictDepartedTokenSources(machinesState.machines);
 			if (machinesState.activeMachineId !== LOCAL_MACHINE_ID) {
 				// A registered machine is active, so the peer is this computer.
 				return localPeer();
