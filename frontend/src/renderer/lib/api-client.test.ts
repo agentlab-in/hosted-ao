@@ -58,6 +58,7 @@ describe("apiClient runtime base URL", () => {
 	});
 
 	it("rebases remote API calls with credentials included for the gateway cookie", async () => {
+		gatewayTokenMock.mockResolvedValue("machine.audience.jwt");
 		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify({ projects: [] }), {
 				status: 200,
@@ -91,16 +92,19 @@ describe("apiClient runtime base URL", () => {
 		expect(init).toMatchObject({ credentials: "include" });
 	});
 
-	it("sends no Authorization header when there is no machine token", async () => {
+	it("never sends a bare request to a remote gateway when there is no machine token", async () => {
+		// Regression: a null token used to go out as a request with no Authorization
+		// header at all, which the gateway 401s without logging; the renderer then
+		// retried forever with nothing anywhere saying why (issue #82).
 		gatewayTokenMock.mockResolvedValue(null);
-		const fetchSpy = vi
-			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(new Response(JSON.stringify({ projects: [] }), { status: 200 }));
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
 
 		setApiBaseUrl("https://vm.example.com");
-		await apiClient.GET("/api/v1/projects");
+		const { response, error } = await apiClient.GET("/api/v1/projects");
 
-		expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(response?.status).toBe(503);
+		expect(error).toMatchObject({ code: "machine_token_unavailable" });
 	});
 
 	it("does not ask for a machine token for a loopback daemon", async () => {

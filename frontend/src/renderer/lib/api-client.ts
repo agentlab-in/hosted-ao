@@ -167,7 +167,12 @@ export function normalizeApiOperation(method: string, pathname: string): string 
 	return `${method.toUpperCase()} ${best?.normalized ?? fallbackNormalize(pathname)}`;
 }
 
-type ApiErrorCategory = "daemon_unavailable" | "network_error" | "http_4xx" | "http_5xx";
+type ApiErrorCategory =
+	| "daemon_unavailable"
+	| "machine_token_unavailable"
+	| "network_error"
+	| "http_4xx"
+	| "http_5xx";
 
 // One event per (operation, category, status) per window: a daemon outage
 // makes every polling query fail at once and on every retry — the failure
@@ -199,6 +204,28 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		});
 	}
 
+	// Bearer is the only credential the machine gateway accepts on a REST route:
+	// its cookie is confined to /mux and the SSE stream, so nothing
+	// state-changing rides an ambient credential (controlplane/TOKEN_CONTRACT.md).
+	// Asked for per request because the main process owns expiry and the silent
+	// refresh. Null when no machine is selected (local daemon) or in browser preview.
+	const remote = baseUrl ? isRemoteDaemonBaseUrl(baseUrl) : false;
+	const gatewayToken = remote ? await aoBridge.machines.gatewayToken() : null;
+	if (remote && !gatewayToken) {
+		// No usable machine credential right now (the silent refresh is failing, or
+		// the main process no longer has this machine). A request sent anyway would
+		// reach the gateway bare and become a silent 401 the gateway does not even
+		// log; answer locally instead so the failure is visible and retryable.
+		reportApiError(operation, "machine_token_unavailable", 503);
+		return new Response(
+			JSON.stringify({
+				message: "This machine's sign-in is not available right now. Reconnecting.",
+				code: "machine_token_unavailable",
+			}),
+			{ status: 503, headers: { "Content-Type": "application/json" } },
+		);
+	}
+
 	const send = async (): Promise<Response> => {
 		if (!baseUrl) {
 			return fetch(input);
@@ -206,14 +233,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 
 		const url = new URL(input.url);
 		const target = new URL(url.pathname + url.search + url.hash, baseUrl);
-		const remote = isRemoteDaemonBaseUrl(baseUrl);
 		const credentials = remote ? "include" : input.credentials;
-		// Bearer is the only credential the machine gateway accepts on a REST route:
-		// its cookie is confined to /mux and the SSE stream, so nothing
-		// state-changing rides an ambient credential (controlplane/TOKEN_CONTRACT.md).
-		// Asked for per request because the main process owns expiry and the silent
-		// refresh. Null when no machine is selected (local daemon) or in browser preview.
-		const gatewayToken = remote ? await aoBridge.machines.gatewayToken() : null;
 		if (target.href === input.url && credentials === input.credentials && !gatewayToken) {
 			return fetch(input);
 		}
