@@ -249,6 +249,16 @@ func withoutSudoPrefix(call string) string {
 // source file behind. The fix has to land the privileged copy on a temp file
 // next to dest and rename it into place as a separate, final step.
 func TestWriteSetupFileIsAtomic(t *testing.T) {
+	// dest is a path on the Ubuntu VM, so writeSetupFile builds the sibling temp
+	// with `path` (always forward slashes), not `filepath`. Feeding it a Windows
+	// temp dir instead makes `path.Dir` see no separator at all, collapse to ".",
+	// and hand `mv` a bare relative name that resolves against the process's own
+	// working directory on another drive. That is an artefact of the fake dest,
+	// not a defect: setup-vm is gated to Linux long before this runs, the same
+	// reason the preflight test above only runs there.
+	if runtime.GOOS == "windows" {
+		t.Skip("setup-vm targets a Linux VM; dest is a POSIX path and the platform gate refuses earlier on Windows")
+	}
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "ao-gateway.service")
 
