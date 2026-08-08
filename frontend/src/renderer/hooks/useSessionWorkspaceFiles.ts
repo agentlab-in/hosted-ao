@@ -14,9 +14,14 @@ export type WorkspaceFilesResponse = components["schemas"]["ListWorkspaceFilesRe
 
 export const sessionWorkspaceFilesQueryKey = (sessionId: string) => ["session-workspace-files", sessionId] as const;
 
-async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string): Promise<WorkspaceFilesResponse> {
+async function fetchSessionWorkspaceFiles(
+	sessionId: string,
+	errorMessage: string,
+	signal?: AbortSignal,
+): Promise<WorkspaceFilesResponse> {
 	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/workspace/files", {
 		params: { path: { sessionId } },
+		signal,
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
 	return (data ?? { sessionId, files: [], truncated: false }) as WorkspaceFilesResponse;
@@ -27,7 +32,7 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files") {
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId),
-		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage),
+		queryFn: ({ signal }: { signal: AbortSignal }) => fetchSessionWorkspaceFiles(sessionId, errorMessage, signal),
 		refetchInterval: 3500,
 	};
 }

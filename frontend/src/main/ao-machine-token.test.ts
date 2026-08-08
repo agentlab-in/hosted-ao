@@ -38,6 +38,10 @@ function source(overrides: Partial<MachineTokenSourceDeps> = {}, clock = { ms: 1
 			controlToken: controlToken(),
 			fetchImpl,
 			now: () => clock.ms,
+			// Tracks the same fake clock by default, so every existing test (which
+			// advances time only via `clock.ms`) sees wall and monotonic move
+			// together, exactly as they do outside of a clock-skew scenario.
+			monotonicNow: () => clock.ms,
 			...overrides,
 		}),
 	};
@@ -94,6 +98,34 @@ describe("createMachineTokenSource", () => {
 		await tokens.get();
 		// Nothing rotates on this endpoint, so re-minting is simply repeating the
 		// call; no persist-before-use ordering is involved.
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
+	});
+
+	// Regression: get() used to judge freshness off `cached.expiresAt - skew >
+	// Date.now()`. A backward NTP correction makes Date.now() read earlier than
+	// it should, which made an actually-spent token look fresher for longer,
+	// delaying the caller's refresh past the token's real expiry. Judging off
+	// monotonic elapsed time since mint is immune to the wall-clock jump.
+	it("judges cache freshness by monotonic elapsed time, immune to a backward wall-clock jump", async () => {
+		const wallClock = { ms: 1_000_000 };
+		const monotonicClock = { ms: 0 };
+		const { tokens, fetchImpl } = source({
+			now: () => wallClock.ms,
+			monotonicNow: () => monotonicClock.ms,
+		});
+
+		await tokens.get();
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+		// Wall clock jumps ten minutes backward; real (monotonic) time has
+		// actually advanced past the token's real 900s life.
+		wallClock.ms -= 600_000;
+		monotonicClock.ms += 900_000;
+
+		await tokens.get();
+		// A wall-clock-only check would still see `cached.expiresAt` (baked in
+		// pre-jump) as comfortably ahead of the now-earlier wall clock, and this
+		// would stay at one call. Monotonic elapsed time correctly sees it spent.
 		expect(fetchImpl).toHaveBeenCalledTimes(2);
 	});
 

@@ -193,6 +193,35 @@ function reportApiError(operation: string, category: ApiErrorCategory, status?: 
 	});
 }
 
+// Backstop against a blackholed connection (dead gateway, network that changed
+// mid-request), not a latency target: the daemon's own REST handler timeout is
+// 60s (backend/internal/config: DefaultRequestTimeout), and every route this
+// client calls is a bounded request/response, never a stream — SSE
+// (/api/v1/events, /api/v1/notifications/stream) and the session workspace
+// event stream open their own EventSource directly against the base URL, and
+// the terminal mux is a WebSocket; neither goes through runtimeFetch. A margin
+// above the daemon's own timeout lets the daemon's timeout response win the race.
+const REQUEST_TIMEOUT_MS = 65_000;
+
+/** Rejects with `signal`'s abort reason as soon as it fires, whichever settles first. */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error: unknown) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
+}
+
 async function runtimeFetch(input: Request): Promise<Response> {
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
@@ -226,32 +255,47 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		);
 	}
 
-	const send = async (): Promise<Response> => {
-		if (!baseUrl) {
-			return fetch(input);
-		}
+	const url = new URL(input.url);
+	const target = baseUrl ? new URL(url.pathname + url.search + url.hash, baseUrl) : null;
+	const credentials = remote ? "include" : input.credentials;
+	// Bearer is only ever added on the rebase path below, so passthrough (send
+	// input untouched) requires no token to attach — which a remote call always
+	// has by this point, so remote never takes this branch.
+	const passthrough = !baseUrl || (target!.href === input.url && credentials === input.credentials && !gatewayToken);
 
-		const url = new URL(input.url);
-		const target = new URL(url.pathname + url.search + url.hash, baseUrl);
-		const credentials = remote ? "include" : input.credentials;
-		if (target.href === input.url && credentials === input.credentials && !gatewayToken) {
-			return fetch(input);
+	// Buffer the body once, outside the send closure: a Request's body stream
+	// can only be read once, and a 401/403 retry below calls send() a second
+	// time with the same body. `new Request(target, input)` (source Request as
+	// the *init* argument) reads input's `duplex` getter, which Electron's
+	// Chromium lacks and throws "The duplex member must be specified" for any
+	// request with a body — buffering to an ArrayBuffer up front sidesteps that
+	// streaming-duplex path entirely, on both the first send and the retry.
+	const body =
+		passthrough || input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
+
+	// Composed, not replacing: a caller-supplied signal (react-query's, once a
+	// hook forwards it) must still cancel the request the moment the caller no
+	// longer wants it, same as before this timeout existed.
+	const signal = AbortSignal.any([input.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+
+	const send = async (token: string | null): Promise<Response> => {
+		if (passthrough) {
+			// input's own signal is left untouched here (see the duplex note above:
+			// even `{ signal }` as a second init argument next to a Request risks the
+			// same body-getter path on some engines), so this call cannot truly abort
+			// the underlying connection on timeout. raceAbort still rejects the
+			// promise the caller is awaiting, which is what turns a hang into a
+			// visible, retryable error; the abandoned fetch is left to fail or settle
+			// on its own.
+			return raceAbort(fetch(input), signal);
 		}
 		const headers = new Headers(input.headers);
-		if (gatewayToken) headers.set("Authorization", `Bearer ${gatewayToken}`);
-
-		// Rebase onto the runtime base URL by copying fields explicitly and
-		// buffering the body. `new Request(target, input)` reads the source
-		// request's `duplex` getter, which Electron's Chromium lacks — it throws
-		// "The duplex member must be specified" for any request with a body, so
-		// every POST would fail in the packaged app. API bodies are small JSON;
-		// buffering sidesteps streaming-duplex semantics entirely.
-		const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
-		return fetch(target, {
+		if (token) headers.set("Authorization", `Bearer ${token}`);
+		return fetch(target!, {
 			method: input.method,
 			headers,
 			body,
-			signal: input.signal,
+			signal,
 			credentials,
 			cache: input.cache,
 			redirect: input.redirect,
@@ -261,16 +305,47 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		});
 	};
 
-	let response: Response;
-	try {
-		response = await send();
-	} catch (error) {
-		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
-		if (!(error instanceof DOMException && error.name === "AbortError")) {
-			reportApiError(operation, "network_error");
+	const sendReportingFailure = async (token: string | null): Promise<Response> => {
+		try {
+			return await send(token);
+		} catch (error) {
+			// Caller-initiated aborts (unmounted components cancelling queries) are
+			// not failures and stay unreported, same as before this timeout existed.
+			// AbortSignal.timeout()'s own rejection is a "TimeoutError" DOMException,
+			// not "AbortError", so this function's own timeout firing still falls
+			// through and is reported — a hang must surface as a real network error,
+			// not be swallowed like a benign cancellation.
+			if (!(error instanceof DOMException && error.name === "AbortError")) {
+				reportApiError(operation, "network_error");
+			}
+			throw error;
 		}
-		throw error;
+	};
+
+	let response = await sendReportingFailure(gatewayToken);
+
+	// A 401/403 from the gateway means the bearer this request carried is no
+	// good, even though it looked unexpired client-side (server-side
+	// revocation, key rotation, or clock skew). Re-mint once and retry once; a
+	// failed re-mint falls back to the same local machine_token_unavailable
+	// path as the up-front no-token gate above, rather than a bare retry. At
+	// most one retry per request: the second attempt's response is returned
+	// as-is, 401/403 included, with no further re-mint.
+	if (remote && (response.status === 401 || response.status === 403)) {
+		const refreshed = await aoBridge.machines.gatewayToken(true);
+		if (!refreshed) {
+			reportApiError(operation, "machine_token_unavailable", 503);
+			return new Response(
+				JSON.stringify({
+					message: "This machine's sign-in is not available right now. Reconnecting.",
+					code: "machine_token_unavailable",
+				}),
+				{ status: 503, headers: { "Content-Type": "application/json" } },
+			);
+		}
+		response = await sendReportingFailure(refreshed);
 	}
+
 	if (!response.ok) {
 		reportApiError(operation, response.status >= 500 ? "http_5xx" : "http_4xx", response.status);
 	}

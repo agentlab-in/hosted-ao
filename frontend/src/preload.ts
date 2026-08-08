@@ -338,8 +338,12 @@ const api = {
 		// The Bearer credential for a REST call to the active machine's gateway,
 		// asked for per request so the renderer never has to reason about expiry.
 		// It is a fifteen minute token scoped to one machine; the refresh token it
-		// descends from never leaves the main process.
-		gatewayToken: () => ipcRenderer.invoke("aoMachines:gatewayToken") as Promise<string | null>,
+		// descends from never leaves the main process. Pass forceRefresh=true after
+		// the gateway itself 401/403s a request, so the main process drops the
+		// cached token and mints a genuinely fresh one instead of handing back the
+		// same doomed bearer.
+		gatewayToken: (forceRefresh?: boolean) =>
+			ipcRenderer.invoke("aoMachines:gatewayToken", forceRefresh) as Promise<string | null>,
 		// Read-only: the peer (non-active) daemon's projects and sessions, for
 		// listing alongside the active machine's. No URL or token here either;
 		// the main process fetches it and shapes the result.

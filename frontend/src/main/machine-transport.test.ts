@@ -79,6 +79,11 @@ function harness() {
 		onStatus,
 		onMachineGone,
 		now: () => clock.ms,
+		// Tracks the same fake clock by default, so every existing test (which
+		// advances time only via `clock.ms` + fake timers) sees wall and
+		// monotonic move together, exactly as they do outside of a clock-skew
+		// scenario.
+		monotonicNow: () => clock.ms,
 		createTokenSource,
 	});
 	return { clock, tokens, set, remove, onStatus, onMachineGone, createTokenSource, transport };
@@ -284,6 +289,47 @@ describe("the silent refresh", () => {
 		// A ten minute token refreshes at eight, not at thirteen.
 		clock.ms += 480_000;
 		await vi.advanceTimersByTimeAsync(480_000);
+		expect(set).toHaveBeenCalledTimes(2);
+	});
+
+	// Regression: scheduleRefresh used to compute its delay as `expiresAt -
+	// REFRESH_LEAD_MS - Date.now()`. acquire() awaits installCookie (an
+	// Electron IPC round trip) between minting and that computation, and a
+	// backward NTP correction landing in that gap inflated the delay, firing
+	// the refresh later than the token's real expiry. Anchoring the delay to
+	// monotonic elapsed time since mint is immune to the jump.
+	it("keeps the refresh on schedule across a backward wall-clock jump during the cookie-install await", async () => {
+		const clock = { ms: NOW };
+		const monotonicClock = { ms: 0 };
+		const tokens = fakeTokens(clock);
+		const set = vi.fn(async () => {
+			// Simulate an NTP backward correction landing while installCookie is
+			// in flight: wall clock jumps back ten minutes, real (monotonic) time
+			// does not move.
+			clock.ms -= 600_000;
+		});
+		const transport = createMachineTransport({
+			cookies: { set, remove: vi.fn().mockResolvedValue(undefined) },
+			controlPlaneUrl: "https://ao.agentlab.in",
+			controlToken,
+			onStatus: vi.fn(),
+			onMachineGone: vi.fn(),
+			now: () => clock.ms,
+			monotonicNow: () => monotonicClock.ms,
+			createTokenSource: () => tokens.source,
+		});
+
+		transport.setMachine(machine());
+		await settle();
+		expect(set).toHaveBeenCalledTimes(1);
+
+		// Advance real (monotonic) time and fake timers by exactly the correct
+		// pre-jump delay (TTL - REFRESH_LEAD_MS). If the jump had leaked into the
+		// schedule, this would not be enough to fire it yet.
+		const correctDelay = TTL_MS - 120_000;
+		monotonicClock.ms += correctDelay;
+		await vi.advanceTimersByTimeAsync(correctDelay);
+
 		expect(set).toHaveBeenCalledTimes(2);
 	});
 

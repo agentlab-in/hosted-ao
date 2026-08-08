@@ -87,12 +87,13 @@ export function useConversation(sessionId: string | undefined): ConversationQuer
 		queryKey: conversationQueryKey(sessionId ?? ""),
 		enabled: Boolean(sessionId),
 		initialPageParam: undefined as number | undefined,
-		queryFn: async ({ pageParam }) => {
+		queryFn: async ({ pageParam, signal }) => {
 			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation", {
 				params: {
 					path: { sessionId: sessionId as string },
 					query: { beforeSequence: pageParam, limit: CONVERSATION_PAGE_SIZE },
 				},
+				signal,
 			});
 			if (error) throw error;
 			return toSnapshot(data as WireSnapshot);
@@ -439,10 +440,10 @@ export function useConversationModels(sessionId: string | undefined, enabled: bo
 		// The catalog changes on the scale of provider releases, not turns.
 		staleTime: 5 * 60 * 1000,
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/conversation/models",
-				{ params: { path: { sessionId: sessionId as string } } },
+				{ params: { path: { sessionId: sessionId as string } }, signal },
 			);
 			if (error) throw error;
 			return (data?.models ?? []) as ChatModel[];
@@ -475,10 +476,10 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// renderer consumes daemon change events, a light poll keeps those updates
 		// visible without coupling them to conversation history polling.
 		refetchInterval: CONFIG_OPTIONS_POLL_INTERVAL_MS,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/conversation/config-options",
-				{ params: { path: { sessionId: sessionId as string } } },
+				{ params: { path: { sessionId: sessionId as string } }, signal },
 			);
 			if (error) throw error;
 			return (data?.options ?? []) as ChatConfigOption[];
@@ -539,10 +540,10 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		staleTime: 60 * 1000,
 		refetchInterval: 60 * 1000,
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/conversation/skills",
-				{ params: { path: { sessionId: sessionId as string } } },
+				{ params: { path: { sessionId: sessionId as string } }, signal },
 			);
 			if (error) throw error;
 			return (data?.skills ?? []) as ChatSkill[];
@@ -569,10 +570,10 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		// still useful and polling every session would not be.
 		staleTime: 30 * 1000,
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/workspace/files",
-				{ params: { path: { sessionId: sessionId as string } } },
+				{ params: { path: { sessionId: sessionId as string } }, signal },
 			);
 			if (error) throw error;
 			return {

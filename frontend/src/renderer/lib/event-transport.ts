@@ -15,7 +15,12 @@ export type EventTransport = {
 const INVALIDATE_DEBOUNCE_MS = 150;
 // How long to wait before rebuilding an EventSource the browser gave up on
 // (readyState CLOSED — e.g. the daemon answered with a non-SSE response).
-const SSE_RETRY_MS = 5_000;
+// Bounded exponential backoff, same shape as main/supervisor-link.ts and
+// main/browser-runtime-link.ts: prompt for the common transient case (a
+// restart, a brief network blip), capped so a gateway that stays down is not
+// handshaked every few seconds forever.
+const SSE_RETRY_INIT_MS = 5_000;
+const SSE_RETRY_MAX_MS = 30_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
 const EVENTSOURCE_CLOSED = 2;
@@ -50,6 +55,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingConversationSessions = new Set<string>();
 			let workspaceInvalidationPending = false;
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
+			let retryBackoffMs = SSE_RETRY_INIT_MS;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
 			const refreshWorkspaces = (event?: Event) => {
@@ -101,10 +107,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 
 			const scheduleRetry = () => {
 				if (retryTimer) return;
+				const delay = retryBackoffMs;
+				retryBackoffMs = Math.min(retryBackoffMs * 2, SSE_RETRY_MAX_MS);
 				retryTimer = setTimeout(() => {
 					retryTimer = undefined;
 					connectSource();
-				}, SSE_RETRY_MS);
+				}, delay);
 			};
 
 			const connectSource = () => {
@@ -130,6 +138,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					});
 					source.onopen = () => {
 						setEventsConnectionState("connected");
+						// Reset backoff on a successful (re)connect, same as the two link
+						// modules this mirrors.
+						retryBackoffMs = SSE_RETRY_INIT_MS;
 						// Events emitted during the gap were lost; refetch once on (re)open.
 						refreshWorkspaces();
 					};

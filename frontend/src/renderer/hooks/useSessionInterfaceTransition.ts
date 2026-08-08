@@ -52,10 +52,10 @@ export function useSessionInterfaceTransition(sessionId: string | undefined) {
 	const query = useQuery({
 		queryKey: sessionInterfaceTransitionQueryKey(sessionId ?? ""),
 		enabled: Boolean(sessionId && hasTrustedApiBaseUrl()),
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/interface-transition",
-				{ params: { path: { sessionId: sessionId as string } } },
+				{ params: { path: { sessionId: sessionId as string } }, signal },
 			);
 			if (error) throw error;
 			return data as SessionInterfaceTransitionStatus;

@@ -13,18 +13,21 @@ async function requestAgentModels(
 	agentId: string,
 	projectId: string,
 	mode: "cached" | "refresh" | "revalidate",
+	signal?: AbortSignal,
 ): Promise<AgentModelCatalog> {
 	const path = { agent: agentId };
 	const result =
 		mode === "cached"
 			? await apiClient.GET("/api/v1/agents/{agent}/models", {
 					params: { path, query: { projectId: projectId || undefined } },
+					signal,
 				})
 			: await apiClient.POST("/api/v1/agents/{agent}/models/refresh", {
 					params: {
 						path,
 						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined },
 					},
+					signal,
 				});
 	if (result.error) throw new Error(apiErrorMessage(result.error));
 	return result.data as AgentModelCatalog;
@@ -33,7 +36,7 @@ async function requestAgentModels(
 export function agentModelsQueryOptions(agentId: string, projectId: string) {
 	return queryOptions({
 		queryKey: agentModelsQueryKey(agentId, projectId),
-		queryFn: () => requestAgentModels(agentId, projectId, "cached"),
+		queryFn: ({ signal }) => requestAgentModels(agentId, projectId, "cached", signal),
 		enabled: agentId !== "",
 		staleTime: MODEL_CATALOG_VALIDATION_INTERVAL_MS,
 	});

@@ -8,9 +8,10 @@ export type SessionUsage = components["schemas"]["SessionUsageResponse"];
 export const sessionUsageDetailQueryKey = (sessionId: string) =>
 	[...sessionUsageQueryRoot, "detail", sessionId] as const;
 
-export async function fetchSessionUsage(sessionId: string): Promise<SessionUsage> {
+export async function fetchSessionUsage(sessionId: string, signal?: AbortSignal): Promise<SessionUsage> {
 	const { data, error } = await apiClient.GET("/api/v1/usage/sessions/{sessionId}", {
 		params: { path: { sessionId } },
+		signal,
 	});
 	if (error) throw error;
 	return data;
@@ -19,7 +20,7 @@ export async function fetchSessionUsage(sessionId: string): Promise<SessionUsage
 export function useSessionUsage(sessionId: string, enabled = true) {
 	return useQuery({
 		queryKey: sessionUsageDetailQueryKey(sessionId),
-		queryFn: () => fetchSessionUsage(sessionId),
+		queryFn: ({ signal }) => fetchSessionUsage(sessionId, signal),
 		enabled: enabled && Boolean(sessionId),
 		retry: 1,
 	});

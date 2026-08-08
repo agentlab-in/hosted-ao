@@ -265,6 +265,64 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// Regression: SSE reconnect was a fixed 5s retry with no backoff and no
+	// ceiling, unlike main/supervisor-link.ts and main/browser-runtime-link.ts,
+	// which both use bounded exponential backoff — a down gateway got a fresh
+	// handshake every 5s forever.
+	it("backs off exponentially on repeated abandonment, capped at 30s, and resets after a successful reconnect", () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+
+			const abandon = (index: number) => {
+				const source = EventSourceStub.instances[index];
+				source.readyState = 2; // CLOSED — EventSource gave up for good
+				source.onerror?.();
+			};
+
+			// First retry: the same prompt 5s as before this fix, for the common
+			// transient case.
+			abandon(0);
+			vi.advanceTimersByTime(4_999);
+			expect(EventSourceStub.instances).toHaveLength(1);
+			vi.advanceTimersByTime(1);
+			expect(EventSourceStub.instances).toHaveLength(2);
+
+			// Second retry: doubled to 10s.
+			abandon(1);
+			vi.advanceTimersByTime(9_999);
+			expect(EventSourceStub.instances).toHaveLength(2);
+			vi.advanceTimersByTime(1);
+			expect(EventSourceStub.instances).toHaveLength(3);
+
+			// Third retry: doubled to 20s.
+			abandon(2);
+			vi.advanceTimersByTime(19_999);
+			expect(EventSourceStub.instances).toHaveLength(3);
+			vi.advanceTimersByTime(1);
+			expect(EventSourceStub.instances).toHaveLength(4);
+
+			// Fourth retry would double to 40s, capped at 30s.
+			abandon(3);
+			vi.advanceTimersByTime(29_999);
+			expect(EventSourceStub.instances).toHaveLength(4);
+			vi.advanceTimersByTime(1);
+			expect(EventSourceStub.instances).toHaveLength(5);
+
+			// A successful open resets the backoff back to the initial 5s delay.
+			const reconnected = EventSourceStub.instances[4];
+			reconnected.readyState = 1; // OPEN
+			reconnected.onopen?.();
+			abandon(4);
+			vi.advanceTimersByTime(4_999);
+			expect(EventSourceStub.instances).toHaveLength(5);
+			vi.advanceTimersByTime(1);
+			expect(EventSourceStub.instances).toHaveLength(6);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("reconnects when the API base URL changes out-of-band", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		expect(subscribeApiBaseUrlMock).toHaveBeenCalledTimes(1);

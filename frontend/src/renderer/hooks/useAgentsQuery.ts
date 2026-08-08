@@ -6,8 +6,8 @@ export type AgentCatalog = components["schemas"]["ListAgentsResponse"];
 
 export const agentsQueryKey = ["agents"] as const;
 
-async function fetchAgents(): Promise<AgentCatalog> {
-	const { data, error } = await apiClient.GET("/api/v1/agents");
+async function fetchAgents(signal?: AbortSignal): Promise<AgentCatalog> {
+	const { data, error } = await apiClient.GET("/api/v1/agents", { signal });
 	if (error) throw new Error(apiErrorMessage(error));
 	return data as AgentCatalog;
 }
@@ -41,7 +41,7 @@ export async function refreshAgentsIfStale(): Promise<AgentCatalog | undefined> 
 
 export const agentsQueryOptions = {
 	queryKey: agentsQueryKey,
-	queryFn: fetchAgents,
+	queryFn: ({ signal }: { signal: AbortSignal }) => fetchAgents(signal),
 	retry: 1,
 	staleTime: 5 * 60 * 1000,
 };
