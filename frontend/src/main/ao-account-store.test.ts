@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -91,6 +91,16 @@ test("an empty refresh token is refused rather than stored", async () => {
 
 test("no stored sign-in reads as null, not as an error", async () => {
 	await expect(readStoredAccount(stateDir, fakeSafeStorage())).resolves.toBeNull();
+});
+
+// A transient EPERM/EMFILE/EIO reading the file must not look like "no account
+// stored": that null propagates through ao-control-token.ts as "signed out" and
+// makes ao-machines.ts refresh() delete the machine binding on a filesystem
+// hiccup that had nothing to do with the account. A directory where the file is
+// expected is a real, reproducible way to get a read error that is not ENOENT.
+test("a read error other than absent (EISDIR here) is rethrown, not read as no stored sign-in", async () => {
+	await mkdir(path.join(stateDir, AO_ACCOUNT_FILE_NAME));
+	await expect(readStoredAccount(stateDir, fakeSafeStorage())).rejects.toThrow();
 });
 
 test("a garbage or future-version file reads as no stored sign-in", async () => {
