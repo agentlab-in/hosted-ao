@@ -37,6 +37,13 @@ const (
 	setupVMKeyringPath    = "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
 	setupVMSourceListPath = "/etc/apt/sources.list.d/github-cli.list"
 	setupVMKeyringURL     = "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+	// setupVMFileMode is the mode every file writeSetupFile installs as root:
+	// systemd units, the apt source list, and the apt keyring are all read by
+	// daemons running as other users, so they are world readable and root
+	// writable. None of them ever carries a secret, so there is nothing here
+	// that wants a tighter mode; machine.json, which does, is written by
+	// writeMachineFile at 0600 instead.
+	setupVMFileMode = "0644"
 )
 
 const (

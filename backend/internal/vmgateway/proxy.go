@@ -164,7 +164,14 @@ func newReverseProxy(daemonAddr string, resolveDaemonAddr func() (string, bool),
 	// such bound, so a daemon that accepts the connection but then wedges
 	// mid-handler (as opposed to one that is simply down, already handled by
 	// ErrorHandler's 502 below) would block this goroutine forever.
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		// net/http always builds DefaultTransport as a *http.Transport, so this
+		// is unreachable in practice. Fall back to a zero Transport rather than
+		// panicking, since the timeout below is the only thing being added.
+		base = &http.Transport{}
+	}
+	transport := base.Clone()
 	transport.ResponseHeaderTimeout = upstreamResponseHeaderTimeout
 	proxy.Transport = transport
 

@@ -603,7 +603,7 @@ func (c *commandContext) ensureGitHubCLIRepo(ctx context.Context) error {
 	if err := c.runSetupPrivileged(ctx, "install", "-d", "-m", "0755", path.Dir(setupVMKeyringPath)); err != nil {
 		return err
 	}
-	if _, err := c.writeSetupFile(ctx, setupVMKeyringPath, "0644", keyring); err != nil {
+	if _, err := c.writeSetupFile(ctx, setupVMKeyringPath, keyring); err != nil {
 		return err
 	}
 	arch := "amd64"
@@ -612,7 +612,7 @@ func (c *commandContext) ensureGitHubCLIRepo(ctx context.Context) error {
 			arch = detected
 		}
 	}
-	_, err = c.writeSetupFile(ctx, setupVMSourceListPath, "0644", []byte(githubCLISourceList(arch)))
+	_, err = c.writeSetupFile(ctx, setupVMSourceListPath, []byte(githubCLISourceList(arch)))
 	return err
 }
 
@@ -649,8 +649,8 @@ func (c *commandContext) ensureSetupBinary(ctx context.Context, out io.Writer, p
 // setupBinaryVersion runs `<path> version` and returns the first line, "" on
 // any failure. Best effort: a missing binary or a pre-`version`-command build
 // must not fail the install over a diagnostic.
-func (c *commandContext) setupBinaryVersion(ctx context.Context, path string) string {
-	out, err := c.deps.CommandOutput(ctx, path, "version")
+func (c *commandContext) setupBinaryVersion(ctx context.Context, binaryPath string) string {
+	out, err := c.deps.CommandOutput(ctx, binaryPath, "version")
 	if err != nil {
 		return ""
 	}
@@ -682,7 +682,7 @@ func setupVersionSkewNote(oldVersion string) string {
 
 func (c *commandContext) writeSetupUnit(ctx context.Context, out io.Writer, name, content string) (bool, error) {
 	dest := slashPath(setupVMUnitDir, name)
-	changed, err := c.writeSetupFile(ctx, dest, "0644", []byte(content))
+	changed, err := c.writeSetupFile(ctx, dest, []byte(content))
 	if err != nil {
 		return false, err
 	}
@@ -708,7 +708,7 @@ func (c *commandContext) writeSetupUnit(ctx context.Context, out io.Writer, name
 // file. A rename within one directory is a single filesystem operation, so the
 // worst a drop can do now is leave the harmless temp sibling behind and dest
 // exactly as it was.
-func (c *commandContext) writeSetupFile(ctx context.Context, dest, mode string, content []byte) (bool, error) {
+func (c *commandContext) writeSetupFile(ctx context.Context, dest string, content []byte) (bool, error) {
 	if existing, err := os.ReadFile(dest); err == nil && bytes.Equal(existing, content) {
 		return false, nil
 	}
@@ -729,7 +729,7 @@ func (c *commandContext) writeSetupFile(ctx context.Context, dest, mode string, 
 	// below only stays a single atomic filesystem op when both sides are on the
 	// same filesystem.
 	destTmp := path.Join(path.Dir(dest), "."+filepath.Base(tmpPath))
-	if err := c.runSetupPrivileged(ctx, "install", "-m", mode, "-o", "root", "-g", "root", tmpPath, destTmp); err != nil {
+	if err := c.runSetupPrivileged(ctx, "install", "-m", setupVMFileMode, "-o", "root", "-g", "root", tmpPath, destTmp); err != nil {
 		return false, err
 	}
 	if err := c.runSetupPrivileged(ctx, "mv", "-f", destTmp, dest); err != nil {
@@ -774,8 +774,8 @@ func setupSameFile(a, b string) bool {
 	return sumA == sumB
 }
 
-func setupFileSum(path string) (string, error) {
-	file, err := os.Open(path)
+func setupFileSum(filePath string) (string, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}

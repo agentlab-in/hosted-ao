@@ -255,7 +255,7 @@ func TestWriteSetupFileIsAtomic(t *testing.T) {
 	deps, calls := fakePrivilegedFileOps(t)
 	c := &commandContext{deps: deps}
 
-	changed, err := c.writeSetupFile(context.Background(), dest, "0644", []byte("first\n"))
+	changed, err := c.writeSetupFile(context.Background(), dest, []byte("first\n"))
 	if err != nil {
 		t.Fatalf("writeSetupFile err = %v", err)
 	}
@@ -302,7 +302,7 @@ func TestWriteSetupFileIsAtomic(t *testing.T) {
 	if _, err := os.ReadFile(dest); err != nil {
 		t.Fatal(err)
 	}
-	changed, err = c2.writeSetupFile(context.Background(), dest, "0644", []byte("first\n"))
+	changed, err = c2.writeSetupFile(context.Background(), dest, []byte("first\n"))
 	if err != nil {
 		t.Fatalf("writeSetupFile (unchanged) err = %v", err)
 	}
@@ -314,7 +314,7 @@ func TestWriteSetupFileIsAtomic(t *testing.T) {
 	}
 
 	// Different content replaces dest, atomically, the same way.
-	changed, err = c.writeSetupFile(context.Background(), dest, "0644", []byte("second\n"))
+	changed, err = c.writeSetupFile(context.Background(), dest, []byte("second\n"))
 	if err != nil {
 		t.Fatalf("writeSetupFile (changed) err = %v", err)
 	}
