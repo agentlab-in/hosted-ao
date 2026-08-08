@@ -18,9 +18,14 @@
 
 ## Historical files in this directory
 
-`Caddyfile` is kept only so old deployments can be recognized and torn down.
-Do not install it on a new VM. Caddy and `ao vm serve` both want `:80`/`:443`,
-so they cannot share a host.
+`Caddyfile` used to be kept here only so old deployments could be recognized
+and torn down, but a valid, installable config referencing a retired
+pairing-token scheme is a port-collision hazard against exactly the ports
+`ao setup-vm`'s preflight protects: Caddy and `ao vm serve` both want
+`:80`/`:443`, and nothing stopped someone from copy-pasting it onto a new VM.
+It has been deleted; the old contents are still in git history
+(`git log --follow -- deploy/hosted/Caddyfile`) for anyone recognizing a
+leftover deployment. Do not restore it as a runnable file.
 
 To retire a leftover pairing proxy on an existing box:
 

@@ -18,9 +18,9 @@ import (
 	"net/url"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -478,7 +478,7 @@ func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan
 	if err := c.ensureSetupPackages(ctx, out, plan.Packages); err != nil {
 		return units, notes, err
 	}
-	binaryChanged, err := c.ensureSetupBinary(ctx, out, plan)
+	binaryChanged, oldBinaryVersion, err := c.ensureSetupBinary(ctx, out, plan)
 	if err != nil {
 		return units, notes, err
 	}
@@ -519,10 +519,7 @@ func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan
 		return units, notes, err
 	}
 	if binaryChanged && daemonAction == "start" {
-		notes = append(notes, fmt.Sprintf(
-			"the ao binary was replaced, but %s was left running on the previous build so live agent"+
-				"\n  sessions were not killed. Restart it when nothing is mid-task: sudo systemctl restart %s",
-			setupVMDaemonUnit, setupVMDaemonUnit))
+		notes = append(notes, setupVersionSkewNote(oldBinaryVersion))
 	}
 
 	if !plan.Bound {
@@ -568,7 +565,8 @@ func (c *commandContext) ensureSetupPackages(ctx context.Context, out io.Writer,
 		_, err := fmt.Fprintf(out, "==> packages already present: %s\n", strings.Join(packages, ", "))
 		return err
 	}
-	if slices.Contains(missing, "gh") {
+	_, statErr := os.Stat(setupVMSourceListPath)
+	if setupNeedsGitHubCLIRefresh(missing, statErr == nil) {
 		if err := c.ensureGitHubCLIRepo(ctx); err != nil {
 			return err
 		}
@@ -587,21 +585,26 @@ func (c *commandContext) ensureSetupPackages(ctx context.Context, out io.Writer,
 // ensureGitHubCLIRepo adds GitHub's own apt repository, which is where a
 // current gh comes from. Ubuntu LTS either has no gh package at all (22.04) or
 // a years-old one, and gh is what picks up the user's git credentials.
+//
+// The keyring is fetched every time this runs rather than only when the file
+// is absent, and written through writeSetupFile, which only touches disk when
+// the content actually differs. So a key GitHub has not rotated costs one
+// HTTP GET and no write; a rotated one is caught and replaced here, with a
+// clear error naming the GitHub CLI signing key, instead of surfacing later as
+// a bare GPG failure out of an unrelated apt-get update.
 func (c *commandContext) ensureGitHubCLIRepo(ctx context.Context) error {
-	if _, err := os.Stat(setupVMKeyringPath); err != nil {
-		keyring, err := setupHTTPGet(ctx, c.setupHTTPClient(), setupVMKeyringURL, 1<<20)
-		if err != nil {
-			return fmt.Errorf("download the GitHub CLI signing key: %w", err)
-		}
-		if len(keyring) < 100 {
-			return fmt.Errorf("the GitHub CLI signing key at %s came back empty", setupVMKeyringURL)
-		}
-		if err := c.runSetupPrivileged(ctx, "install", "-d", "-m", "0755", filepath.ToSlash(filepath.Dir(setupVMKeyringPath))); err != nil {
-			return err
-		}
-		if _, err := c.writeSetupFile(ctx, setupVMKeyringPath, "0644", keyring); err != nil {
-			return err
-		}
+	keyring, err := setupHTTPGet(ctx, c.setupHTTPClient(), setupVMKeyringURL, 1<<20)
+	if err != nil {
+		return fmt.Errorf("download the GitHub CLI signing key: %w", err)
+	}
+	if len(keyring) < 100 {
+		return fmt.Errorf("the GitHub CLI signing key at %s came back empty", setupVMKeyringURL)
+	}
+	if err := c.runSetupPrivileged(ctx, "install", "-d", "-m", "0755", path.Dir(setupVMKeyringPath)); err != nil {
+		return err
+	}
+	if _, err := c.writeSetupFile(ctx, setupVMKeyringPath, "0644", keyring); err != nil {
+		return err
 	}
 	arch := "amd64"
 	if raw, err := c.deps.CommandOutput(ctx, "dpkg", "--print-architecture"); err == nil {
@@ -609,30 +612,72 @@ func (c *commandContext) ensureGitHubCLIRepo(ctx context.Context) error {
 			arch = detected
 		}
 	}
-	_, err := c.writeSetupFile(ctx, setupVMSourceListPath, "0644", []byte(githubCLISourceList(arch)))
+	_, err = c.writeSetupFile(ctx, setupVMSourceListPath, "0644", []byte(githubCLISourceList(arch)))
 	return err
 }
 
 // ensureSetupBinary puts the running ao binary at an absolute, stable path,
 // because a systemd unit must never resolve its ExecStart through a PATH. It
-// reports whether the installed binary actually changed.
-func (c *commandContext) ensureSetupBinary(ctx context.Context, out io.Writer, plan setupPlan) (bool, error) {
+// reports whether the installed binary actually changed, plus the version the
+// previously-installed binary reported ("" when there was none to ask, or the
+// question failed). The caller uses that to name exactly what the daemon,
+// deliberately left running on the old build, is now behind by.
+func (c *commandContext) ensureSetupBinary(ctx context.Context, out io.Writer, plan setupPlan) (bool, string, error) {
 	self, err := c.deps.Executable()
 	if err != nil {
-		return false, fmt.Errorf("locate the running ao binary: %w", err)
+		return false, "", fmt.Errorf("locate the running ao binary: %w", err)
 	}
 	if resolved, err := filepath.EvalSymlinks(self); err == nil {
 		self = resolved
 	}
 	if filepath.ToSlash(self) == plan.BinaryPath || setupSameFile(self, plan.BinaryPath) {
 		_, err := fmt.Fprintf(out, "==> ao binary already current at %s\n", plan.BinaryPath)
-		return false, err
+		return false, "", err
 	}
+	// Ask the old binary its own version before it is overwritten: it is the
+	// build the still-running daemon process actually came from, and asking now
+	// is the only way to say precisely, rather than just "changed", what a
+	// version-skewed daemon is behind by.
+	oldVersion := c.setupBinaryVersion(ctx, plan.BinaryPath)
 	if err := c.runSetupPrivileged(ctx, "install", "-m", "0755", "-o", "root", "-g", "root", self, plan.BinaryPath); err != nil {
-		return false, err
+		return false, "", err
 	}
 	_, err = fmt.Fprintf(out, "==> installed the ao binary to %s\n", plan.BinaryPath)
-	return true, err
+	return true, oldVersion, err
+}
+
+// setupBinaryVersion runs `<path> version` and returns the first line, "" on
+// any failure. Best effort: a missing binary or a pre-`version`-command build
+// must not fail the install over a diagnostic.
+func (c *commandContext) setupBinaryVersion(ctx context.Context, path string) string {
+	out, err := c.deps.CommandOutput(ctx, path, "version")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(firstOutputLine(out))
+}
+
+// setupVersionSkewNote is the note printed when the ao binary on disk changed
+// but the daemon was deliberately left running the old build so live agent
+// sessions were not killed. Named versions when they are known, because a
+// breaking change to the loopback contract between ao-daemon and ao-gateway
+// would otherwise fail silently and confusingly: nothing else ever checks
+// that the two processes agree on a build.
+func setupVersionSkewNote(oldVersion string) string {
+	newVersion := VersionString()
+	if oldVersion == "" || oldVersion == newVersion {
+		return fmt.Sprintf(
+			"the ao binary was replaced, but %s was left running on the previous build so live agent"+
+				"\n  sessions were not killed. Restart it when nothing is mid-task: sudo systemctl restart %s",
+			setupVMDaemonUnit, setupVMDaemonUnit)
+	}
+	return fmt.Sprintf(
+		"VERSION SKEW: the ao binary on disk was updated to %s, but %s is still running the previous"+
+			"\n  build (%s), left up on purpose so live agent sessions were not killed. If this release"+
+			"\n  changed anything about how the daemon and the gateway talk to each other over loopback,"+
+			"\n  they are mismatched until you restart the daemon. Restart it when nothing is mid-task:"+
+			"\n    sudo systemctl restart %s",
+		newVersion, setupVMDaemonUnit, oldVersion, setupVMDaemonUnit)
 }
 
 func (c *commandContext) writeSetupUnit(ctx context.Context, out io.Writer, name, content string) (bool, error) {
@@ -654,6 +699,15 @@ func (c *commandContext) writeSetupUnit(ctx context.Context, out io.Writer, name
 // writeSetupFile writes dest only when its content differs, which is what
 // makes re-running safe: no duplicated units and no file that grows on every
 // run. It reports whether anything changed.
+//
+// The privileged copy lands on a temp file in dest's own directory first, and
+// a privileged rename then moves it onto dest, the same temp-plus-rename dance
+// writeMachineFile uses locally. `install tmp dest` alone, the previous
+// approach, copies onto dest in place: a dropped SSH session or a killed sudo
+// child mid-copy leaves a truncated, unparsable systemd unit or apt source
+// file. A rename within one directory is a single filesystem operation, so the
+// worst a drop can do now is leave the harmless temp sibling behind and dest
+// exactly as it was.
 func (c *commandContext) writeSetupFile(ctx context.Context, dest, mode string, content []byte) (bool, error) {
 	if existing, err := os.ReadFile(dest); err == nil && bytes.Equal(existing, content) {
 		return false, nil
@@ -671,7 +725,17 @@ func (c *commandContext) writeSetupFile(ctx context.Context, dest, mode string, 
 	if err := tmp.Close(); err != nil {
 		return false, err
 	}
-	if err := c.runSetupPrivileged(ctx, "install", "-m", mode, "-o", "root", "-g", "root", tmpPath, dest); err != nil {
+	// destTmp has to sit next to dest, not in the system temp dir: the rename
+	// below only stays a single atomic filesystem op when both sides are on the
+	// same filesystem.
+	destTmp := path.Join(path.Dir(dest), "."+filepath.Base(tmpPath))
+	if err := c.runSetupPrivileged(ctx, "install", "-m", mode, "-o", "root", "-g", "root", tmpPath, destTmp); err != nil {
+		return false, err
+	}
+	if err := c.runSetupPrivileged(ctx, "mv", "-f", destTmp, dest); err != nil {
+		// Best effort: an abandoned destTmp is harmless clutter next to dest, but
+		// leaving it around silently would look like a second, unexplained file.
+		_ = c.runSetupPrivileged(ctx, "rm", "-f", destTmp)
 		return false, err
 	}
 	return true, nil

@@ -9,9 +9,12 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -166,6 +169,203 @@ func TestDiscoverPublicIPPrefersAnIPv4Answer(t *testing.T) {
 	if got != "2001:db8::1" {
 		t.Errorf("discoverPublicIP = %q, want the IPv6 answer when that is all there is", got)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// writeSetupFile atomicity
+// ---------------------------------------------------------------------------
+
+// fakePrivilegedFileOps is a CommandOutput fake standing in for `install`,
+// `mv`, and `rm`, run for real against a local directory instead of over SSH
+// on the target VM. It also unwraps the `sudo -n <cmd> ...` prefix
+// runSetupPrivileged adds whenever the test process is not root, so the
+// assertions below hold on a CI runner started either way.
+func fakePrivilegedFileOps(t *testing.T) (Deps, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		calls = append(calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+		mu.Unlock()
+		if name == "sudo" {
+			if len(args) < 2 || args[0] != "-n" {
+				return nil, fmt.Errorf("unexpected sudo invocation: %v", args)
+			}
+			name, args = args[1], args[2:]
+		}
+		switch name {
+		case "install":
+			// -m mode -o root -g root src dst
+			if len(args) < 2 {
+				return nil, fmt.Errorf("install: too few arguments: %v", args)
+			}
+			src, dst := args[len(args)-2], args[len(args)-1]
+			data, err := os.ReadFile(src)
+			if err != nil {
+				return nil, err
+			}
+			return nil, os.WriteFile(dst, data, 0o644)
+		case "mv":
+			// -f src dst
+			if len(args) != 3 {
+				return nil, fmt.Errorf("mv: want -f src dst, got %v", args)
+			}
+			return nil, os.Rename(args[1], args[2])
+		case "rm":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %s %v", name, args)
+		}
+	}
+	deps := Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}, CommandOutput: run}
+	return deps.withDefaults(), func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), calls...)
+	}
+}
+
+// lastArg returns the last whitespace-separated token of a recorded call,
+// which for install and mv is always the destination path.
+func lastArg(call string) string {
+	fields := strings.Fields(call)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
+}
+
+// withoutSudoPrefix strips the "sudo -n " runSetupPrivileged adds when the
+// test process is not root, so an assertion about which real command ran
+// holds the same way on a root and a non-root CI runner.
+func withoutSudoPrefix(call string) string {
+	return strings.TrimPrefix(call, "sudo -n ")
+}
+
+// TestWriteSetupFileIsAtomic is the defect-3 regression: the old
+// `install tmp dest` copied straight onto dest, so a dropped SSH session or a
+// killed sudo child mid-copy left a truncated, unparsable systemd unit or apt
+// source file behind. The fix has to land the privileged copy on a temp file
+// next to dest and rename it into place as a separate, final step.
+func TestWriteSetupFileIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "ao-gateway.service")
+
+	deps, calls := fakePrivilegedFileOps(t)
+	c := &commandContext{deps: deps}
+
+	changed, err := c.writeSetupFile(context.Background(), dest, "0644", []byte("first\n"))
+	if err != nil {
+		t.Fatalf("writeSetupFile err = %v", err)
+	}
+	if !changed {
+		t.Error("changed = false on the first write, want true")
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "first\n" {
+		t.Fatalf("dest content = %q, err = %v; want %q", got, err, "first\n")
+	}
+
+	got := calls()
+	if len(got) != 2 {
+		t.Fatalf("calls = %v, want exactly an install then an mv", got)
+	}
+	if !strings.HasPrefix(withoutSudoPrefix(got[0]), "install ") {
+		t.Errorf("first call = %q, want it to start with install", got[0])
+	}
+	if lastArg(got[0]) == dest {
+		t.Errorf("install wrote straight to dest %q: this is exactly the non-atomic path being fixed", dest)
+	}
+	if !strings.HasPrefix(withoutSudoPrefix(got[1]), "mv -f ") {
+		t.Errorf("second call = %q, want the final step to be an mv rename", got[1])
+	}
+	if lastArg(got[1]) != dest {
+		t.Errorf("mv destination = %q, want %q", lastArg(got[1]), dest)
+	}
+
+	// No temp sibling may survive a successful write.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(dest) {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Errorf("directory holds %v, want only %s", names, filepath.Base(dest))
+	}
+
+	// Rewriting with the same content is a no-op: nothing is shelled out to.
+	deps2, calls2 := fakePrivilegedFileOps(t)
+	c2 := &commandContext{deps: deps2}
+	if _, err := os.ReadFile(dest); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = c2.writeSetupFile(context.Background(), dest, "0644", []byte("first\n"))
+	if err != nil {
+		t.Fatalf("writeSetupFile (unchanged) err = %v", err)
+	}
+	if changed {
+		t.Error("changed = true when content is identical, want false")
+	}
+	if len(calls2()) != 0 {
+		t.Errorf("an unchanged write must not shell out to anything, got %v", calls2())
+	}
+
+	// Different content replaces dest, atomically, the same way.
+	changed, err = c.writeSetupFile(context.Background(), dest, "0644", []byte("second\n"))
+	if err != nil {
+		t.Fatalf("writeSetupFile (changed) err = %v", err)
+	}
+	if !changed {
+		t.Error("changed = false when content differs, want true")
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "second\n" {
+		t.Fatalf("dest content after re-write = %q, err = %v; want %q", got, err, "second\n")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// version skew
+// ---------------------------------------------------------------------------
+
+// TestSetupVersionSkewNote is the defect-4 regression: a re-run leaves the
+// daemon on the old build on purpose, so the note is the only place that
+// version skew is surfaced at all, and it has to name both versions loudly
+// rather than just saying "replaced".
+func TestSetupVersionSkewNote(t *testing.T) {
+	restore := Version
+	Version = "1.2.3"
+	t.Cleanup(func() { Version = restore })
+
+	t.Run("versions differ", func(t *testing.T) {
+		note := setupVersionSkewNote("1.2.2")
+		for _, want := range []string{"VERSION SKEW", "1.2.2", "1.2.3", "sudo systemctl restart " + setupVMDaemonUnit} {
+			if !strings.Contains(note, want) {
+				t.Errorf("note is missing %q:\n%s", want, note)
+			}
+		}
+		assertNoDashes(t, note)
+	})
+
+	t.Run("old version unknown", func(t *testing.T) {
+		note := setupVersionSkewNote("")
+		if strings.Contains(note, "VERSION SKEW") {
+			t.Errorf("an unknown old version cannot support a skew claim:\n%s", note)
+		}
+		if !strings.Contains(note, "sudo systemctl restart "+setupVMDaemonUnit) {
+			t.Errorf("note is missing the restart command:\n%s", note)
+		}
+		assertNoDashes(t, note)
+	})
+
+	t.Run("versions match", func(t *testing.T) {
+		note := setupVersionSkewNote("1.2.3")
+		if strings.Contains(note, "VERSION SKEW") {
+			t.Errorf("identical versions are not skew:\n%s", note)
+		}
+	})
 }
 
 // assertNoSetupMutation fails if the command ran anything that could have

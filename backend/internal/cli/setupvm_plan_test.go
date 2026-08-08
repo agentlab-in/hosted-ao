@@ -9,6 +9,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -649,7 +650,21 @@ func TestRenderDaemonUnit(t *testing.T) {
 		// The daemon supervises live agent sessions, so a deliberate exit is left
 		// alone; only a failure earns a restart.
 		"Restart=on-failure",
-		"StartLimitIntervalSec=0",
+		// A real start-limit policy, not the old retry-forever one: see
+		// setupVMStartLimitIntervalSec's comment for the numbers' reasoning.
+		"StartLimitIntervalSec=300",
+		"StartLimitBurst=4",
+		"RestartSteps=4",
+		"RestartMaxDelaySec=60",
+		// Generous enough that a crash loop never has journald drop the lines
+		// the summary tells the operator to go read.
+		"LogRateLimitIntervalSec=60",
+		"LogRateLimitBurst=10000",
+		// The daemon spawns arbitrary agent subprocesses, so it gets real
+		// headroom rather than the gateway's small ceiling.
+		"MemoryMax=85%",
+		"CPUQuota=400%",
+		"TasksMax=4096",
 		"WantedBy=multi-user.target",
 		// The daemon spawns the harnesses, which install under the user's home.
 		`Environment="PATH=/home/ubuntu/.local/bin:/home/ubuntu/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"`,
@@ -684,10 +699,20 @@ func TestRenderGatewayUnit(t *testing.T) {
 		// The gateway fronts the daemon, so it starts after it.
 		"After=network-online.target ao-daemon.service",
 		// The gateway holds no session state, so every exit earns a restart, and
-		// systemd's default start rate limit is off so a gateway that fails for
-		// the first half minute after boot does not give up permanently.
+		// the start-limit policy below is what stops a persistently broken
+		// gateway from retrying an ACME order into Let's Encrypt's rate limit.
 		"Restart=always",
-		"StartLimitIntervalSec=0",
+		"StartLimitIntervalSec=300",
+		"StartLimitBurst=4",
+		"RestartSteps=4",
+		"RestartMaxDelaySec=60",
+		"LogRateLimitIntervalSec=60",
+		"LogRateLimitBurst=10000",
+		// The gateway is one small Go binary with no subprocess spawning of its
+		// own, so its ceiling only has to cover a leak or a bug.
+		"MemoryMax=256M",
+		"CPUQuota=100%",
+		"TasksMax=128",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("gateway unit is missing %q:\n%s", want, unit)
@@ -700,6 +725,64 @@ func TestRenderGatewayUnit(t *testing.T) {
 		t.Error("the gateway unit should record that machine.json is read once at startup")
 	}
 	assertNoDashes(t, unit)
+}
+
+// TestGatewayResourceCeilingIsSmallerThanTheDaemons is the defect-2 contract
+// directly: the daemon spawns arbitrary agent subprocesses and needs real
+// headroom, but the gateway is one small Go binary, so a bug in it must not be
+// able to claim as much of the box as a legitimate multi-session daemon can.
+func TestGatewayResourceCeilingIsSmallerThanTheDaemons(t *testing.T) {
+	daemon := renderDaemonUnit(testSetupPlan(t))
+	gateway := renderGatewayUnit(testSetupPlan(t))
+
+	daemonMemory, ok := unitSetting(daemon, "MemoryMax")
+	if !ok || !strings.HasSuffix(daemonMemory, "%") {
+		t.Fatalf("daemon MemoryMax = %q, want a percentage of system RAM", daemonMemory)
+	}
+	gatewayMemory, ok := unitSetting(gateway, "MemoryMax")
+	if !ok || strings.HasSuffix(gatewayMemory, "%") {
+		t.Fatalf("gateway MemoryMax = %q, want a fixed byte ceiling, not a percentage of system RAM", gatewayMemory)
+	}
+
+	daemonCPU, ok := unitSetting(daemon, "CPUQuota")
+	if !ok {
+		t.Fatal("daemon has no CPUQuota")
+	}
+	gatewayCPU, ok := unitSetting(gateway, "CPUQuota")
+	if !ok {
+		t.Fatal("gateway has no CPUQuota")
+	}
+	daemonPercent, err := strconv.Atoi(strings.TrimSuffix(daemonCPU, "%"))
+	if err != nil {
+		t.Fatalf("daemon CPUQuota = %q: %v", daemonCPU, err)
+	}
+	gatewayPercent, err := strconv.Atoi(strings.TrimSuffix(gatewayCPU, "%"))
+	if err != nil {
+		t.Fatalf("gateway CPUQuota = %q: %v", gatewayCPU, err)
+	}
+	if gatewayPercent >= daemonPercent {
+		t.Errorf("gateway CPUQuota %s must be smaller than the daemon's %s", gatewayCPU, daemonCPU)
+	}
+
+	daemonTasks, ok := unitSetting(daemon, "TasksMax")
+	if !ok {
+		t.Fatal("daemon has no TasksMax")
+	}
+	gatewayTasks, ok := unitSetting(gateway, "TasksMax")
+	if !ok {
+		t.Fatal("gateway has no TasksMax")
+	}
+	daemonTasksN, err := strconv.Atoi(daemonTasks)
+	if err != nil {
+		t.Fatalf("daemon TasksMax = %q: %v", daemonTasks, err)
+	}
+	gatewayTasksN, err := strconv.Atoi(gatewayTasks)
+	if err != nil {
+		t.Fatalf("gateway TasksMax = %q: %v", gatewayTasks, err)
+	}
+	if gatewayTasksN >= daemonTasksN {
+		t.Errorf("gateway TasksMax %s must be smaller than the daemon's %s", gatewayTasks, daemonTasks)
+	}
 }
 
 // TestSetupUnitsQuoteOnlyTheListSettings is the regression test for the defect
@@ -924,6 +1007,31 @@ func TestDpkgInstalled(t *testing.T) {
 		if dpkgInstalled(status) {
 			t.Errorf("dpkgInstalled(%q) = true, want false", status)
 		}
+	}
+}
+
+// TestSetupNeedsGitHubCLIRefresh is the defect-6 regression: once gh is
+// installed, "gh is missing" alone never asks this question again, which is
+// what let a rotated GitHub CLI signing key stay stale forever. A source list
+// already on disk has to force the refresh even when nothing is missing.
+func TestSetupNeedsGitHubCLIRefresh(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		missing          []string
+		sourceListExists bool
+		want             bool
+	}{
+		{name: "gh missing, no prior source list", missing: []string{"gh"}, sourceListExists: false, want: true},
+		{name: "gh missing, source list already there", missing: []string{"gh"}, sourceListExists: true, want: true},
+		{name: "gh already installed, source list from an earlier run", missing: []string{"tmux"}, sourceListExists: true, want: true},
+		{name: "gh already installed, nothing else missing, no source list", missing: nil, sourceListExists: false, want: false},
+		{name: "only unrelated packages missing, no source list", missing: []string{"tmux", "git"}, sourceListExists: false, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := setupNeedsGitHubCLIRefresh(tc.missing, tc.sourceListExists); got != tc.want {
+				t.Errorf("setupNeedsGitHubCLIRefresh(%v, %t) = %t, want %t", tc.missing, tc.sourceListExists, got, tc.want)
+			}
+		})
 	}
 }
 
