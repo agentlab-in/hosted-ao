@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -57,6 +58,7 @@ func newVMServeCommand(ctx *commandContext) *cobra.Command {
 	flags.StringVar(&opts.CertDir, "cert-dir", "", "ACME certificate cache directory (default under the AO data dir)")
 	flags.StringVar(&opts.HTTPAddr, "http-addr", "", fmt.Sprintf("ACME HTTP-01 challenge / redirect listener address (default %s)", vmgateway.DefaultHTTPAddr))
 	flags.StringVar(&opts.HTTPSAddr, "https-addr", "", fmt.Sprintf("Public TLS listener address (default %s)", vmgateway.DefaultHTTPSAddr))
+	flags.StringVar(&opts.PasscodeDir, "passcode-dir", "", "Pair-mode passcode hash storage directory (default under the state root; pair mode only)")
 	return cmd
 }
 
@@ -89,26 +91,42 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 
 	log := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
 
-	verify := vmgateway.VerifyOptions{
-		Issuer:   gwCfg.Issuer,
-		Audience: gwCfg.MachineID,
-		Subject:  gwCfg.AccountID,
-		Skew:     vmgateway.DefaultSkew,
-	}
-	jwks := vmgateway.NewJWKSCache(gwCfg.JWKSURL, nil)
-
 	// resolveDaemonAddr lets the gateway recover on its own if the daemon was
 	// not up yet at gateway boot (discoverDaemonAddr returned nothing, so
 	// gwCfg.DaemonAddr is DefaultDaemonAddr) or later restarts onto a
-	// different port: NewHandler's proxy re-reads running.json after a
-	// connection failure instead of proxying to a dead port until this
-	// process is restarted. nil when the address was pinned, so a re-resolve
-	// never overrides it.
+	// different port: the proxy re-reads running.json after a connection
+	// failure instead of proxying to a dead port until this process is
+	// restarted. nil when the address was pinned, so a re-resolve never
+	// overrides it.
 	var resolveDaemonAddr func() (string, bool)
 	if !pinnedDaemonAddr {
 		resolveDaemonAddr = func() (string, bool) { return discoverDaemonAddr(cfg.RunFilePath) }
 	}
-	handler, err := vmgateway.NewHandler(gwCfg.DaemonAddr, resolveDaemonAddr, jwks, verify, cfg.AllowedOrigins, log)
+
+	// The credential check is mode-specific and mutually exclusive, mirroring
+	// gwCfg.Mode itself: hosted mode verifies a machine-audience JWT against
+	// the control plane's JWKS, exactly as before pair mode existed; pair
+	// mode loads the persisted passcode store instead and never touches JWKS
+	// at all. A missing or corrupt passcode store is fatal here, before any
+	// socket is bound, per docs/adr/0003-pair-mode-gateway.md.
+	var handler http.Handler
+	switch gwCfg.Mode {
+	case vmgateway.ModePair:
+		passcodes, loadErr := vmgateway.LoadPasscodeStore(gwCfg.PasscodeDir)
+		if loadErr != nil {
+			return loadErr
+		}
+		handler, err = vmgateway.NewPairHandler(gwCfg.DaemonAddr, resolveDaemonAddr, passcodes, cfg.AllowedOrigins, log)
+	default:
+		verify := vmgateway.VerifyOptions{
+			Issuer:   gwCfg.Issuer,
+			Audience: gwCfg.MachineID,
+			Subject:  gwCfg.AccountID,
+			Skew:     vmgateway.DefaultSkew,
+		}
+		jwks := vmgateway.NewJWKSCache(gwCfg.JWKSURL, nil)
+		handler, err = vmgateway.NewHandler(gwCfg.DaemonAddr, resolveDaemonAddr, jwks, verify, cfg.AllowedOrigins, log)
+	}
 	if err != nil {
 		return fmt.Errorf("build gateway handler: %w", err)
 	}
