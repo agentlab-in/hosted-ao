@@ -1047,7 +1047,7 @@
 	"pairing.addressLabel": "주소",
 	"pairing.addressPlaceholder": "192.168.1.42",
 	"pairing.portLabel": "포트",
-	"pairing.portPlaceholder": "8443",
+	"pairing.portPlaceholder": "443",
 	"pairing.passcodeLabel": "암호",
 	"pairing.passcodePlaceholder": "8자리 암호",
 	"pairing.continue": "계속",

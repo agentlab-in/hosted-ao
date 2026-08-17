@@ -1047,7 +1047,7 @@
 	"pairing.addressLabel": "アドレス",
 	"pairing.addressPlaceholder": "192.168.1.42",
 	"pairing.portLabel": "ポート",
-	"pairing.portPlaceholder": "8443",
+	"pairing.portPlaceholder": "443",
 	"pairing.passcodeLabel": "パスコード",
 	"pairing.passcodePlaceholder": "8桁のパスコード",
 	"pairing.continue": "続行",

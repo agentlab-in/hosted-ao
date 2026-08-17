@@ -1063,7 +1063,7 @@
 	"pairing.addressLabel": "Endereço",
 	"pairing.addressPlaceholder": "192.168.1.42",
 	"pairing.portLabel": "Porta",
-	"pairing.portPlaceholder": "8443",
+	"pairing.portPlaceholder": "443",
 	"pairing.passcodeLabel": "Senha",
 	"pairing.passcodePlaceholder": "Senha de 8 caracteres",
 	"pairing.continue": "Continuar",

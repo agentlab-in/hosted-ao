@@ -1047,7 +1047,7 @@
 	"pairing.addressLabel": "Adresse",
 	"pairing.addressPlaceholder": "192.168.1.42",
 	"pairing.portLabel": "Port",
-	"pairing.portPlaceholder": "8443",
+	"pairing.portPlaceholder": "443",
 	"pairing.passcodeLabel": "Passwort",
 	"pairing.passcodePlaceholder": "8-stelliges Passwort",
 	"pairing.continue": "Weiter",

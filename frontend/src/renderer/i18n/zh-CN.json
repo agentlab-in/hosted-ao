@@ -1029,7 +1029,7 @@
 	"pairing.addressLabel": "地址",
 	"pairing.addressPlaceholder": "192.168.1.42",
 	"pairing.portLabel": "端口",
-	"pairing.portPlaceholder": "8443",
+	"pairing.portPlaceholder": "443",
 	"pairing.passcodeLabel": "密码",
 	"pairing.passcodePlaceholder": "8 位密码",
 	"pairing.continue": "继续",
