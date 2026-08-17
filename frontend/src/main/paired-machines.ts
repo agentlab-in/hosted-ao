@@ -1,7 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { LOCAL_MACHINE_ID, parseMachineOrigin, type AoMachine } from "../shared/ao-machines";
+import {
+	harnessFromDoctorChecks,
+	LOCAL_MACHINE_ID,
+	parseMachineOrigin,
+	type AoMachine,
+	type AoMachineHarness,
+	type AoMachineReachability,
+} from "../shared/ao-machines";
 import type { SafeStorageLike } from "./ao-account-store";
 import { createPairCertificateVerifyProc, type PairCertificateVerifyProc } from "./paired-machine-cert";
 import { fetchWithDeadline } from "./request-deadline";
@@ -68,12 +75,28 @@ export type PairedMachinesControllerDeps = {
 	probeTimeoutMs?: number;
 };
 
+/** Readiness fields from a doctor report; local mirror of the same fields on
+ * `AoMachine` so this module does not need ao-machines.ts's unexported type. */
+type HarnessReadiness = { harness: AoMachineHarness; harnessCommand: string | null };
+const HARNESS_UNKNOWN: HarnessReadiness = { harness: "unknown", harnessCommand: null };
+
 export type PairedMachinesController = {
 	/** Load the registry off disk. Must resolve before `verifyCertificate` can
 	 * see any pin: it runs synchronously off the in-memory cache this builds,
 	 * because Electron calls it from the network service without awaiting it. */
 	load: () => Promise<void>;
 	list: () => AoMachine[];
+	/**
+	 * Probe every registered machine's reachability and agent-harness readiness
+	 * via `GET /api/v1/doctor`, authenticated with its own stored passcode --
+	 * the same route and the same doctor checks `ao-machines.ts`'s hosted
+	 * machines would read if the daemon route existed for them yet (see
+	 * `harnessFromDoctorChecks`), reused here because pair mode's gateway
+	 * already proxies it. Any answer, even a non-2xx one, means the box is up;
+	 * only a transport failure or a timeout counts as offline, mirroring
+	 * ao-machines.ts's own liveness probe. Returns the freshly probed list.
+	 */
+	refresh: () => Promise<AoMachine[]>;
 	/**
 	 * Add a newly paired machine, or update an existing one (matched by id) --
 	 * a re-pair after a fingerprint mismatch is the same call with a fresh
@@ -184,7 +207,11 @@ async function writeAll(stateDir: string, machines: PersistedPairedMachine[]): P
 	}
 }
 
-function toAoMachine(record: PairedMachineRecord): AoMachine | null {
+function toAoMachine(
+	record: PairedMachineRecord,
+	reachability: AoMachineReachability,
+	harness: HarnessReadiness,
+): AoMachine | null {
 	const baseUrl = baseUrlFor(record.address, record.port);
 	if (!baseUrl) return null;
 	return {
@@ -194,9 +221,8 @@ function toAoMachine(record: PairedMachineRecord): AoMachine | null {
 		local: false,
 		createdAt: null,
 		lastSeen: record.lastSeen,
-		reachability: "unknown",
-		harness: "unknown",
-		harnessCommand: null,
+		reachability,
+		...harness,
 	};
 }
 
@@ -219,6 +245,11 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 	/** Latest fingerprint actually presented per hostname, for any host
 	 * `isPairHost` recognises. What `probeFingerprint` reads back. */
 	const presented = new Map<string, string>();
+	/** Reachability and harness readiness from the last `refresh()`, by machine
+	 * id. Ephemeral like ao-machines.ts's own reachability: never persisted,
+	 * defaults to "unknown" for a machine that has never been probed. */
+	let reachabilityById = new Map<string, AoMachineReachability>();
+	let harnessById = new Map<string, HarnessReadiness>();
 
 	function rebuildPinnedByHost(): void {
 		pinnedByHost = new Map(
@@ -233,11 +264,65 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 		await writeAll(deps.stateDir, [...records.values()]);
 	}
 
+	/** Shared by the public `getPasscode` and the reachability probe below, so
+	 * there is exactly one place that decrypts a stored passcode. */
+	async function decryptPasscode(record: PersistedPairedMachine): Promise<string | null> {
+		if (!deps.safeStorage.isEncryptionAvailable()) {
+			throw new Error("This system has no OS credential store available, so the paired machine's passcode cannot be read.");
+		}
+		try {
+			return deps.safeStorage.decryptString(Buffer.from(record.passcode, "base64"));
+		} catch {
+			throw new Error("This paired machine's stored passcode could not be decrypted on this machine. Re-pair it.");
+		}
+	}
+
+	/** One machine's doctor probe: any HTTP answer at all (see the `refresh`
+	 * doc comment) means the box is up. Never throws; a passcode that cannot be
+	 * decrypted or a bad credential just reads as unreachable, since nothing
+	 * useful can be said about a box this process cannot authenticate to. */
+	async function probeReachability(
+		record: PersistedPairedMachine,
+	): Promise<{ reachability: AoMachineReachability; harness: HarnessReadiness; answered: boolean }> {
+		const baseUrl = baseUrlFor(record.address, record.port);
+		if (!baseUrl) return { reachability: "offline", harness: HARNESS_UNKNOWN, answered: false };
+		let passcode: string | null;
+		try {
+			passcode = await decryptPasscode(record);
+		} catch {
+			return { reachability: "offline", harness: HARNESS_UNKNOWN, answered: false };
+		}
+		if (!passcode) return { reachability: "offline", harness: HARNESS_UNKNOWN, answered: false };
+		try {
+			const response = await fetchWithDeadline(
+				netFetch,
+				`${baseUrl}/api/v1/doctor`,
+				{ method: "GET", headers: { Authorization: `Bearer ${passcode}` } },
+				probeTimeoutMs,
+				"Paired machine doctor probe",
+			);
+			if (!response.ok) return { reachability: "online", harness: HARNESS_UNKNOWN, answered: true };
+			return { reachability: "online", harness: harnessFromDoctorChecks(await response.json()), answered: true };
+		} catch {
+			// Transport failure or timeout: the only case that is actually offline,
+			// mirroring ao-machines.ts's own probe() (see its doc comment).
+			return { reachability: "offline", harness: HARNESS_UNKNOWN, answered: false };
+		}
+	}
+
 	const verifyCertificate = createPairCertificateVerifyProc({
 		isPairHost: (hostname) => pendingHosts.has(hostname) || pinnedByHost.has(hostname),
 		getPinnedFingerprint: (hostname) => pinnedByHost.get(hostname) ?? null,
 		onPresented: (hostname, fingerprint) => presented.set(hostname, fingerprint),
 	});
+
+	function list(): AoMachine[] {
+		return [...records.values()]
+			.map((record) =>
+				toAoMachine(record, reachabilityById.get(record.id) ?? "unknown", harnessById.get(record.id) ?? HARNESS_UNKNOWN),
+			)
+			.filter((machine): machine is AoMachine => machine !== null);
+	}
 
 	return {
 		async load(): Promise<void> {
@@ -247,10 +332,28 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 			rebuildPinnedByHost();
 		},
 
-		list(): AoMachine[] {
-			return [...records.values()]
-				.map((record) => toAoMachine(record))
-				.filter((machine): machine is AoMachine => machine !== null);
+		list,
+
+		async refresh(): Promise<AoMachine[]> {
+			const current = [...records.values()];
+			await Promise.all(
+				current.map(async (record) => {
+					const probe = await probeReachability(record);
+					reachabilityById.set(record.id, probe.reachability);
+					harnessById.set(record.id, probe.harness);
+					if (probe.answered) {
+						const previous = records;
+						records = new Map(previous).set(record.id, { ...record, lastSeen: new Date().toISOString() });
+						try {
+							await persist();
+						} catch (err) {
+							records = previous;
+							throw err;
+						}
+					}
+				}),
+			);
+			return list();
 		},
 
 		async add(input): Promise<AoMachine> {
@@ -285,7 +388,11 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 				rebuildPinnedByHost();
 				throw err;
 			}
-			const machine = toAoMachine(record);
+			// A re-pair may point at a different address or hand out a different
+			// passcode; a reachability verdict from before either changed is stale.
+			reachabilityById.delete(record.id);
+			harnessById.delete(record.id);
+			const machine = toAoMachine(record, "unknown", HARNESS_UNKNOWN);
 			if (!machine) throw new Error(`Not a usable address: ${input.address}`);
 			return machine;
 		},
@@ -303,19 +410,14 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 				rebuildPinnedByHost();
 				throw err;
 			}
+			reachabilityById.delete(id);
+			harnessById.delete(id);
 		},
 
 		async getPasscode(id: string): Promise<string | null> {
 			const record = records.get(id);
 			if (!record) return null;
-			if (!deps.safeStorage.isEncryptionAvailable()) {
-				throw new Error("This system has no OS credential store available, so the paired machine's passcode cannot be read.");
-			}
-			try {
-				return deps.safeStorage.decryptString(Buffer.from(record.passcode, "base64"));
-			} catch {
-				throw new Error("This paired machine's stored passcode could not be decrypted on this machine. Re-pair it.");
-			}
+			return decryptPasscode(record);
 		},
 
 		async touchLastSeen(id: string): Promise<void> {

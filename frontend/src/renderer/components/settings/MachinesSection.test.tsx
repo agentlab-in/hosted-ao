@@ -5,12 +5,12 @@ import { beforeEach, expect, test, vi } from "vitest";
 import { HARNESS_SETUP_COMMAND, LOCAL_MACHINE_ID, localMachine, type AoMachine, type AoMachinesState } from "../../../shared/ao-machines";
 import { MachinesSection } from "./MachinesSection";
 
-const { refresh, select, writeText, pairedList, pairedRemove, probeFingerprint, getPinnedFingerprint, pairedAdd } =
+const { refresh, select, writeText, pairedRefresh, pairedRemove, probeFingerprint, getPinnedFingerprint, pairedAdd } =
 	vi.hoisted(() => ({
 		refresh: vi.fn(),
 		select: vi.fn(),
 		writeText: vi.fn(),
-		pairedList: vi.fn(),
+		pairedRefresh: vi.fn(),
 		pairedRemove: vi.fn(),
 		probeFingerprint: vi.fn(),
 		getPinnedFingerprint: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock("../../lib/bridge", () => ({
 		machines: { refresh, select },
 		clipboard: { writeText },
 		pairedMachines: {
-			list: pairedList,
+			refresh: pairedRefresh,
 			remove: pairedRemove,
 			probeFingerprint,
 			getPinnedFingerprint,
@@ -102,7 +102,7 @@ beforeEach(() => {
 	refresh.mockReset().mockResolvedValue(READY);
 	select.mockReset().mockResolvedValue({ ...READY, activeMachineId: "mch_1" });
 	writeText.mockReset().mockResolvedValue(undefined);
-	pairedList.mockReset().mockResolvedValue([]);
+	pairedRefresh.mockReset().mockResolvedValue([]);
 	pairedRemove.mockReset().mockResolvedValue(undefined);
 	probeFingerprint.mockReset();
 	getPinnedFingerprint.mockReset();
@@ -230,7 +230,7 @@ test("shows the reason when the refresh fails, instead of spinning forever", asy
 });
 
 test("a paired machine is listed and labelled by origin, distinct from hosted and local", async () => {
-	pairedList.mockResolvedValue([PAIRED_ONLINE]);
+	pairedRefresh.mockResolvedValue([PAIRED_ONLINE]);
 	renderSection();
 	await screen.findAllByTestId("ao-machine");
 
@@ -240,7 +240,7 @@ test("a paired machine is listed and labelled by origin, distinct from hosted an
 });
 
 test("an unreachable paired machine stays listed, marked unreachable with its last-seen time", async () => {
-	pairedList.mockResolvedValue([PAIRED_OFFLINE]);
+	pairedRefresh.mockResolvedValue([PAIRED_OFFLINE]);
 	renderSection();
 	await screen.findAllByTestId("ao-machine");
 
@@ -251,7 +251,7 @@ test("an unreachable paired machine stays listed, marked unreachable with its la
 });
 
 test("removing a paired machine asks for confirmation, then calls remove and refreshes the list", async () => {
-	pairedList.mockResolvedValue([PAIRED_ONLINE]);
+	pairedRefresh.mockResolvedValue([PAIRED_ONLINE]);
 	renderSection();
 	await screen.findAllByTestId("ao-machine");
 
@@ -261,7 +261,7 @@ test("removing a paired machine asks for confirmation, then calls remove and ref
 	const confirmDialog = await screen.findByRole("dialog");
 	expect(within(confirmDialog).getByText(/remove this paired machine/i)).toBeInTheDocument();
 
-	pairedList.mockResolvedValue([]);
+	pairedRefresh.mockResolvedValue([]);
 	await userEvent.click(within(confirmDialog).getByRole("button", { name: "Remove" }));
 
 	expect(pairedRemove).toHaveBeenCalledWith(PAIRED_ONLINE.id);

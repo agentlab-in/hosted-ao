@@ -61,6 +61,27 @@ const unreachableFetch: typeof fetch = (async () => {
 	throw new Error("connect ECONNREFUSED");
 }) as unknown as typeof fetch;
 
+/**
+ * A box that answers `GET /api/v1/doctor` like the real gateway route would:
+ * 200 with a doctor report when the Authorization header carries `passcode`
+ * as a bearer, 401 otherwise. Records every Authorization header it saw, so a
+ * test can assert the wire shape without inspecting the fetch call directly.
+ */
+function doctorFetch(passcode: string, checks: Array<Record<string, unknown>> = []) {
+	const seenAuthorization: Array<string | null> = [];
+	const requestedUrls: string[] = [];
+	const fetchImpl = (async (input: string, init?: RequestInit) => {
+		requestedUrls.push(String(input));
+		seenAuthorization.push(new Headers(init?.headers).get("Authorization"));
+		if (!String(input).endsWith("/api/v1/doctor")) return new Response("not found", { status: 404 });
+		if (new Headers(init?.headers).get("Authorization") !== `Bearer ${passcode}`) {
+			return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+		}
+		return new Response(JSON.stringify({ ok: true, failures: 0, checks }), { status: 200 });
+	}) as unknown as typeof fetch;
+	return { fetchImpl, seenAuthorization, requestedUrls };
+}
+
 let stateDir = "";
 
 beforeEach(async () => {
@@ -238,6 +259,104 @@ test("getPinnedFingerprint reports the pin for a registered machine and null oth
 	});
 	expect(machines.getPinnedFingerprint("box_1")).toBe(CERT_FINGERPRINT);
 	expect(machines.getPinnedFingerprint("no_such_machine")).toBeNull();
+});
+
+test("refresh() probes GET /api/v1/doctor with the passcode as a bearer credential and marks the machine online", async () => {
+	const { fetchImpl, seenAuthorization } = doctorFetch("abc123XY");
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: fetchImpl, probeTimeoutMs: 200 });
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+	expect(machines.list()[0]).toMatchObject({ reachability: "unknown", lastSeen: null });
+
+	const refreshed = await machines.refresh();
+
+	expect(seenAuthorization).toContain("Bearer abc123XY");
+	expect(refreshed[0]).toMatchObject({ id: "box_1", reachability: "online" });
+	expect(refreshed[0].lastSeen).not.toBeNull();
+	expect(machines.list()[0]).toMatchObject({ reachability: "online" });
+
+	// The refreshed last-seen is persisted, so a relaunch still shows it.
+	const reloaded = createPairedMachinesController({ stateDir, safeStorage });
+	await reloaded.load();
+	expect(reloaded.list()[0].lastSeen).toBe(refreshed[0].lastSeen);
+});
+
+test("refresh() reads agent-harness readiness from the doctor checks", async () => {
+	const { fetchImpl } = doctorFetch("abc123XY", [
+		{ level: "PASS", name: "claude-auth", section: "Agent harnesses", message: "signed in" },
+	]);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: fetchImpl, probeTimeoutMs: 200 });
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	const refreshed = await machines.refresh();
+	expect(refreshed[0]).toMatchObject({ harness: "ready", harnessCommand: null });
+});
+
+test("refresh() marks an unreachable machine offline without bumping last-seen", async () => {
+	const machines = controller(unreachableFetch);
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	const refreshed = await machines.refresh();
+	expect(refreshed[0]).toMatchObject({ reachability: "offline", lastSeen: null });
+});
+
+test("refresh() marks online even on a 401 (wrong passcode): the box answered, only the credential is bad", async () => {
+	const { fetchImpl } = doctorFetch("the-real-passcode");
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: fetchImpl, probeTimeoutMs: 200 });
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "a-stale-passcode",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	const refreshed = await machines.refresh();
+	expect(refreshed[0]).toMatchObject({ reachability: "online", harness: "unknown" });
+});
+
+test("the passcode never appears in the doctor probe's request path or in refresh()'s result", async () => {
+	const { fetchImpl, requestedUrls } = doctorFetch("abc123XY");
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: fetchImpl, probeTimeoutMs: 200 });
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+	const refreshed = await machines.refresh();
+
+	expect(JSON.stringify(refreshed)).not.toContain("abc123XY");
+	const doctorUrl = requestedUrls.find((url) => url.endsWith("/api/v1/doctor"));
+	expect(doctorUrl).not.toContain("abc123XY");
 });
 
 test("add refuses the reserved local machine id, an out-of-range port, and an unusable address", async () => {
