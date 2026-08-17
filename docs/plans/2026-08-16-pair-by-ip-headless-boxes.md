@@ -26,8 +26,18 @@ In scope:
   box without a domain or an account, and prints the passcode and fingerprint.
 - A standalone `ao` binary for Linux, x64 and arm64. This does not exist today
   and is a hard blocker for everything else.
-- Making desktop sign-in skippable, so a user with only paired boxes never
-  needs an account.
+Already true, and requiring no work. Verified on `develop` 2026-08-17:
+
+- **Desktop sign-in is already optional.** `AccountSection.tsx` states there is
+  no sign-in wall anywhere else and its copy already reads "Everything on this
+  computer works without an account". The control-plane token source returns
+  without any network call when signed out, machine listing falls back to the
+  local machine, and `frontend/src/main/ao-machines.test.ts:107` asserts no
+  fetch occurs on a signed-out refresh. This was a founding decision, recorded
+  in `docs/superpowers/specs/2026-07-29-hosted-ao-v1-accounts-and-machines.md:183`
+  ("Local use never requires an account"). An earlier draft of this spec listed
+  it as work; that was an unchecked assumption that accounts-only remote mode
+  implied a login gate.
 
 Explicitly out of scope:
 
@@ -88,9 +98,10 @@ explicit re-pair action. There is no click-through and no "connect anyway". A
 dismissible warning would delete the only security that trust-on-first-use
 provides, so it is not offered.
 
-Sign-in becomes optional. A user whose machines are all paired never sees a
-login requirement. Signing in remains necessary for hosted machines, and the
-picker labels each machine by origin so the two are never confused.
+Sign-in is already optional and stays that way. A user whose machines are all
+local or paired never sees a login requirement. Signing in remains necessary for
+hosted machines, and the picker labels each machine by origin so the two are
+never confused.
 
 ### Failure modes
 
@@ -148,8 +159,6 @@ violation on sight, and the next agent to read it will correctly flag it.
 - `frontend/src/shared/ao-machines.ts` — paired origin.
 - `frontend/src/main.ts` — certificate verification procedure for pinning.
 - `frontend/src/renderer/lib/api-client.ts` — transport selection per machine.
-- `frontend/src/renderer/components/settings/AccountSection.tsx` — sign-in
-  becomes optional.
 - `frontend/scripts/build-daemon.mjs` and `.github/workflows/` — standalone
   Linux binary.
 
@@ -178,8 +187,12 @@ violation on sight, and the next agent to read it will correctly flag it.
    pair mode, generate and persist a long-lived self-signed certificate under
    the state root, compute and expose its SHA-256 fingerprint, and skip the
    `:80` bind and `autocert.Manager` in this mode.
-4. **Make desktop sign-in skippable.** Pure renderer work, no backend
-   dependency. The app must be fully usable with no account.
+4. **Withdrawn: make desktop sign-in skippable.** Audited on 2026-08-17 and
+   already true on `develop`, with a regression test already guarding it. See
+   the "Already true" note under Scope. Task numbers are kept as-is so the
+   dependency references below stay valid.
+
+Status: task 1 shipped in PR #88, task 2 in PR #87.
 
 ### Batch 2
 
