@@ -67,16 +67,42 @@ func TestCheckSetupPlatform(t *testing.T) {
 			},
 			wantWarning: "not an LTS release",
 		},
+		// The distro gate widened to the whole Debian family
+		// (docs/plans/2026-08-16-pair-by-ip-headless-boxes.md, task 7), so
+		// Raspberry Pi OS can pass it: Debian itself and Raspberry Pi OS both
+		// now pass, and neither gets the Ubuntu-specific "not an LTS release"
+		// warning, since neither uses that term.
 		{
-			name: "debian is refused",
+			name: "debian passes and gets no LTS warning",
 			platform: setupPlatform{
 				GOOS: "linux", HasSystemctl: true, HasAptGet: true,
-				OSRelease: parseOSRelease("ID=debian\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n"),
+				OSRelease: parseOSRelease("ID=debian\nVERSION=\"12 (bookworm)\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n"),
 			},
-			wantErr: true,
+		},
+		{
+			name: "raspberry pi os (id=debian) passes",
+			platform: setupPlatform{
+				GOOS: "linux", HasSystemctl: true, HasAptGet: true,
+				OSRelease: parseOSRelease("ID=debian\nVERSION=\"12 (bookworm)\"\nPRETTY_NAME=\"Raspberry Pi OS (64-bit)\"\n"),
+			},
+		},
+		{
+			name: "raspberry pi os (older id=raspbian, id_like=debian) passes",
+			platform: setupPlatform{
+				GOOS: "linux", HasSystemctl: true, HasAptGet: true,
+				OSRelease: parseOSRelease("ID=raspbian\nID_LIKE=debian\nVERSION=\"11 (bullseye)\"\nPRETTY_NAME=\"Raspbian GNU/Linux 11 (bullseye)\"\n"),
+			},
 		},
 		{name: "macOS is refused", platform: setupPlatform{GOOS: "darwin"}, wantErr: true},
 		{name: "windows is refused", platform: setupPlatform{GOOS: "windows"}, wantErr: true},
+		{
+			name: "a genuinely unsupported distro is still refused",
+			platform: setupPlatform{
+				GOOS: "linux", HasSystemctl: true, HasAptGet: true,
+				OSRelease: parseOSRelease("ID=fedora\nPRETTY_NAME=\"Fedora Linux 40\"\n"),
+			},
+			wantErr: true,
+		},
 		{
 			name: "ubuntu without systemd is refused",
 			platform: setupPlatform{
@@ -88,6 +114,22 @@ func TestCheckSetupPlatform(t *testing.T) {
 			name: "ubuntu without apt is refused",
 			platform: setupPlatform{
 				GOOS: "linux", HasSystemctl: true, OSRelease: parseOSRelease(ubuntuNobleOSRelease),
+			},
+			wantErr: true,
+		},
+		{
+			name: "debian without systemd is still refused: the widened gate does not drop the real requirements",
+			platform: setupPlatform{
+				GOOS: "linux", HasAptGet: true,
+				OSRelease: parseOSRelease("ID=debian\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "debian without apt-get is still refused",
+			platform: setupPlatform{
+				GOOS: "linux", HasSystemctl: true,
+				OSRelease: parseOSRelease("ID=debian\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n"),
 			},
 			wantErr: true,
 		},
@@ -352,6 +394,71 @@ func TestEvaluatePreflight_PortProblems(t *testing.T) {
 			t.Fatalf("warnings = %v, want one naming the gateway", warnings)
 		}
 	})
+}
+
+// TestEvaluatePreflight_PairDoesNotDemandPort80 is the pair-mode port
+// requirement directly: pair mode binds only the HTTPS port, never :80 (no
+// ACME challenge to answer), so preflight must never probe or complain about
+// :80 in pair mode, and setupVMPortsPair itself must be HTTPS only.
+func TestEvaluatePreflight_PairDoesNotDemandPort80(t *testing.T) {
+	if len(setupVMPortsPair) != 1 || setupVMPortsPair[0] != 443 {
+		t.Fatalf("setupVMPortsPair = %v, want only 443: pair mode never binds :80", setupVMPortsPair)
+	}
+	pf := setupPreflight{
+		Pair:       true,
+		TargetUser: "ubuntu",
+		Ports:      []setupPortProbe{{Port: 443}},
+	}
+	problems, warnings := evaluatePreflight(pf)
+	if len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none", problems)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none: pair mode has no domain and no off-box reachability check", warnings)
+	}
+}
+
+// TestEvaluatePreflight_PairSkipsDNSAndReachability confirms pair mode never
+// reports a DNS or reachability problem, even when the (unused) fields that
+// would normally cause one are populated: a pair preflight simply never
+// looks at them, because pair mode has no domain and never contacts the
+// control plane (docs/adr/0003-pair-mode-gateway.md).
+func TestEvaluatePreflight_PairSkipsDNSAndReachability(t *testing.T) {
+	pf := setupPreflight{
+		Pair:        true,
+		TargetUser:  "ubuntu",
+		Domain:      "",
+		ResolveErr:  errors.New("no such host"),
+		PublicIPErr: errors.New("dial tcp: i/o timeout"),
+		Reach:       setupReachability{Ran: true, Open: map[int]bool{80: false, 443: false}},
+		Ports:       []setupPortProbe{{Port: 443}},
+	}
+	problems, warnings := evaluatePreflight(pf)
+	if len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none: pair mode must not evaluate DNS or reachability at all", problems)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+}
+
+// TestEvaluatePreflight_PairPortFailureUsesPairRerun pins the pair-specific
+// remediation wording: a low-port bind failure in pair mode must point at
+// `ao setup-vm --pair`, never at the hosted `--domain` form, which pair mode
+// does not take at all.
+func TestEvaluatePreflight_PairPortFailureUsesPairRerun(t *testing.T) {
+	pf := setupPreflight{
+		Pair:       true,
+		TargetUser: "ubuntu",
+		Ports: []setupPortProbe{
+			{Port: 443, Err: errors.New("listen tcp 127.0.0.1:443: bind: permission denied")},
+		},
+	}
+	problems, _ := evaluatePreflight(pf)
+	problem := assertProblem(t, problems, "port 443", "sudo ao setup-vm --pair")
+	if strings.Contains(strings.Join(problem.Remediation, "\n"), "--domain") {
+		t.Errorf("pair-mode remediation must not mention --domain: %v", problem.Remediation)
+	}
 }
 
 func TestEvaluatePreflight_BlockedFirewallIsDetectedAndNamed(t *testing.T) {
@@ -633,6 +740,61 @@ func TestSetupDirsAreDeduplicated(t *testing.T) {
 	}
 }
 
+// testPairSetupPlan mirrors testSetupPlan for a pair-mode plan: no domain.
+func testPairSetupPlan(t *testing.T) setupPlan {
+	t.Helper()
+	plan, err := buildSetupPlan(setupPlanInput{
+		Pair:  true,
+		User:  "ubuntu",
+		Group: "ubuntu",
+		Home:  "/home/ubuntu",
+	})
+	if err != nil {
+		t.Fatalf("buildSetupPlan err = %v", err)
+	}
+	return plan
+}
+
+func TestBuildSetupPlan_PairDefaultsUnderAODir(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	if !plan.Pair {
+		t.Fatal("Pair must be true")
+	}
+	if plan.Domain != "" {
+		t.Errorf("Domain = %q, want empty: pair mode has no domain", plan.Domain)
+	}
+	if plan.PairCertDir != "/home/ubuntu/.ao/hosted/vm-gateway/pair-cert" {
+		t.Errorf("PairCertDir = %q, want it under the state root, matching vmgateway.resolvePair's own default", plan.PairCertDir)
+	}
+	if plan.PasscodeDir != "/home/ubuntu/.ao/hosted/vm-gateway/pair-passcode" {
+		t.Errorf("PasscodeDir = %q, want it under the state root, matching vmgateway.resolvePair's own default", plan.PasscodeDir)
+	}
+	if plan.Bound {
+		t.Error("a pair plan must never claim Bound: pair mode has no account to bind")
+	}
+}
+
+// TestSetupDirsPairModeCreatesPairDirsNotTheACMEOne is the pair-mode half of
+// TestSetupDirsAreDeduplicated: a pair plan must create its own certificate
+// and passcode directories, and must not create the hosted ACME cache
+// directory it will never use.
+func TestSetupDirsPairModeCreatesPairDirsNotTheACMEOne(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	dirs := plan.setupDirs()
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		seen[dir] = true
+	}
+	for _, want := range []string{plan.AODir, plan.DataDir, plan.PairCertDir, plan.PasscodeDir} {
+		if !seen[want] {
+			t.Errorf("setupDirs is missing %q: %v", want, dirs)
+		}
+	}
+	if seen[plan.CertDir] {
+		t.Errorf("setupDirs must not create the unused hosted ACME cert dir %q in pair mode: %v", plan.CertDir, dirs)
+	}
+}
+
 func TestRenderDaemonUnit(t *testing.T) {
 	unit := renderDaemonUnit(testSetupPlan(t))
 	for _, want := range []string{
@@ -723,6 +885,35 @@ func TestRenderGatewayUnit(t *testing.T) {
 	}
 	if !strings.Contains(unit, "needs a restart") {
 		t.Error("the gateway unit should record that machine.json is read once at startup")
+	}
+	assertNoDashes(t, unit)
+}
+
+// TestRenderGatewayUnit_Pair pins pair mode's gateway unit env: AO_VM_PAIR=on
+// selects pair mode, AO_VM_CERT_DIR and AO_VM_PASSCODE_DIR point at the pair
+// certificate and passcode directories, and none of the hosted-only
+// variables are set. vmgateway.Resolve's resolvePair rejects any of them
+// alongside AO_VM_PAIR (internal/vmgateway/config.go), so setting one here
+// would make the rendered unit fail to start.
+func TestRenderGatewayUnit_Pair(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	unit := renderGatewayUnit(plan)
+	for _, want := range []string{
+		`Environment="AO_VM_PAIR=on"`,
+		`Environment="AO_VM_CERT_DIR=/home/ubuntu/.ao/hosted/vm-gateway/pair-cert"`,
+		`Environment="AO_VM_PASSCODE_DIR=/home/ubuntu/.ao/hosted/vm-gateway/pair-passcode"`,
+		"ExecStart=/usr/local/bin/ao vm serve",
+		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
+		"Restart=always",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("pair gateway unit is missing %q:\n%s", want, unit)
+		}
+	}
+	for _, unwanted := range []string{"AO_VM_DOMAIN", "AO_MACHINE_FILE", "AO_VM_ISSUER", "AO_VM_ACCOUNT_ID", "AO_VM_JWKS_URL", "AO_VM_HTTP_ADDR"} {
+		if strings.Contains(unit, unwanted) {
+			t.Errorf("pair gateway unit must not set %q: vmgateway.resolvePair rejects hosted-only fields alongside AO_VM_PAIR:\n%s", unwanted, unit)
+		}
 	}
 	assertNoDashes(t, unit)
 }
@@ -976,6 +1167,136 @@ func TestRenderSetupDryRunShowsBothUnitsAndChangesNothing(t *testing.T) {
 			t.Errorf("dry run output is missing %q:\n%s", want, text)
 		}
 	}
+}
+
+func TestRenderSetupDryRunPairShowsBothUnitsAndChangesNothing(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	text := renderSetupDryRunPair(plan, nil)
+	if !strings.HasPrefix(text, "Dry run. Nothing on this machine was changed.") {
+		t.Fatalf("dry run must lead with the no-mutation guarantee:\n%s", text)
+	}
+	for _, want := range []string{
+		"no domain, no AO account, no control-plane contact",
+		"/etc/systemd/system/ao-daemon.service",
+		"/etc/systemd/system/ao-gateway.service",
+		"ExecStart=/usr/local/bin/ao daemon",
+		"ExecStart=/usr/local/bin/ao vm serve",
+		"AO_VM_PAIR=on",
+		"pair cert dir",
+		"passcode dir",
+		"Re-running never rotates either",
+		"ao vm rotate-passcode",
+		"without --dry-run",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("pair dry run output is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "AO_VM_DOMAIN") || strings.Contains(text, "device code") {
+		t.Errorf("pair dry run must not mention the hosted domain/device-flow path:\n%s", text)
+	}
+	assertNoDashes(t, text)
+}
+
+// TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce is the printed-output
+// half of the single most important pair-mode contract: the passcode and
+// fingerprint appear together, once, on the run that generated them.
+func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
+		"AB12CD34", true, "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil)
+	for _, want := range []string{
+		"No domain, no AO account, no control-plane contact",
+		"AB12CD34",
+		"07:CA:9F:3E:B2:11",
+		"HTTPS only, no :80",
+		"ao vm setup-harness claude",
+		"gh auth login",
+		"ao doctor",
+		"mismatch means refuse and re-pair",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("pair summary is missing %q:\n%s", want, summary)
+		}
+	}
+	if strings.Contains(summary, "AO account") == false {
+		t.Errorf("pair summary must state no AO account is involved:\n%s", summary)
+	}
+	assertNoDashes(t, summary)
+}
+
+// TestRenderSetupSummaryPair_ReRunNeverShowsThePasscodeAgain is the printed
+// side of the non-rotation guarantee: a run that did not generate a fresh
+// passcode must never print one, plaintext or otherwise, and must point at
+// the deliberate rotate command instead.
+func TestRenderSetupSummaryPair_ReRunNeverShowsThePasscodeAgain(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
+		"", false, "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil)
+	if strings.Contains(summary, "AB12CD34") {
+		t.Error("a re-run must never print a passcode")
+	}
+	if !strings.Contains(summary, "already set from an earlier run") {
+		t.Errorf("a re-run must say the passcode is unchanged:\n%s", summary)
+	}
+	if !strings.Contains(summary, "ao vm rotate-passcode") {
+		t.Errorf("a re-run must point at the deliberate rotate command:\n%s", summary)
+	}
+	// The fingerprint is not a secret and must still be printed every run.
+	if !strings.Contains(summary, "07:CA:9F:3E:B2:11") {
+		t.Errorf("the fingerprint must still be printed on a re-run:\n%s", summary)
+	}
+	assertNoDashes(t, summary)
+}
+
+func TestRenderPairCredentials_FallsBackWhenNoAddressWasFound(t *testing.T) {
+	text := renderPairCredentials("AB12CD34", true, "07:CA", nil, ":443")
+	if !strings.Contains(text, "443") {
+		t.Errorf("must still print the port when no address was found: %q", text)
+	}
+	if !strings.Contains(text, "LAN IP") {
+		t.Errorf("must fall back to telling the operator to find their own address: %q", text)
+	}
+}
+
+func TestRenderPairCredentials_ListsEveryDiscoveredAddress(t *testing.T) {
+	text := renderPairCredentials("AB12CD34", true, "07:CA", []string{"192.168.1.20", "10.0.0.5"}, ":443")
+	for _, want := range []string{"192.168.1.20:443", "10.0.0.5:443"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("credentials block is missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderManualPathPair_NamesEveryStep(t *testing.T) {
+	text := renderManualPathPair(setupPlatform{GOOS: "darwin"})
+	for _, want := range []string{
+		"nothing was changed",
+		"ao daemon",
+		"AO_VM_PAIR=on",
+		"ao vm serve",
+		"ao vm setup-harness claude",
+		"gh auth login",
+		"AO_DATA_DIR",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("pair manual path is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "--domain") {
+		t.Errorf("pair manual path must not mention --domain:\n%s", text)
+	}
+	assertNoDashes(t, text)
+}
+
+func TestRenderPasscodeRotated(t *testing.T) {
+	text := renderPasscodeRotated("XY98ZW76")
+	for _, want := range []string{"XY98ZW76", "Every device connected with the old passcode has been dropped", "fingerprint to re-check"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("rotation output is missing %q:\n%s", want, text)
+		}
+	}
+	assertNoDashes(t, text)
 }
 
 func TestSetupPackagesExcludeHarnesses(t *testing.T) {

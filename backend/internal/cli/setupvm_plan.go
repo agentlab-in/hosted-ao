@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 const (
@@ -119,8 +120,14 @@ var setupVMPackages = []string{"tmux", "git", "gh"}
 
 // setupVMPorts are the ports the gateway must be able to bind and be reached
 // on: 80 for the ACME HTTP-01 challenge and the https redirect, 443 for the
-// public TLS listener.
+// public TLS listener. Hosted mode only.
 var setupVMPorts = []int{80, 443}
+
+// setupVMPortsPair is pair mode's port list: the public TLS listener only.
+// Pair mode never binds :80, because there is no ACME HTTP-01 challenge to
+// answer (docs/adr/0003-pair-mode-gateway.md), so preflight must not demand
+// it be free either.
+var setupVMPortsPair = []int{443}
 
 // ---------------------------------------------------------------------------
 // Platform gate
@@ -134,13 +141,13 @@ type setupPlatform struct {
 	HasAptGet    bool
 }
 
-// errUnsupportedPlatform reports that this box is not an Ubuntu box with
-// systemd and apt. The command prints the manual path and exits without
+// errUnsupportedPlatform reports that this box is not a Debian-family box
+// with systemd and apt. The command prints the manual path and exits without
 // touching anything.
 type errUnsupportedPlatform struct{ reason string }
 
 func (e errUnsupportedPlatform) Error() string {
-	return "ao setup-vm supports Ubuntu LTS with systemd and apt only: " + e.reason
+	return "ao setup-vm supports Debian-family Linux (Ubuntu, Debian, Raspberry Pi OS) with systemd and apt only: " + e.reason
 }
 
 // parseOSRelease parses the shell-assignment format of /etc/os-release. Values
@@ -182,15 +189,21 @@ func (p setupPlatform) platformName() string {
 }
 
 // checkSetupPlatform is the platform gate. It returns an
-// errUnsupportedPlatform for anything that is not Ubuntu with systemd and apt,
-// so the caller can print the manual path instead of half-installing. A
-// non-LTS Ubuntu is a warning rather than a refusal: apt and systemd are
-// there, so every step still works, the release just goes end-of-life sooner.
+// errUnsupportedPlatform for anything that is not a Debian-family distro with
+// systemd and apt, so the caller can print the manual path instead of
+// half-installing. Ubuntu, Debian itself, and Raspberry Pi OS (which reports
+// either ID=debian directly or ID=raspbian with ID_LIKE=debian, depending on
+// the release) all pass; anything else is refused. A non-LTS Ubuntu is a
+// warning rather than a refusal: apt and systemd are there, so every step
+// still works, the release just goes end-of-life sooner. The LTS warning is
+// Ubuntu-specific wording and does not apply to the rest of the Debian
+// family, which does not use that term.
 func checkSetupPlatform(p setupPlatform) (warnings []string, err error) {
 	if p.GOOS != "linux" {
 		return nil, errUnsupportedPlatform{reason: "this is " + p.GOOS + ", not Linux"}
 	}
-	if id := strings.ToLower(p.OSRelease["ID"]); id != "ubuntu" {
+	id := strings.ToLower(p.OSRelease["ID"])
+	if !isDebianFamilyID(id, p.OSRelease["ID_LIKE"]) {
 		return nil, errUnsupportedPlatform{reason: "this box reports " + p.platformName()}
 	}
 	if !p.HasSystemctl {
@@ -199,7 +212,7 @@ func checkSetupPlatform(p setupPlatform) (warnings []string, err error) {
 	if !p.HasAptGet {
 		return nil, errUnsupportedPlatform{reason: "apt-get was not found on PATH, so packages cannot be installed"}
 	}
-	if !strings.Contains(strings.ToUpper(p.OSRelease["VERSION"]), "LTS") {
+	if id == "ubuntu" && !strings.Contains(strings.ToUpper(p.OSRelease["VERSION"]), "LTS") {
 		warnings = append(warnings, fmt.Sprintf(
 			"%s is not an LTS release. Setup will work, but the release goes end-of-life sooner than an LTS one.",
 			p.platformName()))
@@ -207,12 +220,30 @@ func checkSetupPlatform(p setupPlatform) (warnings []string, err error) {
 	return warnings, nil
 }
 
+// isDebianFamilyID reports whether id, or (when id itself is not "debian")
+// its ID_LIKE, marks a Debian-family distribution. Ubuntu and Debian itself
+// are always accepted by id; everything else is accepted only through
+// ID_LIKE, which is how a derivative such as Raspberry Pi OS's older
+// "raspbian" id names its ancestry.
+func isDebianFamilyID(id, idLike string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if id == "ubuntu" || id == "debian" {
+		return true
+	}
+	for _, like := range strings.Fields(strings.ToLower(idLike)) {
+		if like == "debian" {
+			return true
+		}
+	}
+	return false
+}
+
 // renderManualPath is what an unsupported box gets instead of a half-install:
 // the same work, spelled out, for a machine ao setup-vm will not touch.
 func renderManualPath(p setupPlatform, domain string) string {
 	var b strings.Builder
-	b.WriteString("ao setup-vm automates Ubuntu LTS only, because it installs apt packages and\n")
-	fmt.Fprintf(&b, "systemd units. This machine reports %s, so nothing was changed.\n", p.platformName())
+	b.WriteString("ao setup-vm automates Debian-family Linux only, because it installs apt packages\n")
+	fmt.Fprintf(&b, "and systemd units. This machine reports %s, so nothing was changed.\n", p.platformName())
 	b.WriteString("\nSet the machine up by hand instead:\n")
 	b.WriteString("\n  1. Install tmux, git, and the GitHub CLI (gh) with this system's package manager.\n")
 	fmt.Fprintf(&b, "  2. Put the ao binary on PATH at an absolute location, for example %s.\n", setupVMBinaryPath)
@@ -281,6 +312,11 @@ type setupReachability struct {
 // computed by evaluatePreflight, which is pure.
 type setupPreflight struct {
 	Domain string
+	// Pair is whether this preflight is for `ao setup-vm --pair`, which skips
+	// every check that only makes sense with a domain and a public internet
+	// presence (DNS, public IP discovery, off-box reachability) and checks
+	// only the HTTPS port, never :80. See docs/adr/0003-pair-mode-gateway.md.
+	Pair bool
 
 	// UID is this process's user id, 0 when it is already root.
 	UID int
@@ -318,12 +354,22 @@ func evaluatePreflight(pf setupPreflight) (problems []setupProblem, warnings []s
 	if p := checkSetupPrivilege(pf); p != nil {
 		problems = append(problems, *p)
 	}
-	if p := checkSetupDNS(pf); p != nil {
-		problems = append(problems, *p)
+	// DNS, public IP discovery, and off-box reachability all exist to prove a
+	// domain resolves to this machine before ACME can issue for it. Pair mode
+	// has no domain and never contacts the control plane at all
+	// (docs/adr/0003-pair-mode-gateway.md), so none of it applies.
+	if !pf.Pair {
+		if p := checkSetupDNS(pf); p != nil {
+			problems = append(problems, *p)
+		}
 	}
 	portProblems, portWarnings := checkSetupPorts(pf)
 	problems = append(problems, portProblems...)
 	warnings = append(warnings, portWarnings...)
+
+	if pf.Pair {
+		return problems, warnings
+	}
 
 	blocked := blockedSetupPorts(pf.Reach)
 	switch {
@@ -369,20 +415,25 @@ func checkSetupPrivilege(pf setupPreflight) *setupProblem {
 	// "nothing on this machine was changed" guarantee. buildSetupPlan rejects it
 	// again for anything that reaches it another way.
 	if isRootSetupIdentity(pf.TargetUser) {
-		problem := rootSetupUserProblem(pf.Domain)
+		problem := rootSetupUserProblem(pf.Domain, pf.Pair)
 		return &problem
 	}
 	if pf.UID == 0 {
 		return nil
 	}
 	rerun := fmt.Sprintf("sudo ao setup-vm --domain %s", pf.Domain)
+	manualRerun := "ao setup-vm --domain " + pf.Domain
+	if pf.Pair {
+		rerun = "sudo ao setup-vm --pair"
+		manualRerun = "ao setup-vm --pair"
+	}
 	if pf.SudoPath == "" {
 		return &setupProblem{
 			Check:  "sudo",
 			Detail: "sudo is not installed and this command is not running as root",
 			Remediation: []string{
 				"Installing packages and systemd units needs root. Either log in as root and run:",
-				"  ao setup-vm --domain " + pf.Domain,
+				"  " + manualRerun,
 				"or install sudo first:",
 				"  apt-get install -y sudo",
 			},
@@ -411,9 +462,12 @@ func isRootSetupIdentity(name string) bool {
 // rootSetupUserProblem is the single wording for a root target user, shared by
 // the preflight check and buildSetupPlan so the two can never disagree about
 // why it is refused or how to fix it.
-func rootSetupUserProblem(domain string) setupProblem {
+func rootSetupUserProblem(domain string, pair bool) setupProblem {
 	rerun := "ao setup-vm --domain " + domain
-	if strings.TrimSpace(domain) == "" {
+	switch {
+	case pair:
+		rerun = "ao setup-vm --pair"
+	case strings.TrimSpace(domain) == "":
 		rerun = "ao setup-vm --domain <your domain>"
 	}
 	return setupProblem{
@@ -529,7 +583,7 @@ func checkSetupPorts(pf setupPreflight) (problems []setupProblem, warnings []str
 		problems = append(problems, setupProblem{
 			Check:       fmt.Sprintf("port %d", probe.Port),
 			Detail:      fmt.Sprintf("cannot bind :%d on this machine: %s", probe.Port, probe.Err.Error()),
-			Remediation: portRemediation(probe),
+			Remediation: portRemediation(probe, pf.Pair),
 		})
 	}
 	return problems, warnings
@@ -538,13 +592,17 @@ func checkSetupPorts(pf setupPreflight) (problems []setupProblem, warnings []str
 // portRemediation classifies a bind failure by its message rather than by
 // errno, because this function has to compile and be testable on every OS the
 // CLI E2E matrix runs.
-func portRemediation(probe setupPortProbe) []string {
+func portRemediation(probe setupPortProbe, pair bool) []string {
 	msg := strings.ToLower(probe.Err.Error())
+	rerun := "sudo ao setup-vm --domain <your domain>"
+	if pair {
+		rerun = "sudo ao setup-vm --pair"
+	}
 	switch {
 	case strings.Contains(msg, "permission denied"), strings.Contains(msg, "access"):
 		return []string{
 			"Ports below 1024 need privilege. Run the whole command through sudo:",
-			"  sudo ao setup-vm --domain <your domain>",
+			"  " + rerun,
 			"The gateway unit itself does not run as root: it gets CAP_NET_BIND_SERVICE instead.",
 		}
 	case strings.Contains(msg, "in use"), strings.Contains(msg, "address already"):
@@ -727,6 +785,10 @@ func parseSetupReachability(body []byte, ports []int) (map[int]bool, error) {
 // disagree about where state lives.
 type setupPlan struct {
 	Domain string
+	// Pair is whether this plan is for `ao setup-vm --pair`: no domain, no
+	// account, no control-plane contact, a self-signed certificate and a
+	// passcode instead. See docs/adr/0003-pair-mode-gateway.md.
+	Pair bool
 	// User and Group own every path below and are who both units run as. The
 	// daemon runs agent sessions, git, and gh, so it must not be root.
 	User  string
@@ -741,12 +803,25 @@ type setupPlan struct {
 	DataDir     string
 	RunFile     string
 	MachineFile string
-	CertDir     string
+	// CertDir is the hosted-mode ACME cache directory. Pair-only plans still
+	// carry it (harmless, unused) rather than special-casing it away.
+	CertDir string
+	// PairCertDir and PasscodeDir are pair-only: the persisted self-signed
+	// certificate and the passcode hash, both under the state root rather
+	// than DataDir, mirroring vmgateway.resolvePair's own defaults, because
+	// they are identity, not disposable cache (losing either forces every
+	// paired client to re-pair). Always computed, even for a hosted plan,
+	// since they are pure path arithmetic with no side effect; setupDirs only
+	// creates them when Pair is true.
+	PairCertDir string
+	PasscodeDir string
 	BinaryPath  string
 	Packages    []string
 	// Bound is whether machine.json already exists. `ao vm serve` reads it
 	// once at startup, so an unbound machine gets an enabled-but-stopped
 	// gateway and a summary line telling the user to restart it after binding.
+	// Pair-only: always false, since pair mode has no account to bind and the
+	// gateway starts as soon as its passcode and certificate exist.
 	Bound bool
 }
 
@@ -754,6 +829,7 @@ type setupPlan struct {
 // whatever AO_* overrides the environment carries.
 type setupPlanInput struct {
 	Domain      string
+	Pair        bool
 	User        string
 	Group       string
 	Home        string
@@ -777,8 +853,8 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 	if isRootSetupIdentity(in.User) || isRootSetupIdentity(in.Group) {
 		return setupPlan{}, fmt.Errorf(
 			"refusing to install units that run as root: %s\n%s",
-			rootSetupUserProblem(in.Domain).Detail,
-			strings.Join(prefixLines(rootSetupUserProblem(in.Domain).Remediation, "  "), "\n"))
+			rootSetupUserProblem(in.Domain, in.Pair).Detail,
+			strings.Join(prefixLines(rootSetupUserProblem(in.Domain, in.Pair).Remediation, "  "), "\n"))
 	}
 	if !isLinuxAbs(in.Home) {
 		return setupPlan{}, fmt.Errorf("home directory %q for user %s is not an absolute path", in.Home, in.User)
@@ -793,6 +869,7 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 	aoDir := slashPath(append([]string{in.Home}, config.StateRootSegments()...)...)
 	plan := setupPlan{
 		Domain:      in.Domain,
+		Pair:        in.Pair,
 		User:        in.User,
 		Group:       group,
 		Home:        in.Home,
@@ -800,6 +877,14 @@ func buildSetupPlan(in setupPlanInput) (setupPlan, error) {
 		DataDir:     slashPath(aoDir, "data"),
 		RunFile:     slashPath(aoDir, "running.json"),
 		MachineFile: slashPath(aoDir, "machine.json"),
+		// Mirrors vmgateway.resolvePair's own defaults exactly
+		// (<state root>/vm-gateway/pair-cert and .../pair-passcode), computed
+		// here rather than by calling vmgateway.DefaultPasscodeDir() because
+		// that function resolves against this process's own home directory,
+		// which under sudo is root's, not the target user's; aoDir above is
+		// already resolved against the right one.
+		PairCertDir: slashPath(aoDir, "vm-gateway", "pair-cert"),
+		PasscodeDir: slashPath(aoDir, "vm-gateway", "pair-passcode"),
 		BinaryPath:  setupVMBinaryPath,
 		Packages:    setupVMPackages,
 		Bound:       in.Bound,
@@ -870,7 +955,13 @@ func isLinuxAbs(p string) bool {
 // the target user and none of them outside ~/.ao/hosted.
 func (p setupPlan) setupDirs() []string {
 	dirs := []string{p.AODir}
-	for _, dir := range []string{p.DataDir, p.CertDir, path.Dir(p.RunFile)} {
+	extra := []string{p.DataDir, path.Dir(p.RunFile)}
+	if p.Pair {
+		extra = append(extra, p.PairCertDir, p.PasscodeDir)
+	} else {
+		extra = append(extra, p.CertDir)
+	}
+	for _, dir := range extra {
 		if !slices.Contains(dirs, dir) {
 			dirs = append(dirs, dir)
 		}
@@ -1049,6 +1140,9 @@ func renderDaemonUnit(p setupPlan) string {
 // absolute and set here rather than derived from the process working
 // directory, which is how ACME keys and state silently relocate under systemd.
 func renderGatewayUnit(p setupPlan) string {
+	if p.Pair {
+		return renderPairGatewayUnit(p)
+	}
 	env := append(p.unitEnvironment(),
 		[2]string{"AO_MACHINE_FILE", p.MachineFile},
 		[2]string{"AO_VM_DOMAIN", p.Domain},
@@ -1079,6 +1173,44 @@ func renderGatewayUnit(p setupPlan) string {
 		MemoryMax: setupVMGatewayMemoryMax,
 		CPUQuota:  setupVMGatewayCPUQuota,
 		TasksMax:  setupVMGatewayTasksMax,
+	})
+}
+
+// renderPairGatewayUnit is renderGatewayUnit's pair-mode branch. It never sets
+// AO_VM_DOMAIN, AO_MACHINE_FILE, or any other hosted-only variable:
+// vmgateway.Resolve rejects hosted-only fields alongside AO_VM_PAIR outright
+// (see resolvePair in internal/vmgateway/config.go), so setting one here would
+// make the unit it renders fail to start. AO_VM_PAIR=on is what selects pair
+// mode; AO_VM_CERT_DIR and AO_VM_PASSCODE_DIR point at the certificate and
+// passcode ao setup-vm --pair generated. See
+// docs/adr/0003-pair-mode-gateway.md.
+func renderPairGatewayUnit(p setupPlan) string {
+	env := append(p.unitEnvironment(),
+		[2]string{"AO_VM_PAIR", "on"},
+		[2]string{"AO_VM_CERT_DIR", p.PairCertDir},
+		[2]string{"AO_VM_PASSCODE_DIR", p.PasscodeDir},
+	)
+	return renderSystemdUnit(systemdUnit{
+		Comment: []string{
+			"The AO VM gateway in pair mode: binds only the HTTPS port with a",
+			"persisted self-signed certificate, verifies a passcode instead of an AO",
+			"access token, and never contacts the control plane. No :80, no ACME,",
+			"no domain, no account. It is a separate process from the daemon and",
+			"must stay one (ADR 0002); see docs/adr/0003-pair-mode-gateway.md.",
+		},
+		Description: "Agent Orchestrator VM gateway (pair mode, HTTPS only)",
+		Wants:       []string{"network-online.target"},
+		After:       []string{"network-online.target", setupVMDaemonUnit},
+		User:        p.User,
+		Group:       p.Group,
+		WorkingDir:  p.DataDir,
+		Env:         env,
+		ExecStart:   p.BinaryPath + " vm serve",
+		AmbientCaps: []string{"CAP_NET_BIND_SERVICE"},
+		Restart:     "always",
+		MemoryMax:   setupVMGatewayMemoryMax,
+		CPUQuota:    setupVMGatewayCPUQuota,
+		TasksMax:    setupVMGatewayTasksMax,
 	})
 }
 
@@ -1218,6 +1350,171 @@ func renderSetupDryRun(p setupPlan, warnings []string) string {
 	b.WriteString("needs a browser and a human to approve it, and then writes the machine file\n")
 	b.WriteString("above and restarts the gateway so it reads it.\n")
 	b.WriteString("\nRun the same command without --dry-run to apply this.\n")
+	return b.String()
+}
+
+// ---------------------------------------------------------------------------
+// pair mode: the closing summary, the dry run, and the unsupported-platform
+// manual path. Pair mode never touches a domain or an AO account, so these
+// deliberately do not share renderSetupSummary/renderSetupDryRun/
+// renderManualPath, whose whole shape is built around one.
+// ---------------------------------------------------------------------------
+
+// renderManualPathPair is renderManualPath's pair-mode counterpart: the same
+// "nothing was changed, here is how by hand" guarantee, but describing
+// AO_VM_PAIR instead of a domain and ACME.
+func renderManualPathPair(p setupPlatform) string {
+	var b strings.Builder
+	b.WriteString("ao setup-vm --pair automates Debian-family Linux only, because it installs apt\n")
+	fmt.Fprintf(&b, "packages and systemd units. This machine reports %s, so nothing was changed.\n", p.platformName())
+	b.WriteString("\nSet the machine up by hand instead:\n")
+	b.WriteString("\n  1. Install tmux, git, and the GitHub CLI (gh) with this system's package manager.\n")
+	fmt.Fprintf(&b, "  2. Put the ao binary on PATH at an absolute location, for example %s.\n", setupVMBinaryPath)
+	b.WriteString("  3. Run the daemon as your own (non-root) user, with the state directory set\n")
+	b.WriteString("     explicitly to an absolute path:\n")
+	b.WriteString("       AO_DATA_DIR=\"$HOME/.ao/hosted/data\" ao daemon\n")
+	b.WriteString("     It listens on 127.0.0.1 only and has no authentication, which is why it must\n")
+	b.WriteString("     never be exposed directly.\n")
+	b.WriteString("  4. Run the gateway as a second, separate process, never the same one:\n")
+	b.WriteString("       AO_DATA_DIR=\"$HOME/.ao/hosted/data\" AO_VM_PAIR=on ao vm serve\n")
+	b.WriteString("     It binds only the HTTPS port, presenting a self-signed certificate; no domain,\n")
+	b.WriteString("     no ACME, no control plane.\n")
+	b.WriteString("  5. Supervise both processes with whatever this system uses, restarting them on\n")
+	b.WriteString("     failure and on boot.\n")
+	b.WriteString("\nThen finish the same way ao setup-vm --pair would:\n")
+	b.WriteString("  ao vm setup-harness claude   (log in to an agent harness in the foreground)\n")
+	b.WriteString("  gh auth login                (git credentials for private repositories)\n")
+	return b.String()
+}
+
+// renderPairCredentials is the pairing block ao setup-vm --pair prints once,
+// at the end of a successful run: the passcode (only when this run generated
+// one; re-running never rotates it), the certificate fingerprint (never a
+// secret, so it is always printed, on every run, for a client that needs to
+// re-pair or wants to double-check it), and where to point the desktop app.
+// Read this off the SSH session it was printed on and compare the fingerprint
+// against what the desktop app shows on first connect, by eye: they must
+// match exactly, and any mismatch means refuse and re-pair, never continue.
+func renderPairCredentials(passcode string, generated bool, fingerprint string, addrs []string, httpsAddr string) string {
+	var b strings.Builder
+	b.WriteString("\nPairing this box to the AO desktop app:\n")
+	if generated {
+		b.WriteString("\n  Passcode (shown once here, never stored anywhere in plaintext):\n")
+		fmt.Fprintf(&b, "\n      %s\n", passcode)
+	} else {
+		b.WriteString("\n  Passcode: already set from an earlier run, so it is not shown again.\n")
+		b.WriteString("  Roll a new one, which drops every connected client, with:\n")
+		b.WriteString("    ao vm rotate-passcode\n")
+	}
+	b.WriteString("\n  Certificate fingerprint (compare this, by eye, against what the desktop app\n")
+	b.WriteString("  shows on first connect; a mismatch means refuse and re-pair, never continue):\n")
+	fmt.Fprintf(&b, "\n      %s\n", fingerprint)
+	b.WriteString("\n  Address to enter in the desktop app:\n")
+	port := strings.TrimPrefix(httpsAddr, ":")
+	if len(addrs) == 0 {
+		fmt.Fprintf(&b, "\n      <this machine's LAN IP>:%s  (no address was found automatically; find it with `ip addr`)\n", port)
+	} else {
+		for _, addr := range addrs {
+			fmt.Fprintf(&b, "\n      %s:%s\n", addr, port)
+		}
+	}
+	return b.String()
+}
+
+// renderSetupSummaryPair is renderSetupSummary's pair-mode counterpart.
+func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, fingerprint string, addrs []string) string {
+	var b strings.Builder
+	b.WriteString("\nao setup-vm --pair finished. No domain, no AO account, no control-plane contact.\n")
+
+	b.WriteString("\nInstalled:\n")
+	fmt.Fprintf(&b, "  ao binary        %s\n", p.BinaryPath)
+	fmt.Fprintf(&b, "  packages         %s\n", strings.Join(p.Packages, ", "))
+	fmt.Fprintf(&b, "  state directory  %s (owned by %s)\n", p.AODir, p.User)
+	daemonState := "enabled, running, loopback only"
+	if !units.DaemonRunning {
+		daemonState = "enabled, but not running: see the warnings below"
+	}
+	fmt.Fprintf(&b, "  daemon unit      %s (%s)\n", slashPath(setupVMUnitDir, setupVMDaemonUnit), daemonState)
+	gatewayState := "enabled, running (HTTPS only, no :80)"
+	if !units.GatewayRunning {
+		gatewayState = "enabled, but not running: see the warnings below"
+	}
+	fmt.Fprintf(&b, "  gateway unit     %s (%s)\n", slashPath(setupVMUnitDir, setupVMGatewayUnit), gatewayState)
+
+	if len(warnings) > 0 {
+		b.WriteString("\nWarnings from this run:\n")
+		for _, warning := range warnings {
+			fmt.Fprintf(&b, "  %s\n", warning)
+		}
+	}
+
+	b.WriteString(renderPairCredentials(passcode, passcodeGenerated, fingerprint, addrs, vmgateway.DefaultHTTPSAddr))
+
+	b.WriteString("\nStill missing. Nothing below is done for you:\n")
+	b.WriteString("\n  1. No agent harness is configured. Run it in the foreground and finish the\n")
+	b.WriteString("     harness's own login:\n")
+	b.WriteString("       ao vm setup-harness claude\n")
+	b.WriteString("\n  2. No git credentials on this machine, so private repositories cannot be cloned.\n")
+	b.WriteString("     gh is installed; authenticate it once:\n")
+	b.WriteString("       gh auth login\n")
+
+	b.WriteString("\nCheck this machine at any time:\n")
+	b.WriteString("  ao doctor\n")
+	fmt.Fprintf(&b, "  systemctl status %s %s\n", setupVMDaemonUnit, setupVMGatewayUnit)
+	fmt.Fprintf(&b, "  journalctl -u %s -f\n", setupVMGatewayUnit)
+	return b.String()
+}
+
+// renderSetupDryRunPair is renderSetupDryRun's pair-mode counterpart: the
+// whole plan and both unit files, without touching the machine or generating
+// a passcode or a certificate.
+func renderSetupDryRunPair(p setupPlan, warnings []string) string {
+	var b strings.Builder
+	b.WriteString("Dry run. Nothing on this machine was changed.\n")
+	if len(warnings) > 0 {
+		b.WriteString("\nWarnings:\n")
+		for _, warning := range warnings {
+			fmt.Fprintf(&b, "  %s\n", warning)
+		}
+	}
+	b.WriteString("\nPlan (pair mode: no domain, no AO account, no control-plane contact):\n")
+	fmt.Fprintf(&b, "  run as           %s:%s\n", p.User, p.Group)
+	fmt.Fprintf(&b, "  state directory  %s\n", p.AODir)
+	fmt.Fprintf(&b, "  data dir         %s\n", p.DataDir)
+	fmt.Fprintf(&b, "  run file         %s\n", p.RunFile)
+	fmt.Fprintf(&b, "  pair cert dir    %s\n", p.PairCertDir)
+	fmt.Fprintf(&b, "  passcode dir     %s\n", p.PasscodeDir)
+	fmt.Fprintf(&b, "  ao binary        %s\n", p.BinaryPath)
+	fmt.Fprintf(&b, "  apt packages     %s\n", strings.Join(p.Packages, ", "))
+
+	for _, unit := range []struct {
+		name    string
+		content string
+	}{
+		{setupVMDaemonUnit, renderDaemonUnit(p)},
+		{setupVMGatewayUnit, renderGatewayUnit(p)},
+	} {
+		fmt.Fprintf(&b, "\n--- %s ---\n", slashPath(setupVMUnitDir, unit.name))
+		b.WriteString(unit.content)
+	}
+	b.WriteString("\nA real run also generates, on first run only, a passcode and a self-signed\n")
+	b.WriteString("certificate, then prints both once alongside this machine's listening address.\n")
+	b.WriteString("Re-running never rotates either; use `ao vm rotate-passcode` to roll the passcode\n")
+	b.WriteString("on purpose.\n")
+	b.WriteString("\nRun the same command without --dry-run to apply this.\n")
+	return b.String()
+}
+
+// renderPasscodeRotated is the whole output of `ao vm rotate-passcode`: the
+// new passcode, printed once, framed differently from ao setup-vm --pair's
+// first-run output so the two are never mistaken for each other.
+func renderPasscodeRotated(passcode string) string {
+	var b strings.Builder
+	b.WriteString("\nPasscode rotated. Every device connected with the old passcode has been dropped\n")
+	b.WriteString("and must enter this new one. The pinned certificate is unchanged, so there is no\n")
+	b.WriteString("fingerprint to re-check.\n")
+	b.WriteString("\n  New passcode (shown once here, never stored anywhere in plaintext):\n")
+	fmt.Fprintf(&b, "\n      %s\n", passcode)
 	return b.String()
 }
 

@@ -7,6 +7,7 @@ package cli
 // setupvm_plan_test.go.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,11 +15,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 // errRoundTripper fails every HTTP request, so a test can never depend on the
@@ -376,6 +381,199 @@ func TestSetupVersionSkewNote(t *testing.T) {
 			t.Errorf("identical versions are not skew:\n%s", note)
 		}
 	})
+}
+
+// TestSetupVM_PairRejectsDomain pins the mutual exclusivity between --pair
+// and --domain at the CLI boundary: pair mode has no domain at all, so
+// combining the two is refused as misuse before anything runs, mirroring
+// vmgateway.Resolve's own resolvePair rejection of hosted-only fields.
+func TestSetupVM_PairRejectsDomain(t *testing.T) {
+	deps, calls := recordingDeps(t)
+	_, _, err := executeCLI(t, deps, "setup-vm", "--pair", "--domain", "vm.example.com")
+	if err == nil {
+		t.Fatal("expected an error when --pair and --domain are combined")
+	}
+	if got := ExitCode(err); got != 2 {
+		t.Errorf("ExitCode = %d, want 2 (misuse)", got)
+	}
+	assertNoSetupMutation(t, calls())
+}
+
+// TestSetupVM_PairRefusesNonDebianWithTheManualPath is --pair's platform-gate
+// refusal path, mirroring TestSetupVM_RefusesNonUbuntuWithTheManualPath: a
+// failed gate must change nothing and must print the pair-specific manual
+// path, not the hosted one (no --domain, no ACME, no device flow).
+func TestSetupVM_PairRefusesNonDebianWithTheManualPath(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("the gate only refuses non-Linux hosts here; Linux is covered by checkSetupPlatform's table test")
+	}
+	deps, calls := recordingDeps(t)
+	out, _, err := executeCLI(t, deps, "setup-vm", "--pair")
+	if err == nil {
+		t.Fatal("expected ao setup-vm --pair to refuse to run on " + runtime.GOOS)
+	}
+	if got := ExitCode(err); got != 1 {
+		t.Errorf("ExitCode = %d, want 1: an unsupported platform is a runtime refusal, not misuse", got)
+	}
+	var unsupported errUnsupportedPlatform
+	if !errors.As(err, &unsupported) {
+		t.Errorf("err = %v, want errUnsupportedPlatform", err)
+	}
+	for _, want := range []string{"nothing was changed", "AO_VM_PAIR=on", "gh auth login"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("pair refusal output is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "--domain") {
+		t.Errorf("pair refusal output must not mention --domain:\n%s", out)
+	}
+	assertNoSetupMutation(t, calls())
+}
+
+// TestEnsureSetupPasscode_ReRunDoesNotRotate is the single most important
+// test in this file: re-running ao setup-vm --pair must never rotate the
+// passcode a client has already pinned. The first call generates one; every
+// call after that, against the same directory, must return generated=false
+// with no plaintext and must leave the persisted hash byte-for-byte
+// identical. See docs/adr/0003-pair-mode-gateway.md.
+func TestEnsureSetupPasscode_ReRunDoesNotRotate(t *testing.T) {
+	c := &commandContext{deps: DefaultDeps()}
+	dir := t.TempDir()
+
+	first, generated, err := c.ensureSetupPasscode(dir, nil)
+	if err != nil {
+		t.Fatalf("first ensureSetupPasscode: %v", err)
+	}
+	if !generated {
+		t.Fatal("the first call against an empty directory must generate a passcode")
+	}
+	if first == "" {
+		t.Fatal("the first call must return the plaintext passcode")
+	}
+	firstHash := readSoleFile(t, dir)
+
+	for i := 0; i < 3; i++ {
+		again, generatedAgain, err := c.ensureSetupPasscode(dir, nil)
+		if err != nil {
+			t.Fatalf("re-run %d: %v", i, err)
+		}
+		if generatedAgain {
+			t.Fatalf("re-run %d: generated = true, want false: re-running must not rotate the passcode", i)
+		}
+		if again != "" {
+			t.Fatalf("re-run %d: plaintext = %q, want empty: an unchanged passcode must never be printed again", i, again)
+		}
+		if got := readSoleFile(t, dir); !bytes.Equal(got, firstHash) {
+			t.Fatalf("re-run %d: the persisted passcode hash changed:\nbefore: %s\nafter:  %s", i, firstHash, got)
+		}
+	}
+
+	// The originally generated passcode must still be the one that verifies,
+	// proving the store was never silently rotated underneath the caller.
+	if hash := mobilebridge.HashPassword(first); string(firstHash) != hash {
+		t.Fatalf("the persisted hash does not match the originally generated passcode: stored %s, want hash of %q (%s)", firstHash, first, hash)
+	}
+}
+
+// TestEnsureSetupPairCert_ReRunDoesNotRotate is the certificate half of the
+// same guarantee: a changed fingerprint is indistinguishable from an attack
+// to a client that pinned the old one, so re-running must load the exact
+// same certificate rather than generating a new one.
+func TestEnsureSetupPairCert_ReRunDoesNotRotate(t *testing.T) {
+	c := &commandContext{deps: DefaultDeps()}
+	dir := t.TempDir()
+
+	first, err := c.ensureSetupPairCert(dir, nil)
+	if err != nil {
+		t.Fatalf("first ensureSetupPairCert: %v", err)
+	}
+	firstFingerprint, err := vmgateway.PairFingerprint(first)
+	if err != nil {
+		t.Fatalf("PairFingerprint: %v", err)
+	}
+	before := readAllFiles(t, dir)
+
+	for i := 0; i < 3; i++ {
+		again, err := c.ensureSetupPairCert(dir, nil)
+		if err != nil {
+			t.Fatalf("re-run %d: %v", i, err)
+		}
+		fingerprint, err := vmgateway.PairFingerprint(again)
+		if err != nil {
+			t.Fatalf("re-run %d: PairFingerprint: %v", i, err)
+		}
+		if fingerprint != firstFingerprint {
+			t.Fatalf("re-run %d: fingerprint changed from %s to %s: re-running must load the same certificate", i, firstFingerprint, fingerprint)
+		}
+		after := readAllFiles(t, dir)
+		for name, want := range before {
+			if got := after[name]; !bytes.Equal(got, want) {
+				t.Fatalf("re-run %d: %s changed on disk, want byte-identical", i, name)
+			}
+		}
+	}
+}
+
+func TestChownSetupTree_NoOpWhenNotRoot(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("this test asserts the not-root no-op path; it cannot run as root")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner := &user.User{Uid: "1", Gid: "1", Username: "someone-else"}
+	if err := chownSetupTree(dir, owner); err != nil {
+		t.Fatalf("chownSetupTree must be a no-op (and never fail) when not root: %v", err)
+	}
+}
+
+func TestDiscoverPairListenAddresses_ExcludesLoopback(t *testing.T) {
+	addrs := discoverPairListenAddresses()
+	for _, addr := range addrs {
+		if addr == "127.0.0.1" {
+			t.Errorf("discoverPairListenAddresses() = %v, must not include loopback", addrs)
+		}
+	}
+}
+
+// readSoleFile reads the single file expected to exist directly under dir,
+// without needing to know vmgateway's internal file name for it.
+func readSoleFile(t *testing.T, dir string) []byte {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ReadDir(%s) = %d entries, want exactly 1: %v", dir, len(entries), entries)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	return b
+}
+
+// readAllFiles reads every regular file directly under dir, keyed by name.
+func readAllFiles(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	out := map[string][]byte{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", e.Name(), err)
+		}
+		out[e.Name()] = b
+	}
+	return out
 }
 
 // assertNoSetupMutation fails if the command ran anything that could have
