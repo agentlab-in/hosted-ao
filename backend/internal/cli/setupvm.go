@@ -988,17 +988,28 @@ func chownSetupTree(dir string, owner *user.User) error {
 	if err != nil {
 		// A non-numeric id is a Windows user, and this path only ever runs on
 		// the Debian-family box the platform gate already checked for.
-		return nil
+		return nil //nolint:nilerr // deliberate: a non-numeric id means there is nothing to chown here, not a failure to report
 	}
 	gid, err := strconv.Atoi(owner.Gid)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // same as above
 	}
-	return filepath.WalkDir(dir, func(path string, _ fs.DirEntry, walkErr error) error {
+	// Root-scoped traversal, and Lchown rather than Chown, because this runs as
+	// root against a directory inside an unprivileged user's home. That user can
+	// plant a symlink there before invoking sudo. A plain filepath.WalkDir plus
+	// os.Chown would follow it and hand them ownership of whatever it points at.
+	// os.Root confines every path to dir, and Lchown acts on the link itself, so
+	// a planted symlink can only ever retarget the chown onto itself.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return fs.WalkDir(root.FS(), ".", func(path string, _ fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		return os.Chown(path, uid, gid)
+		return root.Lchown(path, uid, gid)
 	})
 }
 
