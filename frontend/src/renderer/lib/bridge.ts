@@ -325,4 +325,16 @@ export const aoBridge: AoBridge =
 			gatewayToken: async () => null,
 			peerWorkspaces: async () => browserPreviewPeerWorkspaces(),
 		},
+		// Browser preview has no main process, so no pin store and nothing to
+		// probe or pair.
+		pairedMachines: {
+			list: async () => [],
+			probeFingerprint: async () => ({
+				error: "Pairing needs the desktop app; it is not available in browser preview.",
+			}),
+			add: async () => {
+				throw new Error("Pairing needs the desktop app; it is not available in browser preview.");
+			},
+			remove: async () => undefined,
+		},
 	} satisfies AoBridge);

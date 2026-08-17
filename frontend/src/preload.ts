@@ -14,8 +14,9 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { AoAccountState } from "./shared/ao-account";
-import type { AoMachinesState } from "./shared/ao-machines";
+import type { AoMachine, AoMachinesState } from "./shared/ao-machines";
 import type { PeerWorkspacesResult } from "./shared/peer-workspaces";
+import type { PairFingerprintResult } from "./main/paired-machines";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
@@ -348,6 +349,23 @@ const api = {
 		// listing alongside the active machine's. No URL or token here either;
 		// the main process fetches it and shapes the result.
 		peerWorkspaces: () => ipcRenderer.invoke("aoMachines:peerWorkspaces") as Promise<PeerWorkspacesResult>,
+	},
+	// Paired boxes (docs/adr/0003-pair-mode-gateway.md): the data and pin-store
+	// half. The add-machine form, the passcode entry, and the fingerprint
+	// comparison screen are a different task; this is what that UI calls into.
+	pairedMachines: {
+		list: () => ipcRenderer.invoke("pairedMachines:list") as Promise<AoMachine[]>,
+		// Attempts a connection so the caller can show the presented fingerprint
+		// for comparison against what the box printed. The connection itself is
+		// always denied (trust-on-first-use never auto-accepts); this only ever
+		// reports what was seen, or an error when nothing was.
+		probeFingerprint: (address: string, port: number) =>
+			ipcRenderer.invoke("pairedMachines:probeFingerprint", address, port) as Promise<PairFingerprintResult>,
+		// Persists the pairing. `fingerprint` must be the value the user compared
+		// and accepted; nothing here pins one on the caller's behalf.
+		add: (input: { id: string; name: string; address: string; port: number; passcode: string; fingerprint: string }) =>
+			ipcRenderer.invoke("pairedMachines:add", input) as Promise<AoMachine>,
+		remove: (id: string) => ipcRenderer.invoke("pairedMachines:remove", id) as Promise<void>,
 	},
 };
 
