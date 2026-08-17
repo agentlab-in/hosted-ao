@@ -212,13 +212,31 @@ Status: task 1 shipped in PR #88, task 2 in PR #87.
    the device-flow bind. Relax the distro gate to Debian-family so Raspberry Pi
    OS passes. Generate and print the passcode and fingerprint once. Depends on
    tasks 1, 3, 5.
-8. **Add-machine UI and transport wiring.** Manual entry of address, port, and
-   passcode; the fingerprint comparison screen; paired machines in the picker
-   with origin labels and unreachable state. Depends on tasks 5, 6.
+8. **Add-machine UI.** Manual entry of address, port, and passcode; the
+   fingerprint comparison screen; paired machines in the picker with origin
+   labels and unreachable state. Depends on tasks 5, 6.
+
+### Batch 3a (added 2026-08-17, correcting a gap in this spec)
+
+9. **Paired-machine transport and selection.** A paired machine currently cannot
+   be selected or connected to. `machineTransport()` in `frontend/src/main.ts`
+   returns `null` without a control-plane credential, and
+   `ao-machines.ts`'s `select()` only searches the control-plane-listed `remote`
+   array, so a paired box can be added, pinned, listed, and removed, but never
+   used. Build a passcode-credentialed transport alongside the existing
+   JWT-credentialed one, and a select path that accepts paired machine ids, so
+   the board, terminal mux, SSE, notifications, and `ao doctor` work against a
+   paired box. Depends on tasks 6, 8.
+
+   This task exists because the original task 8 was titled "Add-machine UI and
+   transport wiring" but its body described only the UI. The transport half was
+   three words in a heading and was never specified, so it was dropped. Recorded
+   here rather than quietly folded in, because the same seam is easy to
+   reintroduce: pairing a machine and reaching a machine are separate problems.
 
 ### Batch 4
 
-9. **End-to-end verification and documentation.** A real Debian arm64 box paired
+10. **End-to-end verification and documentation.** A real Debian arm64 box paired
    from a real Mac: board, terminal, SSE, `ao doctor`, passcode rotation,
    fingerprint-change refusal, and lockout under repeated bad passcodes. Update
    the README's getting-started section to present pairing as the no-domain
