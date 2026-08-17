@@ -332,6 +332,7 @@ export const aoBridge: AoBridge =
 			probeFingerprint: async () => ({
 				error: "Pairing needs the desktop app; it is not available in browser preview.",
 			}),
+			getPinnedFingerprint: async () => null,
 			add: async () => {
 				throw new Error("Pairing needs the desktop app; it is not available in browser preview.");
 			},

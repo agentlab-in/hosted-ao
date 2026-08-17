@@ -100,6 +100,19 @@ export type PairedMachinesController = {
 	 * captures what was presented, it never trusts it.
 	 */
 	probeFingerprint: (address: string, port: number) => Promise<PairFingerprintResult>;
+	/**
+	 * The fingerprint currently pinned for a registered machine id, or null if
+	 * that id is not registered or has no pin yet. Read-only, synchronous off
+	 * the in-memory registry: never mutates anything.
+	 *
+	 * What the add-machine flow (task 8) uses to tell a genuine re-pair (the
+	 * box presenting the same fingerprint again, e.g. only the passcode
+	 * changed) from an actual fingerprint mismatch, before it offers the user
+	 * anything to accept. The fingerprint itself is not a secret -- it is
+	 * printed on the box for exactly this comparison -- so handing it back is
+	 * no different from what probeFingerprint already exposes.
+	 */
+	getPinnedFingerprint: (id: string) => string | null;
 	/** Wire directly into `session.defaultSession.setCertificateVerifyProc`. */
 	verifyCertificate: PairCertificateVerifyProc;
 };
@@ -340,6 +353,10 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 			return fingerprint
 				? { fingerprint }
 				: { error: "No certificate could be retrieved from that address. Check the address, port, and that the box is reachable." };
+		},
+
+		getPinnedFingerprint(id: string): string | null {
+			return records.get(id)?.pinnedFingerprint ?? null;
 		},
 
 		verifyCertificate,

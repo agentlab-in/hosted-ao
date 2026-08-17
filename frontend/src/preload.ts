@@ -361,6 +361,11 @@ const api = {
 		// reports what was seen, or an error when nothing was.
 		probeFingerprint: (address: string, port: number) =>
 			ipcRenderer.invoke("pairedMachines:probeFingerprint", address, port) as Promise<PairFingerprintResult>,
+		// The fingerprint already pinned for a machine id, or null. Read-only:
+		// what the add-machine flow compares a fresh probe against so it can tell
+		// a genuine re-pair from a fingerprint mismatch before offering anything
+		// to accept.
+		getPinnedFingerprint: (id: string) => ipcRenderer.invoke("pairedMachines:getPinnedFingerprint", id) as Promise<string | null>,
 		// Persists the pairing. `fingerprint` must be the value the user compared
 		// and accepted; nothing here pins one on the caller's behalf.
 		add: (input: { id: string; name: string; address: string; port: number; passcode: string; fingerprint: string }) =>

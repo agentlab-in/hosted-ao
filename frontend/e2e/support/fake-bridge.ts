@@ -224,6 +224,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				pairedMachines: {
 					list: async () => [],
 					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
+					getPinnedFingerprint: async () => null,
 					add: async () => {
 						throw new Error("Pairing is unavailable under the browser harness.");
 					},
@@ -676,6 +677,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				pairedMachines: {
 					list: async () => [],
 					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
+					getPinnedFingerprint: async () => null,
 					add: async () => {
 						throw new Error("Pairing is unavailable under the browser harness.");
 					},
