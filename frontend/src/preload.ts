@@ -355,6 +355,10 @@ const api = {
 	// comparison screen are a different task; this is what that UI calls into.
 	pairedMachines: {
 		list: () => ipcRenderer.invoke("pairedMachines:list") as Promise<AoMachine[]>,
+		// Probes every paired machine's reachability and agent-harness readiness
+		// (GET /api/v1/doctor through the gateway) and returns the refreshed list,
+		// mirroring machines.refresh()'s contract for the control-plane list.
+		refresh: () => ipcRenderer.invoke("pairedMachines:refresh") as Promise<AoMachine[]>,
 		// Attempts a connection so the caller can show the presented fingerprint
 		// for comparison against what the box printed. The connection itself is
 		// always denied (trust-on-first-use never auto-accepts); this only ever

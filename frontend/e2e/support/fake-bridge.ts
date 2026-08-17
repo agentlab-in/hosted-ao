@@ -223,6 +223,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				// fake that silently succeeds would hide a regression in that path.
 				pairedMachines: {
 					list: async () => [],
+					refresh: async () => [],
 					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
 					getPinnedFingerprint: async () => null,
 					add: async () => {
@@ -676,6 +677,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				// fake that silently succeeds would hide a regression in that path.
 				pairedMachines: {
 					list: async () => [],
+					refresh: async () => [],
 					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
 					getPinnedFingerprint: async () => null,
 					add: async () => {

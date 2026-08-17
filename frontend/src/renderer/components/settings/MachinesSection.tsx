@@ -26,12 +26,11 @@ export const aoPairedMachinesQueryKey = ["ao-paired-machines"] as const;
  * one exception, and its own fingerprint comparison step is what stands in for
  * a certificate authority.
  *
- * Paired machines are listed here but are not yet a selectable target: making
- * one active needs the same authenticated transport (REST bearer, /mux cookie,
- * SSE) that registered machines get from the control plane, and pair mode's
- * credential is a locally-held passcode instead, which is main-process wiring
- * this task does not build. See AddPairedMachineDialog and the PR description
- * for the exact seam.
+ * Paired machines are selectable exactly like registered ones: `select`
+ * resolves a paired id and drives the passcode-credentialed transport instead
+ * of the control-plane one (docs/plans/2026-08-16-pair-by-ip-headless-boxes.md
+ * task 9), and `activeMachineId` on the shared state reflects a paired id the
+ * same way it reflects a registered machine's.
  */
 export function MachinesSection() {
 	const { t } = useTranslation();
@@ -44,9 +43,11 @@ export function MachinesSection() {
 		queryFn: () => aoBridge.machines.refresh(),
 		retry: 1,
 	});
+	// refresh(), not list(): reachability and last-seen for a paired box come
+	// from an authenticated GET /api/v1/doctor probe, not the registry alone.
 	const pairedQuery = useQuery({
 		queryKey: aoPairedMachinesQueryKey,
-		queryFn: () => aoBridge.pairedMachines.list(),
+		queryFn: () => aoBridge.pairedMachines.refresh(),
 	});
 	const apply = (next: AoMachinesState) => queryClient.setQueryData(aoMachinesQueryKey, next);
 	const invalidatePaired = () => queryClient.invalidateQueries({ queryKey: aoPairedMachinesQueryKey });
@@ -89,7 +90,14 @@ export function MachinesSection() {
 			))}
 
 			{pairedMachines.map((machine) => (
-				<PairedMachineRow key={machine.id} machine={machine} onRemove={() => setRemoveTarget(machine)} />
+				<PairedMachineRow
+					key={machine.id}
+					machine={machine}
+					active={machine.id === activeMachineId}
+					busy={select.isPending}
+					onSelect={() => select.mutate(machine.id)}
+					onRemove={() => setRemoveTarget(machine)}
+				/>
 			))}
 
 			{query.isLoading ? (
@@ -213,14 +221,27 @@ function MachineRow({
 
 /**
  * A paired box (docs/adr/0003-pair-mode-gateway.md), listed alongside local
- * and hosted machines but rendered as a static row rather than a `MachineRow`
- * button: there is no bridge call yet to make a paired machine the active one
- * (see the module doc comment above), so this row only ever offers removal,
- * never a click-to-select action that would silently do nothing or select the
- * wrong transport. An unreachable paired box still renders here, with its
- * last-seen time, exactly like an offline registered machine does.
+ * and hosted machines and selectable exactly like a `MachineRow`: `onSelect`
+ * carries the same machine id through `machines.select`, which resolves a
+ * paired id and drives the passcode-credentialed transport instead of the
+ * control-plane one (docs/plans/2026-08-16-pair-by-ip-headless-boxes.md task
+ * 9). An unreachable paired box still renders here, with its last-seen time,
+ * exactly like an offline registered machine does; removal stays a separate
+ * action so a click on the row never both selects and deletes it.
  */
-function PairedMachineRow({ machine, onRemove }: { machine: AoMachine; onRemove: () => void }) {
+function PairedMachineRow({
+	machine,
+	active,
+	busy,
+	onSelect,
+	onRemove,
+}: {
+	machine: AoMachine;
+	active: boolean;
+	busy: boolean;
+	onSelect: () => void;
+	onRemove: () => void;
+}) {
 	const { t } = useTranslation();
 	const offline = machine.reachability === "offline";
 	const lastSeen = formatLastSeen(machine.lastSeen);
@@ -233,14 +254,26 @@ function PairedMachineRow({ machine, onRemove }: { machine: AoMachine; onRemove:
 	return (
 		<div className="flex w-full flex-col gap-1.5" data-testid="ao-machine" data-machine-id={machine.id}>
 			<div className="settings-row-bar w-full">
-				<div className="flex shrink-0 items-center gap-(--size-settings-row-icon-gap)">
+				<button
+					type="button"
+					onClick={onSelect}
+					disabled={busy || active}
+					aria-pressed={active}
+					className="flex shrink-0 items-center gap-(--size-settings-row-icon-gap) text-left transition-colors hover:bg-settings-menu-selected disabled:hover:bg-transparent"
+				>
 					<Router className="size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" />
 					<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{machine.name}</span>
 					<Badge variant="outline">{t("pairing.originPaired")}</Badge>
-				</div>
+				</button>
 				<div className="flex min-w-0 flex-1 items-center justify-end gap-2">
 					<span className="min-w-0 truncate text-control text-settings-muted">{detail}</span>
 					{offline ? <Badge variant="error">Offline</Badge> : null}
+					{active ? (
+						<Badge variant="accent">
+							<Check className="size-3" aria-hidden="true" />
+							Active
+						</Badge>
+					) : null}
 					<Button type="button" variant="ghost" size="sm" onClick={onRemove}>
 						<Trash2 className="size-icon-sm" aria-hidden="true" />
 						{t("pairing.remove")}

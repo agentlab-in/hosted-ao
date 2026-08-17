@@ -82,6 +82,8 @@ import { shouldSignalAttention, shouldToast } from "./main/notification-signals"
 import { buildWindowsAppMenuTemplate } from "./main/menu";
 import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
 import { createMachineTransport, type MachineTransport } from "./main/machine-transport";
+import { createPairedMachineTransport, type PairedMachineTransport } from "./main/paired-machine-transport";
+import { createMachineSelection, type MachineSelection } from "./main/machine-selection";
 import { ancestorRepositorySetupWarning, scanImportFolder } from "./main/import-folder-scan";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
@@ -1600,6 +1602,49 @@ function pairedMachines(): ReturnType<typeof createPairedMachinesController> {
 	return pairedMachinesController;
 }
 
+// The passcode-credentialed sibling of machineTransport() below, for a paired
+// box (docs/adr/0003-pair-mode-gateway.md). Unlike the hosted transport this
+// one always exists: pair mode needs no control-plane credential to build, so
+// there is no null case to guard on construction.
+let pairedMachineTransportInstance: PairedMachineTransport | null = null;
+function pairedMachineTransport(): PairedMachineTransport {
+	if (pairedMachineTransportInstance) return pairedMachineTransportInstance;
+	pairedMachineTransportInstance = createPairedMachineTransport({
+		cookies: session.defaultSession.cookies,
+		onStatus: (status) => {
+			// Dropped while local/hosted owns activeMachineStatus (see
+			// machineSelection's isPairedActive and its module doc comment): this
+			// only fires as a direct result of a setMachine call this file makes,
+			// never a background timer, so the guard only ever suppresses a
+			// teardown call's own status push, never a legitimate update.
+			if (!machineSelection().isPairedActive()) return;
+			activeMachineStatus = status;
+			void startDaemon();
+		},
+	});
+	return pairedMachineTransportInstance;
+}
+
+// The one entry point for making a machine active -- local, hosted, or
+// paired -- and the arbiter of which of the two remote transports may write
+// activeMachineStatus at any moment. See machine-selection.ts's module doc
+// comment for why parking a transport during a switch cannot be allowed to
+// publish its own status.
+let machineSelectionInstance: MachineSelection | null = null;
+function machineSelection(): MachineSelection {
+	if (machineSelectionInstance) return machineSelectionInstance;
+	machineSelectionInstance = createMachineSelection({
+		aoMachines: aoMachines(),
+		pairedMachines: pairedMachines(),
+		pairedTransport: pairedMachineTransport(),
+		// Read the singleton directly rather than calling machineTransport():
+		// parking it must never force a hosted transport into existence (and
+		// with it, a control-plane token attempt) just to immediately null it out.
+		getHostedTransport: () => machineTransportInstance,
+	});
+	return machineSelectionInstance;
+}
+
 // Read-only view of the daemon that is NOT the app's active one (the
 // "peer"), so the UI can list its projects and sessions alongside the active
 // one's. Fully independent of machineTransport(): a peer never opens /mux or
@@ -1641,6 +1686,12 @@ function machineTransport(): MachineTransport | null {
 		controlPlaneUrl: credential.controlPlaneUrl,
 		controlToken: credential.token,
 		onStatus: (status) => {
+			// A paired machine currently owns activeMachineStatus (see
+			// machineSelection().isPairedActive() and pairedMachineTransport()'s own
+			// onStatus above): this transport is parked, and its background token
+			// refresh or a reachability flip on the machine it used to point at must
+			// not clobber the paired machine's status.
+			if (machineSelection().isPairedActive()) return;
 			activeMachineStatus = status;
 			void startDaemon();
 		},
@@ -1680,15 +1731,19 @@ function applyActiveMachine(machine: AoMachine | null): void {
 	void startDaemon();
 }
 
-ipcMain.handle("aoMachines:getState", () => aoMachines().getState());
-ipcMain.handle("aoMachines:refresh", () => aoMachines().refresh());
-ipcMain.handle("aoMachines:select", (_event, machineId: string) => aoMachines().select(machineId));
-// Read from the already-built transport rather than machineTransport(), so a
-// local-only install never constructs one just to be told there is no token.
+// Routed through machineSelection() rather than aoMachines() directly, so a
+// paired machine id is resolved and the picker's active id reflects it too
+// (docs/plans/2026-08-16-pair-by-ip-headless-boxes.md task 9). Local and
+// hosted selection still land in ao-machines.ts exactly as before; see
+// machine-selection.ts.
+ipcMain.handle("aoMachines:getState", () => machineSelection().getState());
+ipcMain.handle("aoMachines:refresh", () => machineSelection().refresh());
+ipcMain.handle("aoMachines:select", (_event, machineId: string) => machineSelection().select(machineId));
 // forceRefresh: the renderer's runtimeFetch sends this after the gateway
-// itself 401/403s a request, so a revoked/rotated token is not repeated verbatim.
+// itself 401/403s a request, so a revoked/rotated token is not repeated
+// verbatim. Ignored on the paired path: there is nothing to refresh.
 ipcMain.handle("aoMachines:gatewayToken", (_event, forceRefresh?: boolean) =>
-	machineTransportInstance?.token(forceRefresh) ?? null,
+	machineSelection().gatewayToken(forceRefresh),
 );
 ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
 
@@ -1696,6 +1751,7 @@ ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
 // Address, port, and passcode entry, and the fingerprint comparison screen, are
 // task 8; this is only what that UI reads and writes through.
 ipcMain.handle("pairedMachines:list", () => pairedMachines().list());
+ipcMain.handle("pairedMachines:refresh", () => pairedMachines().refresh());
 ipcMain.handle("pairedMachines:probeFingerprint", (_event, address: string, port: number) =>
 	pairedMachines().probeFingerprint(address, port),
 );

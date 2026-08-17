@@ -248,6 +248,7 @@ if (typeof window !== "undefined") {
 		},
 		pairedMachines: {
 			list: async () => [],
+			refresh: async () => [],
 			probeFingerprint: async () => ({ error: "not available in tests" }),
 			getPinnedFingerprint: async () => null,
 			add: async () => {

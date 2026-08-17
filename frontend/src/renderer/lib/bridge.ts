@@ -329,6 +329,7 @@ export const aoBridge: AoBridge =
 		// probe or pair.
 		pairedMachines: {
 			list: async () => [],
+			refresh: async () => [],
 			probeFingerprint: async () => ({
 				error: "Pairing needs the desktop app; it is not available in browser preview.",
 			}),
