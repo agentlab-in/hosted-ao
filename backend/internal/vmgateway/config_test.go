@@ -340,6 +340,192 @@ func TestDefaultMachineFilePath_IsHomeNotDataDir(t *testing.T) {
 	}
 }
 
+func TestResolve_DefaultsToHostedMode(t *testing.T) {
+	cfg, err := Resolve(Options{
+		Domain: "vm.example.com", MachineID: "machine-1", AccountID: "account-1",
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.Mode != ModeHosted {
+		t.Errorf("Mode = %q, want %q", cfg.Mode, ModeHosted)
+	}
+}
+
+func TestResolve_PairMode_Basic(t *testing.T) {
+	cfg, err := Resolve(Options{
+		Pair:        true,
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.Mode != ModePair {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModePair)
+	}
+	// Pair mode has no domain, no control-plane URL, and no JWKS, and skips
+	// the ACME challenge listener entirely.
+	if cfg.Domain != "" {
+		t.Errorf("Domain = %q, want empty in pair mode", cfg.Domain)
+	}
+	if cfg.AccountID != "" {
+		t.Errorf("AccountID = %q, want empty in pair mode", cfg.AccountID)
+	}
+	if cfg.Issuer != "" {
+		t.Errorf("Issuer = %q, want empty in pair mode", cfg.Issuer)
+	}
+	if cfg.JWKSURL != "" {
+		t.Errorf("JWKSURL = %q, want empty in pair mode", cfg.JWKSURL)
+	}
+	if cfg.HTTPAddr != "" {
+		t.Errorf("HTTPAddr = %q, want empty in pair mode (no :80 bind)", cfg.HTTPAddr)
+	}
+	if cfg.HTTPSAddr != DefaultHTTPSAddr {
+		t.Errorf("HTTPSAddr = %q, want default %q", cfg.HTTPSAddr, DefaultHTTPSAddr)
+	}
+	if cfg.DaemonAddr != DefaultDaemonAddr {
+		t.Errorf("DaemonAddr = %q, want default %q", cfg.DaemonAddr, DefaultDaemonAddr)
+	}
+	if cfg.CertDir == "" {
+		t.Error("CertDir should default to somewhere under the state root")
+	}
+}
+
+func TestResolve_PairMode_ViaEnvVar(t *testing.T) {
+	t.Setenv("AO_VM_PAIR", "on")
+	cfg, err := Resolve(Options{MachineFile: filepath.Join(t.TempDir(), "missing.json")}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.Mode != ModePair {
+		t.Fatalf("Mode = %q, want %q (AO_VM_PAIR=on)", cfg.Mode, ModePair)
+	}
+}
+
+func TestResolve_PairMode_InvalidEnvValueIsRejected(t *testing.T) {
+	t.Setenv("AO_VM_PAIR", "sure-why-not")
+	_, err := Resolve(Options{MachineFile: filepath.Join(t.TempDir(), "missing.json")}, t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for an unrecognised AO_VM_PAIR value, not a silent fallback to hosted mode")
+	}
+}
+
+// TestResolve_PairMode_RejectsHostedFlags is the mode-mixing validation the
+// task requires: pair mode has no domain, no control-plane URL, and no JWKS,
+// so any flag that configures one of those alongside --pair is operator
+// error and must be rejected loudly at Resolve, not silently ignored.
+func TestResolve_PairMode_RejectsHostedFlags(t *testing.T) {
+	base := Options{Pair: true, MachineFile: filepath.Join(t.TempDir(), "missing.json")}
+	cases := []struct {
+		name       string
+		mutate     func(*Options)
+		wantSubstr string
+	}{
+		{"domain", func(o *Options) { o.Domain = "vm.example.com" }, "--domain"},
+		{"accountID", func(o *Options) { o.AccountID = "account-1" }, "--account-id"},
+		{"issuer", func(o *Options) { o.Issuer = "https://issuer.example.com" }, "--issuer"},
+		{"jwksURL", func(o *Options) { o.JWKSURL = "https://issuer.example.com/jwks.json" }, "--jwks-url"},
+		{"httpAddr", func(o *Options) { o.HTTPAddr = ":8080" }, "--http-addr"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := base
+			tc.mutate(&opts)
+			_, err := Resolve(opts, t.TempDir())
+			if err == nil {
+				t.Fatal("expected an error mixing pair mode with a hosted-only field")
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Errorf("error %q should name the offending flag %q", err, tc.wantSubstr)
+			}
+		})
+	}
+}
+
+func TestResolve_PairMode_RejectsHostedEnvVar(t *testing.T) {
+	t.Setenv("AO_VM_DOMAIN", "env.example.com")
+	_, err := Resolve(Options{Pair: true, MachineFile: filepath.Join(t.TempDir(), "missing.json")}, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "AO_VM_DOMAIN") {
+		t.Fatalf("expected an error naming AO_VM_DOMAIN, got %v", err)
+	}
+}
+
+func TestResolve_PairMode_MachineIDStillResolvesFromMachineFile(t *testing.T) {
+	path := writeMachineFile(t, MachineFile{MachineID: "paired-box-1"})
+	cfg, err := Resolve(Options{Pair: true, MachineFile: path}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.MachineID != "paired-box-1" {
+		t.Errorf("MachineID = %q, want %q (pair mode does not require it, but should still read it)", cfg.MachineID, "paired-box-1")
+	}
+}
+
+func TestResolve_PairMode_InvalidDaemonAddr(t *testing.T) {
+	_, err := Resolve(Options{
+		Pair:        true,
+		DaemonAddr:  "not-a-host-port",
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for an invalid daemon address in pair mode")
+	}
+}
+
+func TestResolve_PairMode_InvalidHTTPSAddr(t *testing.T) {
+	_, err := Resolve(Options{
+		Pair:        true,
+		HTTPSAddr:   "443",
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for an https listener address missing its port separator, in pair mode too")
+	}
+}
+
+// TestResolve_PairMode_CertDirDefaultsUnderStateRoot is the pair-mode
+// analogue of TestResolve_CertDirDefaultsUnderDataDir above, and the
+// asymmetry between them is deliberate, not a bug: the pair-mode certificate
+// is identity (losing it forces every paired client to re-pair), so it has
+// to survive an AO_DATA_DIR change the same way machine.json does, and
+// therefore defaults under the state root rather than the data dir.
+func TestResolve_PairMode_CertDirDefaultsUnderStateRoot(t *testing.T) {
+	home := t.TempDir()
+	setHomeEnv(t, home)
+	dataDir := t.TempDir()
+
+	cfg, err := Resolve(Options{
+		Pair:        true,
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, dataDir)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := filepath.Join(home, ".ao", "hosted", "vm-gateway", "pair-cert")
+	if cfg.CertDir != want {
+		t.Errorf("CertDir = %q, want %q", cfg.CertDir, want)
+	}
+	if strings.HasPrefix(cfg.CertDir, dataDir) {
+		t.Errorf("CertDir %q must not be under dataDir %q in pair mode", cfg.CertDir, dataDir)
+	}
+}
+
+func TestResolve_PairMode_CertDirOverrideWins(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "custom-pair-certs")
+	cfg, err := Resolve(Options{
+		Pair:        true,
+		CertDir:     dir,
+		MachineFile: filepath.Join(t.TempDir(), "missing.json"),
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.CertDir != dir {
+		t.Errorf("CertDir = %q, want override %q", cfg.CertDir, dir)
+	}
+}
+
 func setHomeEnv(t *testing.T, home string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
