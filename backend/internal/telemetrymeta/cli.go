@@ -139,10 +139,11 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao version":                {},
 
 	// Hosted: a human bootstrapping or inspecting a hosted machine.
-	"ao setup-vm":         {},
-	"ao vm":               {},
-	"ao vm setup-harness": {},
-	"ao whoami":           {},
+	"ao setup-vm":           {},
+	"ao vm":                 {},
+	"ao vm setup-harness":   {},
+	"ao vm rotate-passcode": {},
+	"ao whoami":             {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},

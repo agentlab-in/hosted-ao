@@ -25,6 +25,7 @@ func newVMCommand(ctx *commandContext) *cobra.Command {
 	}
 	cmd.AddCommand(newVMServeCommand(ctx))
 	cmd.AddCommand(newVMSetupHarnessCommand(ctx))
+	cmd.AddCommand(newVMRotatePasscodeCommand(ctx))
 	return cmd
 }
 
@@ -141,6 +142,68 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 	log.Info("ao vm serve starting",
 		"domain", gwCfg.Domain, "machineId", gwCfg.MachineID, "daemonAddr", gwCfg.DaemonAddr)
 	return srv.Run(ctxSig, cfg.ShutdownTimeout)
+}
+
+// newVMRotatePasscodeCommand deliberately rolls a pair-mode box's passcode,
+// the counterpart to the accidental non-rotation ao setup-vm --pair
+// guarantees on every re-run. Named for symmetry with the other `ao vm`
+// subcommands (serve, setup-harness): a verb naming what it does to this
+// machine, run on the box itself.
+func newVMRotatePasscodeCommand(ctx *commandContext) *cobra.Command {
+	var passcodeDir string
+	cmd := &cobra.Command{
+		Use:   "rotate-passcode",
+		Short: "Roll this pair-mode box's passcode and drop every connected client",
+		Long: "ao vm rotate-passcode generates a fresh pair-mode passcode, replacing the one\n" +
+			"ao setup-vm --pair printed (or the last rotation), and restarts\n" +
+			"ao-gateway.service so the change takes effect immediately. Every client still\n" +
+			"connected with the old passcode is dropped and has to enter the new one; the\n" +
+			"pinned certificate is unaffected, so there is no fingerprint to re-check.\n\n" +
+			"The new passcode is printed exactly once, here, and is never written to disk\n" +
+			"in plaintext. Run this on the box itself, the same place ao setup-vm --pair ran.\n\n" +
+			"This is the deliberate counterpart to ao setup-vm --pair's own guarantee: running\n" +
+			"setup again never rotates the passcode on its own (see\n" +
+			"docs/adr/0003-pair-mode-gateway.md). Use this command when you actually want to.",
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return ctx.runVMRotatePasscode(cmd, passcodeDir)
+		},
+	}
+	cmd.Flags().StringVar(&passcodeDir, "passcode-dir", "", "Pair-mode passcode hash storage directory (default under the state root)")
+	return cmd
+}
+
+func (c *commandContext) runVMRotatePasscode(cmd *cobra.Command, passcodeDirFlag string) error {
+	dir := strings.TrimSpace(passcodeDirFlag)
+	if dir == "" {
+		dir = strings.TrimSpace(os.Getenv("AO_VM_PASSCODE_DIR"))
+	}
+	if dir == "" {
+		plan, err := c.buildSetupVMPlanPair()
+		if err != nil {
+			return err
+		}
+		dir = plan.PasscodeDir
+	}
+
+	store, err := vmgateway.LoadPasscodeStore(dir)
+	if err != nil {
+		return fmt.Errorf("no pair-mode passcode to rotate at %s: %w", dir, err)
+	}
+	newPasscode, err := store.Rotate()
+	if err != nil {
+		return fmt.Errorf("rotate the passcode: %w", err)
+	}
+	if owner, ownerErr := setupTargetUser(); ownerErr == nil {
+		if err := chownSetupTree(dir, owner); err != nil {
+			return fmt.Errorf("rotated the passcode but could not hand %s to %s: %w", dir, owner.Username, err)
+		}
+	}
+
+	if err := c.runSetupPrivileged(cmd.Context(), "systemctl", "restart", setupVMGatewayUnit); err != nil {
+		return fmt.Errorf("rotated the passcode but could not restart %s so it takes effect: %w", setupVMGatewayUnit, err)
+	}
+	return writeSetupText(cmd.OutOrStdout(), renderPasscodeRotated(newPasscode))
 }
 
 // The claude harness is the only one ao vm setup-harness supports in v1. Its

@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 func TestDiscoverDaemonAddr_FromRunFile(t *testing.T) {
@@ -188,6 +191,69 @@ func TestVMSetupHarnessErrorsWhenClaudeMissing(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Errorf("interactive calls = %v, want none when claude is missing", calls)
+	}
+}
+
+// TestVMRotatePasscode_RotatesRestartsAndInvalidatesTheOldOne is the rotate
+// command's core contract: it changes the persisted passcode, restarts the
+// gateway unit so the change actually takes effect (the running gateway only
+// ever loads the hash once, at startup), and the old passcode's hash no
+// longer matches what ends up on disk.
+func TestVMRotatePasscode_RotatesRestartsAndInvalidatesTheOldOne(t *testing.T) {
+	setConfigEnv(t)
+	dir := t.TempDir()
+	oldPasscode, err := vmgateway.GeneratePasscode(dir)
+	if err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
+	oldHash := readSoleFile(t, dir)
+
+	var calls []string
+	var mu sync.Mutex
+	deps := Deps{
+		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			mu.Lock()
+			calls = append(calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+			mu.Unlock()
+			return nil, nil
+		},
+	}
+	stdout, _, err := executeCLI(t, deps, "vm", "rotate-passcode", "--passcode-dir", dir)
+	if err != nil {
+		t.Fatalf("ao vm rotate-passcode: %v", err)
+	}
+	if !strings.Contains(stdout, "Passcode rotated") {
+		t.Errorf("stdout = %q, want the rotation confirmation", stdout)
+	}
+
+	newHash := readSoleFile(t, dir)
+	if bytes.Equal(newHash, oldHash) {
+		t.Fatal("rotate-passcode must change the persisted hash")
+	}
+	if mobilebridge.PasswordMatches(string(newHash), oldPasscode) {
+		t.Fatal("the old passcode must no longer verify against the rotated hash")
+	}
+
+	mu.Lock()
+	got := strings.Join(calls, "\n")
+	mu.Unlock()
+	if !strings.Contains(got, "systemctl restart "+setupVMGatewayUnit) {
+		t.Errorf("rotate-passcode must restart the gateway so the new passcode takes effect (the running gateway only loads it once, at startup): calls = %v", calls)
+	}
+}
+
+// TestVMRotatePasscode_NoExistingPasscodeFails confirms the command refuses
+// cleanly, rather than silently provisioning a first passcode, when no box
+// has ever been paired at this directory: only ao setup-vm --pair generates
+// the first one.
+func TestVMRotatePasscode_NoExistingPasscodeFails(t *testing.T) {
+	setConfigEnv(t)
+	_, _, err := executeCLI(t, Deps{}, "vm", "rotate-passcode", "--passcode-dir", t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error when no passcode has ever been provisioned")
+	}
+	if got := ExitCode(err); got != 1 {
+		t.Errorf("ExitCode = %d, want 1 (a runtime precondition, not CLI misuse)", got)
 	}
 }
 

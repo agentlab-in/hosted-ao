@@ -10,9 +10,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +23,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,22 +64,31 @@ type setupVMOptions struct {
 	ProbeURL        string
 	ControlPlaneURL string
 	DryRun          bool
+	// Pair requests pair mode: no domain, no AO account, self-signed TLS with
+	// a passcode instead. See docs/adr/0003-pair-mode-gateway.md.
+	Pair bool
 }
 
 func newSetupVMCommand(ctx *commandContext) *cobra.Command {
 	var opts setupVMOptions
 	cmd := &cobra.Command{
 		Use:   "setup-vm",
-		Short: "Preflight and install AO on a hosted Ubuntu VM",
-		Long: "ao setup-vm prepares a hosted Ubuntu LTS VM to run remote agents. It gates\n" +
-			"on the platform, preflights DNS, the public ports, and sudo before it touches\n" +
-			"anything, then installs the ao binary, tmux, git, and gh, and writes two\n" +
-			"systemd units: one for the loopback daemon and one for the public TLS gateway\n" +
-			"(see docs/adr/0002-hosted-public-gateway.md).\n\n" +
+		Short: "Preflight and install AO on a hosted VM, or pair a Debian-family box by IP",
+		Long: "ao setup-vm prepares a Debian-family Linux machine (Ubuntu, Debian, Raspberry Pi OS)\n" +
+			"to run remote agents. It gates on the platform, preflights sudo and (in the default,\n" +
+			"hosted mode) DNS and the public ports before it touches anything, then installs the\n" +
+			"ao binary, tmux, git, and gh, and writes two systemd units: one for the loopback\n" +
+			"daemon and one for the public TLS gateway (see docs/adr/0002-hosted-public-gateway.md).\n\n" +
 			"It then binds this machine to an AO account over an RFC 8628 device code: it\n" +
 			"prints a short code and a URL, waits for you to approve the machine in a browser\n" +
 			"on any device, writes ~/.ao/hosted/machine.json, and restarts the gateway so it reads\n" +
 			"the new binding.\n\n" +
+			"With --pair, it provisions a box for the desktop app to reach by IP instead: no\n" +
+			"domain, no AO account, and no contact with the control plane at all. It generates a\n" +
+			"self-signed certificate and a passcode on first run, prints both once alongside this\n" +
+			"machine's address, and the desktop app pins the certificate's fingerprint on first\n" +
+			"connection (see docs/adr/0003-pair-mode-gateway.md). Re-running never rotates either;\n" +
+			"use `ao vm rotate-passcode` to roll the passcode on purpose.\n\n" +
 			"A failed preflight changes nothing at all: it prints exactly what to fix and\n" +
 			"exits. A successful run is idempotent, so running it again is safe; an\n" +
 			"already-bound machine has its current binding printed and is then bound again.\n" +
@@ -89,15 +101,23 @@ func newSetupVMCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&opts.Domain, "domain", "", "Public hostname you own, with a DNS record pointing at this machine (required)")
-	flags.StringVar(&opts.PublicIP, "public-ip", "", "This machine's public IP, for when it cannot be discovered automatically")
-	flags.StringVar(&opts.ProbeURL, "reachability-probe-url", defaultSetupVMProbeURL, "Off-box prober used to confirm 80 and 443 are reachable from the internet")
-	flags.StringVar(&opts.ControlPlaneURL, "control-plane-url", vmgateway.DefaultIssuer, "AO control plane this machine is bound against")
+	flags.StringVar(&opts.Domain, "domain", "", "Public hostname you own, with a DNS record pointing at this machine (required unless --pair)")
+	flags.StringVar(&opts.PublicIP, "public-ip", "", "This machine's public IP, for when it cannot be discovered automatically (hosted mode only)")
+	flags.StringVar(&opts.ProbeURL, "reachability-probe-url", defaultSetupVMProbeURL, "Off-box prober used to confirm 80 and 443 are reachable from the internet (hosted mode only)")
+	flags.StringVar(&opts.ControlPlaneURL, "control-plane-url", vmgateway.DefaultIssuer, "AO control plane this machine is bound against (hosted mode only)")
 	flags.BoolVar(&opts.DryRun, "dry-run", false, "Gate, preflight, print the plan and both unit files, and change nothing")
+	flags.BoolVar(&opts.Pair, "pair", false, "Pair mode: no domain and no AO account, self-signed TLS with a passcode instead (see docs/adr/0003-pair-mode-gateway.md)")
 	return cmd
 }
 
 func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) error {
+	if opts.Pair {
+		if strings.TrimSpace(opts.Domain) != "" {
+			return usageError{errors.New("--pair does not take --domain: pair mode has no domain (see docs/adr/0003-pair-mode-gateway.md)")}
+		}
+		return c.runSetupVMPair(cmd, opts)
+	}
+
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
 
@@ -119,7 +139,7 @@ func (c *commandContext) runSetupVM(cmd *cobra.Command, opts setupVMOptions) err
 		return err
 	}
 
-	preflight := c.probeSetupPreflight(ctx, domain, opts)
+	preflight := c.probeSetupPreflight(ctx, domain, opts, false)
 	problems, preflightWarnings := evaluatePreflight(preflight)
 	warnings = append(warnings, preflightWarnings...)
 	if len(problems) > 0 {
@@ -186,8 +206,13 @@ func (c *commandContext) probeSetupPlatform() setupPlatform {
 	return platform
 }
 
-func (c *commandContext) probeSetupPreflight(ctx context.Context, domain string, opts setupVMOptions) setupPreflight {
-	preflight := setupPreflight{Domain: domain, UID: os.Getuid()}
+// probeSetupPreflight probes the box for both modes. pair skips every check
+// that only makes sense with a domain and a public internet presence
+// (discovering this machine's public IP, resolving domain, and the off-box
+// reachability probe), and checks only the HTTPS port instead of :80 and
+// :443. See docs/adr/0003-pair-mode-gateway.md.
+func (c *commandContext) probeSetupPreflight(ctx context.Context, domain string, opts setupVMOptions, pair bool) setupPreflight {
+	preflight := setupPreflight{Domain: domain, UID: os.Getuid(), Pair: pair}
 
 	// Who the units would run as is a preflight fact, not an install-time one: a
 	// root target has to be refused before anything on this box is touched. A
@@ -209,20 +234,26 @@ func (c *commandContext) probeSetupPreflight(ctx context.Context, domain string,
 		preflight.Cloud = setupCloudFromVendor(string(vendor))
 	}
 
-	preflight.PublicIP = strings.TrimSpace(opts.PublicIP)
-	switch {
-	case preflight.PublicIP == "":
-		preflight.PublicIP, preflight.PublicIPErr = c.discoverPublicIP(ctx)
-	case net.ParseIP(preflight.PublicIP) == nil:
-		preflight.PublicIPErr = fmt.Errorf("--public-ip %q is not an IP address", preflight.PublicIP)
+	ports := setupVMPorts
+	if pair {
+		ports = setupVMPortsPair
+	} else {
+		preflight.PublicIP = strings.TrimSpace(opts.PublicIP)
+		switch {
+		case preflight.PublicIP == "":
+			preflight.PublicIP, preflight.PublicIPErr = c.discoverPublicIP(ctx)
+		case net.ParseIP(preflight.PublicIP) == nil:
+			preflight.PublicIPErr = fmt.Errorf("--public-ip %q is not an IP address", preflight.PublicIP)
+		}
+		preflight.ResolvedIPs, preflight.ResolveErr = net.DefaultResolver.LookupHost(ctx, domain)
 	}
-
-	preflight.ResolvedIPs, preflight.ResolveErr = net.DefaultResolver.LookupHost(ctx, domain)
 
 	gatewayActive := c.setupUnitActive(ctx, setupVMGatewayUnit)
 	preflight.GatewayActive = gatewayActive
-	preflight.Ports = probeSetupPorts(setupVMPorts, gatewayActive)
-	preflight.Reach = c.probeSetupReachability(ctx, opts.ProbeURL, domain, gatewayActive)
+	preflight.Ports = probeSetupPorts(ports, gatewayActive)
+	if !pair {
+		preflight.Reach = c.probeSetupReachability(ctx, opts.ProbeURL, domain, gatewayActive)
+	}
 	return preflight
 }
 
@@ -433,6 +464,26 @@ func (c *commandContext) buildSetupVMPlan(domain string) (setupPlan, error) {
 	return plan, nil
 }
 
+// buildSetupVMPlanPair is buildSetupVMPlan's pair-mode counterpart: no
+// domain, and Bound stays false, since pair mode has no account to bind.
+func (c *commandContext) buildSetupVMPlanPair() (setupPlan, error) {
+	target, err := setupTargetUser()
+	if err != nil {
+		return setupPlan{}, err
+	}
+	in := setupPlanInput{
+		Pair:    true,
+		User:    target.Username,
+		Home:    target.HomeDir,
+		DataDir: os.Getenv("AO_DATA_DIR"),
+		RunFile: os.Getenv("AO_RUN_FILE"),
+	}
+	if group, err := user.LookupGroupId(target.Gid); err == nil {
+		in.Group = group.Name
+	}
+	return buildSetupPlan(in)
+}
+
 // setupTargetUser is the unprivileged owner of the machine: SUDO_USER when the
 // command was run through sudo, otherwise whoever is running it.
 func setupTargetUser() (*user.User, error) {
@@ -522,9 +573,12 @@ func (c *commandContext) installSetupVM(ctx context.Context, out io.Writer, plan
 		notes = append(notes, setupVersionSkewNote(oldBinaryVersion))
 	}
 
-	if !plan.Bound {
+	if !plan.Pair && !plan.Bound {
 		// `ao vm serve` reads machine.json once at startup and cannot serve
-		// without it, so starting it now would only produce a restart loop.
+		// without it, so starting it now would only produce a restart loop. Pair
+		// mode has no account to bind at all, so it never hits this: by the time
+		// installSetupVM runs, the caller has already generated the passcode and
+		// certificate the gateway needs to start.
 		return units, notes, step("%s enabled but not started: this machine is not bound yet", setupVMGatewayUnit)
 	}
 	// The gateway holds no session state, so a new binary or unit is safe to
@@ -790,4 +844,185 @@ func setupFileSum(filePath string) (string, error) {
 func writeSetupText(out io.Writer, text string) error {
 	_, err := io.WriteString(out, text)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// pair mode
+// ---------------------------------------------------------------------------
+//
+// runSetupVMPair provisions a box for `ao setup-vm --pair`: the same
+// preflight, package, binary, and systemd machinery runSetupVM uses, minus
+// ACME and the device-flow bind, which never run here at all. Pair mode never
+// contacts the control plane. See docs/adr/0003-pair-mode-gateway.md.
+
+func (c *commandContext) runSetupVMPair(cmd *cobra.Command, opts setupVMOptions) error {
+	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+
+	platform := c.probeSetupPlatform()
+	warnings, err := checkSetupPlatform(platform)
+	if err != nil {
+		if writeErr := writeSetupText(out, renderManualPathPair(platform)); writeErr != nil {
+			return writeErr
+		}
+		return err
+	}
+
+	preflight := c.probeSetupPreflight(ctx, "", opts, true)
+	problems, preflightWarnings := evaluatePreflight(preflight)
+	warnings = append(warnings, preflightWarnings...)
+	if len(problems) > 0 {
+		if writeErr := writeSetupText(out, renderPreflightFailure(problems)); writeErr != nil {
+			return writeErr
+		}
+		return errors.New("ao setup-vm --pair preflight failed, so nothing on this machine was changed")
+	}
+
+	plan, err := c.buildSetupVMPlanPair()
+	if err != nil {
+		return err
+	}
+
+	if opts.DryRun {
+		return writeSetupText(out, renderSetupDryRunPair(plan, warnings))
+	}
+
+	owner, err := setupTargetUser()
+	if err != nil {
+		return err
+	}
+
+	// Generated before installSetupVM runs: pair mode has no account to bind
+	// and no "not bound yet" gate, so installSetupVM starts the gateway
+	// immediately, and it needs the passcode and certificate to already be on
+	// disk when it does.
+	passcode, generated, err := c.ensureSetupPasscode(plan.PasscodeDir, owner)
+	if err != nil {
+		return err
+	}
+	if generated {
+		if err := writeSetupText(out, "==> generated a new pair-mode passcode (printed once, at the end of this run)\n"); err != nil {
+			return err
+		}
+	} else {
+		if err := writeSetupText(out, "==> pair-mode passcode already set from an earlier run; unchanged\n"); err != nil {
+			return err
+		}
+	}
+
+	cert, err := c.ensureSetupPairCert(plan.PairCertDir, owner)
+	if err != nil {
+		return err
+	}
+	fingerprint, err := vmgateway.PairFingerprint(cert)
+	if err != nil {
+		return err
+	}
+	if err := writeSetupText(out, "==> pair-mode certificate ready (fingerprint printed at the end of this run)\n"); err != nil {
+		return err
+	}
+
+	units, notes, err := c.installSetupVM(ctx, out, plan)
+	if err != nil {
+		return err
+	}
+	warnings = append(warnings, notes...)
+
+	addrs := discoverPairListenAddresses()
+	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, fingerprint, addrs))
+}
+
+// ensureSetupPasscode returns this box's pair-mode passcode, generating and
+// persisting a fresh one only when dir holds none yet (first run) or an
+// unreadable one (recovery from corruption). Re-running against a directory
+// that already holds a good passcode changes nothing and returns
+// generated=false with no plaintext at all. That is the one guarantee pair
+// mode cannot compromise on: a silent rotation would drop every paired
+// client with no signal beyond a suddenly-wrong passcode, and a changed
+// fingerprint is indistinguishable from an attack to a client that pinned
+// the old one. See docs/adr/0003-pair-mode-gateway.md.
+func (c *commandContext) ensureSetupPasscode(dir string, owner *user.User) (plaintext string, generated bool, err error) {
+	if _, loadErr := vmgateway.LoadPasscodeStore(dir); loadErr == nil {
+		return "", false, nil
+	}
+	plaintext, err = vmgateway.GeneratePasscode(dir)
+	if err != nil {
+		return "", false, err
+	}
+	if err := chownSetupTree(dir, owner); err != nil {
+		return "", false, err
+	}
+	return plaintext, true, nil
+}
+
+// ensureSetupPairCert loads or creates the pair-mode certificate under dir.
+// vmgateway.LoadOrCreatePairCertificate is already idempotent (it loads the
+// existing certificate rather than generating a new one whenever both files
+// are already present), so re-running this never rotates it either.
+func (c *commandContext) ensureSetupPairCert(dir string, owner *user.User) (tls.Certificate, error) {
+	cert, err := vmgateway.LoadOrCreatePairCertificate(dir)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	if err := chownSetupTree(dir, owner); err != nil {
+		return tls.Certificate{}, err
+	}
+	return cert, nil
+}
+
+// chownSetupTree hands every file under dir to owner, recursively. It is a
+// no-op when this process is not root: an unprivileged invocation already
+// writes as the right user, and only a root (sudo) invocation can produce a
+// file the gateway's own unprivileged systemd unit cannot read.
+// vmgateway.GeneratePasscode, PasscodeStore.Rotate, and
+// LoadOrCreatePairCertificate all write directly with this process's own
+// euid, with no idea who the target unit's user is, so this is what stops a
+// root-owned passcode.hash or cert.pem from leaving the gateway unable to
+// start on a machine that was just provisioned or rotated successfully.
+// Mirrors chownMachineFile's reasoning in setupvm_bind.go.
+func chownSetupTree(dir string, owner *user.User) error {
+	if owner == nil || os.Getuid() != 0 {
+		return nil
+	}
+	uid, err := strconv.Atoi(owner.Uid)
+	if err != nil {
+		// A non-numeric id is a Windows user, and this path only ever runs on
+		// the Debian-family box the platform gate already checked for.
+		return nil
+	}
+	gid, err := strconv.Atoi(owner.Gid)
+	if err != nil {
+		return nil
+	}
+	return filepath.WalkDir(dir, func(path string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		return os.Chown(path, uid, gid)
+	})
+}
+
+// discoverPairListenAddresses lists this box's own non-loopback IPv4
+// addresses: the ones a Mac on the same network can actually type into the
+// desktop app. Best effort and never fatal: an empty result just falls back
+// to telling the operator to find the address themselves.
+func discoverPairListenAddresses() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() {
+			continue
+		}
+		ip4 := ipNet.IP.To4()
+		if ip4 == nil {
+			continue
+		}
+		out = append(out, ip4.String())
+	}
+	sort.Strings(out)
+	return out
 }
