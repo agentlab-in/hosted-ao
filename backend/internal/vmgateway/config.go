@@ -104,6 +104,11 @@ type Config struct {
 	HTTPAddr string
 	// HTTPSAddr is the public TLS listener address. Used by both modes.
 	HTTPSAddr string
+	// PasscodeDir is where the pair-mode passcode's hash is persisted
+	// (passcode.hash; see LoadPasscodeStore and GeneratePasscode in
+	// passcode.go). Pair-only: always empty in hosted mode, which has no
+	// passcode and no notion of this directory at all.
+	PasscodeDir string
 }
 
 // Options carries the raw flag values from the `ao vm serve` command, before
@@ -120,6 +125,9 @@ type Options struct {
 	CertDir     string
 	HTTPAddr    string
 	HTTPSAddr   string
+	// PasscodeDir overrides where the pair-mode passcode hash is stored; see
+	// Config.PasscodeDir. Pair mode only.
+	PasscodeDir string
 	// Pair requests ModePair instead of ModeHosted. See AO_VM_PAIR.
 	Pair bool
 }
@@ -151,6 +159,8 @@ type Options struct {
 //	                                                 in pair mode)
 //	AO_VM_HTTP_ADDR     ACME challenge listener     (default DefaultHTTPAddr; hosted only)
 //	AO_VM_HTTPS_ADDR    public TLS listener         (default DefaultHTTPSAddr)
+//	AO_VM_PASSCODE_DIR  pair-mode passcode hash dir (default <state root>/vm-gateway/pair-passcode;
+//	                                                 pair only)
 func Resolve(opts Options, dataDir string) (Config, error) {
 	pairMode, err := resolvePairMode(opts)
 	if err != nil {
@@ -326,6 +336,15 @@ func resolvePair(cfg Config, opts Options) (Config, error) {
 		cfg.CertDir = filepath.Join(stateDir, "vm-gateway", "pair-cert")
 	}
 
+	cfg.PasscodeDir = firstNonEmpty(opts.PasscodeDir, os.Getenv("AO_VM_PASSCODE_DIR"))
+	if cfg.PasscodeDir == "" {
+		dir, err := DefaultPasscodeDir()
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.PasscodeDir = dir
+	}
+
 	return cfg, nil
 }
 
@@ -395,6 +414,21 @@ func DefaultMachineFilePath() (string, error) {
 		return "", fmt.Errorf("resolve machine file path: %w", err)
 	}
 	return filepath.Join(stateDir, "machine.json"), nil
+}
+
+// DefaultPasscodeDir is where the pair-mode passcode's hash is persisted
+// when --passcode-dir/AO_VM_PASSCODE_DIR is unset:
+// <state root>/vm-gateway/pair-passcode, a sibling of the pair
+// certificate's own default directory (<state root>/vm-gateway/pair-cert;
+// see resolvePair). Exported so provisioning (ao setup-vm --pair, batch 3)
+// calls GeneratePasscode against the exact directory this package's own
+// default resolves to, without duplicating the path.
+func DefaultPasscodeDir() (string, error) {
+	stateDir, err := config.DefaultStateDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve pair passcode dir: %w", err)
+	}
+	return filepath.Join(stateDir, "vm-gateway", "pair-passcode"), nil
 }
 
 // firstNonEmpty returns the first non-empty (after trimming) candidate, or ""

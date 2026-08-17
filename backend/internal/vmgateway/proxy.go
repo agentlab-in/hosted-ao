@@ -88,22 +88,29 @@ var maxRequestBodyBytes int64 = 25<<20*4/3 + (2 << 20) // ~37,049,685 bytes, ~35
 // answered; see newReverseProxy.
 const upstreamResponseHeaderTimeout = 6 * time.Minute
 
-// NewHandler assembles the gateway's HTTP handler: panic recovery, CORS
-// preflight, a deny-by-default path allowlist, AO token verification, a
-// request body size cap, then a reverse proxy onto the loopback daemon,
-// initially at daemonAddr. Middleware order (outermost first): panic recovery
-// guards every layer below it so a panic anywhere in the chain logs and
-// returns a clean 500 instead of dropping the connection with nothing in
-// slog; CORS answers preflights and gates disallowed origins before anything
-// else runs — this also is the only Origin check a WebSocket upgrade to /mux
-// ever gets, since browsers do not enforce same-origin on WebSocket
-// connections themselves and /mux's cookie is ambient (browser-attached)
-// credential; deny-by-default rejects any path outside the proxyable set with
-// 404, so an unrecognised or loopback-only route never reaches the daemon
-// regardless of auth; token verification rejects an unauthenticated or
-// invalid request with 401 before the daemon ever sees it; the body size cap
-// applies only once a request is authenticated, so an anonymous flood cannot
-// use it to force allocation.
+// NewHandler assembles the gateway's HTTP handler for hosted mode: panic
+// recovery, CORS preflight, a deny-by-default path allowlist, AO token
+// verification, a request body size cap, then a reverse proxy onto the
+// loopback daemon, initially at daemonAddr. Middleware order (outermost
+// first): panic recovery guards every layer below it so a panic anywhere in
+// the chain logs and returns a clean 500 instead of dropping the connection
+// with nothing in slog; CORS answers preflights and gates disallowed origins
+// before anything else runs — this also is the only Origin check a WebSocket
+// upgrade to /mux ever gets, since browsers do not enforce same-origin on
+// WebSocket connections themselves and /mux's cookie is ambient
+// (browser-attached) credential; deny-by-default rejects any path outside the
+// proxyable set with 404, so an unrecognised or loopback-only route never
+// reaches the daemon regardless of auth; token verification rejects an
+// unauthenticated or invalid request with 401 before the daemon ever sees it;
+// the body size cap applies only once a request is authenticated, so an
+// anonymous flood cannot use it to force allocation.
+//
+// See NewPairHandler for pair mode's equivalent, which shares this exact
+// middleware chain via newHandler and swaps only the credential check
+// (requirePasscode instead of requireToken), per
+// docs/adr/0003-pair-mode-gateway.md's "Add a branch, do not rewrite the
+// existing path" framing: this function and its signature are unchanged by
+// pair mode's existence.
 //
 // resolveDaemonAddr, when non-nil, is consulted by the reverse proxy's
 // ErrorHandler after a failed round trip to re-read the daemon's current
@@ -113,13 +120,37 @@ const upstreamResponseHeaderTimeout = 6 * time.Minute
 // explicitly (a flag or environment variable), so a re-resolve never
 // silently overrides an operator's explicit choice.
 func NewHandler(daemonAddr string, resolveDaemonAddr func() (string, bool), jwks *JWKSCache, verify VerifyOptions, allowedOrigins []string, log *slog.Logger) (http.Handler, error) {
+	return newHandler(requireToken(jwks, verify, log), daemonAddr, resolveDaemonAddr, allowedOrigins, log)
+}
+
+// NewPairHandler assembles the gateway's HTTP handler for pair mode: the
+// same middleware chain NewHandler builds for hosted mode (panic recovery,
+// CORS preflight, the deny-by-default path allowlist, a request body size
+// cap, and the reverse proxy), with requirePasscode against passcodes as the
+// credential check instead of requireToken against a JWKS. See
+// docs/adr/0003-pair-mode-gateway.md. passcodes must be a store already
+// loaded by LoadPasscodeStore; a nil store is refused here rather than
+// starting a gateway with no usable passcode.
+func NewPairHandler(daemonAddr string, resolveDaemonAddr func() (string, bool), passcodes *PasscodeStore, allowedOrigins []string, log *slog.Logger) (http.Handler, error) {
+	if passcodes == nil {
+		return nil, errors.New("vm gateway: pair mode requires a loaded passcode store")
+	}
+	lock := newPasscodeLockout(passcodeLockoutLimit, passcodeLockoutCooldown, time.Now)
+	return newHandler(requirePasscode(passcodes, lock, log), daemonAddr, resolveDaemonAddr, allowedOrigins, log)
+}
+
+// newHandler builds the middleware chain NewHandler and NewPairHandler both
+// use, parameterized only by which credential check (authMW) sits in the
+// requireToken/requirePasscode slot; every other layer, and their order, is
+// identical between hosted and pair mode.
+func newHandler(authMW func(http.Handler) http.Handler, daemonAddr string, resolveDaemonAddr func() (string, bool), allowedOrigins []string, log *slog.Logger) (http.Handler, error) {
 	if _, err := url.Parse("http://" + daemonAddr); err != nil {
 		return nil, err
 	}
 
 	h := http.Handler(newReverseProxy(daemonAddr, resolveDaemonAddr, log))
 	h = limitBody(h)
-	h = requireToken(jwks, verify, log)(h)
+	h = authMW(h)
 	h = denyByDefault(h)
 	h = corsGate(allowedOrigins)(h)
 	h = recoverAndLog(log)(h)
