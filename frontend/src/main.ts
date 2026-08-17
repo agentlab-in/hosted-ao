@@ -75,6 +75,7 @@ import { readMigrationState, updateMigration, writeAppStateMarker, type Migratio
 import { createAoAccountController } from "./main/ao-account";
 import { createAoMachinesController } from "./main/ao-machines";
 import { createPeerWorkspacesController } from "./main/peer-workspaces";
+import { createPairedMachinesController } from "./main/paired-machines";
 import type { AoMachine } from "./shared/ao-machines";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { shouldSignalAttention, shouldToast } from "./main/notification-signals";
@@ -1578,6 +1579,27 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
 	return aoMachinesController;
 }
 
+// Paired boxes (docs/adr/0003-pair-mode-gateway.md): the registry of machines
+// reached by address, port, and passcode instead of the control plane, and the
+// pinned certificate fingerprint each one trusts. Never touches the control
+// plane. session.defaultSession's certificate-verify proc, installed in
+// app.whenReady below, is what actually enforces the pin; this controller only
+// holds the data it reads from.
+let pairedMachinesController: ReturnType<typeof createPairedMachinesController> | null = null;
+function pairedMachines(): ReturnType<typeof createPairedMachinesController> {
+	if (pairedMachinesController) return pairedMachinesController;
+	const runFile = runFilePath();
+	pairedMachinesController = createPairedMachinesController({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		safeStorage,
+		// net.fetch, not the global fetch: it runs through the session's network
+		// stack, which is what verifyCertificate below actually sees. A plain
+		// fetch would bypass the session (and the pin) entirely.
+		netFetch: (input, init) => net.fetch(String(input), init),
+	});
+	return pairedMachinesController;
+}
+
 // Read-only view of the daemon that is NOT the app's active one (the
 // "peer"), so the UI can list its projects and sessions alongside the active
 // one's. Fully independent of machineTransport(): a peer never opens /mux or
@@ -1669,6 +1691,22 @@ ipcMain.handle("aoMachines:gatewayToken", (_event, forceRefresh?: boolean) =>
 	machineTransportInstance?.token(forceRefresh) ?? null,
 );
 ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
+
+// Paired boxes: the data half of pair mode (docs/adr/0003-pair-mode-gateway.md).
+// Address, port, and passcode entry, and the fingerprint comparison screen, are
+// task 8; this is only what that UI reads and writes through.
+ipcMain.handle("pairedMachines:list", () => pairedMachines().list());
+ipcMain.handle("pairedMachines:probeFingerprint", (_event, address: string, port: number) =>
+	pairedMachines().probeFingerprint(address, port),
+);
+ipcMain.handle(
+	"pairedMachines:add",
+	(
+		_event,
+		input: { id: string; name: string; address: string; port: number; passcode: string; fingerprint: string },
+	) => pairedMachines().add(input),
+);
+ipcMain.handle("pairedMachines:remove", (_event, id: string) => pairedMachines().remove(id));
 
 ipcMain.handle("updates:getStatus", (): UpdateStatus => getUpdateStatus());
 ipcMain.handle("updates:check", async (_event, options?: UpdateCheckOptions) => {
@@ -1899,6 +1937,18 @@ app.whenReady().then(async () => {
 	} catch (err) {
 		console.error("failed to restore the active machine:", err);
 	}
+
+	// The paired-machine pin cache must be populated, and the verify proc
+	// installed, before the window opens and the renderer can make its first
+	// request: any request that lands first would race the pin (see
+	// paired-machine-cert.ts for why this has to be a session-level proc
+	// rather than a per-fetch check).
+	try {
+		await pairedMachines().load();
+	} catch (err) {
+		console.error("failed to load paired machines:", err);
+	}
+	session.defaultSession.setCertificateVerifyProc(pairedMachines().verifyCertificate);
 
 	if (isTrayEnabled(process.platform, app.isPackaged, app.getVersion())) {
 		const initialUiSettings = keybindingRunFile ? await readUiSettings(path.dirname(keybindingRunFile)) : { locale: "en" as const };

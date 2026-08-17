@@ -246,5 +246,13 @@ if (typeof window !== "undefined") {
 			gatewayToken: async () => null,
 			peerWorkspaces: async () => noPeerRegistered,
 		},
+		pairedMachines: {
+			list: async () => [],
+			probeFingerprint: async () => ({ error: "not available in tests" }),
+			add: async () => {
+				throw new Error("not available in tests");
+			},
+			remove: async () => undefined,
+		},
 	};
 } // end if (typeof window !== "undefined")
