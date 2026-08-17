@@ -223,6 +223,23 @@ test("a host that was never paired or probed gets default certificate verificati
 	expect(callback).toHaveBeenCalledExactlyOnceWith(-3);
 });
 
+test("getPinnedFingerprint reports the pin for a registered machine and null otherwise", async () => {
+	const machines = controller();
+	await machines.load();
+	expect(machines.getPinnedFingerprint("box_1")).toBeNull();
+
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+	expect(machines.getPinnedFingerprint("box_1")).toBe(CERT_FINGERPRINT);
+	expect(machines.getPinnedFingerprint("no_such_machine")).toBeNull();
+});
+
 test("add refuses the reserved local machine id, an out-of-range port, and an unusable address", async () => {
 	const machines = controller();
 	await machines.load();

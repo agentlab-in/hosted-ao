@@ -1,18 +1,34 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { HARNESS_SETUP_COMMAND, LOCAL_MACHINE_ID, localMachine, type AoMachine, type AoMachinesState } from "../../../shared/ao-machines";
 import { MachinesSection } from "./MachinesSection";
 
-const { refresh, select, writeText } = vi.hoisted(() => ({
-	refresh: vi.fn(),
-	select: vi.fn(),
-	writeText: vi.fn(),
-}));
+const { refresh, select, writeText, pairedList, pairedRemove, probeFingerprint, getPinnedFingerprint, pairedAdd } =
+	vi.hoisted(() => ({
+		refresh: vi.fn(),
+		select: vi.fn(),
+		writeText: vi.fn(),
+		pairedList: vi.fn(),
+		pairedRemove: vi.fn(),
+		probeFingerprint: vi.fn(),
+		getPinnedFingerprint: vi.fn(),
+		pairedAdd: vi.fn(),
+	}));
 
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { machines: { refresh, select }, clipboard: { writeText } },
+	aoBridge: {
+		machines: { refresh, select },
+		clipboard: { writeText },
+		pairedMachines: {
+			list: pairedList,
+			remove: pairedRemove,
+			probeFingerprint,
+			getPinnedFingerprint,
+			add: pairedAdd,
+		},
+	},
 }));
 
 const remote = (extra: Partial<AoMachine> & Pick<AoMachine, "id" | "name" | "baseUrl">): AoMachine => ({
@@ -58,10 +74,39 @@ function renderSection() {
 
 const machineRow = (id: string) => screen.getAllByTestId("ao-machine").find((row) => row.dataset.machineId === id)!;
 
+const PAIRED_ONLINE: AoMachine = {
+	id: "paired:192.168.1.5:8443",
+	name: "192.168.1.5",
+	baseUrl: "https://192.168.1.5:8443",
+	local: false,
+	createdAt: null,
+	lastSeen: null,
+	reachability: "unknown",
+	harness: "unknown",
+	harnessCommand: null,
+};
+
+const PAIRED_OFFLINE: AoMachine = {
+	id: "paired:192.168.1.9:8443",
+	name: "Pi in the closet",
+	baseUrl: "https://192.168.1.9:8443",
+	local: false,
+	createdAt: null,
+	lastSeen: "2020-01-01T09:00:00Z",
+	reachability: "offline",
+	harness: "unknown",
+	harnessCommand: null,
+};
+
 beforeEach(() => {
 	refresh.mockReset().mockResolvedValue(READY);
 	select.mockReset().mockResolvedValue({ ...READY, activeMachineId: "mch_1" });
 	writeText.mockReset().mockResolvedValue(undefined);
+	pairedList.mockReset().mockResolvedValue([]);
+	pairedRemove.mockReset().mockResolvedValue(undefined);
+	probeFingerprint.mockReset();
+	getPinnedFingerprint.mockReset();
+	pairedAdd.mockReset();
 });
 
 test("this computer is machine zero, listed first and active by default", async () => {
@@ -182,4 +227,56 @@ test("shows the reason when the refresh fails, instead of spinning forever", asy
 	expect(error).toHaveTextContent("Listing machines timed out after 15s.");
 	// The spinner must be gone: it is what the user stared at for an hour.
 	expect(screen.queryByText(/Looking for machines registered to your account/)).not.toBeInTheDocument();
+});
+
+test("a paired machine is listed and labelled by origin, distinct from hosted and local", async () => {
+	pairedList.mockResolvedValue([PAIRED_ONLINE]);
+	renderSection();
+	await screen.findAllByTestId("ao-machine");
+
+	const row = machineRow(PAIRED_ONLINE.id);
+	expect(within(row).getByText(PAIRED_ONLINE.name)).toBeInTheDocument();
+	expect(within(row).getByText("Paired")).toBeInTheDocument();
+});
+
+test("an unreachable paired machine stays listed, marked unreachable with its last-seen time", async () => {
+	pairedList.mockResolvedValue([PAIRED_OFFLINE]);
+	renderSection();
+	await screen.findAllByTestId("ao-machine");
+
+	const row = machineRow(PAIRED_OFFLINE.id);
+	expect(within(row).getByText(PAIRED_OFFLINE.name)).toBeInTheDocument();
+	expect(within(row).getByText("Offline")).toBeInTheDocument();
+	expect(within(row).getByText(/Offline, last seen .+ ago/)).toBeInTheDocument();
+});
+
+test("removing a paired machine asks for confirmation, then calls remove and refreshes the list", async () => {
+	pairedList.mockResolvedValue([PAIRED_ONLINE]);
+	renderSection();
+	await screen.findAllByTestId("ao-machine");
+
+	const row = machineRow(PAIRED_ONLINE.id);
+	await userEvent.click(within(row).getByRole("button", { name: /remove/i }));
+
+	const confirmDialog = await screen.findByRole("dialog");
+	expect(within(confirmDialog).getByText(/remove this paired machine/i)).toBeInTheDocument();
+
+	pairedList.mockResolvedValue([]);
+	await userEvent.click(within(confirmDialog).getByRole("button", { name: "Remove" }));
+
+	expect(pairedRemove).toHaveBeenCalledWith(PAIRED_ONLINE.id);
+	// The confirm dialog closes and the invalidated list refetches to empty.
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	await waitFor(() =>
+		expect(screen.queryAllByTestId("ao-machine").some((r) => r.dataset.machineId === PAIRED_ONLINE.id)).toBe(false),
+	);
+	expect(machineRow(LOCAL_MACHINE_ID)).toBeTruthy();
+});
+
+test("clicking Add machine opens the pairing dialog", async () => {
+	renderSection();
+	await screen.findAllByTestId("ao-machine");
+
+	await userEvent.click(screen.getByRole("button", { name: "Add machine" }));
+	expect(await screen.findByTestId("pairing-dialog")).toBeInTheDocument();
 });

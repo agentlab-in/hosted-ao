@@ -1699,6 +1699,7 @@ ipcMain.handle("pairedMachines:list", () => pairedMachines().list());
 ipcMain.handle("pairedMachines:probeFingerprint", (_event, address: string, port: number) =>
 	pairedMachines().probeFingerprint(address, port),
 );
+ipcMain.handle("pairedMachines:getPinnedFingerprint", (_event, id: string) => pairedMachines().getPinnedFingerprint(id));
 ipcMain.handle(
 	"pairedMachines:add",
 	(

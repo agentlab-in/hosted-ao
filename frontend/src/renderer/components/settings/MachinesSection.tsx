@@ -1,24 +1,40 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy, Laptop, Loader2, Server } from "lucide-react";
+import { AlertTriangle, Check, Copy, Laptop, Loader2, Plus, Router, Server, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { formatLastSeen, type AoMachine, type AoMachinesState } from "../../../shared/ao-machines";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { AddPairedMachineDialog } from "./AddPairedMachineDialog";
+import { SettingsLinkRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
 export const aoMachinesQueryKey = ["ao-machines"] as const;
+export const aoPairedMachinesQueryKey = ["ao-paired-machines"] as const;
 
 /**
  * The machine picker. One machine is active at a time, and switching re-points
  * the app at that machine's base URL.
  *
  * This computer is machine zero: it is always in the list, it is always
- * selectable, and it never needs an account. Everything below it is a machine
- * registered with `ao setup-vm`, which is the only way one gets here. No URL
- * and no token is ever typed into this app.
+ * selectable, and it never needs an account. Everything below it is either a
+ * machine registered with `ao setup-vm`, or a machine paired by address, port,
+ * and passcode (docs/adr/0003-pair-mode-gateway.md). No URL and no token is
+ * ever typed into this app for a registered machine; a paired machine is the
+ * one exception, and its own fingerprint comparison step is what stands in for
+ * a certificate authority.
+ *
+ * Paired machines are listed here but are not yet a selectable target: making
+ * one active needs the same authenticated transport (REST bearer, /mux cookie,
+ * SSE) that registered machines get from the control plane, and pair mode's
+ * credential is a locally-held passcode instead, which is main-process wiring
+ * this task does not build. See AddPairedMachineDialog and the PR description
+ * for the exact seam.
  */
 export function MachinesSection() {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	// One retry, then report. The refresh is deadlined in the main process
 	// (request-deadline.ts), so a failure arrives as a rejection rather than as
@@ -28,15 +44,28 @@ export function MachinesSection() {
 		queryFn: () => aoBridge.machines.refresh(),
 		retry: 1,
 	});
+	const pairedQuery = useQuery({
+		queryKey: aoPairedMachinesQueryKey,
+		queryFn: () => aoBridge.pairedMachines.list(),
+	});
 	const apply = (next: AoMachinesState) => queryClient.setQueryData(aoMachinesQueryKey, next);
+	const invalidatePaired = () => queryClient.invalidateQueries({ queryKey: aoPairedMachinesQueryKey });
 
 	const select = useMutation({
 		mutationFn: (machineId: string) => aoBridge.machines.select(machineId),
 		onSuccess: apply,
 	});
+	const remove = useMutation({
+		mutationFn: (id: string) => aoBridge.pairedMachines.remove(id),
+		onSuccess: invalidatePaired,
+	});
+
+	const [addOpen, setAddOpen] = useState(false);
+	const [removeTarget, setRemoveTarget] = useState<AoMachine | null>(null);
 
 	const state = query.data;
 	const machines = state?.machines ?? [];
+	const pairedMachines = pairedQuery.data ?? [];
 	const activeMachineId = state?.activeMachineId ?? "";
 	const mutationError = select.error instanceof Error ? select.error.message : null;
 	// A rejected refresh carries its reason on the query, not in `state`, which
@@ -45,6 +74,7 @@ export function MachinesSection() {
 	// permanent "Looking for machines..." spinner.
 	const refreshError = query.error instanceof Error ? query.error.message : null;
 	const error = state?.error ?? refreshError ?? mutationError;
+	const pairedError = pairedQuery.error instanceof Error ? pairedQuery.error.message : null;
 
 	return (
 		<SettingsSection title="Machines" sectionId="machines">
@@ -56,6 +86,10 @@ export function MachinesSection() {
 					busy={select.isPending}
 					onSelect={() => select.mutate(machine.id)}
 				/>
+			))}
+
+			{pairedMachines.map((machine) => (
+				<PairedMachineRow key={machine.id} machine={machine} onRemove={() => setRemoveTarget(machine)} />
 			))}
 
 			{query.isLoading ? (
@@ -87,6 +121,37 @@ export function MachinesSection() {
 					<span>{error}</span>
 				</p>
 			) : null}
+
+			{pairedError ? (
+				<p
+					className="flex items-start gap-2 px-1 text-xs leading-row text-error"
+					data-testid="ao-paired-machines-error"
+				>
+					<AlertTriangle className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
+					<span>{pairedError}</span>
+				</p>
+			) : null}
+
+			<SettingsLinkRow icon={Plus} label={t("pairing.addMachine")} onClick={() => setAddOpen(true)} />
+
+			<AddPairedMachineDialog open={addOpen} onOpenChange={setAddOpen} onPaired={invalidatePaired} />
+
+			<ConfirmDialog
+				open={removeTarget !== null}
+				title={t("pairing.removeConfirmTitle")}
+				description={t("pairing.removeConfirmBody", { name: removeTarget?.name ?? "" })}
+				confirmLabel={t("pairing.remove")}
+				destructive
+				busy={remove.isPending}
+				error={remove.error instanceof Error ? remove.error.message : null}
+				onConfirm={() => {
+					if (!removeTarget) return;
+					remove.mutate(removeTarget.id, { onSuccess: () => setRemoveTarget(null) });
+				}}
+				onOpenChange={(open) => {
+					if (!open) setRemoveTarget(null);
+				}}
+			/>
 		</SettingsSection>
 	);
 }
@@ -142,6 +207,46 @@ function MachineRow({
 			{machine.harness === "missing" && machine.harnessCommand ? (
 				<HarnessHint machineName={machine.name} command={machine.harnessCommand} />
 			) : null}
+		</div>
+	);
+}
+
+/**
+ * A paired box (docs/adr/0003-pair-mode-gateway.md), listed alongside local
+ * and hosted machines but rendered as a static row rather than a `MachineRow`
+ * button: there is no bridge call yet to make a paired machine the active one
+ * (see the module doc comment above), so this row only ever offers removal,
+ * never a click-to-select action that would silently do nothing or select the
+ * wrong transport. An unreachable paired box still renders here, with its
+ * last-seen time, exactly like an offline registered machine does.
+ */
+function PairedMachineRow({ machine, onRemove }: { machine: AoMachine; onRemove: () => void }) {
+	const { t } = useTranslation();
+	const offline = machine.reachability === "offline";
+	const lastSeen = formatLastSeen(machine.lastSeen);
+	const detail = offline
+		? lastSeen
+			? `Offline, last seen ${lastSeen}`
+			: "Offline, has never connected"
+		: new URL(machine.baseUrl).host;
+
+	return (
+		<div className="flex w-full flex-col gap-1.5" data-testid="ao-machine" data-machine-id={machine.id}>
+			<div className="settings-row-bar w-full">
+				<div className="flex shrink-0 items-center gap-(--size-settings-row-icon-gap)">
+					<Router className="size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" />
+					<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{machine.name}</span>
+					<Badge variant="outline">{t("pairing.originPaired")}</Badge>
+				</div>
+				<div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+					<span className="min-w-0 truncate text-control text-settings-muted">{detail}</span>
+					{offline ? <Badge variant="error">Offline</Badge> : null}
+					<Button type="button" variant="ghost" size="sm" onClick={onRemove}>
+						<Trash2 className="size-icon-sm" aria-hidden="true" />
+						{t("pairing.remove")}
+					</Button>
+				</div>
+			</div>
 		</div>
 	);
 }
