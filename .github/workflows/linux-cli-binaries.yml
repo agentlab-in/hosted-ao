@@ -1,0 +1,150 @@
+# .github/workflows/linux-cli-binaries.yml
+name: Linux CLI binaries
+
+# Cross-compiles the standalone `ao` binary (backend/cmd/ao) for linux/amd64 and
+# linux/arm64 and uploads each as a run artifact. This is the only way to get a
+# bare `ao` onto a Linux box: frontend/scripts/build-daemon.mjs compiles for the
+# host platform only and its output ships bundled inside the Electron app, and
+# `ao setup-vm` installs the daemon by copying the running binary, so the box
+# must already have one (a Raspberry Pi is arm64).
+#
+# The desktop build is deliberately untouched. It keeps getting its daemon from
+# build-daemon.mjs during premake, byte-for-byte as before. Shipping the wrong
+# daemon has broken this repo twice (issues #235 and #256, see
+# desktop-testing.yml), so this workflow never writes into frontend/daemon and
+# never runs as part of the Electron packaging path.
+#
+# Cross-compilation needs no C toolchain: the SQLite driver is
+# modernc.org/sqlite (pure Go), nothing in backend/ imports "C", and the build
+# pins CGO_ENABLED=0, so both targets link statically on the stock ubuntu
+# runner. packages/build-binaries.sh already relies on the same property.
+#
+# Creates no release and publishes nothing. AGENTS.md carries a hard rule that
+# exactly one publisher, the designated release conductor, runs a real publish
+# on any channel. This wires the build and the artifact upload only; the
+# conductor downloads and attaches.
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/linux-cli-binaries.yml"
+  push:
+    branches: [develop]
+    paths:
+      - "backend/**"
+      - ".github/workflows/linux-cli-binaries.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref or SHA to build (defaults to this branch)"
+        type: string
+        required: false
+      version:
+        description: "Version string to stamp into the binary (defaults to frontend/package.json)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `target` is the artifact name and the suffix a consumer downloads
+          # by; `goarch` is what the Go toolchain wants. `elf` is the machine
+          # string `file` must report, which is what proves the cross-compile
+          # actually crossed rather than silently falling back to the host.
+          - target: linux-x64
+            goarch: amd64
+            elf: "x86-64"
+          - target: linux-arm64
+            goarch: arm64
+            elf: "ARM aarch64"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Empty on pull_request/push, which checks out the event's own ref.
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      # cli.Version/Commit/Date default to "dev"/""/"" and nothing overrides
+      # them today, which would make `ao --version` on a box useless and
+      # setup-vm's version-skew note unable to name what the daemon is behind
+      # by. Stamp them here. The date is the checked-out commit's date, not the
+      # build time, so rebuilding the same ref produces the same string.
+      - name: Resolve version stamp
+        id: stamp
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-$(node -p "require('./frontend/package.json').version")}"
+          {
+            echo "version=${version}"
+            echo "commit=$(git rev-parse --short HEAD)"
+            echo "date=$(git log -1 --format=%cI)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build
+        shell: bash
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.stamp.outputs.version }}
+          COMMIT: ${{ steps.stamp.outputs.commit }}
+          DATE: ${{ steps.stamp.outputs.date }}
+        working-directory: backend
+        run: |
+          pkg="github.com/aoagents/agent-orchestrator/backend/internal/cli"
+          mkdir -p ../dist
+          CGO_ENABLED=0 GOOS=linux go build -trimpath \
+            -ldflags "-X ${pkg}.Version=${VERSION} -X ${pkg}.Commit=${COMMIT} -X ${pkg}.Date=${DATE}" \
+            -o ../dist/ao ./cmd/ao
+      # A green build is not proof: `go build` with a bad GOARCH would still
+      # exit 0 having produced a host binary. Assert the ELF machine, and on
+      # amd64 (the runner's own architecture) also run the thing and check the
+      # stamp came through.
+      - name: Verify artifact
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXPECTED_ELF: ${{ matrix.elf }}
+          VERSION: ${{ steps.stamp.outputs.version }}
+        run: |
+          described="$(file -b dist/ao)"
+          echo "$described"
+          case "$described" in
+            *"$EXPECTED_ELF"*) ;;
+            *) echo "::error::$TARGET is not a $EXPECTED_ELF ELF executable: $described"; exit 1 ;;
+          esac
+          if [ "$TARGET" = "linux-x64" ]; then
+            reported="$(dist/ao version)"
+            echo "ao version -> $reported"
+            case "$reported" in
+              "$VERSION "*) ;;
+              *) echo "::error::version stamp missing: got '$reported', expected it to start with '$VERSION '"; exit 1 ;;
+            esac
+          fi
+          hash="$(sha256sum dist/ao | awk '{print $1}')"
+          echo "$hash  ao" > dist/ao.sha256
+          {
+            echo "### $TARGET"
+            echo '```'
+            echo "file: $described"
+            echo "sha256: $hash"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ao-${{ matrix.target }}
+          path: |
+            dist/ao
+            dist/ao.sha256
+          retention-days: 7
+          if-no-files-found: error
