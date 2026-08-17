@@ -3,6 +3,13 @@
 Date: 2026-07-30
 Status: Accepted
 
+> Note (2026-08-17): the scope statement below, that connecting by bare IP is
+> out of scope and the user must bring a domain they own, is narrowed by
+> `docs/adr/0003-pair-mode-gateway.md`. That ADR keeps this requirement for the
+> hosted path decided here, and admits bare IP only for the gateway's pair mode
+> (self-signed TLS with a pinned fingerprint, on a network the user trusts). The
+> decision below is otherwise unchanged and stands as the historical record.
+
 ## Context
 
 AGENTS.md carries a hard rule: the daemon's primary listener stays bound to
