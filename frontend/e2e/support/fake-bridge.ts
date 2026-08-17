@@ -217,6 +217,18 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					// rest of this harness: no main process, so no second daemon.
 					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
 				},
+				// No main process under the browser harness, so nothing is paired and
+				// there is no certificate to present. `add` throws rather than returning
+				// a stub machine: pinning a fingerprint is a real trust decision and a
+				// fake that silently succeeds would hide a regression in that path.
+				pairedMachines: {
+					list: async () => [],
+					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
+					add: async () => {
+						throw new Error("Pairing is unavailable under the browser harness.");
+					},
+					remove: async () => {},
+				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
@@ -656,6 +668,18 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					// Signed out, so there is no peer daemon to list. Matches the
 					// rest of this harness: no main process, so no second daemon.
 					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
+				},
+				// No main process under the browser harness, so nothing is paired and
+				// there is no certificate to present. `add` throws rather than returning
+				// a stub machine: pinning a fingerprint is a real trust decision and a
+				// fake that silently succeeds would hide a regression in that path.
+				pairedMachines: {
+					list: async () => [],
+					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
+					add: async () => {
+						throw new Error("Pairing is unavailable under the browser harness.");
+					},
+					remove: async () => {},
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
