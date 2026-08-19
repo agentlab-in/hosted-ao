@@ -929,7 +929,14 @@ func (c *commandContext) runSetupVMPair(cmd *cobra.Command, opts setupVMOptions)
 	warnings = append(warnings, notes...)
 
 	addrs := discoverPairListenAddresses()
-	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, fingerprint, addrs))
+	// The full ao-pair:// string can only ever be built the run that
+	// generates the plaintext passcode: every run after that only has the
+	// hash, exactly like the raw-passcode display above it.
+	var pairingString string
+	if generated {
+		pairingString, _, _ = c.buildPairingString(ctx, cert, passcode)
+	}
+	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, pairingString, fingerprint, addrs))
 }
 
 // ensureSetupPasscode returns this box's pair-mode passcode, generating and
