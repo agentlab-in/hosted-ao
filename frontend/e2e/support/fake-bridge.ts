@@ -33,15 +33,30 @@ export type FakeBridgeOptions = {
 	daemonState?: "ready" | "starting" | "stopped" | "error";
 	/** REST port advertised when ready (mock data is served regardless). */
 	daemonPort?: number;
+	/**
+	 * Non-secret HTTPS origin for a hosted daemon (DaemonStatus.baseUrl). When
+	 * set alongside a "ready" daemonState, the renderer rebases every REST call
+	 * onto this origin instead of 127.0.0.1:<daemonPort>, the same seam
+	 * machineDaemonStatus (src/shared/remote-daemon.ts) fills for a registered
+	 * machine, so CreateProjectFlow's isRemoteDaemonBaseUrl(...) flips the
+	 * clone dialog into its remote (no local destination picker) mode.
+	 * `daemonPort` is still published alongside it: _shell.tsx's
+	 * workspace-bootstrap effect only fires once a port is present, and
+	 * without one the shell never leaves its startup-loading state (a real
+	 * remote machine's status has no port at all, but reaches "ready" through
+	 * daemon wiring this fake bridge does not reproduce).
+	 */
+	daemonBaseUrl?: string;
 };
 
 export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}): Promise<void> {
 	const version = opts.version ?? "9.9.9-test";
 	const daemonState = opts.daemonState ?? "ready";
 	const daemonPort = opts.daemonPort ?? 8080;
+	const daemonBaseUrl = opts.daemonBaseUrl ?? null;
 
 	await page.addInitScript(
-		({ version, daemonState, daemonPort }) => {
+		({ version, daemonState, daemonPort, daemonBaseUrl }) => {
 			const unsubscribe = () => () => undefined;
 			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
 			// This computer is machine zero and stays selectable with no account,
@@ -64,7 +79,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				],
 			};
 			const status: DaemonStatus =
-				daemonState === "ready" ? { state: "ready", port: daemonPort } : { state: daemonState };
+				daemonState === "ready"
+					? daemonBaseUrl
+						? { state: "ready", port: daemonPort, baseUrl: daemonBaseUrl }
+						: { state: "ready", port: daemonPort }
+					: { state: daemonState };
 			const navState = (viewId: string) => ({
 				viewId,
 				url: "",
@@ -96,9 +115,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onNextTabShortcut: unsubscribe,
 					onFocusTerminalShortcut: unsubscribe,
 				},
-				terminal: { saveDroppedFile: async () => "" },
+				terminal: {
+					saveDroppedFile: async () => "",
+					setFocused: () => undefined,
+					onFontSizeShortcut: () => () => undefined,
+				},
 				window: {
-					setOverlay: async () => undefined,
+					isMaximized: async () => false,
+					onMaximized: () => () => undefined,
 					isFullScreen: async () => false,
 					onFullScreen: () => () => undefined,
 				},
@@ -122,12 +146,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getBootstrap: async () => null,
 				},
 				browser: {
+					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
+					setOverlayOpen: () => undefined,
 					navigate: async ({ viewId }: { viewId: string }) => navState(viewId),
 					clear: async (viewId: string) => navState(viewId),
-					capture: async () => "",
-					requestMirror: async () => false,
 					goBack: async (viewId: string) => navState(viewId),
 					goForward: async (viewId: string) => navState(viewId),
 					reload: async (viewId: string) => navState(viewId),
@@ -147,6 +171,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
+					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
 					// Annotation contract (mirrors src/preload.ts): useBrowserView subscribes
 					// to these whenever SessionView mounts with window.ao.browser present, so
@@ -157,6 +187,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onNavState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
+					onDevToolsState: unsubscribe,
 				},
 				notifications: {
 					show: async () => undefined,
@@ -212,7 +243,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getState: async () => signedOutAoMachines,
 					refresh: async () => signedOutAoMachines,
 					select: async () => signedOutAoMachines,
-					gatewayToken: async () => null,
+					// api-client's runtimeFetch answers a local 503 for any remote-base
+					// request when this is null, before the request ever reaches the
+					// network, so the daemonBaseUrl remote-mode seam needs a non-null
+					// token here to reach the page.route stubs at all.
+					gatewayToken: async () => (daemonBaseUrl ? "fake-gateway-token" : null),
 					// Signed out, so there is no peer daemon to list. Matches the
 					// rest of this harness: no main process, so no second daemon.
 					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
@@ -231,10 +266,16 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 					remove: async () => {},
 				},
+				cloud: {
+					getSession: async () => null,
+					signIn: async () => undefined,
+					signOut: async () => undefined,
+					onSessionChanged: unsubscribe,
+				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonState, daemonPort },
+		{ version, daemonState, daemonPort, daemonBaseUrl },
 	);
 }
 
@@ -264,6 +305,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 export type FakeWorker = {
 	id: string;
 	title: string;
+	mode?: "chat" | "tui";
 	provider?: string;
 	branch?: string;
 	status?: string;
@@ -338,6 +380,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				title: w.title,
 				provider: w.provider ?? "codex",
 				kind: "worker",
+				mode: w.mode ?? "tui",
 				branch: w.branch ?? `session/${w.id}`,
 				status: w.status ?? "working",
 				createdAt: nowIso,
@@ -560,9 +603,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onNextTabShortcut: unsubscribe,
 					onFocusTerminalShortcut: unsubscribe,
 				},
-				terminal: { saveDroppedFile: async () => "" },
+				terminal: {
+					saveDroppedFile: async () => "",
+					setFocused: () => undefined,
+					onFontSizeShortcut: () => () => undefined,
+				},
 				window: {
-					setOverlay: async () => undefined,
+					isMaximized: async () => false,
+					onMaximized: () => () => undefined,
 					isFullScreen: async () => false,
 					onFullScreen: () => () => undefined,
 				},
@@ -581,13 +629,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				telemetry: { getBootstrap: async () => null },
 				browser: {
+					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
+					setOverlayOpen: () => undefined,
 					navigate: async ({ viewId, url }: { viewId: string; url: string }) =>
 						state.browserError ? navState(viewId, "", state.browserError) : navState(viewId, url),
 					clear: async (viewId: string) => navState(viewId),
-					capture: async () => "",
-					requestMirror: async () => false,
 					goBack: async (viewId: string) => navState(viewId),
 					goForward: async (viewId: string) => navState(viewId),
 					reload: async (viewId: string) => navState(viewId),
@@ -607,6 +655,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					openTab: async ({ viewId }: { viewId: string; url?: string }) => ({
+						viewId,
+						activeTabId: "t1",
+						tabs: [{ id: "t1", url: "", title: "", active: true }],
+					}),
+					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
 					// Annotation contract (mirrors src/preload.ts): useBrowserView subscribes
 					// to these whenever SessionView mounts with window.ao.browser present, so
@@ -617,6 +671,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onNavState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
+					onDevToolsState: unsubscribe,
 				},
 				notifications: {
 					show: async () => undefined,
@@ -684,6 +739,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						throw new Error("Pairing is unavailable under the browser harness.");
 					},
 					remove: async () => {},
+				},
+				cloud: {
+					getSession: async () => null,
+					signIn: async () => undefined,
+					signOut: async () => undefined,
+					onSessionChanged: unsubscribe,
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;

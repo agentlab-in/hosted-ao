@@ -44,3 +44,11 @@ details, no decisions (those live in `docs/adr/`).
 - **Home-network-only** — the trust boundary the feature assumes. Transport is
   unencrypted, so the **LAN Listener** is only safe on a network the user trusts;
   the desktop UI states this plainly.
+
+## AO Cloud
+
+Upstream AO Cloud (WorkOS-backed sign-in and hosted account) is pinned hidden
+in Hosted AO builds as of this merge, by decision on 2026-08-19: paired
+machines are this fork's remote story, not a hosted account. The pin is a
+single constant (`CLOUD_SIGN_IN_ENABLED` in
+`frontend/src/renderer/lib/cloud-session.ts`) and is reversible.

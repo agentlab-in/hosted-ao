@@ -159,9 +159,12 @@ export const aoBridge: AoBridge =
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
+			setFocused: () => undefined,
+			onFontSizeShortcut: () => () => undefined,
 		},
 		window: {
-			setOverlay: async () => undefined,
+			isMaximized: async () => false,
+			onMaximized: () => () => undefined,
 			isFullScreen: async () => false,
 			onFullScreen: () => () => undefined,
 		},
@@ -194,6 +197,7 @@ export const aoBridge: AoBridge =
 			getBootstrap: async () => null,
 		},
 		browser: {
+			nativeCompositionEnabled: false,
 			ensure: async (sessionId: string) => ({
 				viewId: `preview:${sessionId}`,
 				url: "",
@@ -203,6 +207,7 @@ export const aoBridge: AoBridge =
 				isLoading: false,
 			}),
 			setBounds: () => undefined,
+			setOverlayOpen: () => undefined,
 			navigate: async ({ viewId, url }) => ({
 				viewId,
 				url,
@@ -254,13 +259,18 @@ export const aoBridge: AoBridge =
 			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
 			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
 			closeTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
+			openTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
+			devtools: async ({ viewId, operation }) => ({
+				viewId,
+				open: operation !== "close",
+				activeTabId: "",
+			}),
 			destroy: () => undefined,
-			capture: async () => "",
-			requestMirror: async () => false,
 			setAnnotationMode: async () => undefined,
 			onNavState: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onDevToolsState: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 		},
@@ -338,5 +348,11 @@ export const aoBridge: AoBridge =
 				throw new Error("Pairing needs the desktop app; it is not available in browser preview.");
 			},
 			remove: async () => undefined,
+		},
+		cloud: {
+			getSession: async () => null,
+			signIn: async () => undefined,
+			signOut: async () => undefined,
+			onSessionChanged: () => () => undefined,
 		},
 	} satisfies AoBridge);

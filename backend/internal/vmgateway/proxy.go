@@ -48,10 +48,13 @@ var upstreamCORSHeaders = []string{
 
 // blockedAPIPrefixes are never proxied even though they sit under the
 // otherwise-allowed /api/v1 prefix: Connect Mobile control and developer
-// maintenance routes are loopback-only. This mirrors lanControlBlockedPrefixes
-// in internal/httpd/lan_listener.go, the daemon's own precedent for the same
-// problem (a second, non-loopback listener that must never reach these
-// routes) applied to the gateway's public listener.
+// maintenance routes are loopback-only. This follows the same precedent as
+// lanControlBlockedPrefixes in internal/httpd/lan_listener.go (a second,
+// non-loopback listener that must never reach these routes), but it is a
+// SUBSET of that list: it blocks mobile and dev, not /api/v1/browser. The
+// LAN listener blocks /api/v1/browser too; the gateway does not yet, and
+// that gap is deliberate for now, tracked as a follow-up hardening issue
+// rather than closed here.
 var blockedAPIPrefixes = []string{
 	"/api/v1/mobile",
 	"/api/v1/dev",

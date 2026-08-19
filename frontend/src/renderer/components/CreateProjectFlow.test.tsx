@@ -1,19 +1,35 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+// The whole point of this file: which wire a clone leaves on depends on whether
+// the active machine is this computer. Drive that through the same base URL
+// api-client rebases every REST call onto.
+const { getApiBaseUrlMock } = vi.hoisted(() => ({ getApiBaseUrlMock: vi.fn(() => "http://127.0.0.1:3001") }));
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
+	getApiBaseUrl: getApiBaseUrlMock,
+	subscribeApiBaseUrl: () => () => undefined,
+}));
+
 import { agentsQueryKey } from "../hooks/useAgentsQuery";
-import { CreateProjectFlow, type CreateProjectInput } from "./CreateProjectFlow";
+import { CreateProjectFlow, type CreateProjectInput, type CloneProjectInput } from "./CreateProjectFlow";
 
-type CreateProjectHandler = (input: CreateProjectInput) => Promise<void>;
-
-function renderFlow(onCreateProject: CreateProjectHandler) {
+function renderFlow() {
+	const onCreateProject = vi.fn<(input: CreateProjectInput) => Promise<void>>().mockResolvedValue(undefined);
+	const onCloneProject = vi.fn<(input: CloneProjectInput) => Promise<void>>().mockResolvedValue(undefined);
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const agent = { id: "claude-code", label: "claude-code", authStatus: "authorized" };
 	queryClient.setQueryData(agentsQueryKey, { supported: [agent], installed: [agent], authorized: [agent] });
 	render(
 		<QueryClientProvider client={queryClient}>
-			<CreateProjectFlow mode="choose" onCreateProject={onCreateProject} onInitializeProject={vi.fn()}>
+			<CreateProjectFlow
+				mode="choose"
+				onCloneProject={onCloneProject}
+				onCreateProject={onCreateProject}
+				onInitializeProject={vi.fn()}
+			>
 				{({ choosePath }) => (
 					<button type="button" onClick={choosePath}>
 						New project
@@ -22,128 +38,48 @@ function renderFlow(onCreateProject: CreateProjectHandler) {
 			</CreateProjectFlow>
 		</QueryClientProvider>,
 	);
+	return { onCloneProject, onCreateProject };
 }
 
 /** Open the picker, take the clone branch, and land on the URL step. */
 async function openCloneStep(user: ReturnType<typeof userEvent.setup>) {
 	await user.click(screen.getByRole("button", { name: "New project" }));
-	await user.click(screen.getByRole("button", { name: "Clone from a Git URL" }));
-	return screen.getByRole("dialog", { name: "Clone a repository" });
+	await user.click(await screen.findByRole("button", { name: /Clone from Git/ }));
+	await screen.findByLabelText("Repository URL");
 }
 
-function cloneFailure(code: string, message: string): Error & { code?: string } {
-	const failure = new Error(`${message} (${code})`) as Error & { code?: string };
-	failure.code = code;
-	return failure;
-}
-
-describe("CreateProjectFlow clone by URL", () => {
-	it("sends a clone URL and never a path alongside it", async () => {
+describe("CreateProjectFlow clone routing", () => {
+	it("sends cloneUrl, and never a local destination, when the active machine is remote", async () => {
+		getApiBaseUrlMock.mockReturnValue("https://vm.example.com");
 		const user = userEvent.setup();
-		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
-		renderFlow(onCreateProject);
+		const { onCloneProject, onCreateProject } = renderFlow();
 
 		await openCloneStep(user);
+		// No local folder picker is even offered on a remote machine.
+		expect(screen.queryByRole("button", { name: "Choose" })).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText("Repository URL"), "https://github.com/agentlab-in/hosted-ao.git");
 		await user.click(screen.getByRole("button", { name: "Continue" }));
-
 		await user.click(await screen.findByRole("button", { name: "Clone and start" }));
 
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(1));
-		expect(onCreateProject).toHaveBeenCalledWith({
-			cloneUrl: "https://github.com/agentlab-in/hosted-ao.git",
-			workerAgent: "claude-code",
-			orchestratorAgent: "claude-code",
-			trackerIntake: undefined,
-		});
-		expect(vi.mocked(onCreateProject).mock.calls[0][0]).not.toHaveProperty("path");
+		// POST /api/v1/projects with cloneUrl: the daemon on the machine picks the
+		// destination. POST /api/v1/projects/clone is never used, because its
+		// destinationParent would be a path from this desktop's filesystem.
+		expect(onCloneProject).not.toHaveBeenCalled();
+		const sent = onCreateProject.mock.calls[0][0];
+		expect(sent).toMatchObject({ cloneUrl: "https://github.com/agentlab-in/hosted-ao.git" });
+		expect(sent).not.toHaveProperty("path");
+		expect(sent).not.toHaveProperty("destinationParent");
 	});
 
-	it("blocks a URL the daemon would reject, and says what a good one looks like", async () => {
+	it("keeps upstream's destination-picker flow when the active machine is local", async () => {
+		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:3001");
 		const user = userEvent.setup();
-		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
-		renderFlow(onCreateProject);
-
-		const dialog = await openCloneStep(user);
-		expect(within(dialog).getByRole("button", { name: "Continue" })).toBeDisabled();
-
-		await user.type(within(dialog).getByLabelText("Repository URL"), "github.com/owner");
-		await user.tab();
-
-		expect(
-			within(dialog).getByText("Use an https:// or ssh git remote URL that names an owner and a repository."),
-		).toBeInTheDocument();
-		expect(within(dialog).getByRole("button", { name: "Continue" })).toBeDisabled();
-		expect(onCreateProject).not.toHaveBeenCalled();
-	});
-
-	it("shows the daemon's auth remediation on the URL step, with the URL kept for a retry", async () => {
-		const user = userEvent.setup();
-		const onCreateProject = vi
-			.fn()
-			.mockRejectedValue(
-				cloneFailure(
-					"CLONE_AUTH_FAILED",
-					"No git credentials on this machine. For an https:// URL, run `gh auth login`. For an SSH URL, add a deploy key or start an SSH agent, then try again.",
-				),
-			) as CreateProjectHandler;
-		renderFlow(onCreateProject);
+		renderFlow();
 
 		await openCloneStep(user);
-		await user.type(screen.getByLabelText("Repository URL"), "https://github.com/agentlab-in/private-repo.git");
-		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await user.click(await screen.findByRole("button", { name: "Clone and start" }));
 
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("Git credentials needed on this machine");
-		expect(alert).toHaveTextContent("run gh auth login");
-		expect(within(alert).getByText("gh auth login").tagName).toBe("CODE");
-		// The code is not repeated raw at the user, and the URL survives for a retry.
-		expect(alert).not.toHaveTextContent("CLONE_AUTH_FAILED");
-		expect(screen.getByLabelText("Repository URL")).toHaveValue("https://github.com/agentlab-in/private-repo.git");
-	});
-
-	it("titles every clone failure code rather than falling back to the raw message", async () => {
-		const user = userEvent.setup();
-		const onCreateProject = vi
-			.fn()
-			.mockRejectedValue(
-				cloneFailure("CLONE_TIMEOUT", "Clone timed out after 5m0s. Check your network connection and try again."),
-			) as CreateProjectHandler;
-		renderFlow(onCreateProject);
-
-		await openCloneStep(user);
-		await user.type(screen.getByLabelText("Repository URL"), "https://github.com/agentlab-in/hosted-ao.git");
-		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await user.click(await screen.findByRole("button", { name: "Clone and start" }));
-
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("Clone timed out");
-		expect(alert).toHaveTextContent("Check your network connection and try again.");
-	});
-
-	it("keeps saying the clone is running while the daemon is still cloning", async () => {
-		const user = userEvent.setup();
-		let finishClone = () => undefined as void;
-		const onCreateProject = vi.fn().mockImplementation(
-			() =>
-				new Promise<void>((resolve) => {
-					finishClone = () => resolve();
-				}),
-		) as CreateProjectHandler;
-		renderFlow(onCreateProject);
-
-		await openCloneStep(user);
-		await user.type(screen.getByLabelText("Repository URL"), "https://github.com/agentlab-in/hosted-ao.git");
-		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await user.click(await screen.findByRole("button", { name: "Clone and start" }));
-
-		const progress = await screen.findByRole("status");
-		expect(progress).toHaveTextContent("Cloning agentlab-in/hosted-ao...");
-		expect(progress).toHaveTextContent("A large repository can take a few minutes.");
-		expect(screen.getByRole("button", { name: "Cloning..." })).toBeDisabled();
-
-		finishClone();
-		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+		expect(screen.getByLabelText("Clone into")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Choose" })).toBeInTheDocument();
 	});
 });

@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { components } from "../../api/schema";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import type { useDaemonStatus } from "../hooks/useDaemonStatus";
 
@@ -9,6 +10,13 @@ export type ShellContextValue = {
 	daemonStatus: ReturnType<typeof useDaemonStatus>;
 	workspaceStartupState: "loading" | "ready" | "error";
 	createProject: (input: CreateProjectInput) => Promise<void>;
+	cloneProject: (input: {
+		remoteUrl: string;
+		destinationParent: string;
+		workerAgent: string;
+		orchestratorAgent: string;
+		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
+	}) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;
 };
 

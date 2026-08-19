@@ -25,6 +25,12 @@ vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: vi.fn() },
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
+	// The board's welcome state mounts CreateProjectFlow, which subscribes to the
+	// active machine's base URL to decide whether a clone can use this desktop's
+	// folder picker. Loopback keeps these tests on the local-machine path, which
+	// is what the folder-picker assertions here already assume.
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => {},
 }));
 
 vi.mock("../../lib/bridge", () => ({
@@ -83,6 +89,7 @@ const orchestratorSession: Session = {
 };
 
 const createProjectMock = vi.fn().mockResolvedValue(undefined);
+const cloneProjectMock = vi.fn().mockResolvedValue(undefined);
 const initializeProjectRepositoryMock = vi.fn().mockResolvedValue(undefined);
 
 // Kept from the latest renderBoard call so tests can rerender with the same
@@ -95,6 +102,7 @@ function renderBoard(ui: ReactNode) {
 	lastShell = {
 		daemonStatus: { state: "ready" } as ShellContextValue["daemonStatus"],
 		workspaceStartupState: "ready",
+		cloneProject: cloneProjectMock,
 		createProject: createProjectMock,
 		initializeProjectRepository: initializeProjectRepositoryMock,
 	};
@@ -110,6 +118,7 @@ const columnCount = () => document.querySelectorAll("section").length;
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	cloneProjectMock.mockResolvedValue(undefined);
 	createProjectMock.mockResolvedValue(undefined);
 	initializeProjectRepositoryMock.mockResolvedValue(undefined);
 	useUiStore.setState({
@@ -127,6 +136,7 @@ describe("global board first launch", () => {
 		lastShell = {
 			daemonStatus: { state: "starting" } as ShellContextValue["daemonStatus"],
 			workspaceStartupState: "loading",
+			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
 		};
@@ -142,7 +152,7 @@ describe("global board first launch", () => {
 		expect(screen.getByRole("status", { name: "Agent Orchestrator is starting" })).toBeInTheDocument();
 		expect(screen.getByText("Agent Orchestrator")).toBeInTheDocument();
 		expect(screen.getByText("Starting local services")).toHaveAttribute("aria-hidden", "true");
-		expect(screen.queryByText("Import to Agent Orchestrator")).not.toBeInTheDocument();
+		expect(screen.queryByText("Add code to Agent Orchestrator")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 	});
 
@@ -150,10 +160,11 @@ describe("global board first launch", () => {
 		respondWith([], []);
 		renderBoard(<SessionsBoard />);
 
-		expect(await screen.findByText("Import to Agent Orchestrator")).toBeInTheDocument();
-		expect(screen.getByText("What are you importing?")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Workspace" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Project" })).toBeInTheDocument();
+		expect(await screen.findByText("Add code to Agent Orchestrator")).toBeInTheDocument();
+		expect(screen.getByText("Clone a repository or open code that is already on this computer.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Clone from Git" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Add a workspace folder" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open local repository" })).toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 		// The welcome carries its own orientation — no dangling "Board" header.
 		expect(screen.queryByText("Board")).not.toBeInTheDocument();
@@ -164,7 +175,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open local repository" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a project repository");
 	});
@@ -174,7 +185,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockResolvedValue(null);
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Workspace" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Add a workspace folder" }));
 		expect(chooseDirectoryMock).toHaveBeenCalledTimes(1);
 		expect(chooseDirectoryMock).toHaveBeenCalledWith("Choose a workspace folder");
 	});
@@ -184,7 +195,7 @@ describe("global board first launch", () => {
 		chooseDirectoryMock.mockRejectedValue(new Error("dialog unavailable"));
 		renderBoard(<SessionsBoard />);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Project" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open local repository" }));
 		const messages = await screen.findAllByText("dialog unavailable");
 		expect(messages.some((el) => !el.classList.contains("sr-only"))).toBe(true);
 	});
@@ -194,7 +205,7 @@ describe("global board first launch", () => {
 		renderBoard(<SessionsBoard />);
 
 		expect(await screen.findByText("fix the bug")).toBeInTheDocument();
-		expect(screen.queryByText("Import to Agent Orchestrator")).not.toBeInTheDocument();
+		expect(screen.queryByText("Add code to Agent Orchestrator")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(4);
 	});
 
@@ -204,6 +215,7 @@ describe("global board first launch", () => {
 		lastShell = {
 			daemonStatus: { state: "stopped", code: "exited" } as ShellContextValue["daemonStatus"],
 			workspaceStartupState: "loading",
+			cloneProject: cloneProjectMock,
 			createProject: createProjectMock,
 			initializeProjectRepository: initializeProjectRepositoryMock,
 		};
@@ -230,7 +242,7 @@ describe("project board with no sessions", () => {
 		// Board header + empty state each offer the pair; the orchestrator is primary in both.
 		expect(screen.getAllByRole("button", { name: "Spawn Orchestrator" }).length).toBeGreaterThan(0);
 		expect(screen.getAllByRole("button", { name: "New task" }).length).toBeGreaterThan(0);
-		expect(screen.queryByText("Import to Agent Orchestrator")).not.toBeInTheDocument();
+		expect(screen.queryByText("Add code to Agent Orchestrator")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 	});
 

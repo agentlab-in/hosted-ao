@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,11 +23,22 @@ import (
 //	go build -ldflags "-X github.com/aoagents/agent-orchestrator/backend/internal/cli.releaseRepo=harshitsinghbhandari/agent-orchestrator" ./cmd/ao
 //
 // Mirrors how version.go's Version var is stamped by release tooling.
-var releaseRepo = "AgentWrapper/agent-orchestrator"
+//
+// Untrivial-ai is the org the repo was transferred to in July 2026. The old
+// AgentWrapper URLs still resolve only through GitHub's rename redirect, which
+// is not a contract: the same staleness that stranded the baked update feed
+// (#3523) would strand every `ao start` download the day that redirect stops.
+var releaseRepo = "Untrivial-ai/agent-orchestrator"
 
 // appBundleName is the macOS bundle directory name produced by electron-forge
 // (spaced, per frontend/forge.config.ts).
 const appBundleName = "Agent Orchestrator.app"
+
+// cloudSignInEnabled mirrors frontend/src/shared/cloud-pin.ts. Hosted AO pins
+// upstream AO Cloud off permanently and must never claim the ao-app://
+// scheme, or it hijacks stock agent-orchestrator's sign-in callback on a
+// machine that has both installed. Flip both constants together.
+const cloudSignInEnabled = false
 
 // appStateFileName is the marker the desktop app writes under ~/.ao/hosted on every
 // launch (spec §5). `ao start` is a read-only consumer of it.
@@ -97,6 +109,12 @@ func (c *commandContext) runStart(ctx context.Context, cmd *cobra.Command, opts 
 	}
 	res.AppPath = appPath
 
+	if shouldRegisterLinuxProtocolHandler() {
+		if err := c.registerLinuxProtocolHandler(ctx, appPath); err != nil {
+			return err
+		}
+	}
+
 	opened, err := c.openApp(ctx, appPath)
 	if err != nil {
 		return err
@@ -115,9 +133,20 @@ func (c *commandContext) runStart(ctx context.Context, cmd *cobra.Command, opts 
 }
 
 // resolveApp returns the path to a usable desktop bundle, or "" when none is
-// found (spec §6.2). Resolution order is fixed: marker path -> stat -> known
-// location scan. It never compares versions (invariant 5).
+// found (spec §6.2). Resolution order is marker path -> stat -> known location
+// scan, with one exception: on macOS a real bundle in /Applications outranks
+// the marker. It still never compares versions (invariant 5).
+//
+// The exception exists because the marker is not authoritative about which copy
+// the user wants. The app rewrites it on every launch, so a stale copy (the
+// original download, one on a dmg) that got launched leaves the marker pointing
+// at itself, and `ao start` would then keep reopening that copy instead of the
+// install. /Applications is the one location the updater maintains, so prefer
+// it and let the marker cover the rest (~/Applications, unusual layouts).
 func (c *commandContext) resolveApp() string {
+	if p := preferredAppPath(); p != "" && isUsableBundle(p) {
+		return p
+	}
 	if p := c.markerAppPath(); p != "" && isUsableBundle(p) {
 		return p
 	}
@@ -127,6 +156,24 @@ func (c *commandContext) resolveApp() string {
 		}
 	}
 	return ""
+}
+
+// preferredAppPath is the location that outranks the marker, or "" when the
+// platform has none. A package var for the same reason as appScanLocations:
+// tests point it at a temp bundle instead of the real system path.
+var preferredAppPath = darwinApplicationsBundle
+
+// darwinApplicationsBundle is /Applications/<bundle> on macOS, "" elsewhere.
+// That is where Squirrel installs updates, so it is the copy actually kept
+// current. Windows and Linux have no equivalent single maintained location, so
+// they keep the original marker-first order.
+func darwinApplicationsBundle() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	// Concatenated, not filepath.Join'd, to match knownAppLocations (and to keep
+	// gocritic's filepathJoin check happy about the leading separator).
+	return "/Applications/" + appBundleName
 }
 
 // appScanLocations is the known-location scan source. It is a package var so
@@ -211,6 +258,114 @@ func linuxAppImagePath() string {
 		return "agent-orchestrator.AppImage"
 	}
 	return filepath.Join(dir, "agent-orchestrator.AppImage")
+}
+
+// shouldRegisterLinuxProtocolHandler reports whether `ao start` should claim
+// the ao-app:// scheme as the Linux desktop's default handler. Extracted from
+// runStart's call site so the cloudSignInEnabled pin is testable on its own,
+// without needing a full runStart harness or a Linux runner. The function
+// itself, registerLinuxProtocolHandler, stays in place and unconditional:
+// deleting it would widen future upstream-merge conflicts. This gate is our
+// seam instead.
+func shouldRegisterLinuxProtocolHandler() bool {
+	return cloudSignInEnabled && runtime.GOOS == "linux"
+}
+
+const linuxDesktopEntryName = "agent-orchestrator-ao-app.desktop"
+
+func linuxApplicationsDir() (string, error) {
+	// A URL-scheme handler is OS integration metadata, not AO runtime state.
+	// freedesktop.org requires desktop entries under XDG_DATA_HOME; keeping the
+	// executable and all mutable AO data under ~/.ao is unchanged.
+	if dataHome := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(dataHome) {
+		return filepath.Join(dataHome, "applications"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home for Linux protocol registration: %w", err)
+	}
+	return filepath.Join(home, ".local", "share", "applications"), nil
+}
+
+func desktopExecPath(appPath string) string {
+	escaped := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"`", "\\`",
+		"$", `\$`,
+		"%", "%%",
+	).Replace(appPath)
+	return `"` + escaped + `"`
+}
+
+// registerLinuxProtocolHandler writes the ao-app:// desktop entry and sets it
+// as the xdg-mime default. Callers must check shouldRegisterLinuxProtocolHandler
+// first (runStart does): this function does not itself check cloudSignInEnabled,
+// so it stays exactly as upstream wrote it and the pin lives entirely at the
+// call site.
+func (c *commandContext) registerLinuxProtocolHandler(
+	ctx context.Context,
+	appPath string,
+) error {
+	applicationsDir, err := linuxApplicationsDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(applicationsDir, 0o750); err != nil {
+		return fmt.Errorf("create Linux applications directory: %w", err)
+	}
+	entry := fmt.Sprintf(`[Desktop Entry]
+Type=Application
+Name=Agent Orchestrator
+Exec=%s %%u
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/ao-app;
+`, desktopExecPath(appPath))
+	target := filepath.Join(applicationsDir, linuxDesktopEntryName)
+	temporary := target + ".tmp"
+	if err := os.WriteFile(temporary, []byte(entry), 0o600); err != nil {
+		return fmt.Errorf("write Linux desktop entry: %w", err)
+	}
+	if err := os.Chmod(temporary, 0o644); err != nil { //nolint:gosec // G302: desktop entries must be world-readable
+		_ = os.Remove(temporary)
+		return fmt.Errorf("chmod Linux desktop entry: %w", err)
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("install Linux desktop entry: %w", err)
+	}
+	if out, err := c.deps.CommandOutput(
+		ctx,
+		"xdg-mime",
+		"default",
+		linuxDesktopEntryName,
+		"x-scheme-handler/ao-app",
+	); err != nil {
+		return fmt.Errorf(
+			"register ao-app URL handler with xdg-mime (install xdg-utils or use the .deb/.rpm package): %w: %s",
+			err,
+			out,
+		)
+	}
+	out, err := c.deps.CommandOutput(
+		ctx,
+		"xdg-mime",
+		"query",
+		"default",
+		"x-scheme-handler/ao-app",
+	)
+	if err != nil {
+		return fmt.Errorf("verify ao-app URL handler: %w: %s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != linuxDesktopEntryName {
+		return fmt.Errorf(
+			"verify ao-app URL handler: xdg-mime selected %q instead of %q",
+			strings.TrimSpace(string(out)),
+			linuxDesktopEntryName,
+		)
+	}
+	return nil
 }
 
 // isUsableBundle reports whether p stats as a usable app bundle. On macOS a
@@ -344,8 +499,8 @@ func (c *commandContext) fetchAppWindows(ctx context.Context, w io.Writer) (stri
 }
 
 // fetchAppLinux downloads the self-contained AppImage to a stable path under
-// ~/.ao/hosted, makes it executable, and returns it. There is no install step (spec
-// §6.3). Re-runs resolve the existing file via knownAppLocations and skip fetch.
+// ~/.ao/hosted, makes it executable, and returns it. runStart separately installs
+// the freedesktop URL handler on every launch, including for an existing AppImage.
 func (c *commandContext) fetchAppLinux(ctx context.Context, w io.Writer) (string, error) {
 	asset, err := assetName()
 	if err != nil {

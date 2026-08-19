@@ -401,6 +401,34 @@ func TestParseCloneURL_HostileInputsStayInsideReposRoot(t *testing.T) {
 	}
 }
 
+func TestCloneRepositoryNameDecodesURLPathOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "space", url: "file:///tmp/my%20repo.git", want: "my repo"},
+		{name: "path separator", url: "https://github.com/acme/nested%2Frepo.git", want: "repo"},
+		{name: "escaped percent", url: "file:///tmp/literal%252Frepo.git", want: "literal%2Frepo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := cloneRepositoryName(tt.url)
+			if err != nil {
+				t.Fatalf("cloneRepositoryName(%q) returned error: %v", tt.url, err)
+			}
+			if got != tt.want {
+				t.Fatalf("cloneRepositoryName(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeDirComponent(t *testing.T) {
 	for _, ok := range []string{"widgets", "widgets.js", "ac..me", "a", "_", "-", ".hidden", "A1-b_2.c", "..a"} {
 		if got, err := sanitizeDirComponent(ok); err != nil || got != ok {
@@ -418,5 +446,13 @@ func TestSanitizeDirComponent(t *testing.T) {
 		if got, err := sanitizeDirComponent(bad); err == nil {
 			t.Fatalf("sanitizeDirComponent(%q) = %q, want an error", bad, got)
 		}
+	}
+}
+
+func TestCloneRepositoryNameRejectsMalformedEscape(t *testing.T) {
+	t.Parallel()
+
+	if _, err := cloneRepositoryName("file:///tmp/bad%ZZ.git"); err == nil {
+		t.Fatal("cloneRepositoryName() accepted a malformed URL escape")
 	}
 }

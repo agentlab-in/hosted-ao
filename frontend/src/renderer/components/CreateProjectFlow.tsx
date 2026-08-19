@@ -1,35 +1,57 @@
 import * as Dialog from "@radix-ui/react-dialog";
+import { ProjectSourcePickerView, type ProjectSource } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, ChevronRight, CloudDownload, Folder, FolderPlus, TriangleAlert, X, XCircle } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+	ArrowRight,
+	CheckCircle2,
+	ChevronRight,
+	Folder,
+	FolderOpen,
+	FolderPlus,
+	Folders,
+	GitFork,
+	X,
+	XCircle,
+} from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { ImportFolderScan } from "../../preload";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
+import { getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
-import { cloneErrorPresentation, parseCloneUrl } from "../lib/clone-url";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
 import { CreateProjectAgentSheet, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
+import type { CloneRepositoryDetails, CloneRepositorySelection } from "./CloneRepositoryDialog";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
 
 // A local folder and a clone URL are mutually exclusive on the daemon (it
 // answers PATH_AND_CLONE_URL_CONFLICT when both arrive). Modelling the source
-// as a union means the UI cannot express the conflict at all: the two are
-// separate branches of the flow, and nothing can send both.
+// as a union means the caller cannot express the conflict at all. Local
+// projects/workspaces (the folder picker) produce the `path` branch;
+// remote-machine clones produce the `cloneUrl` branch, which the hosted
+// build's POST /api/v1/projects accepts so a machine with no local
+// filesystem picker (a remote box, or the CLI) can still add a project by
+// URL.
 export type CreateProjectSource = { path: string; cloneUrl?: never } | { cloneUrl: string; path?: never };
 
 export type CreateProjectInput = CreateProjectSource & { asWorkspace?: boolean } & CreateProjectAgentSelection;
+export type CloneProjectInput = Pick<CloneRepositorySelection, "remoteUrl" | "destinationParent"> &
+	CreateProjectAgentSelection;
+
+const CloneRepositoryDialog = lazy(() => import("./CloneRepositoryDialog"));
+const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 type CreateProjectFlowMode = ProjectKind | "choose";
 
-// Shared create-project flow (native folder picker -> agent sheet -> create).
-// Sidebar opens the import-type picker as a dialog; the first-run board embeds
-// the same picker inline. Both still share the Git setup recovery path.
+// Shared create-project flow. Local projects/workspaces use the native folder
+// picker; remote projects progressively reveal a lazily loaded clone form.
+// Every source converges on the same agent sheet and project-start behavior.
 export function CreateProjectFlow({
 	children,
 	embedded = false,
 	idleLabel,
 	mode = "single_repo",
+	onCloneProject,
 	onCreateProject,
 	onInitializeProject,
 	openSignal,
@@ -40,6 +62,7 @@ export function CreateProjectFlow({
 	embedded?: boolean;
 	idleLabel?: string;
 	mode?: CreateProjectFlowMode;
+	onCloneProject: (input: CloneProjectInput) => Promise<void>;
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
 	// Monotonic counter: each new value opens the flow programmatically (the ⌘N
@@ -48,18 +71,22 @@ export function CreateProjectFlow({
 	openSignal?: number;
 }) {
 	const { t } = useTranslation();
+	// Which machine the clone will actually run on. The same base URL api-client
+	// rebases every REST call onto, so the dialog and the request can never
+	// disagree about which daemon is being asked.
+	const apiBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const remoteMachine = apiBaseUrl !== "" && isRemoteDaemonBaseUrl(apiBaseUrl);
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
 	const [error, setError] = useState<string | null>(null);
-	const [errorCode, setErrorCode] = useState<string | null>(null);
 	const [modePickerOpen, setModePickerOpen] = useState(false);
-	const [folderPickerOpen, setFolderPickerOpen] = useState(false);
 	const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
-	// The field's text, kept across a failed clone so a retry (after `gh auth
-	// login`, say) does not start from an empty input.
-	const [cloneUrl, setCloneUrl] = useState("");
-	// Set once the URL is confirmed: the agent sheet is open and this is what
-	// gets cloned on submit.
-	const [pendingCloneUrl, setPendingCloneUrl] = useState<string | null>(null);
+	const [cloneDetails, setCloneDetails] = useState<CloneRepositoryDetails>(() => ({
+		remoteUrl: "",
+		destinationParent:
+			typeof window === "undefined" ? "" : (window.localStorage.getItem(LAST_CLONE_DESTINATION_KEY) ?? ""),
+	}));
+	const [cloneSelection, setCloneSelection] = useState<CloneRepositorySelection | null>(null);
+	const [folderPickerOpen, setFolderPickerOpen] = useState(false);
 	const [selectedKind, setSelectedKind] = useState<ProjectKind>(mode === "workspace" ? "workspace" : "single_repo");
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [validationScan, setValidationScan] = useState<ImportFolderScan | null>(null);
@@ -72,33 +99,22 @@ export function CreateProjectFlow({
 	const hasModePicker = mode === "choose";
 	const isBusy = isChoosingPath || isCreating || isInitializing;
 
-	const openFolderStep = (kind: ProjectKind) => {
+	const selectSource = (source: ProjectSource) => {
+		setError(null);
+		setValidationScan(null);
+		if (source === "clone") {
+			setModePickerOpen(false);
+			setCloneDialogOpen(true);
+			return;
+		}
+		setCloneSelection(null);
 		// Keep the selector mounted behind the native picker. Closing it first
 		// exposes a blank compositor frame on Windows before Explorer takes focus.
-		void chooseDirectory(kind);
-	};
-
-	const openCloneStep = () => {
-		setError(null);
-		setErrorCode(null);
-		setValidationScan(null);
-		setRepositorySetup(null);
-		setSelectedKind("single_repo");
-		setModePickerOpen(false);
-		setCloneDialogOpen(true);
-	};
-
-	const confirmCloneUrl = (url: string) => {
-		setError(null);
-		setErrorCode(null);
-		setCloneUrl(url);
-		setCloneDialogOpen(false);
-		setPendingCloneUrl(url);
+		void chooseDirectory(source === "workspace" ? "workspace" : "single_repo");
 	};
 
 	const chooseDirectory = async (kind: ProjectKind) => {
 		setError(null);
-		setErrorCode(null);
 		setValidationScan(null);
 		setRepositorySetup(null);
 		setRepositorySetupWarning(null);
@@ -146,6 +162,7 @@ export function CreateProjectFlow({
 	const startFlow = () => {
 		if (hasModePicker) {
 			setError(null);
+			setCloneSelection(null);
 			setModePickerOpen(true);
 			return;
 		}
@@ -161,46 +178,48 @@ export function CreateProjectFlow({
 	}, [openSignal]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
-		const path = selectedPath;
-		const clone = pendingCloneUrl;
-		if (path === null && clone === null) return;
+		if (!selectedPath) return;
 		setError(null);
-		setErrorCode(null);
 		setIsCreating(true);
 		try {
-			if (path !== null && selectedKind === "single_repo" && repositorySetup) {
+			if (cloneSelection) {
+				// No destinationParent means the dialog ran in remote mode and never
+				// offered this desktop's folder picker. Route it onto the cloneUrl
+				// wire, where the machine's own daemon owns the destination. The
+				// discriminant is the selection, not the live machine state, so a
+				// machine switch mid-flow can never send a local path to a remote box.
+				if (cloneSelection.destinationParent === "") {
+					await onCreateProject({ cloneUrl: cloneSelection.remoteUrl, ...selection });
+				} else {
+					await onCloneProject({
+						remoteUrl: cloneSelection.remoteUrl,
+						destinationParent: cloneSelection.destinationParent,
+						...selection,
+					});
+				}
+				setSelectedPath(null);
+				setCloneSelection(null);
+				return;
+			}
+			if (selectedKind === "single_repo" && repositorySetup) {
 				setIsCreating(false);
 				setIsInitializing(true);
-				await onInitializeProject(path);
+				await onInitializeProject(selectedPath);
 				setRepositorySetup(null);
 				setRepositorySetupWarning(null);
 				setIsInitializing(false);
 				setIsCreating(true);
 			}
-			if (clone !== null) {
-				await onCreateProject({ cloneUrl: clone, ...selection });
-				setPendingCloneUrl(null);
-				setCloneUrl("");
-			} else if (path !== null) {
-				await onCreateProject({ path, asWorkspace: selectedKind === "workspace", ...selection });
-				setSelectedPath(null);
-			}
+			await onCreateProject({ path: selectedPath, asWorkspace: selectedKind === "workspace", ...selection });
+			setSelectedPath(null);
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? (err.code as string | undefined) : undefined;
-			// isRepositorySetupRecoveryCode is checked below, after the clone
-			// early-return: a clone failure has no repo-setup recovery UI to show.
 			const message = err instanceof Error ? err.message : t("createProject.couldNotAdd");
-			setError(message);
-			setErrorCode(code ?? null);
-			if (clone !== null) {
-				// Back to the URL step: every clone failure is fixed there, either
-				// by editing the URL or by fixing credentials and retrying it.
-				setPendingCloneUrl(null);
-				setCloneDialogOpen(true);
-				return;
+			if (!cloneSelection && selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) {
+				setRepositorySetup(code);
 			}
-			if (selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) setRepositorySetup(code);
-			if (hasModePicker && selectedPath !== null) {
+			setError(message);
+			if (hasModePicker && !cloneSelection) {
 				if (shouldScanCreateFailure(message)) {
 					try {
 						const scan = await aoBridge.app.scanImportFolder({
@@ -242,10 +261,10 @@ export function CreateProjectFlow({
 					error,
 					label,
 				})}
-			{hasModePicker && embedded && !modePickerOpen && (
+			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
-					<ImportModePicker disabled={isBusy} onSelect={openFolderStep} onCloneFromUrl={openCloneStep} />
-					{error && !folderPickerOpen && !cloneDialogOpen && selectedPath === null && (
+					<ImportSourcePicker disabled={isBusy} onSelect={selectSource} />
+					{error && !folderPickerOpen && selectedPath === null && (
 						<p className="text-caption leading-body text-error" role="status">
 							{error}
 						</p>
@@ -254,37 +273,42 @@ export function CreateProjectFlow({
 			)}
 			{hasModePicker && (
 				<>
-					<CreateProjectModeDialog
+					<CreateProjectSourceDialog
 						disabled={isBusy}
 						open={modePickerOpen}
 						onOpenChange={(open) => !isBusy && setModePickerOpen(open)}
-						onSelect={openFolderStep}
-						onCloneFromUrl={openCloneStep}
+						onSelect={selectSource}
 					/>
-					<CloneProjectDialog
-						disabled={isBusy}
-						error={error ? cloneErrorPresentation(errorCode ?? undefined, error) : null}
-						open={cloneDialogOpen}
-						url={cloneUrl}
-						onUrlChange={setCloneUrl}
-						onBack={() => {
-							setError(null);
-							setErrorCode(null);
-							setCloneDialogOpen(false);
-							if (!embedded) {
-								window.requestAnimationFrame(() => setModePickerOpen(true));
-							}
-						}}
-						onOpenChange={(open) => {
-							if (isBusy) return;
-							setCloneDialogOpen(open);
-							if (!open) {
-								setError(null);
-								setErrorCode(null);
-							}
-						}}
-						onSubmit={confirmCloneUrl}
-					/>
+					{cloneDialogOpen ? (
+						<Suspense fallback={<CloneRepositoryDialogSkeleton />}>
+							<CloneRepositoryDialog
+								disabled={isBusy}
+								error={error}
+								onBack={() => {
+									setError(null);
+									setCloneDialogOpen(false);
+									if (!embedded) window.requestAnimationFrame(() => setModePickerOpen(true));
+								}}
+								onChange={(next) => {
+									setCloneDetails(next);
+									setError(null);
+								}}
+								onClose={() => {
+									setCloneDialogOpen(false);
+									setError(null);
+								}}
+								onContinue={(next) => {
+									setCloneSelection(next);
+									setSelectedKind("single_repo");
+									setSelectedPath(next.targetPath);
+									setCloneDialogOpen(false);
+								}}
+								open
+								remote={remoteMachine}
+								value={cloneDetails}
+							/>
+						</Suspense>
+					) : null}
 					<CreateProjectFolderDialog
 						disabled={isBusy}
 						error={error}
@@ -313,23 +337,30 @@ export function CreateProjectFlow({
 				</>
 			)}
 			<CreateProjectAgentSheet
-				cloneUrl={pendingCloneUrl}
-				error={pendingCloneUrl === null ? error : null}
+				action={cloneSelection ? "clone" : "create"}
+				error={error}
 				isCreating={isCreating}
 				isInitializing={isInitializing}
 				kind={selectedKind}
 				onOpenChange={(open) => {
 					if (!open) {
 						setSelectedPath(null);
-						setPendingCloneUrl(null);
-						if (!folderPickerOpen && !cloneDialogOpen) {
+						setCloneSelection(null);
+						if (!folderPickerOpen) {
 							setError(null);
-							setErrorCode(null);
 						}
 					}
 				}}
+				onBack={
+					cloneSelection
+						? () => {
+								setSelectedPath(null);
+								setCloneDialogOpen(true);
+							}
+						: undefined
+				}
 				onSubmit={createProject}
-				open={selectedPath !== null || pendingCloneUrl !== null}
+				open={selectedPath !== null}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}
@@ -389,17 +420,15 @@ function shouldScanCreateFailure(message: string): boolean {
 	return /workspace|repo|repository|git|path|folder|worktree|bare|branch|commit|remote/i.test(message);
 }
 
-function CreateProjectModeDialog({
+function CreateProjectSourceDialog({
 	disabled,
-	onCloneFromUrl,
 	onOpenChange,
 	onSelect,
 	open,
 }: {
 	disabled: boolean;
-	onCloneFromUrl: () => void;
 	onOpenChange: (open: boolean) => void;
-	onSelect: (kind: ProjectKind) => void;
+	onSelect: (source: ProjectSource) => void;
 	open: boolean;
 }) {
 	return (
@@ -407,164 +436,84 @@ function CreateProjectModeDialog({
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in" />
 				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-[min(var(--size-import-modal-max),calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 border-0 bg-transparent p-0 shadow-none outline-none data-[state=open]:animate-modal-in">
-					<ImportModePicker
-						disabled={disabled}
-						onCloneFromUrl={onCloneFromUrl}
-						onClose={() => onOpenChange(false)}
-						onSelect={onSelect}
-						dialog
-					/>
+					<ImportSourcePicker disabled={disabled} onClose={() => onOpenChange(false)} onSelect={onSelect} dialog />
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
 	);
 }
 
-/** Figma "Dialog - ModalContainer" — Workspace vs Project import chooser. */
-function ImportModePicker({
+/** Shared source chooser for first-run and subsequent project creation. */
+function ImportSourcePicker({
 	dialog = false,
 	disabled,
-	onCloneFromUrl,
 	onClose,
 	onSelect,
 }: {
 	dialog?: boolean;
 	disabled: boolean;
-	onCloneFromUrl: () => void;
 	onClose?: () => void;
-	onSelect: (kind: ProjectKind) => void;
+	onSelect: (source: ProjectSource) => void;
 }) {
 	const { t } = useTranslation();
 	return (
-		<div
-			className="relative isolate flex w-full max-w-(--size-import-modal-max) flex-col items-stretch gap-8 rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-(--size-import-modal-padding) shadow-[var(--shadow-import-modal)]"
-			role={dialog ? undefined : "group"}
-			aria-label={dialog ? undefined : t("createProject.importTitle")}
-		>
-			<div className={cn("relative z-[1] flex flex-col items-start gap-1", onClose && "pr-10")}>
-				{dialog ? (
-					<Dialog.Title className="import-title">{t("createProject.importTitle")}</Dialog.Title>
-				) : (
-					<h2 className="import-title">{t("createProject.importTitle")}</h2>
-				)}
-				{dialog ? (
-					<Dialog.Description className="import-description">{t("createProject.importWhat")}</Dialog.Description>
-				) : (
-					<p className="import-description">{t("createProject.importWhat")}</p>
-				)}
-			</div>
-			<div className="relative z-[2] flex flex-row items-stretch justify-center gap-6 self-stretch">
-				<ProjectModeButton
-					description={t("createProject.workspaceDesc")}
-					disabled={disabled}
-					kind="workspace"
-					onClick={() => onSelect("workspace")}
-				/>
-				<ProjectModeButton
-					description={t("createProject.projectDesc")}
-					disabled={disabled}
-					kind="single_repo"
-					onClick={() => onSelect("single_repo")}
-				/>
-			</div>
-			{/* Third source, deliberately quieter than the two cards: both of those
-			    import something already on this machine, this one fetches it first. */}
-			<div className="relative z-[2] flex flex-col items-center gap-1.5 self-stretch border-t border-[var(--color-border-import-modal)] pt-6 text-center">
-				<button
-					type="button"
-					className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-[14px] font-semibold text-[var(--color-text-import-title)] underline-offset-4 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50"
-					disabled={disabled}
-					onClick={onCloneFromUrl}
-				>
-					<CloudDownload className="size-4 shrink-0" aria-hidden="true" />
-					{t("createProject.cloneFromUrl")}
-				</button>
-				<p className="text-[13px] font-normal leading-5 text-[var(--color-text-import-muted)]">
-					{t("createProject.cloneFromUrlHint")}
-				</p>
-			</div>
-			{onClose && (
-				<button
-					type="button"
-					className="import-close-button"
-					aria-label={t("createProject.closeDialog")}
-					disabled={disabled}
-					onClick={onClose}
-				>
-					<X className="size-5" aria-hidden="true" strokeWidth={1.67} />
-				</button>
+		<>
+			{dialog && (
+				<>
+					<Dialog.Title className="sr-only">{t("createProject.addCodeTitle")}</Dialog.Title>
+					<Dialog.Description className="sr-only">{t("createProject.addCodeDescription")}</Dialog.Description>
+				</>
 			)}
-		</div>
+			<ProjectSourcePickerView
+				dialog={dialog}
+				disabled={disabled}
+				onClose={onClose}
+				onSelect={onSelect}
+				closeIcon={<X className="size-5" aria-hidden="true" strokeWidth={1.67} />}
+				arrowIcon={<ArrowRight className="size-4" aria-hidden="true" />}
+				cloneIcon={<GitFork className="size-[14px] shrink-0" aria-hidden="true" />}
+				folderIcon={<FolderOpen className="size-[14px] shrink-0" aria-hidden="true" />}
+				workspaceIcon={<Folders className="size-5" aria-hidden="true" />}
+				labels={{
+					title: t("createProject.addCodeTitle"),
+					description: t("createProject.addCodeDescription"),
+					clone: t("createProject.cloneFromGit"),
+					cloneDescription: t("createProject.cloneFromGitDesc"),
+					cloneExample: "github.com/acme/web-app",
+					cloneBranchExample: "origin / main",
+					local: t("createProject.openLocal"),
+					localDescription: t("createProject.openLocalDesc"),
+					localExample: "~/Development/web-app",
+					localBranchExample: "main",
+					workspace: t("createProject.addWorkspace"),
+					workspaceDescription: t("createProject.workspaceDesc"),
+					close: t("createProject.closeDialog"),
+				}}
+			/>
+		</>
 	);
 }
 
-function ProjectModeButton({
-	description,
-	disabled,
-	kind,
-	onClick,
-}: {
-	description: string;
-	disabled: boolean;
-	kind: ProjectKind;
-	onClick: () => void;
-}) {
+function CloneRepositoryDialogSkeleton() {
 	const { t } = useTranslation();
-	const isWorkspace = kind === "workspace";
-	const title = isWorkspace ? t("createProject.workspace") : t("createProject.project");
 	return (
-		<button
-			type="button"
-			aria-label={title}
-			className="flex min-h-(--size-import-mode-card-min) w-full flex-1 flex-col justify-start gap-6 self-stretch rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] p-6 text-left transition-colors hover:bg-[var(--color-bg-import-card-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50 sm:min-h-(--size-import-mode-card-min-sm)"
-			disabled={disabled}
-			onClick={onClick}
-		>
-			<span className="flex w-full flex-col items-start">
-				<span
-					className={cn(
-						"flex h-(--size-import-mode-illustration) w-full justify-center",
-						isWorkspace ? "items-start" : "items-center",
-					)}
-				>
-					{isWorkspace ? (
-						<span className="flex h-(--size-import-mode-illustration) w-full max-w-[240px] flex-col items-start gap-3 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-illustration)] p-4">
-							<span className="flex items-center gap-2 text-[14px] leading-5 text-[var(--color-text-import-muted)]">
-								<Folder className="size-[14px] shrink-0" aria-hidden="true" />
-								my-workspace/
-							</span>
-							<span className="flex w-full flex-col items-start gap-2">
-								{["web-app", "api-server", "shared-libs"].map((repo) => (
-									<span key={repo} className="flex w-full items-center px-3 py-2">
-										<span className="mr-2 size-2 shrink-0 rounded-full bg-accent-strong" aria-hidden="true" />
-										<span className="text-[12px] font-bold leading-4 text-[var(--color-text-import-title)]">
-											{repo}
-										</span>
-									</span>
-								))}
-							</span>
-						</span>
-					) : (
-						<span className="flex h-[50px] w-fit items-center rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-chip)] px-4 py-3">
-							<span className="mr-2 size-2 shrink-0 rounded-full bg-accent-strong" aria-hidden="true" />
-							<span className="text-[14px] font-bold leading-5 text-[var(--color-text-import-title)]">web-app</span>
-							<span className="px-1 text-[16px] leading-6 text-[var(--color-text-import-muted)]" aria-hidden="true">
-								·
-							</span>
-							<span className="text-[14px] font-normal leading-5 text-[var(--color-text-import-muted)]">main</span>
-						</span>
-					)}
-				</span>
-			</span>
-			<span className="mt-auto flex w-full flex-col items-start gap-2">
-				<span className="text-[16px] font-bold leading-6 text-[var(--color-text-import-title)]">
-					{title}
-				</span>
-				<span className="text-[14px] font-normal leading-[23px] text-[var(--color-text-import-muted)]">
-					{description}
-				</span>
-			</span>
-		</button>
+		<Dialog.Root open>
+			<Dialog.Portal>
+				<Dialog.Overlay className="dialog-overlay" />
+				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-[min(var(--size-import-folder-dialog),calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-0 shadow-[var(--shadow-import-modal)]">
+					<Dialog.Title className="sr-only">{t("createProject.cloneTitle")}</Dialog.Title>
+					<Dialog.Description className="sr-only">{t("createProject.cloneDescription")}</Dialog.Description>
+					<div className="border-b border-[var(--color-border-import-modal)] p-(--size-import-dialog-padding)">
+						<div className="h-5 w-40 rounded bg-[var(--color-bg-import-chip)]" />
+						<div className="mt-2 h-3 w-72 max-w-full rounded bg-[var(--color-bg-import-chip)]" />
+					</div>
+					<div className="space-y-5 p-(--size-import-dialog-padding)">
+						<div className="h-11 rounded-md bg-[var(--color-bg-import-card)]" />
+						<div className="h-11 rounded-md bg-[var(--color-bg-import-card)]" />
+					</div>
+				</Dialog.Content>
+			</Dialog.Portal>
+		</Dialog.Root>
 	);
 }
 
@@ -589,7 +538,7 @@ function CreateProjectFolderDialog({
 }) {
 	const { t } = useTranslation();
 	const isWorkspace = kind === "workspace";
-	const failedRepos = scan?.repos.filter((repo) => repo.status === "error" || !repo.hasRemote) ?? [];
+	const failedRepos = scan?.repos.filter((repo) => (repo.status === "error" || !repo.hasRemote) && !repo.needsGitInit) ?? [];
 	const hasScan = scan !== null;
 	const footerMessage =
 		failedRepos.length > 0
@@ -667,9 +616,9 @@ function CreateProjectFolderDialog({
 									</div>
 								)}
 
-								{scan.repos
-									.filter((repo) => repo.status !== "error" && repo.hasRemote)
-									.map((repo) => (
+							{scan.repos
+								.filter((repo) => (repo.status !== "error" && repo.hasRemote) || repo.needsGitInit)
+								.map((repo) => (
 										<div
 											key={repo.path}
 											className="rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)]"
@@ -726,189 +675,6 @@ function CreateProjectFolderDialog({
 	);
 }
 
-/**
- * Clone-by-URL step, and the surface every clone failure comes back to: the
- * daemon's remediation always resolves here, either by editing the URL or by
- * fixing credentials on the machine and submitting the same URL again.
- */
-function CloneProjectDialog({
-	disabled,
-	error,
-	onBack,
-	onOpenChange,
-	onSubmit,
-	onUrlChange,
-	open,
-	url,
-}: {
-	disabled: boolean;
-	error: { title: string; message: string } | null;
-	onBack: () => void;
-	onOpenChange: (open: boolean) => void;
-	onSubmit: (url: string) => void;
-	onUrlChange: (url: string) => void;
-	open: boolean;
-	url: string;
-}) {
-	const { t } = useTranslation();
-	// Validity is checked as you type, but only reported once the field has been
-	// left or a submit was attempted: no red text while typing a valid URL.
-	const [touched, setTouched] = useState(false);
-	useEffect(() => {
-		if (!open) setTouched(false);
-	}, [open]);
-
-	const target = parseCloneUrl(url);
-	const invalid = touched && url.trim() !== "" && target === null;
-
-	return (
-		<Dialog.Root open={open} onOpenChange={onOpenChange}>
-			<Dialog.Portal>
-				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in" />
-				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay flex max-h-[calc(100svh-24px)] w-[min(var(--size-import-folder-dialog),calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-0 text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)] data-[state=open]:animate-modal-in">
-					<form
-						className="flex min-h-0 flex-col"
-						onSubmit={(event) => {
-							event.preventDefault();
-							setTouched(true);
-							if (!disabled && target) onSubmit(url.trim());
-						}}
-					>
-						<div className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border-import-modal)] px-4 py-4 sm:gap-4 sm:px-6 sm:py-5">
-							<button
-								type="button"
-								className="grid size-8 shrink-0 place-items-center rounded-lg border border-[var(--color-border-import-modal)] text-[var(--color-text-import-muted)] transition hover:bg-[var(--color-bg-import-card-hover)] hover:text-[var(--color-text-import-title)] disabled:pointer-events-none disabled:opacity-50"
-								aria-label={t("createProject.backToType")}
-								disabled={disabled}
-								onClick={onBack}
-							>
-								<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
-							</button>
-							<div className="min-w-0 flex-1">
-								<Dialog.Title className="text-[18px] font-semibold text-[var(--color-text-import-title)]">
-									{t("createProject.cloneTitle")}
-								</Dialog.Title>
-								<Dialog.Description className="mt-1 max-w-[440px] text-[13px] font-medium leading-5 text-[var(--color-text-import-muted)]">
-									{t("createProject.cloneDescription")}
-								</Dialog.Description>
-							</div>
-							<Dialog.Close asChild>
-								<button
-									type="button"
-									className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--color-text-import-muted)] transition hover:bg-[var(--color-bg-import-card-hover)] hover:text-[var(--color-text-import-title)] disabled:pointer-events-none disabled:opacity-50"
-									aria-label={t("createProject.closeCloneDialog")}
-									disabled={disabled}
-								>
-									<X className="size-4" aria-hidden="true" />
-								</button>
-							</Dialog.Close>
-						</div>
-
-						<div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
-							<div className="flex flex-col gap-1.5">
-								<Label
-									htmlFor="cloneProjectUrl"
-									className="text-[12px] font-medium text-[var(--color-text-import-muted)]"
-								>
-									{t("createProject.repositoryUrlLabel")}
-								</Label>
-								<Input
-									id="cloneProjectUrl"
-									autoFocus
-									autoComplete="off"
-									autoCorrect="off"
-									autoCapitalize="off"
-									spellCheck={false}
-									aria-invalid={invalid || undefined}
-									aria-describedby="cloneProjectUrlHint"
-									className="font-mono text-[13px]"
-									disabled={disabled}
-									placeholder="https://github.com/owner/repo.git"
-									value={url}
-									onBlur={() => setTouched(true)}
-									onChange={(event) => onUrlChange(event.target.value)}
-								/>
-								<p
-									id="cloneProjectUrlHint"
-									className={cn(
-										"text-[12px] leading-5",
-										invalid ? "text-destructive" : "text-[var(--color-text-import-muted)]",
-									)}
-								>
-									{invalid
-										? "Use an https:// or ssh git remote URL that names an owner and a repository."
-										: "https:// or ssh, for example git@github.com:owner/repo.git"}
-								</p>
-							</div>
-
-							{/* Standing expectation-setting, dropped once a real failure is on
-							    screen: the daemon's own remediation supersedes it. */}
-							{!error && (
-								<div className="rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-4 py-3 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-									{t("createProject.cloneHintBefore")} <RemediationText text="`gh auth login`" />{" "}
-									{t("createProject.cloneHintAfter")}
-								</div>
-							)}
-
-							{error && (
-								<div
-									role="alert"
-									className="flex gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-[12px] leading-5"
-								>
-									<TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
-									<div className="min-w-0 space-y-1">
-										<p className="font-semibold text-destructive">{error.title}</p>
-										<p className="text-[var(--color-text-import-muted)]">
-											<RemediationText text={error.message} />
-										</p>
-									</div>
-								</div>
-							)}
-						</div>
-
-						<div className="flex shrink-0 flex-col gap-3 border-t border-[var(--color-border-import-modal)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-							<p className="text-[12px] font-medium text-[var(--color-text-import-muted)]">
-								{target ? `Clones ${target.owner}/${target.repo}` : "Paste the repository's git remote URL"}
-							</p>
-							<div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-								<Button type="button" variant="outline" disabled={disabled} onClick={() => onOpenChange(false)}>
-									{t("createProject.cancel")}
-								</Button>
-								<Button type="submit" variant="primary" disabled={disabled || target === null}>
-									{t("createProject.continue")}
-								</Button>
-							</div>
-						</div>
-					</form>
-				</Dialog.Content>
-			</Dialog.Portal>
-		</Dialog.Root>
-	);
-}
-
-/**
- * The daemon writes its remediation with the command in backticks ("run `gh
- * auth login`"). Render those spans as code so the thing to copy is obvious.
- */
-export function RemediationText({ text }: { text: string }) {
-	return (
-		<>
-			{text.split(/`([^`]+)`/).map((part, index) =>
-				index % 2 === 1 ? (
-					<code
-						key={`${index}:${part}`}
-						className="rounded bg-[var(--color-bg-import-chip)] px-1 py-0.5 font-mono text-[11px] text-[var(--color-text-import-title)]"
-					>
-						{part}
-					</code>
-				) : (
-					part
-				),
-			)}
-		</>
-	);
-}
-
 function ImportRepoRow({ failed = false, repo }: { failed?: boolean; repo: ImportFolderScan["repos"][number] }) {
 	const { t } = useTranslation();
 	return (
@@ -925,7 +691,11 @@ function ImportRepoRow({ failed = false, repo }: { failed?: boolean; repo: Impor
 				</div>
 			</div>
 			<div className="hidden max-w-[260px] shrink-0 truncate text-right font-mono text-[12px] text-[var(--color-text-import-muted)] sm:block">
-				{failed ? (repo.reason ?? t("createProject.repoCannotImport")) : `${repo.branch} ${remoteDisplay(repo.remote)}`}
+				{repo.needsGitInit
+					? "Needs git init"
+					: failed
+						? (repo.reason ?? t("createProject.repoCannotImport"))
+						: `${repo.branch} ${remoteDisplay(repo.remote)}`}
 			</div>
 		</div>
 	);

@@ -7,7 +7,11 @@ import { writeFileSync } from "node:fs";
 
 // Default GitHub release target (production). Hosted AO releases land on the
 // hosted repo, never on upstream's, so a packaged Hosted AO cannot auto-update
-// itself into the upstream app.
+// itself into the upstream app. Builds cut by CI must NOT rely on this fallback:
+// the workflows set AO_RELEASE_REPO to the repo they run in, and
+// build-artifacts.yml asserts the baked app-update.yml matches it, so a future
+// org/repo rename fails the build instead of stranding the fleet on a redirect
+// (#3523).
 const DEFAULT_RELEASE_REPO = "agentlab-in/hosted-ao";
 
 // The packaged binary name (no extension). Single source of truth: the packager
@@ -15,6 +19,15 @@ const DEFAULT_RELEASE_REPO = "agentlab-in/hosted-ao";
 // shortcut/launcher at the SAME name. Drift here means a broken Start menu
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "hosted-ao";
+// Upstream claims the ao-app:// scheme here (packagerConfig.protocols, the
+// AppImage maker's protocols, and the deb/rpm mimeType entries below) so the
+// OS routes AO Cloud sign-in deep links to the app. Hosted AO pins AO Cloud
+// off permanently (see frontend/src/shared/cloud-pin.ts) and must never
+// claim ao-app://: this is baked into Info.plist / the .desktop file at
+// build time, so gating it at runtime is not possible, and a packaged
+// Hosted AO that still claims the scheme would hijack stock
+// agent-orchestrator's sign-in callback on a machine that has both
+// installed. So no maker below declares a protocols/mimeType entry for it.
 
 // parseReleaseRepo turns an "owner/repo" string (from AO_RELEASE_REPO) into the
 // publisher-github { owner, name } shape, falling back to the production default
@@ -41,7 +54,8 @@ const config: ForgeConfig = {
 		icon: "assets/icon",
 		extraResource: [
 			"daemon",
-			"resources/acp-runtime",
+				"agent-browser",
+				"resources/acp-runtime",
 			"assets/icon.png",
 			"assets/icon.ico",
 			"assets/trayIconTemplate.png",
@@ -192,8 +206,9 @@ const config: ForgeConfig = {
 			// fork without a source edit. AO_RELEASE_REPO is "owner/repo"; it defaults
 			// to the production target. The dev/test loop sets
 			// AO_RELEASE_REPO=harshitsinghbhandari/agent-orchestrator (spec §1.1, §8).
-			// Note: aoagents/agent-orchestrator was the temporary rewrite home and is
-			// intentionally NOT the default; releases land on AgentWrapper.
+			// Note: aoagents/agent-orchestrator and AgentWrapper/agent-orchestrator
+			// are prior homes and intentionally NOT the default; releases land on
+			// Untrivial-ai.
 			config: {
 				repository: parseReleaseRepo(process.env.AO_RELEASE_REPO),
 				prerelease: process.env.AO_RELEASE_PRERELEASE === "true",

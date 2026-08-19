@@ -20,6 +20,7 @@ import (
 func TestDoctorJSONReportsClaudeAuthRemediation(t *testing.T) {
 	setConfigEnv(t)
 	clearDoctorGitHubEnv(t)
+	clearDoctorGitLabEnv(t)
 	deps := Deps{
 		LookPath:     func(string) (string, error) { return "", errors.New("missing") },
 		ProcessAlive: func(int) bool { return false },
@@ -50,6 +51,7 @@ func TestDoctorJSONReportsClaudeAuthRemediation(t *testing.T) {
 func TestDoctorJSONOutputIsDecodable(t *testing.T) {
 	setConfigEnv(t)
 	clearDoctorGitHubEnv(t)
+	clearDoctorGitLabEnv(t)
 	out, errOut, err := executeCLI(t, doctorCLIDeps(), "doctor", "--json")
 	if err != nil {
 		t.Fatalf("doctor --json failed: %v\nstderr=%s\nstdout=%s", err, errOut, out)
@@ -69,11 +71,12 @@ func TestDoctorJSONOutputIsDecodable(t *testing.T) {
 func TestDoctorTextOutputIsGrouped(t *testing.T) {
 	setConfigEnv(t)
 	clearDoctorGitHubEnv(t)
+	clearDoctorGitLabEnv(t)
 	out, errOut, err := executeCLI(t, doctorCLIDeps(), "doctor")
 	if err != nil {
 		t.Fatalf("doctor failed: %v\nstderr=%s\nstdout=%s", err, errOut, out)
 	}
-	for _, want := range []string{"Core:\nPASS config:", "Tools:\nPASS git:", "Agent harnesses:\nWARN claude-code:", "WARN codex:", "WARN muse:", "GitHub:\nWARN github-token:"} {
+	for _, want := range []string{"Core:\nPASS config:", "Tools:\nPASS git:", "Agent harnesses:\nWARN claude-code:", "WARN codex:", "WARN muse:", "GitHub:\nWARN github-token:", "GitLab:\nWARN gitlab-token:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
 		}
@@ -86,6 +89,7 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 func TestDoctorReportsDaemonState(t *testing.T) {
 	setConfigEnv(t)
 	clearDoctorGitHubEnv(t)
+	clearDoctorGitLabEnv(t)
 	c := &commandContext{deps: doctorCLIDeps().withDefaults()}
 
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "daemon")
@@ -120,6 +124,12 @@ func clearDoctorGitHubEnv(t *testing.T) {
 	t.Setenv("AO_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "")
+}
+
+func clearDoctorGitLabEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AO_GITLAB_TOKEN", "")
+	t.Setenv("GITLAB_TOKEN", "")
 }
 
 func findDoctorCheck(t *testing.T, checks []doctor.Check, name string) doctor.Check {
