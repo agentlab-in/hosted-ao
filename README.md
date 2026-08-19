@@ -52,7 +52,10 @@ The daemon itself never grows a public listener. That is a hard rule inherited f
 - **One account, many machines.** Sign-in, a machine picker in the app, and unbindable machine registrations on the account page.
 - **One-command VM bootstrap.** `ao setup-vm` takes a fresh Ubuntu box to a registered, TLS-serving agent machine: dependency preflight, systemd units for daemon and gateway, device-flow binding, done.
 - **Real remote sessions.** Bearer-authenticated REST and SSE, cookie-authenticated terminal mux and event streams, silent token refresh. The board, the terminal, notifications, all of it works against a remote machine.
-- **Clone by URL.** Point a project at a Git URL and the machine clones it; nothing needs to pre-exist on it.
+- **Clone by URL, on the machine that runs the agents.** Add a project from a Git URL and the
+  active machine clones it into its own managed repos directory; nothing needs to pre-exist on it,
+  and no folder on your desktop is involved. Local machines keep the ordinary "choose where to
+  clone" flow.
 - **Remote health.** `GET /api/v1/doctor` serves the same checks `ao doctor` runs, through the gateway, so the app can tell you a machine's harness auth is broken before you waste a session on it.
 - **Perfect coexistence.** All state lives under `~/.ao/hosted`. Install Hosted AO next to a stock Agent Orchestrator and neither knows the other exists.
 

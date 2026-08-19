@@ -3,6 +3,7 @@ import { ChevronLeft, Folder, GitBranch, Link2, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
+import { parseCloneUrl } from "../lib/clone-url";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -26,6 +27,7 @@ export default function CloneRepositoryDialog({
 	onClose,
 	onContinue,
 	open,
+	remote = false,
 	value,
 }: {
 	disabled: boolean;
@@ -35,18 +37,35 @@ export default function CloneRepositoryDialog({
 	onClose: () => void;
 	onContinue: (selection: CloneRepositorySelection) => void;
 	open: boolean;
+	// True when the active machine is not this computer. The destination picker
+	// is the desktop's own folder dialog, so on a remote machine it would hand a
+	// local path to a daemon that has never seen it. There, AO instead clones
+	// into the machine's own managed repos directory and the field is dropped:
+	// the daemon derives the destination from the URL (cloneUrl on
+	// POST /api/v1/projects, see backend/internal/service/project/clone.go).
+	remote?: boolean;
 	value: CloneRepositoryDetails;
 }) {
 	const { t } = useTranslation();
 	const [submitted, setSubmitted] = useState(false);
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
-	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
-	const targetPath = repositoryName && value.destinationParent
-		? joinCloneDestination(value.destinationParent, repositoryName)
-		: "";
+	// On the remote wire the daemon names the directory <owner>-<repo>, so the
+	// URL must carry both. parseCloneUrl mirrors that parser exactly; upstream's
+	// repositoryNameFromGitUrl is the right check for the local wire, which
+	// derives only the last segment.
+	const remoteTarget = remote ? parseCloneUrl(value.remoteUrl) : null;
+	const repositoryName = remote
+		? (remoteTarget ? `${remoteTarget.owner}-${remoteTarget.repo}` : null)
+		: repositoryNameFromGitUrl(value.remoteUrl);
+	const targetPath = remote
+		? (repositoryName ?? "")
+		: repositoryName && value.destinationParent
+			? joinCloneDestination(value.destinationParent, repositoryName)
+			: "";
 	const urlError = submitted && !repositoryName ? t("createProject.cloneInvalidUrl") : null;
-	const destinationError = submitted && !value.destinationParent ? t("createProject.cloneDestinationRequired") : null;
+	const destinationError =
+		!remote && submitted && !value.destinationParent ? t("createProject.cloneDestinationRequired") : null;
 
 	const chooseDestination = async () => {
 		setDestinationPickerError(null);
@@ -71,7 +90,15 @@ export default function CloneRepositoryDialog({
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		setSubmitted(true);
-		if (!repositoryName || !value.destinationParent || disabled) return;
+		if (!repositoryName || disabled) return;
+		if (remote) {
+			// An empty destinationParent is the marker the flow discriminates on:
+			// it can only ever be produced here, and it is what routes the submit
+			// onto the cloneUrl wire instead of POST /api/v1/projects/clone.
+			onContinue({ remoteUrl: value.remoteUrl.trim(), destinationParent: "", targetPath: repositoryName });
+			return;
+		}
+		if (!value.destinationParent) return;
 		onContinue({
 			...value,
 			remoteUrl: value.remoteUrl.trim(),
@@ -156,41 +183,43 @@ export default function CloneRepositoryDialog({
 								)}
 							</div>
 
-							<div className="space-y-2">
-								<Label htmlFor="cloneDestination" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
-									{t("createProject.cloneDestination")}
-								</Label>
-								<div className="flex gap-2">
-									<div className="relative min-w-0 flex-1">
-										<span className="pointer-events-none absolute inset-y-0 left-3 flex w-4 items-center justify-center text-[var(--color-text-import-muted)]">
-											<Folder className="size-4" aria-hidden="true" />
-										</span>
-										<Input
-											id="cloneDestination"
-											aria-describedby={destinationError ? "cloneDestinationError" : undefined}
-											aria-invalid={destinationError ? true : undefined}
-											className="cursor-default bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
-											placeholder={t("createProject.cloneDestinationPlaceholder")}
-											readOnly
-											value={value.destinationParent}
-										/>
+							{remote ? null : (
+								<div className="space-y-2">
+									<Label htmlFor="cloneDestination" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
+										{t("createProject.cloneDestination")}
+									</Label>
+									<div className="flex gap-2">
+										<div className="relative min-w-0 flex-1">
+											<span className="pointer-events-none absolute inset-y-0 left-3 flex w-4 items-center justify-center text-[var(--color-text-import-muted)]">
+												<Folder className="size-4" aria-hidden="true" />
+											</span>
+											<Input
+												id="cloneDestination"
+												aria-describedby={destinationError ? "cloneDestinationError" : undefined}
+												aria-invalid={destinationError ? true : undefined}
+												className="cursor-default bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
+												placeholder={t("createProject.cloneDestinationPlaceholder")}
+												readOnly
+												value={value.destinationParent}
+											/>
+										</div>
+										<Button
+											type="button"
+											variant="footer"
+											className="h-control-form! px-4"
+											disabled={disabled || choosingDestination}
+											onClick={() => void chooseDestination()}
+										>
+											{choosingDestination ? t("createProject.opening") : t("createProject.cloneChoose")}
+										</Button>
 									</div>
-									<Button
-										type="button"
-										variant="footer"
-										className="h-control-form! px-4"
-										disabled={disabled || choosingDestination}
-										onClick={() => void chooseDestination()}
-									>
-										{choosingDestination ? t("createProject.opening") : t("createProject.cloneChoose")}
-									</Button>
+									{destinationError ? (
+										<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
+											{destinationError}
+										</p>
+									) : null}
 								</div>
-								{destinationError ? (
-									<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
-										{destinationError}
-									</p>
-								) : null}
-							</div>
+							)}
 
 							{targetPath ? (
 								<div className="flex items-center gap-3 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-3 py-3">

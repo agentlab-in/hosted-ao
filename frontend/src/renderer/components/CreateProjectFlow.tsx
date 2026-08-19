@@ -13,8 +13,10 @@ import {
 	X,
 	XCircle,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { ImportFolderScan } from "../../preload";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
+import { getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
@@ -67,6 +69,11 @@ export function CreateProjectFlow({
 	openSignal?: number;
 }) {
 	const { t } = useTranslation();
+	// Which machine the clone will actually run on. The same base URL api-client
+	// rebases every REST call onto, so the dialog and the request can never
+	// disagree about which daemon is being asked.
+	const apiBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const remoteMachine = apiBaseUrl !== "" && isRemoteDaemonBaseUrl(apiBaseUrl);
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
 	const [error, setError] = useState<string | null>(null);
 	const [modePickerOpen, setModePickerOpen] = useState(false);
@@ -174,11 +181,20 @@ export function CreateProjectFlow({
 		setIsCreating(true);
 		try {
 			if (cloneSelection) {
-				await onCloneProject({
-					remoteUrl: cloneSelection.remoteUrl,
-					destinationParent: cloneSelection.destinationParent,
-					...selection,
-				});
+				// No destinationParent means the dialog ran in remote mode and never
+				// offered this desktop's folder picker. Route it onto the cloneUrl
+				// wire, where the machine's own daemon owns the destination. The
+				// discriminant is the selection, not the live machine state, so a
+				// machine switch mid-flow can never send a local path to a remote box.
+				if (cloneSelection.destinationParent === "") {
+					await onCreateProject({ cloneUrl: cloneSelection.remoteUrl, ...selection });
+				} else {
+					await onCloneProject({
+						remoteUrl: cloneSelection.remoteUrl,
+						destinationParent: cloneSelection.destinationParent,
+						...selection,
+					});
+				}
 				setSelectedPath(null);
 				setCloneSelection(null);
 				return;
@@ -286,6 +302,7 @@ export function CreateProjectFlow({
 									setCloneDialogOpen(false);
 								}}
 								open
+								remote={remoteMachine}
 								value={cloneDetails}
 							/>
 						</Suspense>
