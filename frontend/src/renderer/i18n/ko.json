@@ -1179,6 +1179,7 @@
 	"pairing.pasteParseError": "올바른 페어링 문자열이 아닌 것 같습니다. 전체 문자열을 복사했는지 확인하거나 세부 정보를 직접 입력하세요.",
 	"pairing.enterManually": "세부 정보 직접 입력",
 	"pairing.racing": "페어링 문자열의 모든 주소를 시도하는 중…",
+	"pairing.finalizing": "페어링을 마무리하는 중…",
 	"pairing.raceFailedBody": "페어링 문자열의 어떤 주소도 10초 이내에 확인되지 않았습니다. 대신 세부 정보를 직접 입력할 수 있습니다.",
 	"pairing.raceOutcomeMismatch": "(지문이 일치하지 않음)",
 	"pairing.raceOutcomeUnreachable": "(연결할 수 없음)",

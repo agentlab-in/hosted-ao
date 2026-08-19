@@ -1194,6 +1194,7 @@
 	"pairing.pasteParseError": "Isso não parece uma string de pareamento válida. Verifique se você copiou a string inteira, ou digite os dados manualmente.",
 	"pairing.enterManually": "Digitar os dados manualmente",
 	"pairing.racing": "Testando todos os endereços da string de pareamento…",
+	"pairing.finalizing": "Concluindo o pareamento…",
 	"pairing.raceFailedBody": "Nenhum dos endereços da string de pareamento pôde ser verificado em 10 segundos. Você pode digitar os dados manualmente.",
 	"pairing.raceOutcomeMismatch": "(a impressão digital não corresponde)",
 	"pairing.raceOutcomeUnreachable": "(não foi possível conectar)",

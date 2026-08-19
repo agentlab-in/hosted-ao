@@ -1194,6 +1194,7 @@
 	"pairing.pasteParseError": "Eso no parece una cadena de emparejamiento válida. Comprueba que copiaste la cadena completa, o introduce los datos manualmente.",
 	"pairing.enterManually": "Introducir los datos manualmente",
 	"pairing.racing": "Probando cada dirección de la cadena de emparejamiento…",
+	"pairing.finalizing": "Finalizando el emparejamiento…",
 	"pairing.raceFailedBody": "Ninguna de las direcciones de la cadena de emparejamiento pudo verificarse en 10 segundos. Puedes introducir los datos manualmente en su lugar.",
 	"pairing.raceOutcomeMismatch": "(la huella digital no coincide)",
 	"pairing.raceOutcomeUnreachable": "(no se pudo conectar)",

@@ -1179,6 +1179,7 @@
 	"pairing.pasteParseError": "有効なペアリング文字列ではないようです。文字列全体をコピーしたか確認するか、詳細を手動で入力してください。",
 	"pairing.enterManually": "詳細を手動で入力",
 	"pairing.racing": "ペアリング文字列内のすべてのアドレスを試しています…",
+	"pairing.finalizing": "ペアリングを完了しています…",
 	"pairing.raceFailedBody": "ペアリング文字列内のどのアドレスも10秒以内に確認できませんでした。代わりに詳細を手動で入力できます。",
 	"pairing.raceOutcomeMismatch": "(フィンガープリントが一致しません)",
 	"pairing.raceOutcomeUnreachable": "(接続できませんでした)",

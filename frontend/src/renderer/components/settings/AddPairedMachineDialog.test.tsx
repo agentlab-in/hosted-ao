@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
@@ -17,6 +17,21 @@ vi.mock("../../lib/bridge", () => ({
 		pairedMachines: { probeFingerprint, getPinnedFingerprint, add, list: vi.fn(), remove },
 	},
 }));
+
+// Real by default (the factory below wires it to the actual implementation),
+// overridable per test so the "match resolves, but this attempt's signal was
+// already aborted" branch can be constructed deterministically without
+// fighting real microtask ordering (racePairAddresses's own settled-guard
+// otherwise always makes a same-tick abort win over a same-tick match, which
+// is correct in production but makes that exact interleaving untestable
+// through the real implementation).
+const { racePairAddressesMock } = vi.hoisted(() => ({ racePairAddressesMock: vi.fn() }));
+
+vi.mock("../../../shared/pair-race", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../../shared/pair-race")>();
+	racePairAddressesMock.mockImplementation(actual.racePairAddresses);
+	return { ...actual, racePairAddresses: racePairAddressesMock };
+});
 
 const FINGERPRINT = "DF:9A:6C:0D:63:16:53:39:2F:43:4F:02:D8:5F:61:51:63:21:70:BE:21:45:E1:9E:B1:25:D2:44:6F:D4:AB:E5";
 const OTHER_FINGERPRINT = "AA:BB:CC:0D:63:16:53:39:2F:43:4F:02:D8:5F:61:51:63:21:70:BE:21:45:E1:9E:B1:25:D2:44:6F:D4:AB:E5";
@@ -54,11 +69,14 @@ function renderDialog(onOpenChange = vi.fn(), onPaired = vi.fn()) {
 /** Unlike renderDialog above, `open` here is real state a dismissal (Cancel,
  * the close button, Escape, an overlay click) actually flips, the way the
  * real caller (MachinesSection) wires it -- needed for tests where the point
- * is what happens to in-flight work once the dialog is actually dismissed. */
+ * is what happens to in-flight work once the dialog is actually dismissed
+ * (and, via `reopen`, re-opened). */
 function renderControlledDialog(onPaired = vi.fn()) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	const controls: { setOpen?: (open: boolean) => void } = {};
 	function Controlled() {
 		const [open, setOpen] = useState(true);
+		controls.setOpen = setOpen;
 		return <AddPairedMachineDialog open={open} onOpenChange={setOpen} onPaired={onPaired} />;
 	}
 	render(
@@ -66,7 +84,7 @@ function renderControlledDialog(onPaired = vi.fn()) {
 			<Controlled />
 		</QueryClientProvider>,
 	);
-	return { onPaired };
+	return { onPaired, reopen: () => act(() => controls.setOpen?.(true)) };
 }
 
 /** The dialog now opens on the paste-a-string step; the pre-existing
@@ -332,7 +350,39 @@ test("paste: switching to manual entry mid-race cancels it too", async () => {
 	expect(screen.getByTestId("pairing-step-form")).toBeInTheDocument();
 });
 
-test("paste: cancelling in the window between a match and add() finishing removes the persisted record", async () => {
+test("paste: a match reported after this attempt's signal was already aborted still skips add()", async () => {
+	// racePairAddresses is mocked for this one test so the "matched, but
+	// signal.aborted by the time the dialog checks" branch can be built
+	// directly, instead of chasing a same-tick timing race that the real
+	// implementation's own settled-guard makes unreachable (a cancel that
+	// really lands first always wins there, which is the correct, tested
+	// behavior in pair-race.test.ts).
+	let resolveRace: (outcome: { status: "matched"; host: string; port: number }) => void = () => undefined;
+	const racePromise = new Promise<{ status: "matched"; host: string; port: number }>((resolve) => {
+		resolveRace = resolve;
+	});
+	racePairAddressesMock.mockReturnValueOnce(racePromise);
+	const { onPaired } = renderControlledDialog();
+
+	await pasteString(buildPairString("192.168.1.5:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+	await screen.findByTestId("pairing-step-racing");
+
+	// Cancel this attempt while the (mocked) race is still outstanding: this
+	// aborts the AbortController startPairing minted for it.
+	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+	// The race now reports a match anyway, as if it had been about to win the
+	// instant before the cancel actually landed.
+	resolveRace({ status: "matched", host: "192.168.1.5", port: 8443 });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	expect(add).not.toHaveBeenCalled();
+	expect(onPaired).not.toHaveBeenCalled();
+	expect(remove).not.toHaveBeenCalled();
+});
+
+test("paste: dismissal is blocked while finalizing, and the pairing completes rather than being cancellable", async () => {
 	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
 	let resolveAdd: (machine: ReturnType<typeof addedMachine>) => void = () => undefined;
 	const addPromise = new Promise<ReturnType<typeof addedMachine>>((resolve) => {
@@ -344,18 +394,64 @@ test("paste: cancelling in the window between a match and add() finishing remove
 	await pasteString(buildPairString("192.168.1.5:8443"));
 	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
-	// The race matched and add() is now in flight, but has not resolved yet.
+	await screen.findByTestId("pairing-step-finalizing");
 	await waitFor(() => expect(add).toHaveBeenCalled());
-	expect(remove).not.toHaveBeenCalled();
 
-	// Dismiss while add() is still pending: the machine is about to be
-	// persisted (or already has been, on the real bridge) without any screen
-	// left open to have confirmed it.
+	// Every dismissal path is a no-op while finalizing: Radix's own
+	// Escape/pointer-outside dismissal is prevented, and Close/Cancel are
+	// disabled so clicking them does nothing either.
+	fireEvent.keyDown(document, { key: "Escape" });
+	fireEvent.pointerDown(document.body);
 	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+	await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
-	// Now let the persist complete.
+	expect(screen.getByTestId("pairing-step-finalizing")).toBeInTheDocument();
+	expect(onPaired).not.toHaveBeenCalled();
+
+	// add() finally resolves: the pairing simply completes, since this window
+	// was never actually cancellable.
 	resolveAdd(addedMachine());
 
-	await waitFor(() => expect(remove).toHaveBeenCalledWith("paired:192.168.1.5:8443"));
-	expect(onPaired).not.toHaveBeenCalled();
+	await waitFor(() => expect(onPaired).toHaveBeenCalled());
+	expect(remove).not.toHaveBeenCalled();
+});
+
+test("paste: cancelling race A, reopening, and starting race B leaves A unable to complete", async () => {
+	let resolveA: (v: { fingerprint: string } | { error: string }) => void = () => undefined;
+	const probeA = new Promise<{ fingerprint: string } | { error: string }>((resolve) => {
+		resolveA = resolve;
+	});
+	probeFingerprint.mockImplementationOnce(() => probeA);
+	add.mockResolvedValue(addedMachine({ id: "paired:192.168.1.6:8443", name: "192.168.1.6" }));
+	const { onPaired, reopen } = renderControlledDialog();
+
+	// Race A: paste and submit, but its only address's probe never answers yet.
+	await pasteString(buildPairString("192.168.1.5:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+	await screen.findByTestId("pairing-step-racing");
+
+	// Cancel A (dismiss), then reopen the dialog fresh.
+	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+	reopen();
+	await screen.findByTestId("pairing-step-paste");
+
+	// Race B: a different address that matches immediately.
+	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
+	await pasteString(buildPairString("192.168.1.6:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	await waitFor(() => expect(onPaired).toHaveBeenCalledTimes(1));
+	expect(add).toHaveBeenCalledTimes(1);
+	expect(add).toHaveBeenCalledWith(expect.objectContaining({ address: "192.168.1.6" }));
+
+	// A's probe, abandoned long ago, finally answers as a match. With an
+	// attempt-local signal this cannot revive A: it closed over its own
+	// controller's signal at the time it started, not a shared ref B has
+	// since moved on from.
+	resolveA({ fingerprint: FINGERPRINT });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	// Still exactly one add()/onPaired, both from B; A contributed nothing.
+	expect(add).toHaveBeenCalledTimes(1);
+	expect(onPaired).toHaveBeenCalledTimes(1);
 });

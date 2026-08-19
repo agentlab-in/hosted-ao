@@ -1179,6 +1179,7 @@
 	"pairing.pasteParseError": "Das sieht nicht wie eine gültige Pairing-Zeichenfolge aus. Prüfe, ob du die ganze Zeichenfolge kopiert hast, oder gib die Daten manuell ein.",
 	"pairing.enterManually": "Daten manuell eingeben",
 	"pairing.racing": "Alle Adressen aus der Pairing-Zeichenfolge werden ausprobiert…",
+	"pairing.finalizing": "Kopplung wird abgeschlossen…",
 	"pairing.raceFailedBody": "Keine der Adressen in der Pairing-Zeichenfolge konnte innerhalb von 10 Sekunden bestätigt werden. Du kannst die Daten stattdessen manuell eingeben.",
 	"pairing.raceOutcomeMismatch": "(Fingerabdruck stimmt nicht überein)",
 	"pairing.raceOutcomeUnreachable": "(keine Verbindung möglich)",

@@ -1174,6 +1174,7 @@
 	"pairing.pasteParseError": "That doesn't look like a valid pairing string. Check that you copied the whole thing, or enter the details manually.",
 	"pairing.enterManually": "Enter details manually",
 	"pairing.racing": "Trying every address in the pairing string…",
+	"pairing.finalizing": "Finishing pairing…",
 	"pairing.raceFailedBody": "None of the addresses in the pairing string could be verified within 10 seconds. You can enter the details manually instead.",
 	"pairing.raceOutcomeMismatch": "(fingerprint did not match)",
 	"pairing.raceOutcomeUnreachable": "(could not connect)",

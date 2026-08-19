@@ -54,7 +54,7 @@ function fingerprintRows(fingerprint: string): string[] {
 	return rows;
 }
 
-type Step = "paste" | "racing" | "raceResults" | "form" | "compare" | "mismatch" | "error";
+type Step = "paste" | "racing" | "finalizing" | "raceResults" | "form" | "compare" | "mismatch" | "error";
 
 function parsePort(raw: string): number | null {
 	if (!/^\d+$/.test(raw.trim())) return null;
@@ -74,16 +74,26 @@ function parsePort(raw: string): number | null {
  * concurrently (frontend/src/shared/pair-race.ts) over the same
  * `probeFingerprint` bridge call, entirely in this renderer -- probing is
  * already one call per address, so nothing about sequencing it needs main.
- * Cancellation, though, is real and lives here too: dismissing the dialog
- * mid-race (Cancel, the close button, Escape, or an overlay click) or
- * switching to manual entry both abort the in-flight race via
- * `raceControllerRef` below, so a race abandoned by the user can never
- * silently finish, pin a fingerprint, and persist a passcode behind their
- * back. The winner's fingerprint is auto-pinned from the string itself (the
- * paste is the out-of-band channel the user already trusted), so this path
- * never shows the visual compare step below; that step, and the
- * steady-state hard-refusal on a real mismatch, exist only for the manual
- * escape hatch this step still offers for recovery.
+ *
+ * Cancellation is real and lives here too, and it is prevention, not
+ * compensation: no persisted pairing is ever undone after the fact. Dismissing
+ * the dialog mid-race (Cancel, the close button, Escape, or an overlay click)
+ * or switching to manual entry both abort *this attempt's own*
+ * `AbortController` -- `startPairing` mints a fresh one per attempt and the
+ * mutation closes over its `signal` directly, rather than reading a shared
+ * ref, so a stale attempt's late resolution can never be revived by a later
+ * attempt resetting shared state. Once a race actually finds a match, though,
+ * there is a brief, unavoidable window while `add()` persists it; rather than
+ * trying to undo a persist after the fact, the dialog enters a `finalizing`
+ * step for that window and blocks dismissal outright (Cancel/Close disabled,
+ * Radix's own Escape/overlay dismissal prevented via the `DialogContent`
+ * `onEscapeKeyDown`/`onPointerDownOutside` handlers below) -- `add()` is one
+ * local IPC round-trip, so this blocks dismissal for milliseconds, and the
+ * pairing simply completes. The winner's fingerprint is auto-pinned from the
+ * string itself (the paste is the out-of-band channel the user already
+ * trusted), so this path never shows the visual compare step below; that
+ * step, and the steady-state hard-refusal on a real mismatch, exist only for
+ * the manual escape hatch this step still offers for recovery.
  */
 export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPairedMachineDialogProps) {
 	const { t } = useTranslation();
@@ -106,15 +116,14 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 	// the only bit of extra state that distinction costs.
 	const [errorFromPaste, setErrorFromPaste] = useState(false);
 
-	// The in-flight paste race's cancellation handle, and whether it was
-	// actually cancelled (vs. won or exhausted on its own): a race the user
-	// abandoned must never be allowed to add a machine or show a result once
-	// it eventually settles, no matter how that settling happens.
+	// Handle to abort the CURRENT paste-race attempt. This is only ever used to
+	// trigger an abort, never to read cancellation state back: each attempt
+	// (see `startPairing`/`pasteRace` below) closes over its own controller's
+	// `signal` directly, so a later attempt reassigning this ref can never
+	// un-cancel or otherwise affect an earlier, already-abandoned attempt.
 	const raceControllerRef = useRef<AbortController | null>(null);
-	const raceCancelledRef = useRef(false);
 
 	const cancelRace = () => {
-		raceCancelledRef.current = true;
 		raceControllerRef.current?.abort();
 	};
 
@@ -139,18 +148,22 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 	useEffect(() => () => raceControllerRef.current?.abort(), []);
 
 	const pasteRace = useMutation({
-		mutationFn: async (parsed: ParsedPairString) => {
+		mutationFn: async ({ parsed, signal }: { parsed: ParsedPairString; signal: AbortSignal }) => {
 			setStep("racing");
 			const wantFingerprint = toPinnedFingerprintFormat(parsed.fingerprintHex);
-			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, aoBridge.pairedMachines.probeFingerprint, {
-				signal: raceControllerRef.current?.signal,
-			});
+			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, aoBridge.pairedMachines.probeFingerprint, { signal });
 			if (outcome.status !== "matched") return outcome;
-			// The race itself may have settled "matched" a tick before a
-			// cancellation lands (racePairAddresses already returned, so its own
-			// signal check is moot); re-check here so a cancel that arrives in
-			// this exact window still stops add() from ever being called.
-			if (raceCancelledRef.current) return { status: "cancelled" as const };
+			// Belt-and-suspenders: racePairAddresses already treats a cancel as
+			// winning over a same-tick match internally, but re-checking this
+			// attempt's own signal here (still nothing async in between) costs
+			// nothing and means add() is never called once cancelled, full stop.
+			if (signal.aborted) return { status: "cancelled" as const };
+			// From here the pairing cannot be walked away from: add() is one
+			// local IPC round-trip, so the dialog blocks dismissal for that
+			// window (see the `finalizing` step below and DialogContent's
+			// onEscapeKeyDown/onPointerDownOutside) rather than trying to undo a
+			// persisted record after the fact.
+			setStep("finalizing");
 			const machine = await aoBridge.pairedMachines.add({
 				id: pairedMachineId(outcome.host, outcome.port),
 				name: outcome.host,
@@ -160,21 +173,10 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 				fingerprint: wantFingerprint,
 				addresses: orderedHints(parsed.addrs, outcome),
 			});
-			if (raceCancelledRef.current) {
-				// Cancelled while add() was in flight: the record is already
-				// persisted at this point, so the only honest fix is to undo it --
-				// no machine should survive a flow the user walked away from.
-				await aoBridge.pairedMachines.remove(machine.id);
-				return { status: "cancelled" as const };
-			}
 			return { status: "matched" as const, machine };
 		},
 		onSuccess: (result) => {
-			// The race (or the dialog itself) was cancelled after this mutation
-			// was already in flight: never act on a result the user abandoned,
-			// whether that's a "matched" add() that just completed, an
-			// "exhausted" result, or the "cancelled" outcome itself.
-			if (raceCancelledRef.current || result.status === "cancelled") return;
+			if (result.status === "cancelled") return;
 			if (result.status === "exhausted") {
 				setRaceAttempts(result.attempts);
 				setStep("raceResults");
@@ -184,7 +186,6 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 			onOpenChange(false);
 		},
 		onError: (err) => {
-			if (raceCancelledRef.current) return;
 			setErrorMessage(err instanceof Error ? err.message : String(err));
 			setErrorFromPaste(true);
 			setStep("error");
@@ -201,9 +202,9 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		// Scrub the raw string and passcode from state the instant it has been
 		// handed off, so a re-render of this step can never show it again.
 		setPasteValue("");
-		raceCancelledRef.current = false;
-		raceControllerRef.current = new AbortController();
-		pasteRace.mutate(parsed);
+		const controller = new AbortController();
+		raceControllerRef.current = controller;
+		pasteRace.mutate({ parsed, signal: controller.signal });
 	};
 
 	const probe = useMutation({
@@ -250,15 +251,27 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 
 	const canSubmit = address.trim().length > 0 && parsePort(port) !== null && passcode.length > 0;
 	const pairError = pair.error instanceof Error ? pair.error.message : null;
-	// The paste race is deliberately excluded here: dismissing the dialog
-	// while it runs is a valid, safe cancel (see cancelRace above), not
-	// something Close/Cancel need to block the way they block the manual
-	// probe/pair calls, which have no cancellation path of their own.
-	const isBusy = probe.isPending || pair.isPending;
+	// While racing, dismissing the dialog is a valid, safe cancel (see
+	// cancelRace above): Close/Cancel stay enabled for that. Finalizing is the
+	// one window where dismissal is blocked outright, both here and via
+	// DialogContent's onEscapeKeyDown/onPointerDownOutside below, since add()
+	// cannot be safely walked away from once it has started.
+	const isFinalizing = step === "finalizing";
+	const isBusy = probe.isPending || pair.isPending || isFinalizing;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent showCloseButton={false} className={settingsDialogContentClass} data-testid="pairing-dialog">
+			<DialogContent
+				showCloseButton={false}
+				className={settingsDialogContentClass}
+				data-testid="pairing-dialog"
+				onEscapeKeyDown={(event) => {
+					if (isFinalizing) event.preventDefault();
+				}}
+				onPointerDownOutside={(event) => {
+					if (isFinalizing) event.preventDefault();
+				}}
+			>
 				<DialogClose asChild>
 					<button
 						type="button"
@@ -274,7 +287,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 				<div className={settingsDialogHeaderClass}>
 					<DialogTitle className="settings-dialog-title">{t("pairing.dialogTitle")}</DialogTitle>
 					<DialogDescription className="text-control leading-4 text-settings-muted">
-						{step === "paste" || step === "racing" || step === "raceResults"
+						{step === "paste" || step === "racing" || step === "finalizing" || step === "raceResults"
 							? t("pairing.pasteSubtitle")
 							: t("pairing.dialogSubtitle")}
 					</DialogDescription>
@@ -329,6 +342,15 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 						>
 							{t("pairing.enterManually")}
 						</button>
+					</div>
+				) : null}
+
+				{step === "finalizing" ? (
+					<div className={settingsDialogBodyClass} data-testid="pairing-step-finalizing">
+						<p className="flex items-center gap-2 text-xs leading-row text-settings-muted">
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+							{t("pairing.finalizing")}
+						</p>
 					</div>
 				) : null}
 

@@ -1161,6 +1161,7 @@
 	"pairing.pasteParseError": "这看起来不是有效的配对字符串。请检查是否复制了完整的字符串，或者手动输入详细信息。",
 	"pairing.enterManually": "手动输入详细信息",
 	"pairing.racing": "正在尝试配对字符串中的每个地址…",
+	"pairing.finalizing": "正在完成配对…",
 	"pairing.raceFailedBody": "配对字符串中的地址均未能在 10 秒内验证成功。你可以改为手动输入详细信息。",
 	"pairing.raceOutcomeMismatch": "（指纹不匹配）",
 	"pairing.raceOutcomeUnreachable": "（无法连接）",

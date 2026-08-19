@@ -1194,6 +1194,7 @@
 	"pairing.pasteParseError": "Cela ne ressemble pas à une chaîne de jumelage valide. Vérifiez que vous avez copié la chaîne entière, ou saisissez les informations manuellement.",
 	"pairing.enterManually": "Saisir les informations manuellement",
 	"pairing.racing": "Essai de chaque adresse de la chaîne de jumelage…",
+	"pairing.finalizing": "Finalisation du jumelage…",
 	"pairing.raceFailedBody": "Aucune des adresses de la chaîne de jumelage n'a pu être vérifiée en 10 secondes. Vous pouvez saisir les informations manuellement à la place.",
 	"pairing.raceOutcomeMismatch": "(l'empreinte ne correspond pas)",
 	"pairing.raceOutcomeUnreachable": "(connexion impossible)",
