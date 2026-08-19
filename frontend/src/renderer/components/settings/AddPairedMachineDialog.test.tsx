@@ -269,6 +269,32 @@ test("paste: a wrong-fingerprint candidate is skipped silently and the race cont
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+test("paste: the CLI's own label prefixed on the same line still pairs", async () => {
+	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
+	add.mockResolvedValue(addedMachine());
+	const { onPaired } = renderDialog();
+
+	await pasteString(`Paste this in Hosted AO: ${buildPairString("192.168.1.5:8443")}`);
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	await waitFor(() => expect(add).toHaveBeenCalled());
+	expect(onPaired).toHaveBeenCalled();
+});
+
+test("paste: an embedded newline mid-string still pairs", async () => {
+	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
+	add.mockResolvedValue(addedMachine());
+	const { onPaired } = renderDialog();
+
+	const full = buildPairString("192.168.1.5:8443");
+	const mid = Math.floor(full.length / 2);
+	await pasteString(`${full.slice(0, mid)}\n${full.slice(mid)}`);
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	await waitFor(() => expect(add).toHaveBeenCalled());
+	expect(onPaired).toHaveBeenCalled();
+});
+
 test("paste: garbage input shows an inline parse error and the manual entry path stays reachable", async () => {
 	renderDialog();
 

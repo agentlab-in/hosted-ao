@@ -178,9 +178,12 @@ function validatePort(port: number): boolean {
 
 /** `AoMachine.baseUrl` for a paired machine, and the validation gate for its
  * address: reuses parseMachineOrigin rather than re-deriving the same rules
- * about scheme, path, and credentials. */
+ * about scheme, path, and credentials. Brackets a bare IPv6 host (stored
+ * unbracketed, the same grammar pair-string.ts's `PairAddr.host` uses) so
+ * `new URL()` inside parseMachineOrigin does not throw on the bare colons. */
 function baseUrlFor(address: string, port: number): string | null {
-	return parseMachineOrigin(`https://${address}:${port}`);
+	const host = address.includes(":") ? `[${address}]` : address;
+	return parseMachineOrigin(`https://${host}:${port}`);
 }
 
 /** "host:port", bracketing an IPv6 host the way pair-string.ts's grammar

@@ -513,3 +513,29 @@ test("promoteAddress rejects an unparseable hint", async () => {
 	await machines.add({ id: "box_1", name: "Pi", address: "192.168.1.5", port: 8443, passcode: "abc123XY", fingerprint: CERT_FINGERPRINT });
 	await expect(machines.promoteAddress("box_1", "not-a-hint")).rejects.toThrow(/usable address/);
 });
+
+test("add with an IPv6 address brackets it in baseUrl instead of throwing", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "fd00::7",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	expect(machines.list()[0]).toMatchObject({ baseUrl: "https://[fd00::7]:8443" });
+});
+
+test("promoteAddress promoting an IPv6 hint keeps the machine listed, bracketed in baseUrl", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({ id: "box_1", name: "Pi", address: "192.168.1.5", port: 8443, passcode: "abc123XY", fingerprint: CERT_FINGERPRINT });
+
+	await machines.promoteAddress("box_1", "[fd00::7]:8443");
+
+	expect(machines.getAddresses("box_1")).toEqual(["[fd00::7]:8443", "192.168.1.5:8443"]);
+	expect(machines.list()[0]).toMatchObject({ baseUrl: "https://[fd00::7]:8443" });
+});

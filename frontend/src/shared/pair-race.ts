@@ -118,7 +118,23 @@ export function racePairAddresses(addrs: PairAddr[], wantFingerprint: string, pr
 			return;
 		}
 
-		timers.push(setTimeout(() => finish({ status: "exhausted", attempts }), timeoutMs));
+		timers.push(
+			setTimeout(() => {
+				// A candidate still mid-flight (or one whose head start never even
+				// elapsed) when the overall budget runs out never got to record its
+				// own attempt; synthesize one so the exhausted results list always
+				// accounts for every address, not just the ones that happened to
+				// answer first.
+				const seen = new Set(attempts.map((a) => `${a.host}:${a.port}`));
+				for (const addr of addrs) {
+					const key = `${addr.host}:${addr.port}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					attempts.push({ host: addr.host, port: addr.port, outcome: "unreachable" });
+				}
+				finish({ status: "exhausted", attempts });
+			}, timeoutMs),
+		);
 
 		for (const addr of addrs) {
 			const start = () => {

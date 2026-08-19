@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { orderedHints, racePairAddresses, type RaceAttempt } from "../../../shared/pair-race";
-import { parsePairString, toPinnedFingerprintFormat, type ParsedPairString } from "../../../shared/pair-string";
+import { parsePairString, toPinnedFingerprintFormat, type PairAddr, type ParsedPairString } from "../../../shared/pair-string";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -60,6 +60,40 @@ function parsePort(raw: string): number | null {
 	if (!/^\d+$/.test(raw.trim())) return null;
 	const port = Number(raw.trim());
 	return port > 0 && port <= 65535 ? port : null;
+}
+
+const PAIR_STRING_SCHEME = "ao-pair://";
+
+/**
+ * Tolerates the two ways a pasted string actually arrives: with the CLI's
+ * own "Paste this in Hosted AO:" label still attached on the same line (an
+ * older client, or a paste that grabbed the whole terminal line), and with
+ * an embedded newline mid-string (a terminal that wrapped it, or a paste
+ * that kept the CLI's own line breaks). Takes everything from the first
+ * `ao-pair://` occurrence onward and strips all whitespace, so either shape
+ * still parses; the parser itself (pair-string.ts) is never loosened, this
+ * only cleans up what reaches it.
+ */
+function normalizePastedString(raw: string): string {
+	const idx = raw.indexOf(PAIR_STRING_SCHEME);
+	const candidate = idx === -1 ? raw : raw.slice(idx);
+	return candidate.replace(/\s+/g, "");
+}
+
+/** Dedupe parsed addresses by host:port, keeping first-seen order, before
+ * they reach racePairAddresses: a pairing string that lists the same
+ * address twice would otherwise double-probe it and produce a duplicate
+ * React key in the race-results list. */
+function dedupeAddrs(addrs: PairAddr[]): PairAddr[] {
+	const seen = new Set<string>();
+	const deduped: PairAddr[] = [];
+	for (const addr of addrs) {
+		const key = `${addr.host}:${addr.port}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		deduped.push(addr);
+	}
+	return deduped;
 }
 
 /**
@@ -130,6 +164,10 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 	useEffect(() => {
 		if (open) return;
 		cancelRace();
+		// Also drops parsed.passcode, which pasteRace's mutation cache would
+		// otherwise keep holding (as part of its last variables/data) after the
+		// dialog closes.
+		pasteRace.reset();
 		setStep("paste");
 		setAddress("");
 		setPort("");
@@ -193,7 +231,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 	});
 
 	const startPairing = () => {
-		const parsed = parsePairString(pasteValue.trim());
+		const parsed = parsePairString(normalizePastedString(pasteValue));
 		if ("error" in parsed) {
 			setParseError(t("pairing.pasteParseError"));
 			return;
@@ -204,7 +242,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		setPasteValue("");
 		const controller = new AbortController();
 		raceControllerRef.current = controller;
-		pasteRace.mutate({ parsed, signal: controller.signal });
+		pasteRace.mutate({ parsed: { ...parsed, addrs: dedupeAddrs(parsed.addrs) }, signal: controller.signal });
 	};
 
 	const probe = useMutation({

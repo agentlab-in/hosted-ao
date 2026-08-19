@@ -122,7 +122,10 @@ describe("racePairAddresses", () => {
 		const probe: ProbeFn = () => new Promise(() => undefined); // never resolves
 		const addrs = [{ host: "10.0.0.1", port: 8443 }];
 		const outcome = await racePairAddresses(addrs, WANT, probe, { headStartMs: 5, timeoutMs: 30 });
-		expect(outcome).toEqual({ status: "exhausted", attempts: [] });
+		expect(outcome).toEqual({
+			status: "exhausted",
+			attempts: [{ host: "10.0.0.1", port: 8443, outcome: "unreachable" }],
+		});
 	});
 
 	test("a duplicate address only contributes one attempt-worth of noise and a late resolver after a win changes nothing", async () => {
