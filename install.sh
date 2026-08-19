@@ -107,14 +107,17 @@ verify_sha256() {
 }
 
 # copy_binary installs src to dest as an executable, using sudo when this
-# process is not already root.
+# process is not already root. install -m 0755 sets the exec bit atomically
+# with the copy in one privileged invocation, so a failure partway through
+# (sudo ticket timeout, disk error, signal) cannot leave a copied-but-not-
+# executable dest behind for a re-run to silently miss.
 copy_binary() {
   src="$1"
   dest="$2"
   if [ "$(id -u)" -eq 0 ]; then
-    cp "$src" "$dest" && chmod +x "$dest"
+    install -m 0755 "$src" "$dest"
   else
-    sudo cp "$src" "$dest" && sudo chmod +x "$dest"
+    sudo install -m 0755 "$src" "$dest"
   fi
 }
 
