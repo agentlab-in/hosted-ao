@@ -46,7 +46,7 @@ const (
 // Build assembles a pairing string from already-validated, already-ordered
 // inputs. It validates every input against the grammar and returns an error
 // naming the first violation instead of building a malformed string.
-func Build(addrs []string, fpHex string, passcode string) (string, error) {
+func Build(addrs []string, fpHex, passcode string) (string, error) {
 	if len(addrs) == 0 {
 		return "", errors.New("pairstring: at least one address is required")
 	}

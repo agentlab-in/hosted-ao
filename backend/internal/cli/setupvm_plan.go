@@ -1401,7 +1401,7 @@ func renderManualPathPair(p setupPlatform) string {
 // the credential the desktop app actually pastes; empty whenever there is
 // nothing to build one from (not generated this run, or no address could be
 // found), in which case only the plaintext-passcode fallback below prints.
-func renderPairCredentials(passcode string, generated bool, pairingString string, fingerprint string, addrs []string, httpsAddr string) string {
+func renderPairCredentials(passcode string, generated bool, pairingString, fingerprint string, addrs []string, httpsAddr string) string {
 	var b strings.Builder
 	b.WriteString("\nPairing this box to the AO desktop app:\n")
 	if generated {
@@ -1439,7 +1439,7 @@ func renderPairCredentials(passcode string, generated bool, pairingString string
 }
 
 // renderSetupSummaryPair is renderSetupSummary's pair-mode counterpart.
-func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, pairingString string, fingerprint string, addrs []string) string {
+func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, pairingString, fingerprint string, addrs []string) string {
 	var b strings.Builder
 	b.WriteString("\nao setup-vm --pair finished. No domain, no AO account, no control-plane contact.\n")
 
@@ -1530,7 +1530,7 @@ func renderSetupDryRunPair(p setupPlan, warnings []string) string {
 // passcode, printed on its own line exactly once, prefixed "Paste this in
 // Hosted AO:"; empty when no address could be found to build one from, in
 // which case only the plaintext-passcode fallback below prints.
-func renderPasscodeRotated(passcode string, pairingString string) string {
+func renderPasscodeRotated(passcode, pairingString string) string {
 	var b strings.Builder
 	b.WriteString("\nPasscode rotated. Every device connected with the old passcode has been dropped\n")
 	b.WriteString("and must enter this new one. The pinned certificate is unchanged, so there is no\n")

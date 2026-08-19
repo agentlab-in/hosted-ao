@@ -96,7 +96,7 @@ func TestFingerprint(t *testing.T) {
 		t.Fatalf("Fingerprint() length = %d, want 64", len(got))
 	}
 	for _, c := range got {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Fatalf("Fingerprint() = %q contains non-lowercase-hex char %q", got, c)
 		}
 	}
