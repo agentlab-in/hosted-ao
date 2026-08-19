@@ -1405,8 +1405,16 @@ func renderPairCredentials(passcode string, generated bool, pairingString string
 	var b strings.Builder
 	b.WriteString("\nPairing this box to the AO desktop app:\n")
 	if generated {
-		if pairingString != "" {
+		switch {
+		case pairingString != "":
 			fmt.Fprintf(&b, "\nPaste this in Hosted AO: %s\n", pairingString)
+		case len(addrs) == 0:
+			b.WriteString("\nNo pairing string could be built: no address was found automatically for this\n")
+			b.WriteString("machine (see the address line below). Find one and run `ao vm rotate-passcode`\n")
+			b.WriteString("once it is reachable, which prints a fresh string built from it.\n")
+		default:
+			b.WriteString("\nNo pairing string could be built (the certificate could not be read). Run\n")
+			b.WriteString("`ao vm rotate-passcode` once that is fixed, which prints a fresh string.\n")
 		}
 		b.WriteString("\n  Passcode (shown once here, never stored anywhere in plaintext):\n")
 		fmt.Fprintf(&b, "\n      %s\n", passcode)
@@ -1529,6 +1537,10 @@ func renderPasscodeRotated(passcode string, pairingString string) string {
 	b.WriteString("fingerprint to re-check.\n")
 	if pairingString != "" {
 		fmt.Fprintf(&b, "\nPaste this in Hosted AO: %s\n", pairingString)
+	} else {
+		b.WriteString("\nNo pairing string could be built (no address was found automatically, or the\n")
+		b.WriteString("certificate could not be read). The passcode below is still valid; build a\n")
+		b.WriteString("string by hand once this machine's address is known.\n")
 	}
 	b.WriteString("\n  New passcode (shown once here, never stored anywhere in plaintext):\n")
 	fmt.Fprintf(&b, "\n      %s\n", passcode)

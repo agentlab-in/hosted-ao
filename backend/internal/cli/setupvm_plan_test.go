@@ -1264,6 +1264,22 @@ func TestRenderPairCredentials_FallsBackWhenNoAddressWasFound(t *testing.T) {
 	}
 }
 
+// TestRenderPairCredentials_ExplainsWhenNoAddressWasFound is the "no
+// usable address" fallback the review found missing: a run that generated
+// a fresh passcode but could not build a pairing string (no address found)
+// must say so explicitly, not silently omit the "Paste this in Hosted AO:"
+// line with no explanation at all.
+func TestRenderPairCredentials_ExplainsWhenNoAddressWasFound(t *testing.T) {
+	text := renderPairCredentials("AB12CD34", true, "", "07:CA", nil, ":443")
+	if strings.Contains(text, "Paste this in Hosted AO") {
+		t.Errorf("must not claim to have a pairing string when none was built:\n%s", text)
+	}
+	if !strings.Contains(text, "No pairing string could be built") {
+		t.Errorf("must explicitly say no pairing string could be built, not omit it silently:\n%s", text)
+	}
+	assertNoDashes(t, text)
+}
+
 func TestRenderPairCredentials_ListsEveryDiscoveredAddress(t *testing.T) {
 	text := renderPairCredentials("AB12CD34", true, "", "07:CA", []string{"192.168.1.20", "10.0.0.5"}, ":443")
 	for _, want := range []string{"192.168.1.20:443", "10.0.0.5:443"} {
@@ -1326,6 +1342,21 @@ func TestRenderPasscodeRotated(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("rotation output is missing %q:\n%s", want, text)
 		}
+	}
+	assertNoDashes(t, text)
+}
+
+// TestRenderPasscodeRotated_ExplainsWhenNoPairingStringCouldBeBuilt is
+// rotate-passcode's half of the same "no usable address" fallback: an
+// empty pairingString must produce an explicit line, not a silent gap in
+// the output.
+func TestRenderPasscodeRotated_ExplainsWhenNoPairingStringCouldBeBuilt(t *testing.T) {
+	text := renderPasscodeRotated("XY98ZW76", "")
+	if strings.Contains(text, "Paste this in Hosted AO") {
+		t.Errorf("must not claim to have a pairing string when none was built:\n%s", text)
+	}
+	if !strings.Contains(text, "No pairing string could be built") {
+		t.Errorf("must explicitly say no pairing string could be built, not omit it silently:\n%s", text)
 	}
 	assertNoDashes(t, text)
 }

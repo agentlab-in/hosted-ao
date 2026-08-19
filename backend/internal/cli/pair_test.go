@@ -38,19 +38,36 @@ func pairFixture(t *testing.T) (passcodeDir, certDir, fingerprint string) {
 	return passcodeDir, certDir, fingerprint
 }
 
-// stubPairAddresses points pairPrivateAddrIPs and the public-IP probe at
-// fixed, network-free values for the duration of the test, so address
-// enumeration never depends on the interfaces or connectivity of whatever
-// machine happens to run the suite.
+// stubPairAddresses points pairInterfaceIPs (with only private addresses)
+// and the public-IP probe at fixed, network-free values for the duration of
+// the test, so address enumeration never depends on the interfaces or
+// connectivity of whatever machine happens to run the suite.
 func stubPairAddresses(t *testing.T, private []string) {
 	t.Helper()
-	restorePriv := pairPrivateAddrIPs
-	t.Cleanup(func() { pairPrivateAddrIPs = restorePriv })
-	pairPrivateAddrIPs = func() []string { return private }
+	stubPairInterfaceIPs(t, private, nil)
 
 	restoreEndpoints := setupVMPublicIPEndpoints
 	t.Cleanup(func() { setupVMPublicIPEndpoints = restoreEndpoints })
 	setupVMPublicIPEndpoints = nil
+}
+
+// stubPairInterfaceIPs overrides pairInterfaceIPs to return exactly
+// (private, public) for the duration of the test.
+func stubPairInterfaceIPs(t *testing.T, private, public []string) {
+	t.Helper()
+	restore := pairInterfaceIPs
+	t.Cleanup(func() { pairInterfaceIPs = restore })
+	pairInterfaceIPs = func() ([]string, []string) { return private, public }
+}
+
+// stubUnreachablePublicProbe points setupVMPublicIPEndpoints at an address
+// nothing listens on, so pairPublicAddress always fails, without ever
+// touching the real network.
+func stubUnreachablePublicProbe(t *testing.T) {
+	t.Helper()
+	restore := setupVMPublicIPEndpoints
+	t.Cleanup(func() { setupVMPublicIPEndpoints = restore })
+	setupVMPublicIPEndpoints = []string{"http://127.0.0.1:1"}
 }
 
 // (a) ao pair show, with a stubbed cert and passcode already on disk, prints
@@ -120,12 +137,10 @@ func TestPairShow_NeverCreatesACertificateWhenOneIsMissing(t *testing.T) {
 // (c) Address enumeration orders every private (RFC 1918) interface address
 // before the public-probe result, excludes loopback (implicit: the stub
 // below never returns one, exercised separately by
-// TestDefaultPairPrivateAddrIPs_ExcludesLoopback), and appends the gateway
+// TestDefaultPairInterfaceIPs_ExcludesLoopback), and appends the gateway
 // port to every address.
 func TestPairListenAddresses_PrivateBeforePublicWithPortAppended(t *testing.T) {
-	restorePriv := pairPrivateAddrIPs
-	t.Cleanup(func() { pairPrivateAddrIPs = restorePriv })
-	pairPrivateAddrIPs = func() []string { return []string{"10.0.0.5", "192.168.1.20"} }
+	stubPairInterfaceIPs(t, []string{"10.0.0.5", "192.168.1.20"}, nil)
 
 	pub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "203.0.113.9\n")
@@ -146,13 +161,8 @@ func TestPairListenAddresses_PrivateBeforePublicWithPortAppended(t *testing.T) {
 // list still comes back with just the private addresses, and the command
 // this feeds must never fail just because the internet was not reachable.
 func TestPairListenAddresses_SkipsAnUnreachablePublicProbe(t *testing.T) {
-	restorePriv := pairPrivateAddrIPs
-	t.Cleanup(func() { pairPrivateAddrIPs = restorePriv })
-	pairPrivateAddrIPs = func() []string { return []string{"10.0.0.5"} }
-
-	restoreEndpoints := setupVMPublicIPEndpoints
-	t.Cleanup(func() { setupVMPublicIPEndpoints = restoreEndpoints })
-	setupVMPublicIPEndpoints = []string{"http://127.0.0.1:1"}
+	stubPairInterfaceIPs(t, []string{"10.0.0.5"}, nil)
+	stubUnreachablePublicProbe(t)
 
 	got := pairListenAddresses(context.Background(), &http.Client{Transport: errRoundTripper{}}, ":443")
 	want := []string{"10.0.0.5:443"}
@@ -161,13 +171,52 @@ func TestPairListenAddresses_SkipsAnUnreachablePublicProbe(t *testing.T) {
 	}
 }
 
-// defaultPairPrivateAddrIPs is the one function in this file that talks to
+// A box whose only address is a directly bound public IP (no NAT, no
+// private interface address at all) must still show up: private-first is
+// an ordering preference, not a filter that discards public interface
+// addresses. This holds even when the public-IP probe itself fails, which
+// is the exact scenario the private-only filter used to break: the probe
+// failing must never be the reason no address (and so no pairing string)
+// is produced when a perfectly usable one is already bound to an
+// interface.
+func TestPairListenAddresses_PublicInterfaceAddressSurvivesEvenWhenProbeFails(t *testing.T) {
+	stubPairInterfaceIPs(t, nil, []string{"203.0.113.5"})
+	stubUnreachablePublicProbe(t)
+
+	got := pairListenAddresses(context.Background(), &http.Client{Transport: errRoundTripper{}}, ":443")
+	want := []string{"203.0.113.5:443"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("pairListenAddresses = %v, want %v (a directly bound public address must not be discarded)", got, want)
+	}
+}
+
+// The public-IP probe's answer is skipped, not duplicated, when it matches
+// an address already found on an interface.
+func TestPairCandidateIPs_DeduplicatesProbeAnswerAlreadyOnAnInterface(t *testing.T) {
+	stubPairInterfaceIPs(t, nil, []string{"203.0.113.5"})
+	pub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "203.0.113.5\n")
+	}))
+	defer pub.Close()
+	restoreEndpoints := setupVMPublicIPEndpoints
+	t.Cleanup(func() { setupVMPublicIPEndpoints = restoreEndpoints })
+	setupVMPublicIPEndpoints = []string{pub.URL}
+
+	got := pairCandidateIPs(context.Background(), &http.Client{})
+	want := []string{"203.0.113.5"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("pairCandidateIPs = %v, want %v (no duplicate entry)", got, want)
+	}
+}
+
+// defaultPairInterfaceIPs is the one function in this file that talks to
 // the real network stack (net.Interfaces); this pins the one thing that is
 // safe to assert regardless of which machine runs the suite.
-func TestDefaultPairPrivateAddrIPs_ExcludesLoopback(t *testing.T) {
-	for _, addr := range defaultPairPrivateAddrIPs() {
+func TestDefaultPairInterfaceIPs_ExcludesLoopback(t *testing.T) {
+	private, public := defaultPairInterfaceIPs()
+	for _, addr := range append(append([]string{}, private...), public...) {
 		if strings.HasPrefix(addr, "127.") || addr == "::1" {
-			t.Errorf("defaultPairPrivateAddrIPs() = %v, must not include loopback", addr)
+			t.Errorf("defaultPairInterfaceIPs() included %v, must not include loopback", addr)
 		}
 	}
 }
@@ -291,5 +340,113 @@ func TestBuildPairingString_NoAddressReportsNotOK(t *testing.T) {
 	s, _, ok := c.buildPairingString(context.Background(), cert, "AB12CD34")
 	if ok || s != "" {
 		t.Errorf("buildPairingString = (%q, ok=%v), want (\"\", false) with no address available", s, ok)
+	}
+}
+
+// pairSummaryAddresses is ao setup-vm --pair's single enumeration point:
+// this pins that the "Addresses:" display list and the addresses embedded
+// in the pairing string can never diverge, because both come from the same
+// pairCandidateIPs call. Every address in the display list must appear
+// (with the gateway port) inside the pairing string, and vice versa.
+func TestPairSummaryAddresses_DisplayListMatchesPairingStringAddresses(t *testing.T) {
+	_, certDir, _ := pairFixture(t)
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	stubPairInterfaceIPs(t, []string{"192.168.1.20"}, []string{"203.0.113.5"})
+	stubUnreachablePublicProbe(t)
+
+	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
+	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "AB12CD34", true)
+
+	want := []string{"192.168.1.20", "203.0.113.5"}
+	if !slices.Equal(addrs, want) {
+		t.Fatalf("addrs = %v, want %v", addrs, want)
+	}
+	if err := pairstring.Validate(pairingString); err != nil {
+		t.Fatalf("pairstring.Validate(%q) = %v", pairingString, err)
+	}
+	for _, ip := range addrs {
+		hostPort := ip + ":443"
+		if !strings.Contains(pairingString, hostPort) {
+			t.Errorf("pairing string %q is missing display address %s: display list and pairing string must come from the same enumeration", pairingString, hostPort)
+		}
+	}
+}
+
+// Bare interface-address enumeration with a public-only interface and a
+// failing public-IP probe (the exact scenario a private-only filter used to
+// silently break, per the review finding this test guards against): the
+// display list still contains the interface's public address, and a
+// pairing string is still produced from it, rather than the two going
+// silent together.
+func TestPairSummaryAddresses_PublicOnlyInterfaceWithFailedProbeStillBuildsAString(t *testing.T) {
+	_, certDir, _ := pairFixture(t)
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	stubPairInterfaceIPs(t, nil, []string{"203.0.113.5"})
+	stubUnreachablePublicProbe(t)
+
+	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
+	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "AB12CD34", true)
+
+	if !slices.Equal(addrs, []string{"203.0.113.5"}) {
+		t.Fatalf("addrs = %v, want [203.0.113.5]", addrs)
+	}
+	if pairingString == "" {
+		t.Fatal("pairingString is empty, want a string built from the directly bound public interface address")
+	}
+	if err := pairstring.Validate(pairingString); err != nil {
+		t.Fatalf("pairstring.Validate(%q) = %v", pairingString, err)
+	}
+	if !strings.Contains(pairingString, "203.0.113.5:443") {
+		t.Errorf("pairing string %q is missing the interface address", pairingString)
+	}
+}
+
+// When there really is no address at all, pairSummaryAddresses reports an
+// empty pairing string (not a panic, not a malformed string), and the
+// render layer (TestRenderPairCredentials_ExplainsWhenNoAddressWasFound)
+// is what turns that into an explicit line instead of a silent omission.
+func TestPairSummaryAddresses_NoAddressAtAllReturnsEmptyPairingString(t *testing.T) {
+	_, certDir, _ := pairFixture(t)
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	stubPairInterfaceIPs(t, nil, nil)
+	stubUnreachablePublicProbe(t)
+
+	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
+	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "AB12CD34", true)
+	if len(addrs) != 0 {
+		t.Fatalf("addrs = %v, want none", addrs)
+	}
+	if pairingString != "" {
+		t.Fatalf("pairingString = %q, want empty", pairingString)
+	}
+}
+
+// Not generated (a re-run, no fresh passcode known) never builds a pairing
+// string, regardless of what addresses are available.
+func TestPairSummaryAddresses_NotGeneratedNeverBuildsAPairingString(t *testing.T) {
+	_, certDir, _ := pairFixture(t)
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	stubPairInterfaceIPs(t, []string{"192.168.1.20"}, nil)
+	stubUnreachablePublicProbe(t)
+
+	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
+	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "", false)
+	if len(addrs) == 0 {
+		t.Fatal("addrs must still be populated, for the display list, even when not generated")
+	}
+	if pairingString != "" {
+		t.Fatalf("pairingString = %q, want empty when nothing was generated this run", pairingString)
 	}
 }

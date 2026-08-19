@@ -205,12 +205,12 @@ func (c *commandContext) runVMRotatePasscode(cmd *cobra.Command, passcodeDirFlag
 	// no address to build a string from, must never turn a successful
 	// rotation into a reported failure, so both are swallowed here and the
 	// output silently falls back to the plaintext-passcode-only line.
-	// pairCertFileExists gates the load so a missing certificate directory
-	// can never cause this command to mint a brand new certificate: that
-	// would silently break the "pinned certificate is unaffected" guarantee
-	// this command's own help text makes above.
+	// vmgateway.PairCertExists gates the load so a missing certificate
+	// directory can never cause this command to mint a brand new
+	// certificate: that would silently break the "pinned certificate is
+	// unaffected" guarantee this command's own help text makes above.
 	var pairingString string
-	if certDir, certErr := c.resolvePairCertDir(certDirFlag); certErr == nil && pairCertFileExists(certDir) {
+	if certDir, certErr := c.resolvePairCertDir(certDirFlag); certErr == nil && vmgateway.PairCertExists(certDir) {
 		if cert, certErr := vmgateway.LoadOrCreatePairCertificate(certDir); certErr == nil {
 			pairingString, _, _ = c.buildPairingString(cmd.Context(), cert, newPasscode)
 		}

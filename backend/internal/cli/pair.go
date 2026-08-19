@@ -28,7 +28,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -123,7 +123,7 @@ func (c *commandContext) runPairShow(cmd *cobra.Command, opts pairShowOptions) e
 	if err != nil {
 		return err
 	}
-	if !pairCertFileExists(certDir) {
+	if !vmgateway.PairCertExists(certDir) {
 		return fmt.Errorf(
 			"pair mode: no certificate found at %s: provision this box first (ao setup-vm --pair, or bare `ao pair`)",
 			certDir)
@@ -193,23 +193,6 @@ func (c *commandContext) resolvePairCertDir(flag string) (string, error) {
 	return dir, nil
 }
 
-// pairCertFileExists reports whether dir already holds a persisted pair-mode
-// certificate, without ever creating one. vmgateway.LoadOrCreatePairCertificate
-// creates a fresh certificate whenever dir is empty, which is exactly right
-// for provisioning (ensureSetupPairCert in setupvm.go) but wrong here: `ao
-// pair show` promises to only ever read what is on disk, and `ao vm
-// rotate-passcode` promises the pinned certificate is unaffected by a
-// rotation, so both must refuse to call the create-on-missing path at all
-// rather than risk silently minting a new certificate (a changed fingerprint
-// is indistinguishable from an attack to a client that already pinned the
-// old one). "cert.pem" mirrors the file name LoadOrCreatePairCertificate
-// itself persists to (see paircert.go): a stable, documented part of that
-// function's own contract, not path-derivation logic duplicated from it.
-func pairCertFileExists(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "cert.pem"))
-	return err == nil
-}
-
 // pairHTTPClient clones the CLI's shared HTTP client with a short timeout,
 // mirroring setupHTTPClient's pattern in setupvm.go for the same reason: the
 // public-IP probe talks to the internet, so the default loopback budget is
@@ -233,25 +216,31 @@ func pairHTTPSAddr() string {
 	return vmgateway.DefaultHTTPSAddr
 }
 
-// pairPrivateAddrIPs lists this box's own private-network addresses (RFC
-// 1918 IPv4, RFC 4193 IPv6 ULA) bound to a live network interface: the ones
-// a device on the same LAN can actually dial. A package var, overridden in
-// tests, so address-ordering behavior does not depend on the network
-// interfaces of whatever machine happens to run the test suite.
-var pairPrivateAddrIPs = defaultPairPrivateAddrIPs
+// pairInterfaceIPs lists this box's own non-loopback interface addresses,
+// split into private-network ones (RFC 1918 IPv4, RFC 4193 IPv6 ULA) and
+// public ones (a directly bound public IP, no NAT between it and the
+// internet). A package var, overridden in tests, so address-ordering
+// behavior does not depend on the network interfaces of whatever machine
+// happens to run the test suite.
+var pairInterfaceIPs = defaultPairInterfaceIPs
 
-// defaultPairPrivateAddrIPs is pairPrivateAddrIPs' real implementation:
-// net.Interfaces, filtered to global unicast and private, with loopback,
-// link-local, and multicast addresses excluded. Best effort and never
-// fatal: an interface this process cannot list its addresses for is simply
-// skipped, since a partial list is still useful and a fatal error here
-// would take down a command whose job is reading what is already on disk.
-func defaultPairPrivateAddrIPs() []string {
+// defaultPairInterfaceIPs is pairInterfaceIPs' real implementation:
+// net.Interfaces, filtered to global unicast, with loopback, link-local,
+// and multicast addresses excluded. Best effort and never fatal: an
+// interface this process cannot list its addresses for is simply skipped,
+// since a partial list is still useful and a fatal error here would take
+// down a command whose job is reading what is already on disk.
+//
+// Splitting private from public here, rather than filtering to private
+// only, matters: a box whose only interface address is a directly bound
+// public IP (no NAT) is still reachable at that address, and pairCandidateIPs
+// below still has to offer it. The private/public split is what lets that
+// caller prefer private addresses without ever discarding a public one.
+func defaultPairInterfaceIPs() (private, public []string) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	var out []string
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -263,14 +252,19 @@ func defaultPairPrivateAddrIPs() []string {
 				continue
 			}
 			ip := ipNet.IP
-			if ip.IsLoopback() || !ip.IsGlobalUnicast() || !ip.IsPrivate() {
+			if ip.IsLoopback() || !ip.IsGlobalUnicast() {
 				continue
 			}
-			out = append(out, ip.String())
+			if ip.IsPrivate() {
+				private = append(private, ip.String())
+			} else {
+				public = append(public, ip.String())
+			}
 		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(private)
+	sort.Strings(public)
+	return private, public
 }
 
 // pairPublicAddress asks the same public-IP endpoints ao setup-vm's own
@@ -290,20 +284,48 @@ func pairPublicAddress(ctx context.Context, client *http.Client) (string, bool) 
 	return "", false
 }
 
-// pairListenAddresses is the ordered address list ao pair show prints and
-// the pairing string is built from: every private address first (sorted,
-// for determinism), then the public probe's answer if it has one, each with
-// httpsAddr's port appended. pairstring.Build takes addresses already
-// ordered by the caller and never reorders them, so this ordering (private
-// before public) is what the desktop app tries first on connect.
-func pairListenAddresses(ctx context.Context, client *http.Client, httpsAddr string) []string {
-	port := strings.TrimPrefix(httpsAddr, ":")
-	var out []string
-	for _, ip := range pairPrivateAddrIPs() {
-		out = append(out, net.JoinHostPort(ip, port))
+// pairCandidateIPs is the single, ordered list of bare IPs this box could be
+// reached at: this is the one enumeration every pair-mode command builds
+// its output from, so the addresses a command displays and the addresses
+// embedded in its pairing string can never diverge. Order is private
+// interface addresses first (preferred: a LAN address is usually the more
+// direct route), then any interface address that is itself public (a
+// directly bound public IP still has to be offered, not discarded, when
+// there is no private address at all), then the public-IP probe's answer if
+// it found one not already listed (a NATed box's WAN-facing address, which
+// no local interface carries). The ordering here is a preference, not a
+// filter: nothing that could pair a client is ever left out of the list.
+func pairCandidateIPs(ctx context.Context, client *http.Client) []string {
+	private, public := pairInterfaceIPs()
+	out := append(append([]string{}, private...), public...)
+	if pub, ok := pairPublicAddress(ctx, client); ok && !slices.Contains(out, pub) {
+		out = append(out, pub)
 	}
-	if pub, ok := pairPublicAddress(ctx, client); ok {
-		out = append(out, net.JoinHostPort(pub, port))
+	return out
+}
+
+// pairListenAddresses is pairCandidateIPs with httpsAddr's port appended to
+// every address: the shape ao pair show prints and pairstring.Build needs.
+// pairstring.Build takes addresses already ordered by the caller and never
+// reorders them, so pairCandidateIPs' own ordering is what the desktop app
+// tries first on connect.
+func pairListenAddresses(ctx context.Context, client *http.Client, httpsAddr string) []string {
+	return pairAddrsWithPort(pairCandidateIPs(ctx, client), httpsAddr)
+}
+
+// pairAddrsWithPort appends httpsAddr's port to every ip in ips, without
+// re-enumerating or re-probing: callers that already hold an ips list
+// (pairSummaryAddresses, buildPairingStringFromIPs) use this instead of
+// pairListenAddresses so the public-IP probe only ever runs once per
+// command invocation.
+func pairAddrsWithPort(ips []string, httpsAddr string) []string {
+	if len(ips) == 0 {
+		return nil
+	}
+	port := strings.TrimPrefix(httpsAddr, ":")
+	out := make([]string, len(ips))
+	for i, ip := range ips {
+		out[i] = net.JoinHostPort(ip, port)
 	}
 	return out
 }
@@ -322,16 +344,15 @@ func pairLeafCertificate(cert tls.Certificate) (*x509.Certificate, error) {
 	return x509.ParseCertificate(cert.Certificate[0])
 }
 
-// buildPairingString assembles the full ao-pair:// string this box would
-// hand to the desktop app, from a freshly generated (or just-rotated)
-// plaintext passcode: every reachable address (pairListenAddresses), the
-// certificate's pairstring-format fingerprint, and the passcode. ok is
-// false whenever there is nothing usable to build from (no address found,
-// or the certificate cannot be parsed); the caller falls back to its own
-// "not found automatically" guidance instead of failing the whole command
-// over what is, at that point, just a missing enrichment.
-func (c *commandContext) buildPairingString(ctx context.Context, cert tls.Certificate, passcode string) (pairingString string, addrs []string, ok bool) {
-	addrs = pairListenAddresses(ctx, c.pairHTTPClient(), pairHTTPSAddr())
+// buildPairingStringFromIPs assembles the full ao-pair:// string from an
+// already-enumerated ips list (see pairCandidateIPs), a freshly generated
+// (or just-rotated) plaintext passcode, and cert. ok is false whenever
+// there is nothing usable to build from (no address, or the certificate
+// cannot be parsed); the caller falls back to its own "no address was
+// found" guidance instead of failing the whole command over what is, at
+// that point, just a missing enrichment.
+func buildPairingStringFromIPs(ips []string, httpsAddr string, cert tls.Certificate, passcode string) (pairingString string, addrs []string, ok bool) {
+	addrs = pairAddrsWithPort(ips, httpsAddr)
 	if len(addrs) == 0 {
 		return "", addrs, false
 	}
@@ -344,6 +365,30 @@ func (c *commandContext) buildPairingString(ctx context.Context, cert tls.Certif
 		return "", addrs, false
 	}
 	return s, addrs, true
+}
+
+// buildPairingString is buildPairingStringFromIPs for a caller (ao vm
+// rotate-passcode) that has no already-enumerated ips list of its own: it
+// runs pairCandidateIPs itself, once, then builds from that.
+func (c *commandContext) buildPairingString(ctx context.Context, cert tls.Certificate, passcode string) (pairingString string, addrs []string, ok bool) {
+	ips := pairCandidateIPs(ctx, c.pairHTTPClient())
+	return buildPairingStringFromIPs(ips, pairHTTPSAddr(), cert, passcode)
+}
+
+// pairSummaryAddresses is `ao setup-vm --pair`'s one enumeration point: the
+// bare candidate IPs its "Addresses:" display is built from, and, when this
+// run generated a fresh passcode, the pairing string built from those exact
+// same IPs. Both come from a single pairCandidateIPs call (one public-IP
+// probe), which is what makes it impossible for the display list and the
+// string's own embedded addresses to show different addresses or counts
+// for the same run.
+func (c *commandContext) pairSummaryAddresses(ctx context.Context, cert tls.Certificate, passcode string, generated bool) (addrs []string, pairingString string) {
+	ips := pairCandidateIPs(ctx, c.pairHTTPClient())
+	if !generated {
+		return ips, ""
+	}
+	pairingString, _, _ = buildPairingStringFromIPs(ips, pairHTTPSAddr(), cert, passcode)
+	return ips, pairingString
 }
 
 // renderPairShow is the whole output of `ao pair show`: the address list,

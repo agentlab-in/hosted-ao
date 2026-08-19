@@ -219,9 +219,9 @@ func TestVMRotatePasscode_RotatesRestartsAndInvalidatesTheOldOne(t *testing.T) {
 	if _, err := vmgateway.LoadOrCreatePairCertificate(certDir); err != nil {
 		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
 	}
-	restore := pairPrivateAddrIPs
-	t.Cleanup(func() { pairPrivateAddrIPs = restore })
-	pairPrivateAddrIPs = func() []string { return []string{"192.168.1.20"} }
+	restore := pairInterfaceIPs
+	t.Cleanup(func() { pairInterfaceIPs = restore })
+	pairInterfaceIPs = func() ([]string, []string) { return []string{"192.168.1.20"}, nil }
 
 	var calls []string
 	var mu sync.Mutex
@@ -276,9 +276,9 @@ func TestVMRotatePasscode_PrintsAValidPairingString(t *testing.T) {
 	if _, err := vmgateway.LoadOrCreatePairCertificate(certDir); err != nil {
 		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
 	}
-	restore := pairPrivateAddrIPs
-	t.Cleanup(func() { pairPrivateAddrIPs = restore })
-	pairPrivateAddrIPs = func() []string { return []string{"192.168.1.20"} }
+	restore := pairInterfaceIPs
+	t.Cleanup(func() { pairInterfaceIPs = restore })
+	pairInterfaceIPs = func() ([]string, []string) { return []string{"192.168.1.20"}, nil }
 
 	deps := Deps{
 		HTTPClient: &http.Client{Transport: errRoundTripper{}},
