@@ -184,7 +184,8 @@ Each phase is separately PR-able against `develop`.
 - **Phase 0: upstream merge** (230 commits as of 2026-08-19, analyzed the
   same day; base verified healthy). PR sequence per the merge playbook: safe
   bulk, mechanical, regenerate, seam clusters one at a time, migrations. New
-  hosted-only migrations number >= 0100. The AO-Cloud-hidden pin and the
+  hosted-only migrations number >= 0200 (upstream reached 0100 during this
+  merge, so the original >= 0100 reservation is spent). The AO-Cloud-hidden pin and the
   addition of upstream's new `/api/v1/mobile/devices` routes to the
   gateway's `blockedAPIPrefixes` land here. The `connect-src https: wss:`
   CSP grant in `vite.renderer.config.ts` must survive; upstream's version
