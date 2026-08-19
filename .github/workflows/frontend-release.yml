@@ -41,6 +41,11 @@ on:
 
 env:
   VITE_WORKOS_CLIENT_ID: ${{ vars.VITE_WORKOS_CLIENT_ID }}
+  # A step's own `if:` cannot use the `secrets` context directly (only env,
+  # github, inputs, job, matrix, needs, runner, steps, strategy, vars are
+  # allowed there), so resolve it into a plain env var here once, the same
+  # way VITE_WORKOS_CLIENT_ID above is threaded through.
+  AO_HAS_MACOS_CERT: ${{ secrets.CSC_LINK != '' }}
 
 jobs:
   release:
@@ -108,7 +113,7 @@ jobs:
       # at all rather than run and error, or unsigned releases could never
       # publish.
       - name: macOS signing setup
-        if: startsWith(matrix.os, 'macos') && secrets.CSC_LINK != ''
+        if: startsWith(matrix.os, 'macos') && env.AO_HAS_MACOS_CERT == 'true'
         uses: ./.github/actions/macos-signing-setup
         with:
           csc-link: ${{ secrets.CSC_LINK }}
@@ -335,7 +340,7 @@ jobs:
       # configured Developer ID certificate so an unsigned build (which
       # forge.config.ts already supports) can still publish.
       - name: macOS signing setup
-        if: secrets.CSC_LINK != ''
+        if: env.AO_HAS_MACOS_CERT == 'true'
         uses: ./.github/actions/macos-signing-setup
         with:
           csc-link: ${{ secrets.CSC_LINK }}
