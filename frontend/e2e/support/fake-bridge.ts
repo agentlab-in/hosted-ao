@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import type { AoBridge } from "../../src/preload";
+import type { AoMachine } from "../../src/shared/ao-machines";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
 
 // The e2e suite runs the renderer under `dev:web` (VITE_NO_ELECTRON=1) with no
@@ -47,6 +48,25 @@ export type FakeBridgeOptions = {
 	 * daemon wiring this fake bridge does not reproduce).
 	 */
 	daemonBaseUrl?: string;
+	/**
+	 * Opt-in fixture for the paste-a-pairing-string flow (PAIR e2e). Under the
+	 * browser harness there is no main process and so no real certificate to
+	 * present, which is why `pairedMachines.probeFingerprint`/`add` are a hard
+	 * failure by default below (see the comment on that namespace). Supplying
+	 * this makes exactly one address answer probeFingerprint with a matching
+	 * fingerprint and makes `add` persist (and `list`/`refresh` return) the
+	 * given machine, so AddPairedMachineDialog's real paste → race → pin flow
+	 * can run end to end against a deterministic winner, without turning `add`
+	 * into a blanket success stub for every other spec.
+	 */
+	pairing?: {
+		host: string;
+		port: number;
+		/** Colon-separated uppercase hex, matching toPinnedFingerprintFormat's output. */
+		fingerprint: string;
+		/** Returned by `add()` and then listed by `list()`/`refresh()`. */
+		machine: AoMachine;
+	};
 };
 
 export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}): Promise<void> {
@@ -54,9 +74,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	const daemonState = opts.daemonState ?? "ready";
 	const daemonPort = opts.daemonPort ?? 8080;
 	const daemonBaseUrl = opts.daemonBaseUrl ?? null;
+	const pairing = opts.pairing ?? null;
 
 	await page.addInitScript(
-		({ version, daemonState, daemonPort, daemonBaseUrl }) => {
+		({ version, daemonState, daemonPort, daemonBaseUrl, pairing }) => {
 			const unsubscribe = () => () => undefined;
 			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
 			// This computer is machine zero and stays selectable with no account,
@@ -84,6 +105,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						? { state: "ready", port: daemonPort, baseUrl: daemonBaseUrl }
 						: { state: "ready", port: daemonPort }
 					: { state: daemonState };
+			// Backing store for the opt-in `pairing` fixture's add()/list()/refresh():
+			// unused (and empty) whenever `pairing` is null, i.e. every spec but the
+			// paste-flow e2e.
+			let pairedList: AoMachine[] = [];
 			const navState = (viewId: string) => ({
 				viewId,
 				url: "",
@@ -253,19 +278,40 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
 				},
 				// No main process under the browser harness, so nothing is paired and
-				// there is no certificate to present. `add` throws rather than returning
-				// a stub machine: pinning a fingerprint is a real trust decision and a
-				// fake that silently succeeds would hide a regression in that path.
-				pairedMachines: {
-					list: async () => [],
-					refresh: async () => [],
-					probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
-					getPinnedFingerprint: async () => null,
-					add: async () => {
-						throw new Error("Pairing is unavailable under the browser harness.");
-					},
-					remove: async () => {},
-				},
+				// there is no certificate to present by default. `add` throws rather
+				// than returning a stub machine: pinning a fingerprint is a real trust
+				// decision and a fake that silently succeeds would hide a regression in
+				// that path. The one opt-in exception is the `pairing` fixture above,
+				// for the paste-flow e2e specifically: it stands in for "a real box
+				// answered and presented the pasted fingerprint" for one address only,
+				// every other spec still gets the throwing default.
+				pairedMachines: pairing
+					? {
+							list: async () => pairedList,
+							refresh: async () => pairedList,
+							probeFingerprint: async (address: string, port: number) =>
+								address === pairing.host && port === pairing.port
+									? { fingerprint: pairing.fingerprint }
+									: { error: "No certificate could be retrieved from that address." },
+							getPinnedFingerprint: async () => null,
+							add: async () => {
+								pairedList = [...pairedList, pairing.machine];
+								return pairing.machine;
+							},
+							remove: async () => {
+								pairedList = [];
+							},
+						}
+					: {
+							list: async () => [],
+							refresh: async () => [],
+							probeFingerprint: async () => ({ error: "No main process under the browser harness." }),
+							getPinnedFingerprint: async () => null,
+							add: async () => {
+								throw new Error("Pairing is unavailable under the browser harness.");
+							},
+							remove: async () => {},
+						},
 				cloud: {
 					getSession: async () => null,
 					signIn: async () => undefined,
@@ -275,7 +321,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonState, daemonPort, daemonBaseUrl },
+		{ version, daemonState, daemonPort, daemonBaseUrl, pairing },
 	);
 }
 
