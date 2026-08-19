@@ -71,6 +71,7 @@ const (
 	SectionTools  = "Tools"
 	SectionAgents = "Agent harnesses"
 	SectionGitHub = "GitHub"
+	SectionGitLab = "GitLab"
 
 	// ClaudeHarnessName is the harness whose login `ao vm setup-harness` runs
 	// and whose readiness the claude-auth check reports. Both halves read it
@@ -86,8 +87,12 @@ const (
 	// DefaultGitHubRESTBase is the API root the github-token check probes.
 	DefaultGitHubRESTBase = "https://api.github.com"
 
+	// DefaultGitLabRESTBase is the API root the gitlab-token check probes.
+	DefaultGitLabRESTBase = "https://gitlab.com/api/v4"
+
 	minGitVersion         = "2.25.0"
 	githubDoctorUserAgent = "ao-agent-orchestrator/doctor"
+	gitlabDoctorUserAgent = "ao-agent-orchestrator/doctor"
 	probeTimeout          = 2 * time.Second
 
 	// harnessAuthTimeout is the claude-auth probe's own budget. probeTimeout is
@@ -136,6 +141,8 @@ type Deps struct {
 	HTTPClient    *http.Client
 	// GitHubRESTBase lets tests point the github-token probe at httptest.
 	GitHubRESTBase string
+	// GitLabRESTBase lets tests point the gitlab-token probe at httptest.
+	GitLabRESTBase string
 	// DaemonCheck reports the daemon's own state. It is caller-supplied
 	// because the answer differs by vantage point: the CLI inspects the run
 	// file and probes the loopback health endpoints, while the daemon answers
@@ -151,6 +158,7 @@ func DefaultDeps() Deps {
 		Executable:     os.Executable,
 		HTTPClient:     &http.Client{Timeout: probeTimeout},
 		GitHubRESTBase: DefaultGitHubRESTBase,
+		GitLabRESTBase: DefaultGitLabRESTBase,
 	}
 }
 
@@ -179,6 +187,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.GitHubRESTBase == "" {
 		d.GitHubRESTBase = def.GitHubRESTBase
+	}
+	if d.GitLabRESTBase == "" {
+		d.GitLabRESTBase = def.GitLabRESTBase
 	}
 	return d
 }
@@ -222,7 +233,7 @@ func Run(ctx context.Context, deps Deps) []Check {
 	for _, harness := range harnesses {
 		checks = append(checks, d.checkHarness(ctx, harness))
 	}
-	checks = append(checks, d.checkClaudeAuth(ctx), d.checkCodexLaunchFlags(ctx), d.checkGitHubToken(ctx))
+	checks = append(checks, d.checkClaudeAuth(ctx), d.checkCodexLaunchFlags(ctx), d.checkGitHubToken(ctx), d.checkGitLabToken(ctx))
 	return checks
 }
 
@@ -621,6 +632,103 @@ func (d Deps) checkGitHubToken(ctx context.Context) Check {
 		// good.
 		PublicMessage: fmt.Sprintf("%s token valid", source),
 	}
+}
+
+func (d Deps) checkGitLabToken(ctx context.Context) Check {
+	token, source, err := d.gitlabToken(ctx)
+	if err != nil {
+		return Check{Level: Warn, Section: SectionGitLab, Name: "gitlab-token", Message: err.Error()}
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(d.GitLabRESTBase, "/")+"/user", http.NoBody)
+	if err != nil {
+		return Check{Level: Fail, Section: SectionGitLab, Name: "gitlab-token", Message: err.Error()}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", gitlabDoctorUserAgent)
+	req.Header.Set("PRIVATE-TOKEN", token)
+	resp, err := d.HTTPClient.Do(req)
+	if err != nil {
+		return Check{Level: Fail, Section: SectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token validation failed: %v", source, err)}
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return Check{Level: Fail, Section: SectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token rejected by GitLab (HTTP %d)", source, resp.StatusCode)}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Check{Level: Warn, Section: SectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token probe returned HTTP %d", source, resp.StatusCode)}
+	}
+
+	var user struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return Check{Level: Fail, Section: SectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token probe decode failed: %v", source, err)}
+	}
+	login := user.Username
+	if login == "" {
+		login = "unknown user"
+	}
+	return Check{
+		Level: Pass, Section: SectionGitLab, Name: "gitlab-token",
+		Message: fmt.Sprintf("%s token valid for %s", source, login),
+		// Same reasoning as github-token: the username names the account this
+		// machine acts as, which is nobody else's business off the box.
+		PublicMessage: fmt.Sprintf("%s token valid", source),
+	}
+}
+
+func (d Deps) gitlabToken(ctx context.Context) (token, source string, err error) {
+	for _, name := range []string{"AO_GITLAB_TOKEN", "GITLAB_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			return v, name, nil
+		}
+	}
+	path, lookErr := d.LookPath("glab")
+	if lookErr != nil || path == "" {
+		return "", "", errors.New("no GitLab token found (set AO_GITLAB_TOKEN/GITLAB_TOKEN or run `glab auth login`)")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	out, cmdErr := d.CommandOutput(reqCtx, path, "auth", "status", "--show-token")
+	if cmdErr != nil {
+		return "", "", fmt.Errorf("glab is installed but no token was available (`glab auth status --show-token` failed: %w)", cmdErr)
+	}
+	token = parseGLabTokenLine(string(out))
+	if token == "" {
+		return "", "", errors.New("glab is installed but returned no auth token")
+	}
+	return token, "glab", nil
+}
+
+// parseGLabTokenLine extracts the token value from `glab auth status --show-token`
+// output. The token appears on a line containing "Token" followed by a colon
+// and the token value (e.g. "Token found: glpat-xxx"). This mirrors the
+// parsing logic in the GitLab SCM adapter (gitlab/auth.go) without importing
+// the adapter package here.
+func parseGLabTokenLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		tokenIdx := strings.Index(line, "Token")
+		if tokenIdx < 0 {
+			continue
+		}
+		colonIdx := strings.Index(line[tokenIdx:], ":")
+		if colonIdx < 0 {
+			continue
+		}
+		val := strings.TrimSpace(line[tokenIdx+colonIdx+1:])
+		if val != "" {
+			return val
+		}
+	}
+	return ""
 }
 
 // truncate shortens s to at most maxRunes characters and says that it did.

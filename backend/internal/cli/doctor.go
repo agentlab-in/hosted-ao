@@ -90,6 +90,7 @@ func (c *commandContext) doctorDeps() doctor.Deps {
 		Executable:     c.deps.Executable,
 		HTTPClient:     c.deps.HTTPClient,
 		GitHubRESTBase: c.deps.DoctorGitHubRESTBase,
+		GitLabRESTBase: c.deps.DoctorGitLabRESTBase,
 		DaemonCheck:    c.doctorDaemonCheck,
 	}
 }

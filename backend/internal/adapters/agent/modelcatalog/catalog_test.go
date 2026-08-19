@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,8 @@ func TestBaseClassifiesStaticTextAndModeAgents(t *testing.T) {
 		{agent: "muse", mode: ports.ModelSelectionCatalog, count: 3},
 		{agent: "aider", mode: ports.ModelSelectionCatalog},
 		{agent: "autohand", mode: ports.ModelSelectionCatalog},
+		{agent: "kimchi", mode: ports.ModelSelectionCatalog},
+		{agent: "prime-agent", mode: ports.ModelSelectionCatalog},
 		{agent: "qwen", mode: ports.ModelSelectionText},
 		{agent: "continue", mode: ports.ModelSelectionText},
 		{agent: "crush", mode: ports.ModelSelectionText},
@@ -97,6 +100,34 @@ func TestBaseClassifiesStaticTextAndModeAgents(t *testing.T) {
 				t.Fatalf("Base(%q) = %#v", tc.agent, got)
 			}
 		})
+	}
+}
+
+func TestPrimeAgentDiscoveryUsesDocumentedModelCommand(t *testing.T) {
+	spec := commandSpecs["prime-agent"]
+	want := []string{"model", "list"}
+	if !reflect.DeepEqual(spec.args, want) {
+		t.Fatalf("prime-agent discovery args = %q, want %q", spec.args, want)
+	}
+	if spec.parser == nil {
+		t.Fatal("prime-agent parser is nil")
+	}
+}
+
+func TestParsePrimeAgentModelsBuildsProviderQualifiedIDs(t *testing.T) {
+	got, err := parsePiModels([]byte(`provider   model                 context  max-out  thinking  images
+anthropic  claude-opus-4-8       200K     64K      yes       yes
+openai     gpt-5.6-sol           400K     128K     yes       yes
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "anthropic/claude-opus-4-8", Label: "claude-opus-4-8", Provider: "anthropic"},
+		{ID: "openai/gpt-5.6-sol", Label: "gpt-5.6-sol", Provider: "openai"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want %#v", got, want)
 	}
 }
 
@@ -161,6 +192,46 @@ Tip: use --model <id> to switch.
 	}
 }
 
+func TestKimchiDiscoveryUsesListModelsFlag(t *testing.T) {
+	spec := commandSpecs["kimchi"]
+	if len(spec.args) != 1 || spec.args[0] != "--list-models" {
+		t.Fatalf("kimchi discovery args = %q, want [--list-models]", spec.args)
+	}
+	if spec.parser == nil {
+		t.Fatalf("kimchi parser is nil")
+	}
+}
+
+func TestParseKimchiModelsBuildsProviderQualifiedIDs(t *testing.T) {
+	got, err := parsePiModels([]byte(`provider              model                 context  max-out  thinking  images
+kimchi-dev            deepseek-v4-flash     1.0M     1.0M     yes       no
+kimchi-dev            glm-5.2-fp8           1.0M     1.0M     yes       no
+kimchi-dev/anthropic  claude-sonnet-5       1M       128K     yes       yes
+kimchi-dev/anthropic  claude-opus-4-8       1M       128K     yes       yes
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("models = %#v, want 4", got)
+	}
+	want := map[string]bool{
+		"kimchi-dev/deepseek-v4-flash":         true,
+		"kimchi-dev/glm-5.2-fp8":               true,
+		"kimchi-dev/anthropic/claude-sonnet-5": true,
+		"kimchi-dev/anthropic/claude-opus-4-8": true,
+	}
+	for _, m := range got {
+		delete(want, m.ID)
+		if m.Provider == "" {
+			t.Fatalf("model %q has empty Provider", m.ID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("models = %#v, missing %#v", got, want)
+	}
+}
+
 func TestParsePiModelsBuildsProviderQualifiedIDs(t *testing.T) {
 	got, err := parsePiModels([]byte(`provider   model                       context  max-out  thinking  images
 anthropic  claude-sonnet-4-6           1M       64K      yes       yes
@@ -190,6 +261,55 @@ func TestParseJSONModelsFindsNestedModels(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("models = %#v, want nested claude-sonnet", got)
+	}
+}
+
+func TestParseJSONModelsUsesModelMapKeysAsSelectableIDs(t *testing.T) {
+	got, err := parseJSONModels([]byte(`{
+		"models": {
+			"kimi-code/kimi-for-coding": {
+				"provider": "managed:kimi-code",
+				"model": "kimi-for-coding",
+				"displayName": "K2.7 Coding"
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "kimi-code/kimi-for-coding" || got[0].Label != "K2.7 Coding" || got[0].Provider != "managed:kimi-code" {
+		t.Fatalf("models = %#v, want provider-qualified Kimi config alias", got)
+	}
+}
+
+func TestParseJSONModelsWalksGroupedModelsMaps(t *testing.T) {
+	got, err := parseJSONModels([]byte(`{
+		"models": {
+			"available": [{"modelId": "claude-sonnet", "displayName": "Claude Sonnet"}]
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "claude-sonnet" || got[0].Label != "Claude Sonnet" {
+		t.Fatalf("models = %#v, want recursively discovered claude-sonnet", got)
+	}
+}
+
+func TestParseJSONModelsWalksProviderGroupsWithNestedModels(t *testing.T) {
+	got, err := parseJSONModels([]byte(`{
+		"models": {
+			"anthropic": {
+				"provider": "anthropic",
+				"models": [{"modelId": "claude-sonnet", "displayName": "Claude Sonnet"}]
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "claude-sonnet" || got[0].Label != "Claude Sonnet" {
+		t.Fatalf("models = %#v, want nested claude-sonnet without provider-group alias", got)
 	}
 }
 

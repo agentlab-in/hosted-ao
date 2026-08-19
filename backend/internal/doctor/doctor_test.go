@@ -369,6 +369,79 @@ func TestFailsExpiredGitHubToken(t *testing.T) {
 	}
 }
 
+func TestChecksGitLabTokenFromEnv(t *testing.T) {
+	setConfigEnv(t)
+	srv := gitlabServer(t, http.StatusOK, `{"username":"gitlab-user"}`)
+	deps := testDeps(t, map[string]string{"git": "/bin/git"}, gitOnly)
+	t.Setenv("AO_GITLAB_TOKEN", "env-token")
+	deps.HTTPClient = srv.Client()
+	deps.GitLabRESTBase = srv.URL
+
+	check := findCheck(t, Run(context.Background(), deps), "gitlab-token")
+	if check.Level != Pass || !strings.Contains(check.Message, "AO_GITLAB_TOKEN") || !strings.Contains(check.Message, "gitlab-user") {
+		t.Fatalf("gitlab-token check = %+v, want PASS with source and username", check)
+	}
+}
+
+func TestChecksGitLabTokenFromEnvGitLabToken(t *testing.T) {
+	setConfigEnv(t)
+	srv := gitlabServer(t, http.StatusOK, `{"username":"gitlab-user"}`)
+	deps := testDeps(t, map[string]string{"git": "/bin/git"}, gitOnly)
+	t.Setenv("GITLAB_TOKEN", "env-token-2")
+	deps.HTTPClient = srv.Client()
+	deps.GitLabRESTBase = srv.URL
+
+	check := findCheck(t, Run(context.Background(), deps), "gitlab-token")
+	if check.Level != Pass || !strings.Contains(check.Message, "GITLAB_TOKEN") {
+		t.Fatalf("gitlab-token check = %+v, want PASS from GITLAB_TOKEN", check)
+	}
+}
+
+func TestChecksGitLabTokenFromGLabCLI(t *testing.T) {
+	setConfigEnv(t)
+	srv := gitlabServer(t, http.StatusOK, `{"username":"glab-user"}`)
+	deps := testDeps(t, map[string]string{"git": "/bin/git", "glab": "/bin/glab"}, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "/bin/glab" {
+			if len(args) != 3 || args[0] != "auth" || args[1] != "status" || args[2] != "--show-token" {
+				t.Fatalf("unexpected glab command: %s %v", name, args)
+			}
+			return []byte("Hostname: gitlab.com\nToken found: glpat-token123\n"), nil
+		}
+		return []byte("git version 2.43.0\n"), nil
+	})
+	deps.HTTPClient = srv.Client()
+	deps.GitLabRESTBase = srv.URL
+
+	check := findCheck(t, Run(context.Background(), deps), "gitlab-token")
+	if check.Level != Pass || !strings.Contains(check.Message, "glab token valid") || !strings.Contains(check.Message, "glab-user") {
+		t.Fatalf("gitlab-token check = %+v, want PASS from glab", check)
+	}
+}
+
+func TestWarnsWhenGitLabTokenMissing(t *testing.T) {
+	setConfigEnv(t)
+	deps := testDeps(t, map[string]string{"git": "/bin/git"}, gitOnly)
+
+	check := findCheck(t, Run(context.Background(), deps), "gitlab-token")
+	if check.Level != Warn || !strings.Contains(check.Message, "no GitLab token found") {
+		t.Fatalf("gitlab-token check = %+v, want WARN missing token", check)
+	}
+}
+
+func TestFailsExpiredGitLabToken(t *testing.T) {
+	setConfigEnv(t)
+	srv := gitlabServer(t, http.StatusUnauthorized, `{"message":"401 Unauthorized"}`)
+	deps := testDeps(t, map[string]string{"git": "/bin/git"}, gitOnly)
+	t.Setenv("GITLAB_TOKEN", "expired-token")
+	deps.HTTPClient = srv.Client()
+	deps.GitLabRESTBase = srv.URL
+
+	check := findCheck(t, Run(context.Background(), deps), "gitlab-token")
+	if check.Level != Fail || !strings.Contains(check.Message, "HTTP 401") {
+		t.Fatalf("gitlab-token check = %+v, want FAIL rejected token", check)
+	}
+}
+
 // TestChecksAOBinaryIdentity covers the `ao-binary` check: workspace hooks
 // invoke a bare `ao hooks <agent> <event>`, so doctor must surface when the
 // `ao` on PATH is not the running binary (e.g. a legacy CLI without the hooks
@@ -569,8 +642,25 @@ func testDeps(t *testing.T, paths map[string]string, commandOutput func(context.
 	t.Setenv("AO_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "")
+	t.Setenv("AO_GITLAB_TOKEN", "")
+	t.Setenv("GITLAB_TOKEN", "")
 	deps := Deps{LookPath: lookPathIn(paths), CommandOutput: commandOutput}
 	return deps.withDefaults()
+}
+
+func gitlabServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/user" {
+			t.Fatalf("unexpected gitlab probe: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("PRIVATE-TOKEN"); got == "" {
+			t.Fatalf("missing PRIVATE-TOKEN auth header: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
 }
 
 func githubServer(t *testing.T, status int, body, scopes string) *httptest.Server {

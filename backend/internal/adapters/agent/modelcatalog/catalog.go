@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -42,18 +43,20 @@ type commandSpec struct {
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[[:alpha:]]`)
 
 var commandSpecs = map[string]commandSpec{
-	"aider":    {args: []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}, parser: parseIDLines},
-	"autohand": {args: []string{"models", "list"}, parser: parseIDLines},
-	"opencode": {args: []string{"--pure", "models"}, parser: parseIDLines},
-	"grok":     {args: []string{"models"}, parser: parseGrokModels},
-	"cursor":   {args: []string{"models"}, parser: parseCursorModels},
-	"agy":      {args: []string{"models"}, parser: parseIDLines},
-	"kilocode": {args: []string{"models"}, parser: parseIDLines},
-	"pi":       {args: []string{"--list-models"}, parser: parsePiModels},
-	"kimi":     {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
-	"auggie":   {args: []string{"models", "list", "--json"}, parser: parseJSONModels},
-	"devin":    {args: []string{"models", "list", "--format", "json"}, parser: parseJSONModels},
-	"kiro":     {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels},
+	"aider":       {args: []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}, parser: parseIDLines},
+	"autohand":    {args: []string{"models", "list"}, parser: parseIDLines},
+	"opencode":    {args: []string{"--pure", "models"}, parser: parseIDLines},
+	"grok":        {args: []string{"models"}, parser: parseGrokModels},
+	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
+	"agy":         {args: []string{"models"}, parser: parseIDLines},
+	"kilocode":    {args: []string{"models"}, parser: parseIDLines},
+	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
+	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
+	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
+	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
+	"auggie":      {args: []string{"models", "list", "--json"}, parser: parseJSONModels},
+	"devin":       {args: []string{"models", "list", "--format", "json"}, parser: parseJSONModels},
+	"kiro":        {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -261,7 +264,7 @@ func hasDiscoverySource(agentID string) bool {
 }
 
 func modelCommand(ctx context.Context, binary string, args []string, workingDir string, env map[string]string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec // binary is adapter-resolved, args are static
+	cmd := aoprocess.CommandContext(ctx, binary, args...) //nolint:gosec // binary is adapter-resolved, args are static
 	cmd.WaitDelay = commandTerminationWait
 	if strings.TrimSpace(workingDir) != "" {
 		cmd.Dir = workingDir
@@ -509,13 +512,44 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 					IsDefault: firstBool(node, "isDefault", "is_default", "default"),
 				})
 			}
-			for _, child := range node {
+			for key, child := range node {
+				if key == "models" {
+					if modelMap, ok := child.(map[string]any); ok {
+						for alias, item := range modelMap {
+							if modelNode, ok := item.(map[string]any); ok && strings.TrimSpace(alias) != "" && looksLikeModelAliasRecord(modelNode) {
+								label := firstString(modelNode, "displayName", "display_name", "model_name", "label", "name")
+								if label == "" {
+									label = alias
+								}
+								models = append(models, ports.AgentModelInfo{
+									ID:        strings.TrimSpace(alias),
+									Label:     label,
+									Provider:  firstString(modelNode, "provider", "providerId", "provider_id"),
+									IsDefault: firstBool(modelNode, "isDefault", "is_default", "default"),
+								})
+								continue
+							}
+							walk(item)
+						}
+						continue
+					}
+				}
 				walk(child)
 			}
 		}
 	}
 	walk(root)
 	return normalize(models), nil
+}
+
+func looksLikeModelAliasRecord(node map[string]any) bool {
+	if _, isModelContainer := node["models"]; isModelContainer {
+		return false
+	}
+	return firstString(node,
+		"modelId", "model_id", "model_uid", "slug", "model",
+		"provider", "providerId", "provider_id",
+	) != ""
 }
 
 func firstString(node map[string]any, keys ...string) string {
