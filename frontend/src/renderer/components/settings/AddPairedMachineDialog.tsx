@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, ShieldAlert, X } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { orderedHints, racePairAddresses, type RaceAttempt } from "../../../shared/pair-race";
@@ -73,10 +73,15 @@ function parsePort(raw: string): number | null {
  * (frontend/src/shared/pair-string.ts): every address it lists is raced
  * concurrently (frontend/src/shared/pair-race.ts) over the same
  * `probeFingerprint` bridge call, entirely in this renderer -- probing is
- * already one call per address, so nothing about cancelling or sequencing it
- * needs main. The winner's fingerprint is auto-pinned from the string itself
- * (the paste is the out-of-band channel the user already trusted), so this
- * path never shows the visual compare step below; that step, and the
+ * already one call per address, so nothing about sequencing it needs main.
+ * Cancellation, though, is real and lives here too: dismissing the dialog
+ * mid-race (Cancel, the close button, Escape, or an overlay click) or
+ * switching to manual entry both abort the in-flight race via
+ * `raceControllerRef` below, so a race abandoned by the user can never
+ * silently finish, pin a fingerprint, and persist a passcode behind their
+ * back. The winner's fingerprint is auto-pinned from the string itself (the
+ * paste is the out-of-band channel the user already trusted), so this path
+ * never shows the visual compare step below; that step, and the
  * steady-state hard-refusal on a real mismatch, exist only for the manual
  * escape hatch this step still offers for recovery.
  */
@@ -101,8 +106,21 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 	// the only bit of extra state that distinction costs.
 	const [errorFromPaste, setErrorFromPaste] = useState(false);
 
+	// The in-flight paste race's cancellation handle, and whether it was
+	// actually cancelled (vs. won or exhausted on its own): a race the user
+	// abandoned must never be allowed to add a machine or show a result once
+	// it eventually settles, no matter how that settling happens.
+	const raceControllerRef = useRef<AbortController | null>(null);
+	const raceCancelledRef = useRef(false);
+
+	const cancelRace = () => {
+		raceCancelledRef.current = true;
+		raceControllerRef.current?.abort();
+	};
+
 	useEffect(() => {
 		if (open) return;
+		cancelRace();
 		setStep("paste");
 		setAddress("");
 		setPort("");
@@ -115,12 +133,19 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		setErrorFromPaste(false);
 	}, [open]);
 
+	// True unmount (as opposed to the dialog just being closed, which the
+	// effect above already covers): still worth aborting so a stray timer
+	// never fires into a component that no longer exists.
+	useEffect(() => () => raceControllerRef.current?.abort(), []);
+
 	const pasteRace = useMutation({
 		mutationFn: async (parsed: ParsedPairString) => {
 			setStep("racing");
 			const wantFingerprint = toPinnedFingerprintFormat(parsed.fingerprintHex);
-			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, aoBridge.pairedMachines.probeFingerprint);
-			if (outcome.status === "exhausted") return outcome;
+			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, aoBridge.pairedMachines.probeFingerprint, {
+				signal: raceControllerRef.current?.signal,
+			});
+			if (outcome.status !== "matched") return outcome;
 			const machine = await aoBridge.pairedMachines.add({
 				id: pairedMachineId(outcome.host, outcome.port),
 				name: outcome.host,
@@ -133,6 +158,11 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 			return { status: "matched" as const, machine };
 		},
 		onSuccess: (result) => {
+			// The race (or the dialog itself) was cancelled after this mutation
+			// was already in flight: never act on a result the user abandoned,
+			// whether that's a "matched" add() that just completed, an
+			// "exhausted" result, or the "cancelled" outcome itself.
+			if (raceCancelledRef.current || result.status === "cancelled") return;
 			if (result.status === "exhausted") {
 				setRaceAttempts(result.attempts);
 				setStep("raceResults");
@@ -142,6 +172,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 			onOpenChange(false);
 		},
 		onError: (err) => {
+			if (raceCancelledRef.current) return;
 			setErrorMessage(err instanceof Error ? err.message : String(err));
 			setErrorFromPaste(true);
 			setStep("error");
@@ -158,6 +189,8 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		// Scrub the raw string and passcode from state the instant it has been
 		// handed off, so a re-render of this step can never show it again.
 		setPasteValue("");
+		raceCancelledRef.current = false;
+		raceControllerRef.current = new AbortController();
 		pasteRace.mutate(parsed);
 	};
 
@@ -205,7 +238,11 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 
 	const canSubmit = address.trim().length > 0 && parsePort(port) !== null && passcode.length > 0;
 	const pairError = pair.error instanceof Error ? pair.error.message : null;
-	const isBusy = probe.isPending || pair.isPending || pasteRace.isPending;
+	// The paste race is deliberately excluded here: dismissing the dialog
+	// while it runs is a valid, safe cancel (see cancelRace above), not
+	// something Close/Cancel need to block the way they block the manual
+	// probe/pair calls, which have no cancellation path of their own.
+	const isBusy = probe.isPending || pair.isPending;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -269,6 +306,17 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
 							{t("pairing.racing")}
 						</p>
+
+						<button
+							type="button"
+							onClick={() => {
+								cancelRace();
+								setStep("form");
+							}}
+							className="self-start text-xs text-settings-muted underline-offset-2 hover:underline"
+						>
+							{t("pairing.enterManually")}
+						</button>
 					</div>
 				) : null}
 

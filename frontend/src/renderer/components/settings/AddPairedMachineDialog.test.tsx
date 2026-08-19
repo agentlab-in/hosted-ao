@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { AddPairedMachineDialog } from "./AddPairedMachineDialog";
 
@@ -47,6 +48,24 @@ function renderDialog(onOpenChange = vi.fn(), onPaired = vi.fn()) {
 		</QueryClientProvider>,
 	);
 	return { onOpenChange, onPaired };
+}
+
+/** Unlike renderDialog above, `open` here is real state a dismissal (Cancel,
+ * the close button, Escape, an overlay click) actually flips, the way the
+ * real caller (MachinesSection) wires it -- needed for tests where the point
+ * is what happens to in-flight work once the dialog is actually dismissed. */
+function renderControlledDialog(onPaired = vi.fn()) {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	function Controlled() {
+		const [open, setOpen] = useState(true);
+		return <AddPairedMachineDialog open={open} onOpenChange={setOpen} onPaired={onPaired} />;
+	}
+	render(
+		<QueryClientProvider client={client}>
+			<Controlled />
+		</QueryClientProvider>,
+	);
+	return { onPaired };
 }
 
 /** The dialog now opens on the paste-a-string step; the pre-existing
@@ -261,4 +280,52 @@ test("paste: the pasted string never reappears in the DOM once submitted", async
 	expect(document.querySelector("textarea")).not.toBeInTheDocument();
 	// The passcode embedded in the pasted string must not linger either.
 	expect(screen.queryByText("abc123XY")).not.toBeInTheDocument();
+});
+
+test("paste: dismissing the dialog mid-race cancels it, so a later winner is never added", async () => {
+	let resolveWinner: (v: { fingerprint: string } | { error: string }) => void = () => undefined;
+	const winnerProbe = new Promise<{ fingerprint: string } | { error: string }>((resolve) => {
+		resolveWinner = resolve;
+	});
+	probeFingerprint.mockImplementation(() => winnerProbe);
+	const { onPaired } = renderControlledDialog();
+
+	await pasteString(buildPairString("192.168.1.5:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+	await screen.findByTestId("pairing-step-racing");
+
+	// Cancel is no longer blocked while the race is in flight: dismissing here
+	// must cancel the race, not just hide the dialog around it.
+	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+	// The probe that would have won only answers now, well after dismissal.
+	resolveWinner({ fingerprint: FINGERPRINT });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	expect(add).not.toHaveBeenCalled();
+	expect(onPaired).not.toHaveBeenCalled();
+});
+
+test("paste: switching to manual entry mid-race cancels it too", async () => {
+	let resolveWinner: (v: { fingerprint: string } | { error: string }) => void = () => undefined;
+	const winnerProbe = new Promise<{ fingerprint: string } | { error: string }>((resolve) => {
+		resolveWinner = resolve;
+	});
+	probeFingerprint.mockImplementation(() => winnerProbe);
+	const { onPaired } = renderControlledDialog();
+
+	await pasteString(buildPairString("192.168.1.5:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+	await screen.findByTestId("pairing-step-racing");
+
+	await userEvent.click(screen.getByRole("button", { name: "Enter details manually" }));
+	expect(await screen.findByTestId("pairing-step-form")).toBeInTheDocument();
+
+	resolveWinner({ fingerprint: FINGERPRINT });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	expect(add).not.toHaveBeenCalled();
+	expect(onPaired).not.toHaveBeenCalled();
+	// Still on the manual form, not bounced onto some race-result step.
+	expect(screen.getByTestId("pairing-step-form")).toBeInTheDocument();
 });

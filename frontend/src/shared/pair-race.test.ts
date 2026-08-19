@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { isPrivateHost, orderedHints, racePairAddresses, type ProbeFn } from "./pair-race";
 
 const WANT = "match-fp";
@@ -144,6 +144,36 @@ describe("racePairAddresses", () => {
 		// Resolve the slow duplicate after the race already settled: must not throw
 		// and must not change the outcome already returned above.
 		resolveSlow({ fingerprint: "wrong" });
+		await new Promise((r) => setTimeout(r, 10));
+	});
+
+	test("an already-aborted signal cancels the race before any probe runs", async () => {
+		const probe = vi.fn<ProbeFn>(async () => ({ fingerprint: WANT }));
+		const controller = new AbortController();
+		controller.abort();
+		const addrs = [{ host: "10.0.0.1", port: 8443 }];
+		const outcome = await racePairAddresses(addrs, WANT, probe, { headStartMs: 5, timeoutMs: 500, signal: controller.signal });
+		expect(outcome).toEqual({ status: "cancelled" });
+		expect(probe).not.toHaveBeenCalled();
+	});
+
+	test("aborting mid-race cancels immediately, and the would-be winner resolving afterward changes nothing", async () => {
+		let resolveWinner: (v: { fingerprint: string } | { error: string }) => void = () => undefined;
+		const pending = new Promise<{ fingerprint: string } | { error: string }>((resolve) => {
+			resolveWinner = resolve;
+		});
+		const probe: ProbeFn = async () => pending;
+		const controller = new AbortController();
+		const addrs = [{ host: "10.0.0.1", port: 8443 }];
+
+		const racePromise = racePairAddresses(addrs, WANT, probe, { headStartMs: 5, timeoutMs: 2000, signal: controller.signal });
+		controller.abort();
+		const outcome = await racePromise;
+		expect(outcome).toEqual({ status: "cancelled" });
+
+		// The probe that would have won answers only now, well after cancellation:
+		// must not throw and must not retroactively change the settled outcome.
+		resolveWinner({ fingerprint: WANT });
 		await new Promise((r) => setTimeout(r, 10));
 	});
 });

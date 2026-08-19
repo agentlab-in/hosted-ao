@@ -15,7 +15,10 @@ export type ProbeFn = (host: string, port: number) => Promise<{ fingerprint: str
 
 export type RaceAttempt = { host: string; port: number; outcome: "mismatch" | "unreachable" };
 
-export type RaceOutcome = { status: "matched"; host: string; port: number } | { status: "exhausted"; attempts: RaceAttempt[] };
+export type RaceOutcome =
+	| { status: "matched"; host: string; port: number }
+	| { status: "exhausted"; attempts: RaceAttempt[] }
+	| { status: "cancelled" };
 
 export type RaceOptions = {
 	/** Delay before a non-private candidate starts, so a private one (same
@@ -25,6 +28,12 @@ export type RaceOptions = {
 	/** Overall budget for the whole race, win or nothing. */
 	timeoutMs?: number;
 	isPrivate?: (host: string) => boolean;
+	/** Abort the whole race in flight -- the dialog that started it was
+	 * dismissed, or the caller switched to manual entry. The race settles to
+	 * `{ status: "cancelled" }` the instant this fires, not on the next probe
+	 * to answer; every in-flight probe's eventual result is discarded by the
+	 * same `settled` guard that protects a normal win from a late loser. */
+	signal?: AbortSignal;
 };
 
 const DEFAULT_HEAD_START_MS = 250;
@@ -69,9 +78,11 @@ export function isPrivateHost(host: string): boolean {
  * `toPinnedFingerprintFormat`) wins; a wrong fingerprint or an unreachable
  * address is recorded and the race continues, silently, since discovery
  * traffic on a LAN is not an attack. Resolves the instant one candidate
- * wins, every candidate is exhausted, or `timeoutMs` elapses, whichever
- * comes first; a probe that answers after the race has already settled is
- * ignored, so a slow loser can never double-resolve or overwrite a win. */
+ * wins, every candidate is exhausted, `opts.signal` aborts, or `timeoutMs`
+ * elapses, whichever comes first; a probe that answers after the race has
+ * already settled -- a win, an exhaustion, or a cancellation -- is ignored,
+ * so a slow loser can never double-resolve, overwrite a win, or complete a
+ * pairing the caller already abandoned. */
 export function racePairAddresses(addrs: PairAddr[], wantFingerprint: string, probe: ProbeFn, opts: RaceOptions = {}): Promise<RaceOutcome> {
 	const headStartMs = opts.headStartMs ?? DEFAULT_HEAD_START_MS;
 	const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -82,13 +93,25 @@ export function racePairAddresses(addrs: PairAddr[], wantFingerprint: string, pr
 		let settled = false;
 		let pending = addrs.length;
 		const timers: ReturnType<typeof setTimeout>[] = [];
+		const signal = opts.signal;
 
 		const finish = (outcome: RaceOutcome) => {
 			if (settled) return;
 			settled = true;
 			for (const timer of timers) clearTimeout(timer);
+			if (signal) signal.removeEventListener("abort", onAbort);
 			resolve(outcome);
 		};
+
+		const onAbort = () => finish({ status: "cancelled" });
+
+		if (signal) {
+			if (signal.aborted) {
+				finish({ status: "cancelled" });
+				return;
+			}
+			signal.addEventListener("abort", onAbort);
+		}
 
 		if (addrs.length === 0) {
 			finish({ status: "exhausted", attempts });
