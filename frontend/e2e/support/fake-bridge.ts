@@ -33,15 +33,30 @@ export type FakeBridgeOptions = {
 	daemonState?: "ready" | "starting" | "stopped" | "error";
 	/** REST port advertised when ready (mock data is served regardless). */
 	daemonPort?: number;
+	/**
+	 * Non-secret HTTPS origin for a hosted daemon (DaemonStatus.baseUrl). When
+	 * set alongside a "ready" daemonState, the renderer rebases every REST call
+	 * onto this origin instead of 127.0.0.1:<daemonPort>, the same seam
+	 * machineDaemonStatus (src/shared/remote-daemon.ts) fills for a registered
+	 * machine, so CreateProjectFlow's isRemoteDaemonBaseUrl(...) flips the
+	 * clone dialog into its remote (no local destination picker) mode.
+	 * `daemonPort` is still published alongside it: _shell.tsx's
+	 * workspace-bootstrap effect only fires once a port is present, and
+	 * without one the shell never leaves its startup-loading state (a real
+	 * remote machine's status has no port at all, but reaches "ready" through
+	 * daemon wiring this fake bridge does not reproduce).
+	 */
+	daemonBaseUrl?: string;
 };
 
 export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}): Promise<void> {
 	const version = opts.version ?? "9.9.9-test";
 	const daemonState = opts.daemonState ?? "ready";
 	const daemonPort = opts.daemonPort ?? 8080;
+	const daemonBaseUrl = opts.daemonBaseUrl ?? null;
 
 	await page.addInitScript(
-		({ version, daemonState, daemonPort }) => {
+		({ version, daemonState, daemonPort, daemonBaseUrl }) => {
 			const unsubscribe = () => () => undefined;
 			const signedOutAoAccount = { status: "signed-out" as const, controlPlaneUrl: "https://ao.agentlab.in" };
 			// This computer is machine zero and stays selectable with no account,
@@ -64,7 +79,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				],
 			};
 			const status: DaemonStatus =
-				daemonState === "ready" ? { state: "ready", port: daemonPort } : { state: daemonState };
+				daemonState === "ready"
+					? daemonBaseUrl
+						? { state: "ready", port: daemonPort, baseUrl: daemonBaseUrl }
+						: { state: "ready", port: daemonPort }
+					: { state: daemonState };
 			const navState = (viewId: string) => ({
 				viewId,
 				url: "",
@@ -224,7 +243,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					getState: async () => signedOutAoMachines,
 					refresh: async () => signedOutAoMachines,
 					select: async () => signedOutAoMachines,
-					gatewayToken: async () => null,
+					// api-client's runtimeFetch answers a local 503 for any remote-base
+					// request when this is null, before the request ever reaches the
+					// network, so the daemonBaseUrl remote-mode seam needs a non-null
+					// token here to reach the page.route stubs at all.
+					gatewayToken: async () => (daemonBaseUrl ? "fake-gateway-token" : null),
 					// Signed out, so there is no peer daemon to list. Matches the
 					// rest of this harness: no main process, so no second daemon.
 					peerWorkspaces: async () => ({ state: "unavailable" as const, reason: "This computer is signed out of AO." }),
@@ -252,7 +275,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
-		{ version, daemonState, daemonPort },
+		{ version, daemonState, daemonPort, daemonBaseUrl },
 	);
 }
 
