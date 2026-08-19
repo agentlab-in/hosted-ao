@@ -25,6 +25,12 @@ vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: vi.fn() },
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
+	// The board's welcome state mounts CreateProjectFlow, which subscribes to the
+	// active machine's base URL to decide whether a clone can use this desktop's
+	// folder picker. Loopback keeps these tests on the local-machine path, which
+	// is what the folder-picker assertions here already assume.
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => {},
 }));
 
 vi.mock("../../lib/bridge", () => ({

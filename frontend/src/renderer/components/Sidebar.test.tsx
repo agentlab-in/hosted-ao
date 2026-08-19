@@ -65,6 +65,13 @@ vi.mock("../lib/bridge", async (importOriginal) => {
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock },
+	// The sidebar mounts CreateProjectFlow, which subscribes to the active
+	// machine's base URL to decide whether a clone can use this desktop's folder
+	// picker. Loopback keeps every test here on the local-machine path, which is
+	// what they already assume; the remote path is covered in
+	// CreateProjectFlow.test.tsx and CloneRepositoryDialog.test.tsx.
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
