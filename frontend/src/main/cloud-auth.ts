@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import type { CloudAccount } from "../shared/cloud-account";
+import { CLOUD_SIGN_IN_ENABLED } from "../shared/cloud-pin";
 
 const CLIENT_ID =
   import.meta.env.VITE_WORKOS_CLIENT_ID?.trim() ||
@@ -382,6 +383,13 @@ export async function showCloudSignInFailure(error: unknown): Promise<void> {
 }
 
 export function registerCloudProtocol(): void {
+  // Hosted AO pins AO Cloud off permanently (see shared/cloud-pin.ts). The
+  // forge.config.ts build no longer bakes the ao-app:// scheme into the
+  // packaged app at all, so this call would fail closed anyway on a fresh
+  // install; it stays gated here too so a dev build (or an already-installed
+  // packaged build from before the pin) never registers itself as the OS
+  // handler and steals stock agent-orchestrator's sign-in callback.
+  if (!CLOUD_SIGN_IN_ENABLED) return;
   if (process.defaultApp && process.argv.length >= 2) {
     app.setAsDefaultProtocolClient("ao-app", process.execPath, [
       path.resolve(process.argv[1]),

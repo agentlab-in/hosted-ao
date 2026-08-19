@@ -19,11 +19,15 @@ const DEFAULT_RELEASE_REPO = "agentlab-in/hosted-ao";
 // shortcut/launcher at the SAME name. Drift here means a broken Start menu
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "hosted-ao";
-const AUTH_PROTOCOL = {
-	name: "Agent Orchestrator authentication callback",
-	schemes: ["ao-app"],
-};
-const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
+// Upstream claims the ao-app:// scheme here (packagerConfig.protocols, the
+// AppImage maker's protocols, and the deb/rpm mimeType entries below) so the
+// OS routes AO Cloud sign-in deep links to the app. Hosted AO pins AO Cloud
+// off permanently (see frontend/src/shared/cloud-pin.ts) and must never
+// claim ao-app://: this is baked into Info.plist / the .desktop file at
+// build time, so gating it at runtime is not possible, and a packaged
+// Hosted AO that still claims the scheme would hijack stock
+// agent-orchestrator's sign-in callback on a machine that has both
+// installed. So no maker below declares a protocols/mimeType entry for it.
 
 // parseReleaseRepo turns an "owner/repo" string (from AO_RELEASE_REPO) into the
 // publisher-github { owner, name } shape, falling back to the production default
@@ -43,7 +47,6 @@ const config: ForgeConfig = {
 		appBundleId: "in.agentlab.hosted-ao.desktop",
 		name: "Hosted AO",
 		executableName: EXECUTABLE_NAME,
-		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
@@ -167,7 +170,6 @@ const config: ForgeConfig = {
 				appId: "in.agentlab.hosted-ao.desktop",
 				productName: "Hosted AO",
 				icon: "assets/icon.png",
-				protocols: [AUTH_PROTOCOL],
 			},
 			["linux"],
 		),
@@ -182,7 +184,6 @@ const config: ForgeConfig = {
 					icon: "assets/icon.png",
 					maintainer: "Hosted AO",
 					homepage: "https://github.com/aoagents/agent-orchestrator",
-					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
 			},
 		},
@@ -194,7 +195,6 @@ const config: ForgeConfig = {
 					// rpmbuild rejects a spec with an empty License field.
 					license: "MIT",
 					homepage: "https://github.com/aoagents/agent-orchestrator",
-					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
 			},
 		},

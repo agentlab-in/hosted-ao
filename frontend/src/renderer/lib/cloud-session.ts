@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { aoBridge } from "./bridge";
 import type { CloudAccount } from "../../shared/cloud-account";
+import { CLOUD_SIGN_IN_ENABLED } from "../../shared/cloud-pin";
 
 export type { CloudAccount };
 
@@ -13,10 +14,6 @@ export interface UseCloudSessionResult {
   signIn: (returnTo?: string) => void;
   signOut: () => Promise<void>;
 }
-
-// Hosted AO pins upstream AO Cloud off permanently; machines are this fork's
-// remote story. See docs/superpowers/specs/2026-08-19-seamless-machine-onboarding-design.md.
-const CLOUD_SIGN_IN_ENABLED = false;
 
 export function isCloudSignInConfigured(
   clientId = import.meta.env.VITE_WORKOS_CLIENT_ID,

@@ -82,6 +82,7 @@ import {
 	registerCloudProtocol,
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
+import { CLOUD_SIGN_IN_ENABLED } from "./shared/cloud-pin";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { buildTelemetryBootstrap } from "./shared/telemetry";
 import { createBrowserViewHost, type BrowserViewHost } from "./main/browser-view-host";
@@ -242,7 +243,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 // Register ao-app:// as the deep-link protocol for WorkOS auth callbacks.
-// Must run before app.whenReady().
+// Must run before app.whenReady(). Hosted AO pins AO Cloud off permanently
+// (see shared/cloud-pin.ts), so registerCloudProtocol() is a no-op here; it
+// is still called (rather than skipped outright) so the gate lives in one
+// place instead of being re-checked at every call site.
 registerCloudProtocol();
 if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
@@ -2166,13 +2170,22 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 // macOS: the OS sends the ao-app:// URL via the open-url event when the app is
 // already running. If the app is not running, the URL is passed in process.argv
 // on first launch (handled in app.whenReady below).
+//
+// Hosted AO pins AO Cloud off permanently (see shared/cloud-pin.ts) and never
+// claims ao-app:// at build time (forge.config.ts), so this should not fire.
+// The gate below is defense in depth: no ao-app:// URL is routed into
+// handleCloudDeepLinkAndFocus, which otherwise pops an "AO Cloud sign-in
+// failed" modal in a build where Cloud is hidden.
 app.on("open-url", (event, url) => {
 	event.preventDefault();
+	if (!CLOUD_SIGN_IN_ENABLED) return;
 	void handleCloudDeepLinkAndFocus(url);
 });
 
 app.on("second-instance", (_event, argv) => {
-	const deepLink = argv.find((value) => value.startsWith("ao-app://"));
+	const deepLink = CLOUD_SIGN_IN_ENABLED
+		? argv.find((value) => value.startsWith("ao-app://"))
+		: undefined;
 	if (deepLink) {
 		void handleCloudDeepLinkAndFocus(deepLink);
 		return;
@@ -2340,8 +2353,11 @@ app.whenReady().then(async () => {
 	initAutoUpdates();
 
 	// Windows/Linux: on first launch, the deep-link URL may arrive as a
-	// process.argv entry (e.g. ao-app://callback?token=...).
-	const deepLinkArg = process.argv.find((a) => a.startsWith("ao-app://"));
+	// process.argv entry (e.g. ao-app://callback?token=...). Gated on the same
+	// pin as the open-url/second-instance handlers above; see shared/cloud-pin.ts.
+	const deepLinkArg = CLOUD_SIGN_IN_ENABLED
+		? process.argv.find((a) => a.startsWith("ao-app://"))
+		: undefined;
 	if (deepLinkArg) {
 		void handleCloudDeepLinkAndFocus(deepLinkArg);
 	}

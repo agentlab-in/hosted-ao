@@ -51,9 +51,11 @@ import {
   beginCloudSignIn,
   getCloudSession,
   handleCloudDeepLink,
+  registerCloudProtocol,
   showCloudSignInFailure,
   signOutCloud,
 } from "./cloud-auth";
+import { app } from "electron";
 
 describe("native WorkOS authentication", () => {
   let dataDir: string;
@@ -366,5 +368,40 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.openExternal).not.toHaveBeenCalled();
     await expect(getCloudSession(dataDir)).resolves.toBeNull();
+  });
+});
+
+// Hosted AO pins upstream AO Cloud off permanently (see
+// shared/cloud-pin.ts): a packaged build must never claim the ao-app://
+// OS protocol, or it hijacks stock agent-orchestrator's Cloud sign-in
+// callback on a machine that has both installed.
+describe("registerCloudProtocol pin gating", () => {
+  beforeEach(() => {
+    vi.mocked(app.setAsDefaultProtocolClient).mockClear();
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../shared/cloud-pin");
+    vi.resetModules();
+  });
+
+  it("never claims the ao-app protocol while the shared pin is off", () => {
+    registerCloudProtocol();
+    expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+  });
+
+  // Proves the gate reads the shared constant (../shared/cloud-pin) rather
+  // than a local duplicate of the boolean: if cloud-auth.ts ever hardcoded
+  // its own copy, mocking the shared module would stop affecting this
+  // module's behavior and this assertion would fail.
+  it("would claim the ao-app protocol if the shared pin were flipped on", async () => {
+    vi.doMock("../shared/cloud-pin", () => ({ CLOUD_SIGN_IN_ENABLED: true }));
+    vi.resetModules();
+    const { registerCloudProtocol: reloaded } = await import("./cloud-auth");
+    const electron = await import("electron");
+    reloaded();
+    expect(electron.app.setAsDefaultProtocolClient).toHaveBeenCalledWith(
+      "ao-app",
+    );
   });
 });
