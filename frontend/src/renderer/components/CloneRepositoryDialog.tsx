@@ -127,7 +127,7 @@ export default function CloneRepositoryDialog({
 								{t("createProject.cloneTitle")}
 							</Dialog.Title>
 							<Dialog.Description className="mt-1 max-w-[520px] text-pretty text-[13px] font-medium leading-5 text-[var(--color-text-import-muted)]">
-								{t("createProject.cloneDescription")}
+								{remote ? t("createProject.cloneDescription") : t("createProject.cloneDescriptionLocal")}
 							</Dialog.Description>
 						</div>
 						<button

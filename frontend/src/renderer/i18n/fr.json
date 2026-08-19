@@ -126,6 +126,7 @@
 	"createProject.cloneContinue": "Continuer",
 	"createProject.cloneCredentialsHint": "Les dépôts privés utilisent les identifiants Git déjà configurés sur cet ordinateur.",
 	"createProject.cloneDescription": "AO clone le dépôt sur la machine active, puis importe ce clone en tant que projet.",
+	"createProject.cloneDescriptionLocal": "Collez une URL Git et choisissez où AO doit créer la copie locale.",
 	"createProject.cloneDestination": "Cloner dans",
 	"createProject.cloneDestinationPlaceholder": "Choisir un dossier parent",
 	"createProject.cloneDestinationRequired": "Choisissez un dossier de destination.",

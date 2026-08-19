@@ -43,6 +43,14 @@ describe("CloneRepositoryDialog on a remote machine", () => {
 		expect(screen.getByLabelText("Repository URL")).toBeInTheDocument();
 	});
 
+	it("describes the remote clone flow, not the local destination picker", () => {
+		renderDialog({ remote: true });
+
+		expect(
+			screen.getByText("AO clones the repository onto the active machine, then imports the clone as a project."),
+		).toBeInTheDocument();
+	});
+
 	it("submits a URL with no destination, so the flow takes the cloneUrl wire", async () => {
 		const user = userEvent.setup();
 		const onContinue = vi.fn();
@@ -94,6 +102,14 @@ describe("CloneRepositoryDialog on the local machine", () => {
 
 		expect(screen.getByLabelText("Clone into")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Choose" })).toBeInTheDocument();
+	});
+
+	it("describes choosing a local destination, not the remote-machine flow", () => {
+		renderDialog({ remote: false });
+
+		expect(
+			screen.getByText("Paste a Git URL and choose where AO should create the local checkout."),
+		).toBeInTheDocument();
 	});
 
 	it("still requires a destination before continuing", async () => {

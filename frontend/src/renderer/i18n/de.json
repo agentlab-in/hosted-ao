@@ -125,6 +125,7 @@
 	"createProject.cloneContinue": "Weiter",
 	"createProject.cloneCredentialsHint": "Private Repositorys verwenden die Git-Zugangsdaten, die bereits auf diesem Computer eingerichtet sind.",
 	"createProject.cloneDescription": "AO klont das Repository auf den aktiven Rechner und importiert den Klon anschließend als Projekt.",
+	"createProject.cloneDescriptionLocal": "Füge eine Git-URL ein und wähle aus, wo AO die lokale Arbeitskopie erstellen soll.",
 	"createProject.cloneDestination": "Klonen nach",
 	"createProject.cloneDestinationPlaceholder": "Übergeordneten Ordner auswählen",
 	"createProject.cloneDestinationRequired": "Wähle einen Zielordner aus.",

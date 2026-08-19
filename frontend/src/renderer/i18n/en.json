@@ -125,6 +125,7 @@
 	"createProject.cloneContinue": "Continue",
 	"createProject.cloneCredentialsHint": "Private repositories use credentials already configured for Git on this computer.",
 	"createProject.cloneDescription": "AO clones the repository onto the active machine, then imports the clone as a project.",
+	"createProject.cloneDescriptionLocal": "Paste a Git URL and choose where AO should create the local checkout.",
 	"createProject.cloneDestination": "Clone into",
 	"createProject.cloneDestinationPlaceholder": "Choose a parent folder",
 	"createProject.cloneDestinationRequired": "Choose a destination folder.",

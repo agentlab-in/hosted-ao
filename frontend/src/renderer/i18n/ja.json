@@ -125,6 +125,7 @@
 	"createProject.cloneContinue": "続行",
 	"createProject.cloneCredentialsHint": "プライベートリポジトリでは、このコンピューターの Git に設定済みの認証情報を使用します。",
 	"createProject.cloneDescription": "リポジトリはアクティブなマシンにクローンされ、そのクローンがプロジェクトとしてインポートされます。",
+	"createProject.cloneDescriptionLocal": "Git URL を貼り付け、AO がローカルコピーを作成する場所を選択します。",
 	"createProject.cloneDestination": "クローン先",
 	"createProject.cloneDestinationPlaceholder": "親フォルダーを選択",
 	"createProject.cloneDestinationRequired": "保存先フォルダーを選択してください。",
