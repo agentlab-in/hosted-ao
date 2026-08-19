@@ -14,10 +14,14 @@ export interface UseCloudSessionResult {
   signOut: () => Promise<void>;
 }
 
+// Hosted AO pins upstream AO Cloud off permanently; machines are this fork's
+// remote story. See docs/superpowers/specs/2026-08-19-seamless-machine-onboarding-design.md.
+const CLOUD_SIGN_IN_ENABLED = false;
+
 export function isCloudSignInConfigured(
   clientId = import.meta.env.VITE_WORKOS_CLIENT_ID,
 ): boolean {
-  return Boolean(clientId?.trim());
+  return CLOUD_SIGN_IN_ENABLED && Boolean(clientId?.trim());
 }
 
 export function useCloudSession(): UseCloudSessionResult {
