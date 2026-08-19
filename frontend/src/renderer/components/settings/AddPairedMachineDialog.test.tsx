@@ -5,15 +5,16 @@ import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { AddPairedMachineDialog } from "./AddPairedMachineDialog";
 
-const { probeFingerprint, getPinnedFingerprint, add } = vi.hoisted(() => ({
+const { probeFingerprint, getPinnedFingerprint, add, remove } = vi.hoisted(() => ({
 	probeFingerprint: vi.fn(),
 	getPinnedFingerprint: vi.fn(),
 	add: vi.fn(),
+	remove: vi.fn(),
 }));
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
-		pairedMachines: { probeFingerprint, getPinnedFingerprint, add, list: vi.fn(), remove: vi.fn() },
+		pairedMachines: { probeFingerprint, getPinnedFingerprint, add, list: vi.fn(), remove },
 	},
 }));
 
@@ -91,6 +92,7 @@ beforeEach(() => {
 	probeFingerprint.mockReset();
 	getPinnedFingerprint.mockReset().mockResolvedValue(null);
 	add.mockReset();
+	remove.mockReset().mockResolvedValue(undefined);
 });
 
 test("happy path: enter address and passcode, see the fingerprint, accept, and the machine is added", async () => {
@@ -328,4 +330,32 @@ test("paste: switching to manual entry mid-race cancels it too", async () => {
 	expect(onPaired).not.toHaveBeenCalled();
 	// Still on the manual form, not bounced onto some race-result step.
 	expect(screen.getByTestId("pairing-step-form")).toBeInTheDocument();
+});
+
+test("paste: cancelling in the window between a match and add() finishing removes the persisted record", async () => {
+	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
+	let resolveAdd: (machine: ReturnType<typeof addedMachine>) => void = () => undefined;
+	const addPromise = new Promise<ReturnType<typeof addedMachine>>((resolve) => {
+		resolveAdd = resolve;
+	});
+	add.mockImplementation(() => addPromise);
+	const { onPaired } = renderControlledDialog();
+
+	await pasteString(buildPairString("192.168.1.5:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	// The race matched and add() is now in flight, but has not resolved yet.
+	await waitFor(() => expect(add).toHaveBeenCalled());
+	expect(remove).not.toHaveBeenCalled();
+
+	// Dismiss while add() is still pending: the machine is about to be
+	// persisted (or already has been, on the real bridge) without any screen
+	// left open to have confirmed it.
+	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+	// Now let the persist complete.
+	resolveAdd(addedMachine());
+
+	await waitFor(() => expect(remove).toHaveBeenCalledWith("paired:192.168.1.5:8443"));
+	expect(onPaired).not.toHaveBeenCalled();
 });

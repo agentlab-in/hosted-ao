@@ -146,6 +146,11 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 				signal: raceControllerRef.current?.signal,
 			});
 			if (outcome.status !== "matched") return outcome;
+			// The race itself may have settled "matched" a tick before a
+			// cancellation lands (racePairAddresses already returned, so its own
+			// signal check is moot); re-check here so a cancel that arrives in
+			// this exact window still stops add() from ever being called.
+			if (raceCancelledRef.current) return { status: "cancelled" as const };
 			const machine = await aoBridge.pairedMachines.add({
 				id: pairedMachineId(outcome.host, outcome.port),
 				name: outcome.host,
@@ -155,6 +160,13 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 				fingerprint: wantFingerprint,
 				addresses: orderedHints(parsed.addrs, outcome),
 			});
+			if (raceCancelledRef.current) {
+				// Cancelled while add() was in flight: the record is already
+				// persisted at this point, so the only honest fix is to undo it --
+				// no machine should survive a flow the user walked away from.
+				await aoBridge.pairedMachines.remove(machine.id);
+				return { status: "cancelled" as const };
+			}
 			return { status: "matched" as const, machine };
 		},
 		onSuccess: (result) => {
