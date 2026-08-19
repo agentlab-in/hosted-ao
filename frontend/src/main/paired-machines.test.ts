@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -146,6 +146,10 @@ test("add persists the pairing and round-trips through disk", async () => {
 		local: false,
 		reachability: "unknown",
 	});
+
+	// A bare add() with no explicit hints defaults the hint list to the single
+	// current address, the same "host:port" shape a v1 migration would produce.
+	expect(machines.getAddresses("box_1")).toEqual(["192.168.1.5:8443"]);
 
 	// Reload as a fresh controller, the way a relaunch would.
 	const reloaded = createPairedMachinesController({ stateDir, safeStorage });
@@ -372,4 +376,140 @@ test("add refuses the reserved local machine id, an out-of-range port, and an un
 	await expect(
 		machines.add({ id: "box_1", name: "x", address: "not a host!", port: 8443, passcode: "p", fingerprint: CERT_FINGERPRINT }),
 	).rejects.toThrow(/usable address/);
+});
+
+test("load() migrates a v1 file on disk into v2 address hints", async () => {
+	const v1File = {
+		version: 1,
+		machines: [
+			{
+				id: "box_1",
+				name: "Pi",
+				address: "192.168.1.5",
+				port: 8443,
+				pinnedFingerprint: CERT_FINGERPRINT,
+				lastSeen: null,
+				passcode: "enc:abc123XY",
+			},
+		],
+	};
+	await writeFile(path.join(stateDir, AO_PAIRED_MACHINES_FILE_NAME), JSON.stringify(v1File));
+
+	const machines = controller();
+	await machines.load();
+
+	expect(machines.getAddresses("box_1")).toEqual(["192.168.1.5:8443"]);
+	expect(machines.list()[0]).toMatchObject({ id: "box_1", baseUrl: "https://192.168.1.5:8443" });
+});
+
+test("load() drops a v1 record with an invalid port, the same as it always has", async () => {
+	const v1File = {
+		version: 1,
+		machines: [
+			{ id: "box_1", name: "Pi", address: "192.168.1.5", port: 99999, pinnedFingerprint: null, lastSeen: null, passcode: "enc:abc123XY" },
+		],
+	};
+	await writeFile(path.join(stateDir, AO_PAIRED_MACHINES_FILE_NAME), JSON.stringify(v1File));
+
+	const machines = controller();
+	await machines.load();
+	expect(machines.list()).toEqual([]);
+});
+
+test("loading a v1 file twice migrates identically (idempotent, since load() never writes)", async () => {
+	const v1File = {
+		version: 1,
+		machines: [
+			{ id: "box_1", name: "Pi", address: "192.168.1.5", port: 8443, pinnedFingerprint: null, lastSeen: null, passcode: "enc:abc123XY" },
+		],
+	};
+	await writeFile(path.join(stateDir, AO_PAIRED_MACHINES_FILE_NAME), JSON.stringify(v1File));
+
+	const machines = controller();
+	await machines.load();
+	const first = machines.getAddresses("box_1");
+	await machines.load();
+	const second = machines.getAddresses("box_1");
+	expect(second).toEqual(first);
+	expect(second).toEqual(["192.168.1.5:8443"]);
+});
+
+test("an unrecognized future schema version yields an empty registry, same as an unknown version always has", async () => {
+	const futureFile = {
+		version: 99,
+		machines: [{ id: "box_1", name: "Pi", address: "192.168.1.5", port: 8443, pinnedFingerprint: null, lastSeen: null, passcode: "x" }],
+	};
+	await writeFile(path.join(stateDir, AO_PAIRED_MACHINES_FILE_NAME), JSON.stringify(futureFile));
+
+	const machines = controller();
+	await machines.load();
+	expect(machines.list()).toEqual([]);
+});
+
+test("add with multiple hints persists them in order", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+		addresses: ["192.168.1.5:8443", "10.0.0.9:8443", "[fe80::1]:8443"],
+	});
+
+	expect(machines.getAddresses("box_1")).toEqual(["192.168.1.5:8443", "10.0.0.9:8443", "[fe80::1]:8443"]);
+
+	const reloaded = createPairedMachinesController({ stateDir, safeStorage });
+	await reloaded.load();
+	expect(reloaded.getAddresses("box_1")).toEqual(["192.168.1.5:8443", "10.0.0.9:8443", "[fe80::1]:8443"]);
+});
+
+test("promoteAddress moves a hint to the front, updates the current address, and persists", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+		addresses: ["192.168.1.5:8443", "10.0.0.9:8443"],
+	});
+
+	await machines.promoteAddress("box_1", "10.0.0.9:8443");
+
+	expect(machines.getAddresses("box_1")).toEqual(["10.0.0.9:8443", "192.168.1.5:8443"]);
+	expect(machines.list()[0]).toMatchObject({ baseUrl: "https://10.0.0.9:8443" });
+
+	const reloaded = createPairedMachinesController({ stateDir, safeStorage });
+	await reloaded.load();
+	expect(reloaded.getAddresses("box_1")).toEqual(["10.0.0.9:8443", "192.168.1.5:8443"]);
+	expect(reloaded.list()[0]).toMatchObject({ baseUrl: "https://10.0.0.9:8443" });
+});
+
+test("promoteAddress accepts a hint not yet in the list, adding it at the front without dropping the others", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({ id: "box_1", name: "Pi", address: "192.168.1.5", port: 8443, passcode: "abc123XY", fingerprint: CERT_FINGERPRINT });
+
+	await machines.promoteAddress("box_1", "10.0.0.9:8443");
+
+	expect(machines.getAddresses("box_1")).toEqual(["10.0.0.9:8443", "192.168.1.5:8443"]);
+	expect(machines.list()[0]).toMatchObject({ baseUrl: "https://10.0.0.9:8443" });
+});
+
+test("promoteAddress on an unregistered id is a no-op", async () => {
+	const machines = controller();
+	await machines.load();
+	await expect(machines.promoteAddress("no_such_machine", "192.168.1.5:8443")).resolves.toBeUndefined();
+});
+
+test("promoteAddress rejects an unparseable hint", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({ id: "box_1", name: "Pi", address: "192.168.1.5", port: 8443, passcode: "abc123XY", fingerprint: CERT_FINGERPRINT });
+	await expect(machines.promoteAddress("box_1", "not-a-hint")).rejects.toThrow(/usable address/);
 });
