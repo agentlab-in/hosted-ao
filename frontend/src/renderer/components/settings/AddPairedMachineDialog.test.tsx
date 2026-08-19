@@ -18,6 +18,26 @@ vi.mock("../../lib/bridge", () => ({
 
 const FINGERPRINT = "DF:9A:6C:0D:63:16:53:39:2F:43:4F:02:D8:5F:61:51:63:21:70:BE:21:45:E1:9E:B1:25:D2:44:6F:D4:AB:E5";
 const OTHER_FINGERPRINT = "AA:BB:CC:0D:63:16:53:39:2F:43:4F:02:D8:5F:61:51:63:21:70:BE:21:45:E1:9E:B1:25:D2:44:6F:D4:AB:E5";
+const FINGERPRINT_HEX = FINGERPRINT.replace(/:/g, "").toLowerCase();
+
+/** A syntactically valid `ao-pair://` string (frontend/src/shared/pair-string.ts's
+ * grammar) so paste-flow tests exercise the real parser rather than a stub. */
+function buildPairString(addrs: string, passcode = "abc123XY"): string {
+	return `ao-pair://v1/${addrs}#${FINGERPRINT_HEX}:${passcode}`;
+}
+
+const addedMachine = (overrides: Partial<{ id: string; name: string; baseUrl: string }> = {}) => ({
+	id: "paired:192.168.1.5:8443",
+	name: "192.168.1.5",
+	baseUrl: "https://192.168.1.5:8443",
+	local: false,
+	createdAt: null,
+	lastSeen: null,
+	reachability: "unknown" as const,
+	harness: "unknown" as const,
+	harnessCommand: null,
+	...overrides,
+});
 
 function renderDialog(onOpenChange = vi.fn(), onPaired = vi.fn()) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -29,11 +49,23 @@ function renderDialog(onOpenChange = vi.fn(), onPaired = vi.fn()) {
 	return { onOpenChange, onPaired };
 }
 
+/** The dialog now opens on the paste-a-string step; the pre-existing
+ * address/port/passcode form is reached through the manual escape hatch. */
+async function goToManualForm() {
+	await userEvent.click(screen.getByRole("button", { name: "Enter details manually" }));
+	await screen.findByTestId("pairing-step-form");
+}
+
 async function fillForm(passcode = "abc123XY") {
 	await userEvent.type(screen.getByLabelText("Address"), "192.168.1.5");
 	await userEvent.type(screen.getByLabelText("Port"), "8443");
 	await userEvent.type(screen.getByLabelText("Passcode"), passcode);
 	return passcode;
+}
+
+async function pasteString(pairString: string) {
+	await userEvent.click(screen.getByLabelText("Pairing string"));
+	await userEvent.paste(pairString);
 }
 
 beforeEach(() => {
@@ -44,19 +76,10 @@ beforeEach(() => {
 
 test("happy path: enter address and passcode, see the fingerprint, accept, and the machine is added", async () => {
 	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
-	add.mockResolvedValue({
-		id: "paired:192.168.1.5:8443",
-		name: "192.168.1.5",
-		baseUrl: "https://192.168.1.5:8443",
-		local: false,
-		createdAt: null,
-		lastSeen: null,
-		reachability: "unknown",
-		harness: "unknown",
-		harnessCommand: null,
-	});
+	add.mockResolvedValue(addedMachine());
 	const { onOpenChange, onPaired } = renderDialog();
 
+	await goToManualForm();
 	await fillForm("abc123XY");
 	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -87,6 +110,7 @@ test("declining at the comparison step pins nothing and adds nothing", async () 
 	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
 	const { onOpenChange } = renderDialog();
 
+	await goToManualForm();
 	await fillForm();
 	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 	expect(await screen.findByTestId("pairing-step-compare")).toBeInTheDocument();
@@ -101,6 +125,7 @@ test("a probe error renders as an error, not a successful pairing", async () => 
 	probeFingerprint.mockResolvedValue({ error: "No certificate could be retrieved from that address." });
 	renderDialog();
 
+	await goToManualForm();
 	await fillForm();
 	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -115,6 +140,7 @@ test("a fingerprint mismatch is a hard refusal with a re-pair action and no conn
 	getPinnedFingerprint.mockResolvedValue(OTHER_FINGERPRINT);
 	renderDialog();
 
+	await goToManualForm();
 	await fillForm();
 	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -141,6 +167,7 @@ test("the passcode never appears in the DOM after submission", async () => {
 	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
 	renderDialog();
 
+	await goToManualForm();
 	const passcode = await fillForm("s3cr3t-passcode");
 	expect(screen.getByDisplayValue(passcode)).toBeInTheDocument();
 
@@ -150,4 +177,88 @@ test("the passcode never appears in the DOM after submission", async () => {
 	expect(screen.queryByDisplayValue(passcode)).not.toBeInTheDocument();
 	expect(screen.queryByText(passcode)).not.toBeInTheDocument();
 	expect(document.querySelector('input[type="password"]')).not.toBeInTheDocument();
+});
+
+test("paste: races every address, a public one wins after the private one fails, and no compare step is shown", async () => {
+	probeFingerprint.mockImplementation(async (host: string) => {
+		if (host === "192.168.1.5") return { error: "No certificate could be retrieved from that address." };
+		return { fingerprint: FINGERPRINT };
+	});
+	add.mockResolvedValue(addedMachine({ id: "paired:9.9.9.9:8443", name: "9.9.9.9", baseUrl: "https://9.9.9.9:8443" }));
+	const { onOpenChange, onPaired } = renderDialog();
+
+	await pasteString(buildPairString("192.168.1.5:8443,9.9.9.9:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	await waitFor(
+		() =>
+			expect(add).toHaveBeenCalledWith({
+				id: "paired:9.9.9.9:8443",
+				name: "9.9.9.9",
+				address: "9.9.9.9",
+				port: 8443,
+				passcode: "abc123XY",
+				fingerprint: FINGERPRINT,
+				addresses: ["9.9.9.9:8443", "192.168.1.5:8443"],
+			}),
+		{ timeout: 2000 },
+	);
+	expect(onPaired).toHaveBeenCalled();
+	expect(onOpenChange).toHaveBeenCalledWith(false);
+	// The winning-path story never shows a visual compare step: the fingerprint
+	// is auto-pinned from the pasted string itself, the out-of-band channel.
+	expect(screen.queryByTestId("pairing-step-compare")).not.toBeInTheDocument();
+});
+
+test("paste: a wrong-fingerprint candidate is skipped silently and the race continues to a winner", async () => {
+	probeFingerprint.mockImplementation(async (host: string) => {
+		if (host === "192.168.1.5") return { fingerprint: OTHER_FINGERPRINT };
+		return { fingerprint: FINGERPRINT };
+	});
+	add.mockResolvedValue(addedMachine({ id: "paired:192.168.1.6:8443", name: "192.168.1.6" }));
+	const { onPaired } = renderDialog();
+
+	await pasteString(buildPairString("192.168.1.5:8443,192.168.1.6:8443"));
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	await waitFor(() => expect(onPaired).toHaveBeenCalled());
+	expect(add).toHaveBeenCalledWith(
+		expect.objectContaining({ address: "192.168.1.6", addresses: ["192.168.1.6:8443", "192.168.1.5:8443"] }),
+	);
+	// The mismatch is discovery noise, not a hard refusal: no mismatch UI, no alert.
+	expect(screen.queryByTestId("pairing-step-mismatch")).not.toBeInTheDocument();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("paste: garbage input shows an inline parse error and the manual entry path stays reachable", async () => {
+	renderDialog();
+
+	await pasteString("not a pairing string");
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	expect(await screen.findByRole("alert")).toHaveTextContent(/pairing string/i);
+	expect(probeFingerprint).not.toHaveBeenCalled();
+	expect(add).not.toHaveBeenCalled();
+
+	await userEvent.click(screen.getByRole("button", { name: "Enter details manually" }));
+	expect(await screen.findByTestId("pairing-step-form")).toBeInTheDocument();
+});
+
+test("paste: the pasted string never reappears in the DOM once submitted", async () => {
+	probeFingerprint.mockResolvedValue({ fingerprint: FINGERPRINT });
+	add.mockResolvedValue(addedMachine());
+	renderDialog();
+
+	const pairString = buildPairString("192.168.1.5:8443");
+	await pasteString(pairString);
+	expect(screen.getByDisplayValue(pairString)).toBeInTheDocument();
+
+	await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+	await waitFor(() => expect(add).toHaveBeenCalled());
+	expect(screen.queryByDisplayValue(pairString)).not.toBeInTheDocument();
+	expect(screen.queryByText(pairString)).not.toBeInTheDocument();
+	expect(document.querySelector("textarea")).not.toBeInTheDocument();
+	// The passcode embedded in the pasted string must not linger either.
+	expect(screen.queryByText("abc123XY")).not.toBeInTheDocument();
 });

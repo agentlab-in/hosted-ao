@@ -414,9 +414,20 @@ const api = {
 		// to accept.
 		getPinnedFingerprint: (id: string) => ipcRenderer.invoke("pairedMachines:getPinnedFingerprint", id) as Promise<string | null>,
 		// Persists the pairing. `fingerprint` must be the value the user compared
-		// and accepted; nothing here pins one on the caller's behalf.
-		add: (input: { id: string; name: string; address: string; port: number; passcode: string; fingerprint: string }) =>
-			ipcRenderer.invoke("pairedMachines:add", input) as Promise<AoMachine>,
+		// and accepted, or -- on the paste-first path -- the value already
+		// embedded in the pairing string itself, since that string is the
+		// out-of-band channel. `addresses` is the ordered hint list a future
+		// reconnect races through; omitted, it defaults to the single address:port
+		// pair given.
+		add: (input: {
+			id: string;
+			name: string;
+			address: string;
+			port: number;
+			passcode: string;
+			fingerprint: string;
+			addresses?: string[];
+		}) => ipcRenderer.invoke("pairedMachines:add", input) as Promise<AoMachine>,
 		remove: (id: string) => ipcRenderer.invoke("pairedMachines:remove", id) as Promise<void>,
 	},
 	cloud: {

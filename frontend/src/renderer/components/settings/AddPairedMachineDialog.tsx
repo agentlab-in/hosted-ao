@@ -3,6 +3,8 @@ import { AlertTriangle, Loader2, ShieldAlert, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
+import { orderedHints, racePairAddresses, type RaceAttempt } from "../../../shared/pair-race";
+import { parsePairString, toPinnedFingerprintFormat, type ParsedPairString } from "../../../shared/pair-string";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -52,7 +54,7 @@ function fingerprintRows(fingerprint: string): string[] {
 	return rows;
 }
 
-type Step = "form" | "compare" | "mismatch" | "error";
+type Step = "paste" | "racing" | "raceResults" | "form" | "compare" | "mismatch" | "error";
 
 function parsePort(raw: string): number | null {
 	if (!/^\d+$/.test(raw.trim())) return null;
@@ -66,29 +68,98 @@ function parsePort(raw: string): number | null {
  * explicitly accept before anything is pinned. Built entirely on the
  * `ao.pairedMachines` bridge (list/probeFingerprint/getPinnedFingerprint/add);
  * no transport or storage logic lives here.
+ *
+ * The first step, though, is pasting the `ao-pair://` string a box prints
+ * (frontend/src/shared/pair-string.ts): every address it lists is raced
+ * concurrently (frontend/src/shared/pair-race.ts) over the same
+ * `probeFingerprint` bridge call, entirely in this renderer -- probing is
+ * already one call per address, so nothing about cancelling or sequencing it
+ * needs main. The winner's fingerprint is auto-pinned from the string itself
+ * (the paste is the out-of-band channel the user already trusted), so this
+ * path never shows the visual compare step below; that step, and the
+ * steady-state hard-refusal on a real mismatch, exist only for the manual
+ * escape hatch this step still offers for recovery.
  */
 export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPairedMachineDialogProps) {
 	const { t } = useTranslation();
 	const addressId = useId();
 	const portId = useId();
 	const passcodeId = useId();
+	const pasteId = useId();
 
-	const [step, setStep] = useState<Step>("form");
+	const [step, setStep] = useState<Step>("paste");
 	const [address, setAddress] = useState("");
 	const [port, setPort] = useState("");
 	const [passcode, setPasscode] = useState("");
 	const [fingerprint, setFingerprint] = useState("");
 	const [errorMessage, setErrorMessage] = useState("");
+	const [pasteValue, setPasteValue] = useState("");
+	const [parseError, setParseError] = useState("");
+	const [raceAttempts, setRaceAttempts] = useState<RaceAttempt[]>([]);
+	// The generic "error" step is shared by the manual probe and the paste
+	// race's `add()` failure; the two need different retry actions, so this is
+	// the only bit of extra state that distinction costs.
+	const [errorFromPaste, setErrorFromPaste] = useState(false);
 
 	useEffect(() => {
 		if (open) return;
-		setStep("form");
+		setStep("paste");
 		setAddress("");
 		setPort("");
 		setPasscode("");
 		setFingerprint("");
 		setErrorMessage("");
+		setPasteValue("");
+		setParseError("");
+		setRaceAttempts([]);
+		setErrorFromPaste(false);
 	}, [open]);
+
+	const pasteRace = useMutation({
+		mutationFn: async (parsed: ParsedPairString) => {
+			setStep("racing");
+			const wantFingerprint = toPinnedFingerprintFormat(parsed.fingerprintHex);
+			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, aoBridge.pairedMachines.probeFingerprint);
+			if (outcome.status === "exhausted") return outcome;
+			const machine = await aoBridge.pairedMachines.add({
+				id: pairedMachineId(outcome.host, outcome.port),
+				name: outcome.host,
+				address: outcome.host,
+				port: outcome.port,
+				passcode: parsed.passcode,
+				fingerprint: wantFingerprint,
+				addresses: orderedHints(parsed.addrs, outcome),
+			});
+			return { status: "matched" as const, machine };
+		},
+		onSuccess: (result) => {
+			if (result.status === "exhausted") {
+				setRaceAttempts(result.attempts);
+				setStep("raceResults");
+				return;
+			}
+			onPaired();
+			onOpenChange(false);
+		},
+		onError: (err) => {
+			setErrorMessage(err instanceof Error ? err.message : String(err));
+			setErrorFromPaste(true);
+			setStep("error");
+		},
+	});
+
+	const startPairing = () => {
+		const parsed = parsePairString(pasteValue.trim());
+		if ("error" in parsed) {
+			setParseError(t("pairing.pasteParseError"));
+			return;
+		}
+		setParseError("");
+		// Scrub the raw string and passcode from state the instant it has been
+		// handed off, so a re-render of this step can never show it again.
+		setPasteValue("");
+		pasteRace.mutate(parsed);
+	};
 
 	const probe = useMutation({
 		mutationFn: async () => {
@@ -107,6 +178,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		},
 		onError: (err) => {
 			setErrorMessage(err instanceof Error ? err.message : String(err));
+			setErrorFromPaste(false);
 			setStep("error");
 		},
 	});
@@ -133,6 +205,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 
 	const canSubmit = address.trim().length > 0 && parsePort(port) !== null && passcode.length > 0;
 	const pairError = pair.error instanceof Error ? pair.error.message : null;
+	const isBusy = probe.isPending || pair.isPending || pasteRace.isPending;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -140,7 +213,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 				<DialogClose asChild>
 					<button
 						type="button"
-						disabled={probe.isPending || pair.isPending}
+						disabled={isBusy}
 						className="settings-dialog-close-button settings-close-button"
 						aria-label={t("common.close")}
 						title={t("common.close")}
@@ -152,9 +225,75 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 				<div className={settingsDialogHeaderClass}>
 					<DialogTitle className="settings-dialog-title">{t("pairing.dialogTitle")}</DialogTitle>
 					<DialogDescription className="text-control leading-4 text-settings-muted">
-						{t("pairing.dialogSubtitle")}
+						{step === "paste" || step === "racing" || step === "raceResults"
+							? t("pairing.pasteSubtitle")
+							: t("pairing.dialogSubtitle")}
 					</DialogDescription>
 				</div>
+
+				{step === "paste" ? (
+					<div className={settingsDialogBodyClass} data-testid="pairing-step-paste">
+						<div className="flex flex-col gap-1.5">
+							<Label htmlFor={pasteId}>{t("pairing.pasteLabel")}</Label>
+							<textarea
+								id={pasteId}
+								value={pasteValue}
+								onChange={(event) => setPasteValue(event.target.value)}
+								placeholder={t("pairing.pastePlaceholder")}
+								rows={3}
+								autoFocus
+								className="min-h-20 w-full resize-none rounded-md border border-transparent bg-input/50 px-3 py-2 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+							/>
+						</div>
+
+						{parseError ? (
+							<p role="alert" className="flex items-start gap-2 text-xs leading-row text-error">
+								<AlertTriangle className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
+								<span>{parseError}</span>
+							</p>
+						) : null}
+
+						<button
+							type="button"
+							onClick={() => setStep("form")}
+							className="self-start text-xs text-settings-muted underline-offset-2 hover:underline"
+						>
+							{t("pairing.enterManually")}
+						</button>
+					</div>
+				) : null}
+
+				{step === "racing" ? (
+					<div className={settingsDialogBodyClass} data-testid="pairing-step-racing">
+						<p className="flex items-center gap-2 text-xs leading-row text-settings-muted">
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+							{t("pairing.racing")}
+						</p>
+					</div>
+				) : null}
+
+				{step === "raceResults" ? (
+					<div className={settingsDialogBodyClass} data-testid="pairing-step-race-results">
+						<p className="text-xs leading-row text-settings-muted">{t("pairing.raceFailedBody")}</p>
+
+						<ul className="flex flex-col gap-1 rounded-md bg-raised px-3 py-2.5 font-mono text-xs leading-5 text-settings-label">
+							{raceAttempts.map((attempt) => (
+								<li key={`${attempt.host}:${attempt.port}`}>
+									{`${attempt.host}:${attempt.port}`}{" "}
+									{t(attempt.outcome === "mismatch" ? "pairing.raceOutcomeMismatch" : "pairing.raceOutcomeUnreachable")}
+								</li>
+							))}
+						</ul>
+
+						<button
+							type="button"
+							onClick={() => setStep("form")}
+							className="self-start text-xs text-settings-muted underline-offset-2 hover:underline"
+						>
+							{t("pairing.enterManually")}
+						</button>
+					</div>
+				) : null}
 
 				{step === "form" ? (
 					probe.isPending ? (
@@ -244,12 +383,23 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 
 				<div className={settingsDialogFooterClass}>
 					<DialogClose asChild>
-						<Button type="button" variant="footer" disabled={probe.isPending || pair.isPending}>
+						<Button type="button" variant="footer" disabled={isBusy}>
 							{t("pairing.cancel")}
 						</Button>
 					</DialogClose>
 
-					{step === "form" || step === "error" ? (
+					{step === "paste" ? (
+						<Button
+							type="button"
+							variant="footer-primary"
+							disabled={pasteValue.trim().length === 0 || pasteRace.isPending}
+							onClick={startPairing}
+						>
+							{t("pairing.continue")}
+						</Button>
+					) : null}
+
+					{step === "form" || (step === "error" && !errorFromPaste) ? (
 						<Button
 							type="button"
 							variant="footer-primary"
@@ -258,6 +408,12 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 						>
 							{probe.isPending ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
 							{step === "error" ? t("pairing.tryAgain") : t("pairing.continue")}
+						</Button>
+					) : null}
+
+					{step === "error" && errorFromPaste ? (
+						<Button type="button" variant="footer-primary" onClick={() => setStep("paste")}>
+							{t("pairing.tryAgain")}
 						</Button>
 					) : null}
 
