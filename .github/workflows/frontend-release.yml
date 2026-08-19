@@ -73,12 +73,21 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - run: npm ci
+      # Hosted AO pins upstream AO Cloud sign-in off permanently (see
+      # frontend/src/shared/cloud-pin.ts and cloudSignInEnabled in
+      # backend/internal/cli/start.go), so VITE_WORKOS_CLIENT_ID guards a
+      # sign-in surface this fork's builds hide end to end. Requiring it here
+      # would mean shipping a credentialed bundle for dead code, so a missing
+      # value is a skip, not a release-blocking failure. If a value IS set,
+      # keep the original hard verification: AO Cloud is still off (the pin
+      # is code, not config), but nothing downstream should silently swallow
+      # a real misconfiguration if the variable is ever populated by mistake.
       - name: Verify WorkOS build configuration
         shell: bash
         run: |
           if [ -z "$VITE_WORKOS_CLIENT_ID" ]; then
-            echo "::error::Repository variable VITE_WORKOS_CLIENT_ID is required for desktop releases." >&2
-            exit 1
+            echo "VITE_WORKOS_CLIENT_ID unset: AO Cloud sign-in is pinned off in this fork (frontend/src/shared/cloud-pin.ts); skipping WorkOS verification."
+            exit 0
           fi
       - name: macOS signing setup
         if: startsWith(matrix.os, 'macos')
@@ -286,12 +295,15 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - run: npm ci
+      # See the matching step in the release job above: this fork pins AO
+      # Cloud sign-in off permanently, so a missing WorkOS client ID is a
+      # skip here too, not a release-blocking failure.
       - name: Verify WorkOS build configuration
         shell: bash
         run: |
           if [ -z "$VITE_WORKOS_CLIENT_ID" ]; then
-            echo "::error::Repository variable VITE_WORKOS_CLIENT_ID is required for desktop releases." >&2
-            exit 1
+            echo "VITE_WORKOS_CLIENT_ID unset: AO Cloud sign-in is pinned off in this fork (frontend/src/shared/cloud-pin.ts); skipping WorkOS verification."
+            exit 0
           fi
       - name: macOS signing setup
         uses: ./.github/actions/macos-signing-setup
