@@ -116,6 +116,12 @@ vi.mock("../lib/api-client", () => ({
 		GET: getMock,
 		POST: postMock,
 	},
+	// CommandPalette mounts CreateProjectFlow on one branch, which subscribes to
+	// the active machine's base URL to decide whether a clone can use this
+	// desktop's folder picker. Loopback keeps this suite on the local-machine
+	// path, matching Sidebar.test.tsx's mock for the same reason.
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error) {
