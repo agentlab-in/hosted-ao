@@ -180,6 +180,86 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Standalone Linux `ao` CLI binaries, published so Phase 2's curl|sh
+      # installer (docs/superpowers/plans/2026-08-20-phase-2-installer.md) has
+      # something to fetch from releases/latest. .github/workflows/linux-cli-binaries.yml
+      # builds and verifies the same way on every push but is CI-only and
+      # publishes nothing (see its header); this is the one authorized
+      # publisher (AGENTS.md: exactly one publisher per asset), so the
+      # cross-compile + verify recipe is mirrored here rather than called.
+      - name: Resolve Linux CLI version stamp
+        if: matrix.os == 'ubuntu-latest'
+        id: cli-stamp
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          {
+            echo "version=${version}"
+            echo "commit=$(git rev-parse --short HEAD)"
+            echo "date=$(git log -1 --format=%cI)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build Linux CLI binaries
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        working-directory: backend
+        env:
+          VERSION: ${{ steps.cli-stamp.outputs.version }}
+          COMMIT: ${{ steps.cli-stamp.outputs.commit }}
+          DATE: ${{ steps.cli-stamp.outputs.date }}
+        run: |
+          pkg="github.com/aoagents/agent-orchestrator/backend/internal/cli"
+          mkdir -p "$GITHUB_WORKSPACE/dist-cli"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-X ${pkg}.Version=${VERSION} -X ${pkg}.Commit=${COMMIT} -X ${pkg}.Date=${DATE}" \
+            -o "$GITHUB_WORKSPACE/dist-cli/ao-linux-x64" ./cmd/ao
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
+            -ldflags "-X ${pkg}.Version=${VERSION} -X ${pkg}.Commit=${COMMIT} -X ${pkg}.Date=${DATE}" \
+            -o "$GITHUB_WORKSPACE/dist-cli/ao-linux-arm64" ./cmd/ao
+
+      # A green build is not proof: a bad GOARCH would still exit 0 having
+      # produced a host binary. Assert the ELF machine per arch, and on
+      # amd64 (the runner's own architecture) also run the binary and check
+      # the version stamp came through. Mirrors linux-cli-binaries.yml's
+      # "Verify artifact" step.
+      - name: Verify Linux CLI binaries
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          VERSION: ${{ steps.cli-stamp.outputs.version }}
+        run: |
+          cd "$GITHUB_WORKSPACE/dist-cli"
+          check() {
+            local file="$1" expected_elf="$2" described
+            described="$(file -b "$file")"
+            echo "$file: $described"
+            case "$described" in
+              *"$expected_elf"*) ;;
+              *) echo "::error::$file is not a $expected_elf ELF executable: $described"; exit 1 ;;
+            esac
+          }
+          check ao-linux-x64 "x86-64"
+          check ao-linux-arm64 "ARM aarch64"
+          reported="$(./ao-linux-x64 version)"
+          echo "ao-linux-x64 version -> $reported"
+          case "$reported" in
+            "$VERSION "*) ;;
+            *) echo "::error::version stamp missing: got '$reported', expected it to start with '$VERSION '"; exit 1 ;;
+          esac
+
+      - name: Upload Linux CLI binaries
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          # Forge publishes to v<version> (see the macOS step), not the git tag.
+          tag="v$(node -p "require('./package.json').version")"
+          cd "$GITHUB_WORKSPACE/dist-cli"
+          sha256sum ao-linux-x64 > ao-linux-x64.sha256
+          sha256sum ao-linux-arm64 > ao-linux-arm64.sha256
+          gh release upload "$tag" ao-linux-x64 ao-linux-x64.sha256 ao-linux-arm64 ao-linux-arm64.sha256 --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Dedicated Intel (darwin-x64) build leg. Kept a separate job (not in the
   # release matrix) because only a macOS host can build the x64 installer, but
   # publish-feed now waits on it (needs: [release, release-intel]) so the x64
