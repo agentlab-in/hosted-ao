@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 const (
@@ -1439,7 +1438,7 @@ func renderPairCredentials(passcode string, generated bool, pairingString, finge
 }
 
 // renderSetupSummaryPair is renderSetupSummary's pair-mode counterpart.
-func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, pairingString, fingerprint string, addrs []string) string {
+func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, pairingString, fingerprint string, addrs []string, httpsAddr string) string {
 	var b strings.Builder
 	b.WriteString("\nao setup-vm --pair finished. No domain, no AO account, no control-plane contact.\n")
 
@@ -1465,7 +1464,7 @@ func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []strin
 		}
 	}
 
-	b.WriteString(renderPairCredentials(passcode, passcodeGenerated, pairingString, fingerprint, addrs, vmgateway.DefaultHTTPSAddr))
+	b.WriteString(renderPairCredentials(passcode, passcodeGenerated, pairingString, fingerprint, addrs, httpsAddr))
 
 	b.WriteString("\nStill missing. Nothing below is done for you:\n")
 	b.WriteString("\n  1. No agent harness is configured. Run it in the foreground and finish the\n")

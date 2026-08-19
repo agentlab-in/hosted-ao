@@ -934,7 +934,7 @@ func (c *commandContext) runSetupVMPair(cmd *cobra.Command, opts setupVMOptions)
 	// built the run that generates the plaintext passcode: every run after
 	// that only has the hash, exactly like the raw-passcode display above it.
 	addrs, pairingString := c.pairSummaryAddresses(ctx, cert, passcode, generated)
-	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, pairingString, fingerprint, addrs))
+	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, pairingString, fingerprint, addrs, pairHTTPSAddr()))
 }
 
 // ensureSetupPasscode returns this box's pair-mode passcode, generating and

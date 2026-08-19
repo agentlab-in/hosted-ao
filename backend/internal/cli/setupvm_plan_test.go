@@ -1205,7 +1205,7 @@ func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
 	plan := testPairSetupPlan(t)
 	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
 		"AB12CD34", true, "ao-pair://v1/192.168.1.20:443#"+strings.Repeat("0", 64)+":AB12CD34",
-		"07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil)
+		"07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil, ":443")
 	for _, want := range []string{
 		"No domain, no AO account, no control-plane contact",
 		"AB12CD34",
@@ -1235,7 +1235,7 @@ func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
 func TestRenderSetupSummaryPair_ReRunNeverShowsThePasscodeAgain(t *testing.T) {
 	plan := testPairSetupPlan(t)
 	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
-		"", false, "", "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil)
+		"", false, "", "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil, ":443")
 	if strings.Contains(summary, "AB12CD34") {
 		t.Error("a re-run must never print a passcode")
 	}
@@ -1251,6 +1251,29 @@ func TestRenderSetupSummaryPair_ReRunNeverShowsThePasscodeAgain(t *testing.T) {
 	// The fingerprint is not a secret and must still be printed every run.
 	if !strings.Contains(summary, "07:CA:9F:3E:B2:11") {
 		t.Errorf("the fingerprint must still be printed on a re-run:\n%s", summary)
+	}
+	assertNoDashes(t, summary)
+}
+
+// TestRenderSetupSummaryPair_CustomHTTPSAddrIsReflectedInTheAddressBlock pins
+// a real bug the unparam linter flagged: renderSetupSummaryPair used to hand
+// renderPairCredentials the package's own DefaultHTTPSAddr constant instead
+// of the actually-resolved listener address, so a box configured with
+// AO_VM_HTTPS_ADDR (a custom port) printed the pairing string's addresses
+// with the right port but the separate "Address to enter in the desktop
+// app" display block with the wrong one (always :443).
+func TestRenderSetupSummaryPair_CustomHTTPSAddrIsReflectedInTheAddressBlock(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
+		"AB12CD34", true, "ao-pair://v1/192.168.1.20:8443#"+strings.Repeat("0", 64)+":AB12CD34",
+		"07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+		[]string{"192.168.1.20"}, ":8443")
+
+	if !strings.Contains(summary, "192.168.1.20:8443") {
+		t.Errorf("address block must reflect the custom port, not the :443 default:\n%s", summary)
+	}
+	if strings.Contains(summary, "192.168.1.20:443") {
+		t.Errorf("address block must not fall back to :443 once a custom port is configured:\n%s", summary)
 	}
 	assertNoDashes(t, summary)
 }
