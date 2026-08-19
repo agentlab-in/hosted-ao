@@ -1407,7 +1407,7 @@ func renderPairCredentials(passcode string, generated bool, pairingString string
 	if generated {
 		switch {
 		case pairingString != "":
-			fmt.Fprintf(&b, "\nPaste this in Hosted AO: %s\n", pairingString)
+			fmt.Fprintf(&b, "\nPaste this in Hosted AO:\n\n  %s\n", pairingString)
 		case len(addrs) == 0:
 			b.WriteString("\nNo pairing string could be built: no address was found automatically for this\n")
 			b.WriteString("machine (see the address line below). Find one and run `ao vm rotate-passcode`\n")
@@ -1536,7 +1536,7 @@ func renderPasscodeRotated(passcode string, pairingString string) string {
 	b.WriteString("and must enter this new one. The pinned certificate is unchanged, so there is no\n")
 	b.WriteString("fingerprint to re-check.\n")
 	if pairingString != "" {
-		fmt.Fprintf(&b, "\nPaste this in Hosted AO: %s\n", pairingString)
+		fmt.Fprintf(&b, "\nPaste this in Hosted AO:\n\n  %s\n", pairingString)
 	} else {
 		b.WriteString("\nNo pairing string could be built (no address was found automatically, or the\n")
 		b.WriteString("certificate could not be read). The passcode below is still valid; build a\n")

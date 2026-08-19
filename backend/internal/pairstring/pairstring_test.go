@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -75,18 +76,9 @@ func TestValidate_InvalidVectors(t *testing.T) {
 }
 
 func TestBuild_NoAddresses(t *testing.T) {
-	fp := "ab"
-	if _, err := Build(nil, repeat(fp, 32), "XK4M2P7Q"); err == nil {
+	if _, err := Build(nil, strings.Repeat("ab", 32), "XK4M2P7Q"); err == nil {
 		t.Fatal("Build with no addresses = nil error, want error")
 	}
-}
-
-func repeat(s string, n int) string {
-	out := make([]byte, 0, len(s)*n)
-	for i := 0; i < n; i++ {
-		out = append(out, s...)
-	}
-	return string(out)
 }
 
 // TestFingerprint checks Fingerprint returns the 64-char lowercase hex

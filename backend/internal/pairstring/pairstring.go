@@ -127,11 +127,11 @@ func validateAddr(addr string) error {
 	if strings.ContainsAny(host, "@#,") {
 		return errors.New("address must not include a username, fragment, or extra address")
 	}
-	portNum, err := strconv.Atoi(port)
+	portNum, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
 		return fmt.Errorf("port %q is not a number", port)
 	}
-	if portNum < 1 || portNum > 65535 {
+	if portNum < 1 {
 		return fmt.Errorf("port %d is outside 1-65535", portNum)
 	}
 	return nil

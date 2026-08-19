@@ -291,7 +291,7 @@ func TestVMRotatePasscode_PrintsAValidPairingString(t *testing.T) {
 		t.Fatalf("ao vm rotate-passcode: %v", err)
 	}
 
-	const prefix = "Paste this in Hosted AO: "
+	const prefix = "Paste this in Hosted AO:\n\n  "
 	idx := strings.Index(stdout, prefix)
 	if idx == -1 {
 		t.Fatalf("stdout is missing the %q line:\n%s", prefix, stdout)

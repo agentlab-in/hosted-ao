@@ -1215,7 +1215,8 @@ func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
 		"gh auth login",
 		"ao doctor",
 		"mismatch means refuse and re-pair",
-		"Paste this in Hosted AO: ao-pair://v1/192.168.1.20:443#",
+		"Paste this in Hosted AO:",
+		"  ao-pair://v1/192.168.1.20:443#",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("pair summary is missing %q:\n%s", want, summary)
@@ -1296,7 +1297,7 @@ func TestRenderPairCredentials_ListsEveryDiscoveredAddress(t *testing.T) {
 func TestRenderPairCredentials_PrintsThePairingStringOnceWhenGenerated(t *testing.T) {
 	pairingString := "ao-pair://v1/192.168.1.20:443#" + strings.Repeat("0", 64) + ":AB12CD34"
 	text := renderPairCredentials("AB12CD34", true, pairingString, "07:CA", []string{"192.168.1.20"}, ":443")
-	want := "Paste this in Hosted AO: " + pairingString
+	want := "Paste this in Hosted AO:\n\n  " + pairingString
 	if n := strings.Count(text, want); n != 1 {
 		t.Errorf("pairing-string line count = %d, want exactly 1:\n%s", n, text)
 	}
@@ -1338,7 +1339,7 @@ func TestRenderManualPathPair_NamesEveryStep(t *testing.T) {
 func TestRenderPasscodeRotated(t *testing.T) {
 	pairingString := "ao-pair://v1/192.168.1.20:443#" + strings.Repeat("0", 64) + ":XY98ZW76"
 	text := renderPasscodeRotated("XY98ZW76", pairingString)
-	for _, want := range []string{"XY98ZW76", "Every device connected with the old passcode has been dropped", "fingerprint to re-check", "Paste this in Hosted AO: " + pairingString} {
+	for _, want := range []string{"XY98ZW76", "Every device connected with the old passcode has been dropped", "fingerprint to re-check", "Paste this in Hosted AO:\n\n  " + pairingString} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rotation output is missing %q:\n%s", want, text)
 		}

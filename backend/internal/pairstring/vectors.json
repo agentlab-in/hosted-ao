@@ -36,6 +36,16 @@
       "fp": "abababababababababababababababababababababababababababababababab",
       "passcode": "XK4M2P7Q",
       "string": "ao-pair://v1/vm-42.example.com:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
+    },
+    {
+      "name": "multi address bracketed ipv6 then ipv4",
+      "addrs": [
+        "[fd00::7]:8443",
+        "192.168.1.40:8443"
+      ],
+      "fp": "abababababababababababababababababababababababababababababababab",
+      "passcode": "XK4M2P7Q",
+      "string": "ao-pair://v1/[fd00::7]:8443,192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
     }
   ],
   "invalid": [
@@ -98,6 +108,16 @@
       "name": "username in address",
       "string": "ao-pair://v1/user@192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
       "reason": "address must not include a username"
+    },
+    {
+      "name": "port with leading plus",
+      "string": "ao-pair://v1/192.168.1.40:+8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "address must include an explicit port"
+    },
+    {
+      "name": "bare unbracketed ipv6 host",
+      "string": "ao-pair://v1/fd00::7:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "address must include an explicit port"
     }
   ]
 }
