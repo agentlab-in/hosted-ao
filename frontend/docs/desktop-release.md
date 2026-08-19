@@ -182,8 +182,11 @@ Windows and Linux only (macOS ships none by policy since #3151, so mac clients
 always take the full-download path), the version-free aliases `ao start` fetches
 (`agent-orchestrator-darwin-arm64.zip`, `agent-orchestrator-darwin-x64.zip`,
 `agent-orchestrator-win32-x64.exe`, `agent-orchestrator-linux-x64.AppImage`,
-and the deb/rpm published under versioned names), and the electron-updater
-feeds `latest.yml`, `latest-mac.yml`, `latest-linux.yml`.
+and the deb/rpm published under versioned names), the electron-updater
+feeds `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, and the standalone
+Linux `ao` CLI binaries `ao-linux-x64` and `ao-linux-arm64` (plus their
+`.sha256` sidecars) that the curl|sh installer fetches from
+`releases/latest`.
 
 **Stable releases only** additionally carry
 `agent-orchestrator-darwin-{arm64,x64}.dmg` for first install, and this is the
