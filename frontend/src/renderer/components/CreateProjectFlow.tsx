@@ -26,10 +26,12 @@ import { Button } from "./ui/button";
 
 // A local folder and a clone URL are mutually exclusive on the daemon (it
 // answers PATH_AND_CLONE_URL_CONFLICT when both arrive). Modelling the source
-// as a union means the caller cannot express the conflict at all. This flow
-// only ever produces the `path` branch today; `cloneUrl` is what the hosted
-// build's POST /api/v1/projects accepts so a machine with no local filesystem
-// picker (a remote box, or the CLI) can still add a project by URL.
+// as a union means the caller cannot express the conflict at all. Local
+// projects/workspaces (the folder picker) produce the `path` branch;
+// remote-machine clones produce the `cloneUrl` branch, which the hosted
+// build's POST /api/v1/projects accepts so a machine with no local
+// filesystem picker (a remote box, or the CLI) can still add a project by
+// URL.
 export type CreateProjectSource = { path: string; cloneUrl?: never } | { cloneUrl: string; path?: never };
 
 export type CreateProjectInput = CreateProjectSource & { asWorkspace?: boolean } & CreateProjectAgentSelection;
