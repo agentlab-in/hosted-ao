@@ -203,6 +203,7 @@ func TestGateway_BlockedRoutes_NeverReachDaemon(t *testing.T) {
 		"/shutdown",
 		"/internal/telemetry/cli-invoked",
 		"/api/v1/mobile/status",
+		"/api/v1/mobile/devices",
 		"/api/v1/mobile",
 		"/api/v1/dev/import-projects",
 		"/api/v1/dev",
