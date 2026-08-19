@@ -1,7 +1,7 @@
 {
 	"name": "hosted-ao",
 	"productName": "Hosted AO",
-	"version": "0.10.3",
+	"version": "0.13.0",
 	"private": true,
 	"description": "Electron + TypeScript frontend for the agent-orchestrator rewrite",
 	"author": "Agent Orchestrator",
