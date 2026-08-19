@@ -73,6 +73,17 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - run: npm ci
+      # frontend/vite.renderer.config.ts aliases @aoagents/product-ui straight
+      # to packages/product-ui/src (source, not a built dist), so Vite needs
+      # that package's own node_modules (e.g. clsx) on disk to resolve it.
+      # Mirrors frontend.yml's "Install Cloud client dependencies" / "Install
+      # product UI dependencies" steps, which this workflow was missing.
+      - name: Install Cloud client dependencies
+        run: npm ci
+        working-directory: packages/cloud-client
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
       # Hosted AO pins upstream AO Cloud sign-in off permanently (see
       # frontend/src/shared/cloud-pin.ts and cloudSignInEnabled in
       # backend/internal/cli/start.go), so VITE_WORKOS_CLIENT_ID guards a
@@ -89,8 +100,15 @@ jobs:
             echo "VITE_WORKOS_CLIENT_ID unset: AO Cloud sign-in is pinned off in this fork (frontend/src/shared/cloud-pin.ts); skipping WorkOS verification."
             exit 0
           fi
+      # Skipped when no Developer ID certificate is configured (this fork has
+      # no Apple signing secrets today): forge.config.ts's osxSign/osxNotarize
+      # already fall back to undefined without CSC_LINK/APPLE_SIGNING_IDENTITY,
+      # producing an unsigned build. The apple-actions/import-codesign-certs
+      # step this action wraps hard-fails on an empty p12, so it must not run
+      # at all rather than run and error, or unsigned releases could never
+      # publish.
       - name: macOS signing setup
-        if: startsWith(matrix.os, 'macos')
+        if: startsWith(matrix.os, 'macos') && secrets.CSC_LINK != ''
         uses: ./.github/actions/macos-signing-setup
         with:
           csc-link: ${{ secrets.CSC_LINK }}
@@ -295,6 +313,14 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - run: npm ci
+      # See "Install Cloud client dependencies" / "Install product UI
+      # dependencies" in the release job above: same reason, needed here too.
+      - name: Install Cloud client dependencies
+        run: npm ci
+        working-directory: packages/cloud-client
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
       # See the matching step in the release job above: this fork pins AO
       # Cloud sign-in off permanently, so a missing WorkOS client ID is a
       # skip here too, not a release-blocking failure.
@@ -305,7 +331,11 @@ jobs:
             echo "VITE_WORKOS_CLIENT_ID unset: AO Cloud sign-in is pinned off in this fork (frontend/src/shared/cloud-pin.ts); skipping WorkOS verification."
             exit 0
           fi
+      # See the matching step in the release job above: skipped without a
+      # configured Developer ID certificate so an unsigned build (which
+      # forge.config.ts already supports) can still publish.
       - name: macOS signing setup
+        if: secrets.CSC_LINK != ''
         uses: ./.github/actions/macos-signing-setup
         with:
           csc-link: ${{ secrets.CSC_LINK }}
