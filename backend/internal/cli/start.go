@@ -34,6 +34,12 @@ var releaseRepo = "Untrivial-ai/agent-orchestrator"
 // (spaced, per frontend/forge.config.ts).
 const appBundleName = "Agent Orchestrator.app"
 
+// cloudSignInEnabled mirrors frontend/src/shared/cloud-pin.ts. Hosted AO pins
+// upstream AO Cloud off permanently and must never claim the ao-app://
+// scheme, or it hijacks stock agent-orchestrator's sign-in callback on a
+// machine that has both installed. Flip both constants together.
+const cloudSignInEnabled = false
+
 // appStateFileName is the marker the desktop app writes under ~/.ao/hosted on every
 // launch (spec §5). `ao start` is a read-only consumer of it.
 const appStateFileName = "app-state.json"
@@ -103,7 +109,7 @@ func (c *commandContext) runStart(ctx context.Context, cmd *cobra.Command, opts 
 	}
 	res.AppPath = appPath
 
-	if runtime.GOOS == "linux" {
+	if shouldRegisterLinuxProtocolHandler() {
 		if err := c.registerLinuxProtocolHandler(ctx, appPath); err != nil {
 			return err
 		}
@@ -254,6 +260,17 @@ func linuxAppImagePath() string {
 	return filepath.Join(dir, "agent-orchestrator.AppImage")
 }
 
+// shouldRegisterLinuxProtocolHandler reports whether `ao start` should claim
+// the ao-app:// scheme as the Linux desktop's default handler. Extracted from
+// runStart's call site so the cloudSignInEnabled pin is testable on its own,
+// without needing a full runStart harness or a Linux runner. The function
+// itself, registerLinuxProtocolHandler, stays in place and unconditional:
+// deleting it would widen future upstream-merge conflicts. This gate is our
+// seam instead.
+func shouldRegisterLinuxProtocolHandler() bool {
+	return cloudSignInEnabled && runtime.GOOS == "linux"
+}
+
 const linuxDesktopEntryName = "agent-orchestrator-ao-app.desktop"
 
 func linuxApplicationsDir() (string, error) {
@@ -281,6 +298,11 @@ func desktopExecPath(appPath string) string {
 	return `"` + escaped + `"`
 }
 
+// registerLinuxProtocolHandler writes the ao-app:// desktop entry and sets it
+// as the xdg-mime default. Callers must check shouldRegisterLinuxProtocolHandler
+// first (runStart does): this function does not itself check cloudSignInEnabled,
+// so it stays exactly as upstream wrote it and the pin lives entirely at the
+// call site.
 func (c *commandContext) registerLinuxProtocolHandler(
 	ctx context.Context,
 	appPath string,

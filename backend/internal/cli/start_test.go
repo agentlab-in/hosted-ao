@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // writeMarker writes a ~/.ao/app-state.json marker pointing at appPath into the
@@ -302,6 +304,53 @@ func TestRegisterLinuxProtocolHandler(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commands, wantCommands) {
 		t.Fatalf("commands = %#v, want %#v", commands, wantCommands)
+	}
+}
+
+// Hosted AO pins upstream AO Cloud off permanently (mirrors
+// frontend/src/shared/cloud-pin.ts). registerLinuxProtocolHandler itself
+// stays unconditional on purpose (see its doc comment); the pin must live at
+// the call site, in shouldRegisterLinuxProtocolHandler.
+func TestShouldRegisterLinuxProtocolHandler_PinnedOff(t *testing.T) {
+	if cloudSignInEnabled {
+		t.Fatal("cloudSignInEnabled must stay false: flipping it independently of " +
+			"frontend/src/shared/cloud-pin.ts re-claims the ao-app scheme and can " +
+			"hijack stock agent-orchestrator's sign-in callback on a shared machine")
+	}
+	if shouldRegisterLinuxProtocolHandler() {
+		t.Fatal("shouldRegisterLinuxProtocolHandler must return false while cloudSignInEnabled is false")
+	}
+}
+
+// runStart must not invoke registerLinuxProtocolHandler (and therefore never
+// shells out to xdg-mime) while the pin is off, even on Linux where it would
+// otherwise apply. This exercises the real call site, not just the helper.
+func TestRunStart_DoesNotRegisterProtocolWhilePinnedOff(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the registration call site is Linux-only")
+	}
+	setConfigEnv(t)
+	bundle := makeBundle(t, "agent-orchestrator.AppImage")
+	t.Cleanup(swapPreferredAppPath(func() string { return bundle }))
+	t.Cleanup(swapScanLocations(func() []string { return nil }))
+
+	var commands [][]string
+	c := &commandContext{deps: Deps{
+		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, append([]string{name}, args...))
+			return nil, nil
+		},
+		StartProcess: func(processStartConfig) error { return nil },
+	}.withDefaults()}
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := c.runStart(context.Background(), cmd, startOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("runStart shelled out while cloudSignInEnabled is false: %#v", commands)
 	}
 }
 
