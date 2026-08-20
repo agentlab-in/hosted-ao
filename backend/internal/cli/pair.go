@@ -25,6 +25,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -116,7 +117,7 @@ func (c *commandContext) runPairShow(cmd *cobra.Command, opts pairShowOptions) e
 		return err
 	}
 	if _, err := vmgateway.LoadPasscodeStore(passcodeDir); err != nil {
-		return fmt.Errorf("%w (or run bare `ao pair`, which provisions this box automatically)", err)
+		return pairPasscodeReadError(err)
 	}
 
 	certDir, err := c.resolvePairCertDir(opts.CertDir)
@@ -149,13 +150,48 @@ func (c *commandContext) runPairShow(cmd *cobra.Command, opts pairShowOptions) e
 // passcode store is proof the certificate exists too, without this command
 // ever having to touch (and risk silently creating) the certificate itself
 // just to answer a yes/no question.
+//
+// A permission error counts as provisioned too, not as "no store found":
+// only a uid that cannot read an existing file (or traverse into its
+// directory) produces one, and a genuinely unprovisioned box has nothing
+// there to be denied on. Without this, a non-root `ao pair` on a box
+// provisioned under sudo reads pairIsProvisioned's false as "never
+// provisioned" and walks straight into runSetupVMPair to provision it
+// again, which is both wrong (the box is provisioned) and useless (a
+// non-root re-provision cannot fix a permission problem a privileged one
+// created).
 func (c *commandContext) pairIsProvisioned(passcodeDirFlag string) (bool, error) {
 	dir, err := c.resolvePairPasscodeDir(passcodeDirFlag)
 	if err != nil {
 		return false, err
 	}
 	_, err = vmgateway.LoadPasscodeStore(dir)
-	return err == nil, nil
+	if err == nil || errors.Is(err, fs.ErrPermission) {
+		return true, nil
+	}
+	return false, nil
+}
+
+// pairPasscodeReadError turns a failed passcode-store read into the right
+// next step. A permission error means this box is already provisioned: the
+// store is there but this process cannot read it, almost always because
+// pair mode was provisioned under sudo and this invocation is not, so the
+// fix is to re-run with sudo, not to provision again (the generic "run bare
+// `ao pair`" suggestion would be wrong twice over here: provisioning
+// already happened, and a non-root bare `ao pair` fails the identical way).
+// Anything else, most commonly not-exist but also a corrupt store, really
+// has nothing to read yet, so provisioning is still the right suggestion.
+//
+// errors.Is, not os.IsPermission, because LoadPasscodeStore wraps the
+// underlying os.ReadFile error with %w (see readPasscodeHash in
+// vmgateway/passcode.go), and os.IsPermission's shallow type switch over
+// *PathError/*LinkError/*SyscallError does not see through that wrap the
+// way errors.Is's Unwrap-following comparison does.
+func pairPasscodeReadError(err error) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("%w (this box is already provisioned; re-run with sudo: sudo ao pair show)", err)
+	}
+	return fmt.Errorf("%w (or run bare `ao pair`, which provisions this box automatically)", err)
 }
 
 // resolvePairPasscodeDir and resolvePairCertDir mirror runVMRotatePasscode's
