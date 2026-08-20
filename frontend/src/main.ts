@@ -1857,14 +1857,18 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
  * tries, and again on every manual retry -- for as long as the app stays
  * open. Keying by host instead bounds that to one throwaway session per
  * distinct box ever probed, which is what actually needs isolating from
- * `session.defaultSession`. The cost: a probe of a host that was already
- * probed and rejected once in this session -- still unpinned, the box's cert
- * genuinely rotated between the two attempts -- can hit its own cached
- * rejection and fail to (re)capture the new fingerprint until the app
- * restarts. That is a narrower recurrence of the same class of bug, scoped
- * to an already-rare event (a paired box re-minting its long-lived
- * certificate between two probes of the same unpinned host, in one app
- * session) rather than to the every-single-pairing case #114 was.
+ * `session.defaultSession`.
+ *
+ * The cost: a probe of an unpinned host is always denied, by design (same as
+ * above), so reusing that host's session for a second probe can hit its own
+ * cached rejection and fail to capture anything -- not only when the box's
+ * certificate has actually changed between the two attempts. The realistic
+ * trigger is a retry after an abandoned or failed pairing attempt (compare
+ * the fingerprint, close the dialog without pinning, try again), which can
+ * come back with a misleading "no certificate could be retrieved" until the
+ * app restarts. Re-pairing an already-registered box is unaffected: a pinned
+ * host verifies and accepts on `session.defaultSession`, which this probe
+ * session never touches. Tracked as a follow-up: #121.
  */
 function pairProbeNetFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 	const hostname = new URL(String(input)).hostname;
