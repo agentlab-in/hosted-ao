@@ -1830,15 +1830,13 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
 // app.whenReady below, is what actually enforces the pin; this controller only
 // holds the data it reads from.
 
-let pairProbeSessionSeq = 0;
-
 /**
- * Fetch for `probeFingerprint`'s capture connection, bound to a fresh,
- * in-memory session every call rather than `session.defaultSession`.
- * `ses.fetch()`, not `net.fetch()`: the latter always issues from the default
- * session (that is the whole reason it exists as a convenience wrapper), so
- * routing through another session requires calling `fetch` on the `Session`
- * instance itself.
+ * Fetch for `probeFingerprint`'s capture connection, bound to a session other
+ * than `session.defaultSession`, keyed by the target host rather than a
+ * fresh partition every call. `ses.fetch()`, not `net.fetch()`: the latter
+ * always issues from the default session (that is the whole reason it exists
+ * as a convenience wrapper), so routing through another session requires
+ * calling `fetch` on the `Session` instance itself.
  *
  * That connection is always denied at the TLS layer (paired-machine-cert.ts
  * has no accept path for a host with nothing pinned yet), and Chromium caches
@@ -1849,12 +1847,28 @@ let pairProbeSessionSeq = 0;
  * rejection: the very next authenticated request to the newly paired host
  * would still be short-circuited to a failure before the verify proc is even
  * consulted, reading as unreachable until the app restarts and the cache is
- * gone (#114). A throwaway partition, discarded after the one probe it was
- * created for, means the poisoned verdict dies with it instead of outliving
- * the pairing flow.
+ * gone (#114).
+ *
+ * The partition is keyed by hostname, not minted fresh per call, because
+ * `session.fromPartition` has no destroy API: Electron holds every partition
+ * it has ever created in an internal map for the life of the process
+ * (electron/electron#27142, #28566), so a fresh name every call would leak
+ * one Session per probe -- one per candidate address `racePairAddresses`
+ * tries, and again on every manual retry -- for as long as the app stays
+ * open. Keying by host instead bounds that to one throwaway session per
+ * distinct box ever probed, which is what actually needs isolating from
+ * `session.defaultSession`. The cost: a probe of a host that was already
+ * probed and rejected once in this session -- still unpinned, the box's cert
+ * genuinely rotated between the two attempts -- can hit its own cached
+ * rejection and fail to (re)capture the new fingerprint until the app
+ * restarts. That is a narrower recurrence of the same class of bug, scoped
+ * to an already-rare event (a paired box re-minting its long-lived
+ * certificate between two probes of the same unpinned host, in one app
+ * session) rather than to the every-single-pairing case #114 was.
  */
 function pairProbeNetFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-	const probeSession = session.fromPartition(`pair-probe-${pairProbeSessionSeq++}`);
+	const hostname = new URL(String(input)).hostname;
+	const probeSession = session.fromPartition(`pair-probe-${hostname}`);
 	probeSession.setCertificateVerifyProc(pairedMachines().verifyCertificate);
 	return probeSession.fetch(String(input), init);
 }
