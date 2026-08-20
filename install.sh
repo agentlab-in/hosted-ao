@@ -84,10 +84,25 @@ download_url() {
 download_file() {
   url="$1"
   dest="$2"
-  # curl's own -S diagnostic is discarded: err() below is the single line of
-  # output this failure surfaces, so a 404 (or any other curl failure) reads
-  # as one clear message instead of curl's line plus ours.
-  curl -fsL -o "$dest" "$url" 2>/dev/null || err "download failed: $url"
+  # -S makes curl emit its own one-line diagnostic on failure (DNS,
+  # connection refused, TLS, timeout, a 404, ...); without it curl stays
+  # fully silent even on error and there is no cause to report at all. That
+  # diagnostic is redirected to a file under $tmp_dir (main() owns its
+  # cleanup) instead of straight to stderr, then folded into err()'s single
+  # line below, so a failure here still produces exactly one line of output
+  # but the line still carries curl's reason: for an unattended curl|sh run
+  # on a box nobody is watching, that reason is often the only signal there
+  # is, and this script's own generic "download failed" should not throw it
+  # away.
+  curl -f -s -S -L -o "$dest" "$url" 2>"$tmp_dir/curl-err" || {
+    cause=$(tr -s '\n' ' ' <"$tmp_dir/curl-err" | head -c 200)
+    cause="${cause% }"
+    if [ -n "$cause" ]; then
+      err "download failed: $url ($cause)"
+    else
+      err "download failed: $url"
+    fi
+  }
 }
 
 # verify_sha256 checks file against its sidecar checksum file, which must
