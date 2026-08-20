@@ -100,7 +100,7 @@ import { createPairedMachinesController } from "./main/paired-machines";
 import type { AoMachine } from "./shared/ao-machines";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { shouldSignalAttention, shouldToast } from "./main/notification-signals";
-import { buildWindowsAppMenuTemplate } from "./main/menu";
+import { buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
 import { createMachineTransport, type MachineTransport } from "./main/machine-transport";
 import { createPairedMachineTransport, type PairedMachineTransport } from "./main/paired-machine-transport";
@@ -367,19 +367,28 @@ function appendDaemonOutput(text: string): void {
 	if (nextStatus !== daemonStatus) setDaemonStatus(nextStatus);
 }
 
+// Shared by both native app menus below. Tries the AO browser toggle first so
+// the focused Browser panel opens the same native Chromium surface as the
+// toolbar, then falls back to the shell webContents (never throws even with
+// no focused window, unlike Electron's built-in { role: "toggleDevTools" }).
+function toggleFocusedDevTools(): void {
+	const fallback = () => getShellWebContents()?.toggleDevTools();
+	void browserViewHost?.toggleDevToolsForLastFocused().then((state) => {
+		if (!state) fallback();
+	}).catch(fallback);
+}
+
 // Menu installed on Windows where the native menu bar is hidden. The bar stays
 // out of sight, but the roles keep their accelerators alive (Reload, zoom, full
-// screen, edit commands). DevTools uses the AO browser toggle so the focused
-// Browser panel opens the same native Chromium surface as the toolbar.
+// screen, edit commands).
 function buildWindowsAppMenu(): Menu {
-	return Menu.buildFromTemplate(
-		buildWindowsAppMenuTemplate(() => {
-			const fallback = () => getShellWebContents()?.toggleDevTools();
-			void browserViewHost?.toggleDevToolsForLastFocused().then((state) => {
-				if (!state) fallback();
-			}).catch(fallback);
-		}),
-	);
+	return Menu.buildFromTemplate(buildWindowsAppMenuTemplate(toggleFocusedDevTools));
+}
+
+// Explicit macOS application menu, installed instead of leaving Electron's
+// default in place (see buildMacAppMenuTemplate for why).
+function buildMacAppMenu(): Menu {
+	return Menu.buildFromTemplate(buildMacAppMenuTemplate(toggleFocusedDevTools));
 }
 
 async function disposeBrowserViewHost(): Promise<void> {
@@ -468,11 +477,15 @@ async function createWindowInternal(): Promise<void> {
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
 	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
 	// installed so its accelerators keep working and act on the focused pane;
-	// setMenuBarVisibility(false) keeps the strip itself out of view. macOS/Linux
-	// keep their native menus.
+	// setMenuBarVisibility(false) keeps the strip itself out of view. macOS keeps
+	// its native menu bar, but with the explicit, guarded application menu built
+	// above rather than Electron's default (see buildMacAppMenuTemplate). Linux
+	// keeps Electron's default menu.
 	if (process.platform === "win32") {
 		Menu.setApplicationMenu(buildWindowsAppMenu());
 		mainWindow.setMenuBarVisibility(false);
+	} else if (process.platform === "darwin") {
+		Menu.setApplicationMenu(buildMacAppMenu());
 	}
 
 	// Harden navigation: never let renderer/terminal content open in-app windows or
