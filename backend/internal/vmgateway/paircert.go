@@ -166,3 +166,17 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// PairCertExists reports whether dir already holds a persisted pair-mode
+// certificate, without loading or creating one. This is the read-only
+// counterpart to LoadOrCreatePairCertificate for callers that must never
+// risk minting a new certificate just to answer a yes/no question (`ao pair
+// show`, which only ever reads what is on disk, and `ao vm rotate-passcode`,
+// which promises the pinned certificate is unaffected by a rotation): both
+// gate their own certificate load behind this instead of calling
+// LoadOrCreatePairCertificate directly, which would silently generate a
+// fresh certificate against an empty dir. Exported so those callers never
+// have to duplicate pairCertFileName's value themselves.
+func PairCertExists(dir string) bool {
+	return fileExists(filepath.Join(dir, pairCertFileName))
+}

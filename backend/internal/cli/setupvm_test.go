@@ -528,15 +528,6 @@ func TestChownSetupTree_NoOpWhenNotRoot(t *testing.T) {
 	}
 }
 
-func TestDiscoverPairListenAddresses_ExcludesLoopback(t *testing.T) {
-	addrs := discoverPairListenAddresses()
-	for _, addr := range addrs {
-		if addr == "127.0.0.1" {
-			t.Errorf("discoverPairListenAddresses() = %v, must not include loopback", addrs)
-		}
-	}
-}
-
 // readSoleFile reads the single file expected to exist directly under dir,
 // without needing to know vmgateway's internal file name for it.
 func readSoleFile(t *testing.T, dir string) []byte {

@@ -162,6 +162,8 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao vm setup-harness":   {},
 	"ao vm rotate-passcode": {},
 	"ao whoami":             {},
+	"ao pair":               {},
+	"ao pair show":          {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},

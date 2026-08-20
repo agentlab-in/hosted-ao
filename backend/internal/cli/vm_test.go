@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pairstring"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
@@ -208,9 +211,24 @@ func TestVMRotatePasscode_RotatesRestartsAndInvalidatesTheOldOne(t *testing.T) {
 	}
 	oldHash := readSoleFile(t, dir)
 
+	// --cert-dir points rotate-passcode at a temp directory rather than
+	// letting it fall back to the real state root: without this, resolving
+	// the certificate directory would touch (and create a certificate
+	// under) whatever machine happens to run this test.
+	certDir := t.TempDir()
+	if _, err := vmgateway.LoadOrCreatePairCertificate(certDir); err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	restore := pairInterfaceIPs
+	t.Cleanup(func() { pairInterfaceIPs = restore })
+	pairInterfaceIPs = func() ([]string, []string) { return []string{"192.168.1.20"}, nil }
+
 	var calls []string
 	var mu sync.Mutex
 	deps := Deps{
+		// A real HTTP client would let the pairing string's public-address
+		// probe reach the internet; this keeps the test hermetic.
+		HTTPClient: &http.Client{Transport: errRoundTripper{}},
 		CommandOutput: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			mu.Lock()
 			calls = append(calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
@@ -218,7 +236,7 @@ func TestVMRotatePasscode_RotatesRestartsAndInvalidatesTheOldOne(t *testing.T) {
 			return nil, nil
 		},
 	}
-	stdout, _, err := executeCLI(t, deps, "vm", "rotate-passcode", "--passcode-dir", dir)
+	stdout, _, err := executeCLI(t, deps, "vm", "rotate-passcode", "--passcode-dir", dir, "--cert-dir", certDir)
 	if err != nil {
 		t.Fatalf("ao vm rotate-passcode: %v", err)
 	}
@@ -239,6 +257,87 @@ func TestVMRotatePasscode_RotatesRestartsAndInvalidatesTheOldOne(t *testing.T) {
 	mu.Unlock()
 	if !strings.Contains(got, "systemctl restart "+setupVMGatewayUnit) {
 		t.Errorf("rotate-passcode must restart the gateway so the new passcode takes effect (the running gateway only loads it once, at startup): calls = %v", calls)
+	}
+}
+
+// TestVMRotatePasscode_PrintsAValidPairingString is the credential-rule
+// regression for rotation: the new passcode can only ever be handed to the
+// desktop app as part of a fresh ao-pair:// string (rotation prints no
+// standalone passcode the desktop could use on its own), so the output must
+// contain one, on its own line, prefixed "Paste this in Hosted AO:", that
+// pairstring.Validate accepts.
+func TestVMRotatePasscode_PrintsAValidPairingString(t *testing.T) {
+	setConfigEnv(t)
+	passcodeDir := t.TempDir()
+	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
+	certDir := t.TempDir()
+	if _, err := vmgateway.LoadOrCreatePairCertificate(certDir); err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	restore := pairInterfaceIPs
+	t.Cleanup(func() { pairInterfaceIPs = restore })
+	pairInterfaceIPs = func() ([]string, []string) { return []string{"192.168.1.20"}, nil }
+
+	deps := Deps{
+		HTTPClient: &http.Client{Transport: errRoundTripper{}},
+		CommandOutput: func(context.Context, string, ...string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	stdout, _, err := executeCLI(t, deps, "vm", "rotate-passcode", "--passcode-dir", passcodeDir, "--cert-dir", certDir)
+	if err != nil {
+		t.Fatalf("ao vm rotate-passcode: %v", err)
+	}
+
+	const prefix = "Paste this in Hosted AO:\n\n  "
+	idx := strings.Index(stdout, prefix)
+	if idx == -1 {
+		t.Fatalf("stdout is missing the %q line:\n%s", prefix, stdout)
+	}
+	line := strings.SplitN(stdout[idx+len(prefix):], "\n", 2)[0]
+	if err := pairstring.Validate(line); err != nil {
+		t.Errorf("pairing string %q failed pairstring.Validate: %v", line, err)
+	}
+	if !strings.Contains(line, "192.168.1.20:443") {
+		t.Errorf("pairing string = %q, want it to contain the stubbed private address", line)
+	}
+}
+
+// TestVMRotatePasscode_NeverCreatesACertificateWhenOneIsMissing pins the
+// same guarantee as TestPairShow_NeverCreatesACertificateWhenOneIsMissing:
+// rotate-passcode's own help text promises "the pinned certificate is
+// unaffected", so an empty --cert-dir must never cause this command to mint
+// one, even though the pairing string it would otherwise print is silently
+// skipped as a result.
+func TestVMRotatePasscode_NeverCreatesACertificateWhenOneIsMissing(t *testing.T) {
+	setConfigEnv(t)
+	passcodeDir := t.TempDir()
+	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
+	certDir := t.TempDir() // deliberately left empty
+
+	deps := Deps{
+		HTTPClient: &http.Client{Transport: errRoundTripper{}},
+		CommandOutput: func(context.Context, string, ...string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	stdout, _, err := executeCLI(t, deps, "vm", "rotate-passcode", "--passcode-dir", passcodeDir, "--cert-dir", certDir)
+	if err != nil {
+		t.Fatalf("ao vm rotate-passcode: %v", err)
+	}
+	if strings.Contains(stdout, "Paste this in Hosted AO") {
+		t.Errorf("must not print a pairing string when no certificate could be safely loaded:\n%s", stdout)
+	}
+	entries, readErr := os.ReadDir(certDir)
+	if readErr != nil {
+		t.Fatalf("ReadDir(%s): %v", certDir, readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("rotate-passcode created files in the certificate directory: %v (the pinned certificate must be unaffected)", entries)
 	}
 }
 

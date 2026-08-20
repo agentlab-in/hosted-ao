@@ -1,7 +1,17 @@
 # 3. A pair mode for the VM gateway: self-signed TLS and a passcode, for a box reached by bare IP
 
 Date: 2026-08-17
-Status: Accepted
+Status: Accepted, superseded in part by 0004 (cloud VM scoping)
+
+> Note (2026-08-20): the Decision and Consequences below say a cloud VM "is
+> not a documented or supported configuration" for pair mode. That scoping is
+> reversed by `docs/adr/0004-pairing-string-and-cloud-pair-scope.md`, which
+> makes pair mode the front door for any machine, cloud VMs included. The
+> transport decided here, self-signed TLS, fingerprint pinning, the passcode
+> credential, per-source lockout, and the hard refusal on a steady-state
+> mismatch, is unchanged and unaffected; only the "which machines this mode
+> officially covers" statement is amended. The rest of this ADR stands as the
+> historical record.
 
 ## Context
 

@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 const (
@@ -1395,10 +1394,27 @@ func renderManualPathPair(p setupPlatform) string {
 // Read this off the SSH session it was printed on and compare the fingerprint
 // against what the desktop app shows on first connect, by eye: they must
 // match exactly, and any mismatch means refuse and re-pair, never continue.
-func renderPairCredentials(passcode string, generated bool, fingerprint string, addrs []string, httpsAddr string) string {
+//
+// pairingString is the full ao-pair:// string (see backend/internal/pairstring),
+// printed on its own line exactly once, prefixed "Paste this in Hosted AO:",
+// the credential the desktop app actually pastes; empty whenever there is
+// nothing to build one from (not generated this run, or no address could be
+// found), in which case only the plaintext-passcode fallback below prints.
+func renderPairCredentials(passcode string, generated bool, pairingString, fingerprint string, addrs []string, httpsAddr string) string {
 	var b strings.Builder
 	b.WriteString("\nPairing this box to the AO desktop app:\n")
 	if generated {
+		switch {
+		case pairingString != "":
+			fmt.Fprintf(&b, "\nPaste this in Hosted AO:\n\n  %s\n", pairingString)
+		case len(addrs) == 0:
+			b.WriteString("\nNo pairing string could be built: no address was found automatically for this\n")
+			b.WriteString("machine (see the address line below). Find one and run `ao vm rotate-passcode`\n")
+			b.WriteString("once it is reachable, which prints a fresh string built from it.\n")
+		default:
+			b.WriteString("\nNo pairing string could be built (the certificate could not be read). Run\n")
+			b.WriteString("`ao vm rotate-passcode` once that is fixed, which prints a fresh string.\n")
+		}
 		b.WriteString("\n  Passcode (shown once here, never stored anywhere in plaintext):\n")
 		fmt.Fprintf(&b, "\n      %s\n", passcode)
 	} else {
@@ -1422,7 +1438,7 @@ func renderPairCredentials(passcode string, generated bool, fingerprint string, 
 }
 
 // renderSetupSummaryPair is renderSetupSummary's pair-mode counterpart.
-func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, fingerprint string, addrs []string) string {
+func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []string, passcode string, passcodeGenerated bool, pairingString, fingerprint string, addrs []string, httpsAddr string) string {
 	var b strings.Builder
 	b.WriteString("\nao setup-vm --pair finished. No domain, no AO account, no control-plane contact.\n")
 
@@ -1448,7 +1464,7 @@ func renderSetupSummaryPair(p setupPlan, units setupUnitStates, warnings []strin
 		}
 	}
 
-	b.WriteString(renderPairCredentials(passcode, passcodeGenerated, fingerprint, addrs, vmgateway.DefaultHTTPSAddr))
+	b.WriteString(renderPairCredentials(passcode, passcodeGenerated, pairingString, fingerprint, addrs, httpsAddr))
 
 	b.WriteString("\nStill missing. Nothing below is done for you:\n")
 	b.WriteString("\n  1. No agent harness is configured. Run it in the foreground and finish the\n")
@@ -1508,11 +1524,23 @@ func renderSetupDryRunPair(p setupPlan, warnings []string) string {
 // renderPasscodeRotated is the whole output of `ao vm rotate-passcode`: the
 // new passcode, printed once, framed differently from ao setup-vm --pair's
 // first-run output so the two are never mistaken for each other.
-func renderPasscodeRotated(passcode string) string {
+//
+// pairingString is the full ao-pair:// string built from the rotated
+// passcode, printed on its own line exactly once, prefixed "Paste this in
+// Hosted AO:"; empty when no address could be found to build one from, in
+// which case only the plaintext-passcode fallback below prints.
+func renderPasscodeRotated(passcode, pairingString string) string {
 	var b strings.Builder
 	b.WriteString("\nPasscode rotated. Every device connected with the old passcode has been dropped\n")
 	b.WriteString("and must enter this new one. The pinned certificate is unchanged, so there is no\n")
 	b.WriteString("fingerprint to re-check.\n")
+	if pairingString != "" {
+		fmt.Fprintf(&b, "\nPaste this in Hosted AO:\n\n  %s\n", pairingString)
+	} else {
+		b.WriteString("\nNo pairing string could be built (no address was found automatically, or the\n")
+		b.WriteString("certificate could not be read). The passcode below is still valid; build a\n")
+		b.WriteString("string by hand once this machine's address is known.\n")
+	}
 	b.WriteString("\n  New passcode (shown once here, never stored anywhere in plaintext):\n")
 	fmt.Fprintf(&b, "\n      %s\n", passcode)
 	return b.String()

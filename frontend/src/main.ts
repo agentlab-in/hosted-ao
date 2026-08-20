@@ -2002,7 +2002,15 @@ ipcMain.handle(
 	"pairedMachines:add",
 	(
 		_event,
-		input: { id: string; name: string; address: string; port: number; passcode: string; fingerprint: string },
+		input: {
+			id: string;
+			name: string;
+			address: string;
+			port: number;
+			passcode: string;
+			fingerprint: string;
+			addresses?: string[];
+		},
 	) => pairedMachines().add(input),
 );
 ipcMain.handle("pairedMachines:remove", (_event, id: string) => pairedMachines().remove(id));

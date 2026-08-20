@@ -23,7 +23,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -928,8 +927,14 @@ func (c *commandContext) runSetupVMPair(cmd *cobra.Command, opts setupVMOptions)
 	}
 	warnings = append(warnings, notes...)
 
-	addrs := discoverPairListenAddresses()
-	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, fingerprint, addrs))
+	// pairSummaryAddresses is the one enumeration point for both the
+	// "Addresses:" display and the pairing string below: both come from the
+	// same candidate-IP list, so they can never show different addresses or
+	// counts for the same run. The full ao-pair:// string can only ever be
+	// built the run that generates the plaintext passcode: every run after
+	// that only has the hash, exactly like the raw-passcode display above it.
+	addrs, pairingString := c.pairSummaryAddresses(ctx, cert, passcode, generated)
+	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, pairingString, fingerprint, addrs, pairHTTPSAddr()))
 }
 
 // ensureSetupPasscode returns this box's pair-mode passcode, generating and
@@ -1011,29 +1016,4 @@ func chownSetupTree(dir string, owner *user.User) error {
 		}
 		return root.Lchown(path, uid, gid)
 	})
-}
-
-// discoverPairListenAddresses lists this box's own non-loopback IPv4
-// addresses: the ones a Mac on the same network can actually type into the
-// desktop app. Best effort and never fatal: an empty result just falls back
-// to telling the operator to find the address themselves.
-func discoverPairListenAddresses() []string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() {
-			continue
-		}
-		ip4 := ipNet.IP.To4()
-		if ip4 == nil {
-			continue
-		}
-		out = append(out, ip4.String())
-	}
-	sort.Strings(out)
-	return out
 }
