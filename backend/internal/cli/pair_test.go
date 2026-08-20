@@ -114,6 +114,9 @@ func TestPairPasscodeReadError_DistinguishesPermissionFromNotExist(t *testing.T)
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses file permission checks, so this cannot simulate a permission error")
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict the owner's own access on Windows, so this cannot simulate a permission error there")
+	}
 	tests := []struct {
 		name         string
 		buildErr     func(t *testing.T) error
@@ -179,6 +182,9 @@ func TestPairShow_PermissionDeniedSuggestsSudo(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses file permission checks, so this cannot simulate a permission error")
 	}
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict the owner's own access on Windows, so this cannot simulate a permission error there")
+	}
 	passcodeDir := t.TempDir()
 	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
 		t.Fatalf("GeneratePasscode: %v", err)
@@ -210,6 +216,9 @@ func TestPairShow_PermissionDeniedSuggestsSudo(t *testing.T) {
 func TestPairBare_PermissionDeniedIsTreatedAsProvisioned(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses file permission checks, so this cannot simulate a permission error")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict the owner's own access on Windows, so this cannot simulate a permission error there")
 	}
 	passcodeDir := t.TempDir()
 	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
