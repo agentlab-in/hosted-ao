@@ -18,6 +18,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -525,6 +526,101 @@ func TestChownSetupTree_NoOpWhenNotRoot(t *testing.T) {
 	owner := &user.User{Uid: "1", Gid: "1", Username: "someone-else"}
 	if err := chownSetupTree(dir, owner); err != nil {
 		t.Fatalf("chownSetupTree must be a no-op (and never fail) when not root: %v", err)
+	}
+}
+
+// TestChownSetupDirs_NoOpWhenNotRoot mirrors TestChownSetupTree_NoOpWhenNotRoot
+// for the parent-directory chown loop: neither function may fail, or touch
+// anything, outside a root (sudo) invocation.
+func TestChownSetupDirs_NoOpWhenNotRoot(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("this test asserts the not-root no-op path; it cannot run as root")
+	}
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owner := &user.User{Uid: "1", Gid: "1", Username: "someone-else"}
+	if err := chownSetupDirs([]string{filepath.Join(dir, "a"), nested}, owner); err != nil {
+		t.Fatalf("chownSetupDirs must be a no-op (and never fail) when not root: %v", err)
+	}
+}
+
+// TestSetupMissingSetupDirs_ReportsOnlyTheAncestorAboutToBeCreated is the
+// regression test for the live incident: dir's real state root exists
+// (~/.ao/hosted, created by an earlier run), but the immediate parent that
+// GeneratePasscode/LoadOrCreatePairCertificate's own os.MkdirAll is about to
+// mint (vm-gateway) does not. setupMissingSetupDirs must report exactly
+// that one directory, in top-down order, and nothing that already existed.
+func TestSetupMissingSetupDirs_ReportsOnlyTheAncestorAboutToBeCreated(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "home", "azureuser", ".ao", "hosted")
+	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// vm-gateway does not exist yet; pair-passcode is the leaf a caller is
+	// about to create under it, exactly the shape plan.PasscodeDir has.
+	leaf := filepath.Join(stateRoot, "vm-gateway", "pair-passcode")
+
+	got, err := setupMissingSetupDirs(leaf)
+	if err != nil {
+		t.Fatalf("setupMissingSetupDirs: %v", err)
+	}
+	want := []string{filepath.Join(stateRoot, "vm-gateway")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("setupMissingSetupDirs(%s) = %v, want %v", leaf, got, want)
+	}
+	// The state root itself already existed and must never appear.
+	for _, dir := range got {
+		if dir == stateRoot {
+			t.Fatalf("setupMissingSetupDirs reported the pre-existing state root %s as missing", stateRoot)
+		}
+	}
+}
+
+// TestSetupMissingSetupDirs_ReportsEveryMissingLevelOnAFreshBox covers a box
+// with no prior ao setup-vm run at all, so ~/.ao itself, ~/.ao/hosted, and
+// vm-gateway are all about to be minted by the same MkdirAll call. Every one
+// of them must come back, outermost first, so a caller chowns them in an
+// order where each directory's parent is already owned correctly by the
+// time the child is reached.
+func TestSetupMissingSetupDirs_ReportsEveryMissingLevelOnAFreshBox(t *testing.T) {
+	home := t.TempDir() // exists; nothing under it does.
+	leaf := filepath.Join(home, ".ao", "hosted", "vm-gateway", "pair-cert")
+
+	got, err := setupMissingSetupDirs(leaf)
+	if err != nil {
+		t.Fatalf("setupMissingSetupDirs: %v", err)
+	}
+	want := []string{
+		filepath.Join(home, ".ao"),
+		filepath.Join(home, ".ao", "hosted"),
+		filepath.Join(home, ".ao", "hosted", "vm-gateway"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("setupMissingSetupDirs(%s) = %v, want %v (outermost missing directory first)", leaf, got, want)
+	}
+}
+
+// TestSetupMissingSetupDirs_ReportsNothingWhenTheParentAlreadyExists is the
+// steady-state re-run case: pair-cert's own parent (vm-gateway) already
+// exists from an earlier provisioning run, so there is nothing new for a
+// second run to chown up the tree.
+func TestSetupMissingSetupDirs_ReportsNothingWhenTheParentAlreadyExists(t *testing.T) {
+	dir := t.TempDir()
+	vmGateway := filepath.Join(dir, "vm-gateway")
+	if err := os.MkdirAll(vmGateway, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(vmGateway, "pair-cert")
+
+	got, err := setupMissingSetupDirs(leaf)
+	if err != nil {
+		t.Fatalf("setupMissingSetupDirs: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("setupMissingSetupDirs(%s) = %v, want none: vm-gateway already existed", leaf, got)
 	}
 }
 
