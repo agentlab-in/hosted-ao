@@ -7,9 +7,14 @@ How to set up, build, run, and test Agent Orchestrator locally.
 | Tool       | Minimum version | Notes                                                                  |
 | ---------- | --------------- | ---------------------------------------------------------------------- |
 | Go         | 1.25.7          | `go version` to check; install via [go.dev](https://go.dev/dl/)        |
-| Node.js    | 20.19.0         | `node --version`; install via [nodejs.org](https://nodejs.org/)        |
+| Node.js    | 20.19.0, below 26 for Electron packaging | `node --version`; install via [nodejs.org](https://nodejs.org/) |
 | npm        | 10              | Ships with Node.js                                                     |
 | Nix (opt.) | -               | `nix develop` drops you into a shell with all deps; see `../flake.nix` |
+
+Electron packaging (`cd frontend && npm run package` or `npm run make`) needs
+Node below 26: on Node 26 it exits 0 but produces no `.app`, with no error
+printed. CI pins Node 20, 22, and 24, never 26; Node 22 is the safest local
+choice for packaging work. See the troubleshooting table below.
 
 Additional runtime dependencies for the daemon:
 
@@ -260,6 +265,8 @@ go run ./cmd/ao --help
 | `npm run typecheck` has type errors   | API types out of sync   | Run `npm run api` from repo root to regenerate               |
 | `npm run dev` fails on native modules | Missing build tools     | Install Python + C++ build tools for `node-gyp`              |
 | `npm install` or `npm ci` fails       | Node.js version too old | `node --version`; must be 20.19.0+ (see prerequisites above) |
+| `npm run package` / `npm run make` prints every step through "Finalizing package", exits 0, but `out/` has no `.app` (only `LICENSE`, `LICENSES.chromium.html`, `version`) | Node 26 breaks Electron Forge packaging silently | `node --version`; switch to Node below 26 (22 is verified working) and rerun |
+| Packaging fails with `RequestError: write EPROTO ... ssl3_get_record:wrong version number` | The network breaks TLS to `objects.githubusercontent.com`, which Electron Forge downloads the Electron runtime zip from; `github.com` and `raw.githubusercontent.com` staying reachable is a hint this is the cause | `export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"` and rerun. This changes `@electron/get`'s cache key, so it re-downloads Electron instead of reusing a cached zip |
 
 ### Code generation drift
 

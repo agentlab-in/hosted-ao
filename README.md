@@ -61,12 +61,24 @@ The daemon itself never grows a public listener. That is a hard rule inherited f
 
 ## Getting started
 
+Download the latest signed, notarized installer from the
+[releases page](https://github.com/agentlab-in/hosted-ao/releases): a macOS
+`.dmg` (Apple Silicon and Intel builds), a Windows `.exe`, and a Linux
+`.AppImage`, `.deb`, or `.rpm`. Grab the asset for your platform, install it,
+and open Hosted AO.
+
+### Building from source
+
+Only needed if you are contributing to Hosted AO itself.
+
 ```bash
-# Desktop (macOS)
 npm install
 cd frontend && npm install && npm run make
 open "out/make/Hosted AO-"*.dmg
 ```
+
+See [docs/development.md](docs/development.md) for prerequisites, the full
+build/test loop, and troubleshooting.
 
 ### Add a machine
 
