@@ -1829,6 +1829,36 @@ function aoMachines(): ReturnType<typeof createAoMachinesController> {
 // plane. session.defaultSession's certificate-verify proc, installed in
 // app.whenReady below, is what actually enforces the pin; this controller only
 // holds the data it reads from.
+
+let pairProbeSessionSeq = 0;
+
+/**
+ * Fetch for `probeFingerprint`'s capture connection, bound to a fresh,
+ * in-memory session every call rather than `session.defaultSession`.
+ * `ses.fetch()`, not `net.fetch()`: the latter always issues from the default
+ * session (that is the whole reason it exists as a convenience wrapper), so
+ * routing through another session requires calling `fetch` on the `Session`
+ * instance itself.
+ *
+ * That connection is always denied at the TLS layer (paired-machine-cert.ts
+ * has no accept path for a host with nothing pinned yet), and Chromium caches
+ * a per-host certificate-error verdict at the network-service level, below
+ * where the verify proc runs, for the life of the session that made the
+ * connection. If the capture probe shared `session.defaultSession` with real
+ * traffic, pinning the fingerprint in `add()` would not undo that cached
+ * rejection: the very next authenticated request to the newly paired host
+ * would still be short-circuited to a failure before the verify proc is even
+ * consulted, reading as unreachable until the app restarts and the cache is
+ * gone (#114). A throwaway partition, discarded after the one probe it was
+ * created for, means the poisoned verdict dies with it instead of outliving
+ * the pairing flow.
+ */
+function pairProbeNetFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+	const probeSession = session.fromPartition(`pair-probe-${pairProbeSessionSeq++}`);
+	probeSession.setCertificateVerifyProc(pairedMachines().verifyCertificate);
+	return probeSession.fetch(String(input), init);
+}
+
 let pairedMachinesController: ReturnType<typeof createPairedMachinesController> | null = null;
 function pairedMachines(): ReturnType<typeof createPairedMachinesController> {
 	if (pairedMachinesController) return pairedMachinesController;
@@ -1840,6 +1870,7 @@ function pairedMachines(): ReturnType<typeof createPairedMachinesController> {
 		// stack, which is what verifyCertificate below actually sees. A plain
 		// fetch would bypass the session (and the pin) entirely.
 		netFetch: (input, init) => net.fetch(String(input), init),
+		probeNetFetch: pairProbeNetFetch,
 	});
 	return pairedMachinesController;
 }

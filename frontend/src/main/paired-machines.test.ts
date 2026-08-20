@@ -127,6 +127,90 @@ test("probing an unreachable address reports an error, not a fingerprint", async
 	expect(result).toEqual({ error: expect.stringContaining("No certificate could be retrieved") });
 });
 
+/**
+ * Regression coverage for #114: a paired machine reading as unreachable
+ * until the app restarts, even though the pin and the box are both fine.
+ *
+ * Stands in for Chromium's per-session certificate-error cache, the
+ * mechanism the issue's root-cause analysis points at: once a session denies
+ * a host's certificate, that session short-circuits every later connection
+ * to the same host straight to a transport failure, without invoking
+ * `session.setCertificateVerifyProc` again. `cache` is what makes two
+ * `typeof fetch` stand-ins here behave like two different Electron sessions
+ * (a shared `cache` Map = the same session; separate Maps = separate
+ * sessions), the same distinction `netFetch` vs. `probeNetFetch` draws in
+ * paired-machines.ts.
+ */
+function sessionLikeFetch(cache: Map<string, boolean>, verify: PairCertificateVerifyProc, pem: string): typeof fetch {
+	return (async (input: string | URL | Request) => {
+		const url = new URL(String(input));
+		if (cache.get(url.hostname)) throw new Error("certificate verification failed (cached)");
+		let verdict: number | undefined;
+		verify({ hostname: url.hostname, certificate: { data: pem } }, (result) => {
+			verdict = result;
+		});
+		if (verdict === 0) return new Response(JSON.stringify({ ok: true, failures: 0, checks: [] }), { status: 200 });
+		cache.set(url.hostname, true);
+		throw new Error("certificate verification failed");
+	}) as unknown as typeof fetch;
+}
+
+test("without a dedicated probe session, the pairing probe's rejection wedges refresh() offline after add() (reproduces #114)", async () => {
+	// probeNetFetch omitted: probeFingerprint falls back to sharing netFetch's
+	// session, exactly the pre-fix wiring in main.ts (both bound to
+	// session.defaultSession).
+	let verify: PairCertificateVerifyProc | undefined;
+	const sharedCache = new Map<string, boolean>();
+	const netFetch = sessionLikeFetch(sharedCache, (request, callback) => verify?.(request, callback), CERT_PEM);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, probeTimeoutMs: 200 });
+	verify = machines.verifyCertificate;
+	await machines.load();
+
+	await machines.probeFingerprint("192.168.1.5", 8443);
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	// The pin is correct and the box is healthy, but the shared session's
+	// cached rejection from the probe short-circuits every connection after
+	// it, so the doctor probe never even reaches verifyCertificate again.
+	const refreshed = await machines.refresh();
+	expect(refreshed[0]).toMatchObject({ reachability: "offline", lastSeen: null });
+});
+
+test("a dedicated probe session keeps the pairing probe's rejection from wedging refresh() after add() (the #114 fix)", async () => {
+	let verify: PairCertificateVerifyProc | undefined;
+	const netCache = new Map<string, boolean>();
+	const probeCache = new Map<string, boolean>();
+	const netFetch = sessionLikeFetch(netCache, (request, callback) => verify?.(request, callback), CERT_PEM);
+	const probeNetFetch = sessionLikeFetch(probeCache, (request, callback) => verify?.(request, callback), CERT_PEM);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, probeNetFetch, probeTimeoutMs: 200 });
+	verify = machines.verifyCertificate;
+	await machines.load();
+
+	await machines.probeFingerprint("192.168.1.5", 8443);
+	await machines.add({
+		id: "box_1",
+		name: "Pi",
+		address: "192.168.1.5",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	// The probe's rejection only poisoned probeCache. netFetch's session sees
+	// this host for the first time here, verifyCertificate is consulted, and
+	// the now-pinned fingerprint matches.
+	const refreshed = await machines.refresh();
+	expect(refreshed[0]).toMatchObject({ reachability: "online" });
+	expect(refreshed[0].lastSeen).not.toBeNull();
+});
+
 test("add persists the pairing and round-trips through disk", async () => {
 	const machines = controller();
 	await machines.load();

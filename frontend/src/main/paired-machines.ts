@@ -79,8 +79,28 @@ export type PairedMachinesControllerDeps = {
 	/** Electron's `net.fetch`, which runs through the session's network stack
 	 * and therefore through `verifyCertificate` below. A plain global `fetch`
 	 * would not: it bypasses the session entirely, which is exactly the gap
-	 * this whole module exists to close. */
+	 * this whole module exists to close. Used for every authenticated call
+	 * (`refresh`'s doctor probe) against a host that is expected to already be
+	 * pinned. */
 	netFetch?: typeof fetch;
+	/**
+	 * Electron's `net.fetch` bound to a throwaway session, used only by
+	 * `probeFingerprint`. `probeFingerprint`'s whole point is a connection that
+	 * is *always* denied at the TLS layer (see paired-machine-cert.ts: an
+	 * unpinned host has no accept path), and Chromium caches that per-host
+	 * certificate-error verdict at the network-service level for the life of
+	 * the session -- below where `verifyCertificate` runs, so the verify proc
+	 * is not even re-consulted once the cache is warm. If the capture probe
+	 * shared `netFetch`'s session, pinning the host in `add()` would not undo
+	 * that cached rejection: the very next request against the pinned host
+	 * would still be short-circuited to a failure, reading as "unreachable"
+	 * until the app restarts and the cache is gone. Routing the capture probe
+	 * through a session that is discarded afterward, instead of the one real
+	 * traffic uses, means the poisoned verdict dies with it. Defaults to
+	 * `netFetch` when omitted (tests construct one shared fetch and do not
+	 * exercise this failure mode).
+	 */
+	probeNetFetch?: typeof fetch;
 	probeTimeoutMs?: number;
 };
 
@@ -148,7 +168,10 @@ export type PairedMachinesController = {
 	 * paired machine, so the pairing flow can show the presented fingerprint
 	 * for comparison against what the box printed. The connection is always
 	 * denied at the TLS layer (see paired-machine-cert.ts): this only ever
-	 * captures what was presented, it never trusts it.
+	 * captures what was presented, it never trusts it. Runs over
+	 * `probeNetFetch`, not `netFetch`: see that dep's doc comment for why the
+	 * always-denied capture connection must not share a session with real
+	 * traffic to a pinned host.
 	 */
 	probeFingerprint: (address: string, port: number) => Promise<PairFingerprintResult>;
 	/**
@@ -308,6 +331,7 @@ function toAoMachine(
 
 export function createPairedMachinesController(deps: PairedMachinesControllerDeps): PairedMachinesController {
 	const netFetch = deps.netFetch ?? fetch;
+	const probeNetFetch = deps.probeNetFetch ?? netFetch;
 	const probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
 
 	/** In-memory mirror of disk, keyed by id. verifyCertificate reads only the
@@ -545,7 +569,7 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 			presented.delete(address);
 			pendingHosts.add(address);
 			try {
-				await fetchWithDeadline(netFetch, `${baseUrl}/`, { method: "GET", redirect: "manual" }, probeTimeoutMs, "Pairing probe");
+				await fetchWithDeadline(probeNetFetch, `${baseUrl}/`, { method: "GET", redirect: "manual" }, probeTimeoutMs, "Pairing probe");
 			} catch {
 				// Expected: an unpinned host is always denied at the TLS layer (see
 				// paired-machine-cert.ts), and a box that is simply unreachable denies
