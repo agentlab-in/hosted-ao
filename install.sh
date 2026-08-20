@@ -83,7 +83,10 @@ download_url() {
 download_file() {
   url="$1"
   dest="$2"
-  curl -fsSL -o "$dest" "$url" || err "download failed: $url"
+  # curl's own -S diagnostic is discarded: err() below is the single line of
+  # output this failure surfaces, so a 404 (or any other curl failure) reads
+  # as one clear message instead of curl's line plus ours.
+  curl -fsL -o "$dest" "$url" 2>/dev/null || err "download failed: $url"
 }
 
 # verify_sha256 checks file against its sidecar checksum file, which must

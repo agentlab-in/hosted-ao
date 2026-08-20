@@ -32,3 +32,23 @@ jobs:
         run: shellcheck test/cli/install/*.sh
       - name: Run install.sh detection fixtures
         run: sh test/cli/install/install-detect-test.sh
+      - name: install.sh fails cleanly against a repo with no published assets
+        env:
+          AO_INSTALL_OS_OVERRIDE: Linux
+          AO_INSTALL_ARCH_OVERRIDE: x86_64
+          AO_INSTALL_REPO: agentlab-in/does-not-exist-fixture
+        run: |
+          set +e
+          err_out=$(sh install.sh 2>&1 >/dev/null)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "install.sh exited 0 against a nonexistent repo; expected a download failure" >&2
+            exit 1
+          fi
+          echo "$err_out"
+          if [ "$(printf '%s\n' "$err_out" | wc -l)" -ne 1 ]; then
+            echo "expected a single-line error, got:" >&2
+            echo "$err_out" >&2
+            exit 1
+          fi
