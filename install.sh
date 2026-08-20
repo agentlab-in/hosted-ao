@@ -1,12 +1,13 @@
 #!/bin/sh
 # install.sh - installs the ao CLI on this Linux machine and provisions it.
 #
-# Usage:
-#   curl -fsSL https://github.com/agentlab-in/hosted-ao/releases/latest/download/install.sh | sh
+# Usage (interim, until get.agentlab.in exists):
+#   curl -fsSL https://raw.githubusercontent.com/agentlab-in/hosted-ao/develop/install.sh | sh
 #
-# (Kept at the repo root so the interim raw.githubusercontent.com URL stays
-# short; swapping in get.agentlab.in later is a pure hosting change, not a
-# script change.)
+# This script contains no reference to its own fetch URL anywhere below, so
+# pointing get.agentlab.in at this same file later (reverse-proxied or copied
+# to static hosting) is a pure hosting/DNS change: zero script changes, just
+# updating the one command shown in README.md.
 #
 # Downloads the ao binary for this machine's OS/arch, verifies its sha256
 # sidecar, installs it to /usr/local/bin/ao, then execs `ao pair` so it can

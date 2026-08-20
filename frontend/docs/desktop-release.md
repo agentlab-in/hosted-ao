@@ -188,6 +188,13 @@ Linux `ao` CLI binaries `ao-linux-x64` and `ao-linux-arm64` (plus their
 `.sha256` sidecars) that the curl|sh installer fetches from
 `releases/latest`.
 
+**Hosting note:** `install.sh` itself is served from the interim URL
+`https://raw.githubusercontent.com/agentlab-in/hosted-ao/develop/install.sh`
+(the command shown in `README.md`). Pointing `get.agentlab.in` at this same
+file later, reverse-proxied or copied to static hosting, is a hosting/DNS
+swap only: `install.sh` never references its own fetch URL, so the swap
+touches `README.md`'s one command, not the script.
+
 **Stable releases only** additionally carry
 `agent-orchestrator-darwin-{arm64,x64}.dmg` for first install, and this is the
 artifact the download page and the README tables link to. Mounting it gives the
