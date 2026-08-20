@@ -1,7 +1,7 @@
 # 2. A public TLS gateway on a user-owned VM, as a separate process from the daemon
 
 Date: 2026-07-30
-Status: Accepted
+Status: Accepted, narrowed by 0003 (bare-IP pair mode)
 
 > Note (2026-08-17): the scope statement below, that connecting by bare IP is
 > out of scope and the user must bring a domain they own, is narrowed by

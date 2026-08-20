@@ -1204,7 +1204,8 @@ func TestRenderSetupDryRunPairShowsBothUnitsAndChangesNothing(t *testing.T) {
 func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
 	plan := testPairSetupPlan(t)
 	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
-		"AB12CD34", true, "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil)
+		"AB12CD34", true, "ao-pair://v1/192.168.1.20:443#"+strings.Repeat("0", 64)+":AB12CD34",
+		"07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil, ":443")
 	for _, want := range []string{
 		"No domain, no AO account, no control-plane contact",
 		"AB12CD34",
@@ -1214,6 +1215,8 @@ func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
 		"gh auth login",
 		"ao doctor",
 		"mismatch means refuse and re-pair",
+		"Paste this in Hosted AO:",
+		"  ao-pair://v1/192.168.1.20:443#",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("pair summary is missing %q:\n%s", want, summary)
@@ -1232,9 +1235,12 @@ func TestRenderSetupSummaryPair_FirstRunShowsThePasscodeOnce(t *testing.T) {
 func TestRenderSetupSummaryPair_ReRunNeverShowsThePasscodeAgain(t *testing.T) {
 	plan := testPairSetupPlan(t)
 	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
-		"", false, "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil)
+		"", false, "", "07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99", nil, ":443")
 	if strings.Contains(summary, "AB12CD34") {
 		t.Error("a re-run must never print a passcode")
+	}
+	if strings.Contains(summary, "Paste this in Hosted AO") {
+		t.Error("a re-run must never print a pairing string: the passcode is only known in plaintext on the run that generates it")
 	}
 	if !strings.Contains(summary, "already set from an earlier run") {
 		t.Errorf("a re-run must say the passcode is unchanged:\n%s", summary)
@@ -1249,8 +1255,31 @@ func TestRenderSetupSummaryPair_ReRunNeverShowsThePasscodeAgain(t *testing.T) {
 	assertNoDashes(t, summary)
 }
 
+// TestRenderSetupSummaryPair_CustomHTTPSAddrIsReflectedInTheAddressBlock pins
+// a real bug the unparam linter flagged: renderSetupSummaryPair used to hand
+// renderPairCredentials the package's own DefaultHTTPSAddr constant instead
+// of the actually-resolved listener address, so a box configured with
+// AO_VM_HTTPS_ADDR (a custom port) printed the pairing string's addresses
+// with the right port but the separate "Address to enter in the desktop
+// app" display block with the wrong one (always :443).
+func TestRenderSetupSummaryPair_CustomHTTPSAddrIsReflectedInTheAddressBlock(t *testing.T) {
+	plan := testPairSetupPlan(t)
+	summary := renderSetupSummaryPair(plan, setupUnitStates{DaemonRunning: true, GatewayRunning: true}, nil,
+		"AB12CD34", true, "ao-pair://v1/192.168.1.20:8443#"+strings.Repeat("0", 64)+":AB12CD34",
+		"07:CA:9F:3E:B2:11:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+		[]string{"192.168.1.20"}, ":8443")
+
+	if !strings.Contains(summary, "192.168.1.20:8443") {
+		t.Errorf("address block must reflect the custom port, not the :443 default:\n%s", summary)
+	}
+	if strings.Contains(summary, "192.168.1.20:443") {
+		t.Errorf("address block must not fall back to :443 once a custom port is configured:\n%s", summary)
+	}
+	assertNoDashes(t, summary)
+}
+
 func TestRenderPairCredentials_FallsBackWhenNoAddressWasFound(t *testing.T) {
-	text := renderPairCredentials("AB12CD34", true, "07:CA", nil, ":443")
+	text := renderPairCredentials("AB12CD34", true, "", "07:CA", nil, ":443")
 	if !strings.Contains(text, "443") {
 		t.Errorf("must still print the port when no address was found: %q", text)
 	}
@@ -1259,12 +1288,53 @@ func TestRenderPairCredentials_FallsBackWhenNoAddressWasFound(t *testing.T) {
 	}
 }
 
+// TestRenderPairCredentials_ExplainsWhenNoAddressWasFound is the "no
+// usable address" fallback the review found missing: a run that generated
+// a fresh passcode but could not build a pairing string (no address found)
+// must say so explicitly, not silently omit the "Paste this in Hosted AO:"
+// line with no explanation at all.
+func TestRenderPairCredentials_ExplainsWhenNoAddressWasFound(t *testing.T) {
+	text := renderPairCredentials("AB12CD34", true, "", "07:CA", nil, ":443")
+	if strings.Contains(text, "Paste this in Hosted AO") {
+		t.Errorf("must not claim to have a pairing string when none was built:\n%s", text)
+	}
+	if !strings.Contains(text, "No pairing string could be built") {
+		t.Errorf("must explicitly say no pairing string could be built, not omit it silently:\n%s", text)
+	}
+	assertNoDashes(t, text)
+}
+
 func TestRenderPairCredentials_ListsEveryDiscoveredAddress(t *testing.T) {
-	text := renderPairCredentials("AB12CD34", true, "07:CA", []string{"192.168.1.20", "10.0.0.5"}, ":443")
+	text := renderPairCredentials("AB12CD34", true, "", "07:CA", []string{"192.168.1.20", "10.0.0.5"}, ":443")
 	for _, want := range []string{"192.168.1.20:443", "10.0.0.5:443"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("credentials block is missing %q:\n%s", want, text)
 		}
+	}
+}
+
+// TestRenderPairCredentials_PrintsThePairingStringOnceWhenGenerated is the
+// credential-rule regression: the full ao-pair:// string must appear
+// exactly once, on its own line, prefixed "Paste this in Hosted AO:", on the
+// run that generated the passcode it was built from.
+func TestRenderPairCredentials_PrintsThePairingStringOnceWhenGenerated(t *testing.T) {
+	pairingString := "ao-pair://v1/192.168.1.20:443#" + strings.Repeat("0", 64) + ":AB12CD34"
+	text := renderPairCredentials("AB12CD34", true, pairingString, "07:CA", []string{"192.168.1.20"}, ":443")
+	want := "Paste this in Hosted AO:\n\n  " + pairingString
+	if n := strings.Count(text, want); n != 1 {
+		t.Errorf("pairing-string line count = %d, want exactly 1:\n%s", n, text)
+	}
+	assertNoDashes(t, text)
+}
+
+// TestRenderPairCredentials_NoPairingStringWhenNotGenerated confirms a
+// re-run (nothing generated, so pairingString is empty) never prints the
+// "Paste this in Hosted AO:" line at all: there is no plaintext passcode to
+// build one from.
+func TestRenderPairCredentials_NoPairingStringWhenNotGenerated(t *testing.T) {
+	text := renderPairCredentials("", false, "", "07:CA", []string{"192.168.1.20"}, ":443")
+	if strings.Contains(text, "Paste this in Hosted AO") {
+		t.Errorf("must not print a pairing string on a re-run:\n%s", text)
 	}
 }
 
@@ -1290,11 +1360,27 @@ func TestRenderManualPathPair_NamesEveryStep(t *testing.T) {
 }
 
 func TestRenderPasscodeRotated(t *testing.T) {
-	text := renderPasscodeRotated("XY98ZW76")
-	for _, want := range []string{"XY98ZW76", "Every device connected with the old passcode has been dropped", "fingerprint to re-check"} {
+	pairingString := "ao-pair://v1/192.168.1.20:443#" + strings.Repeat("0", 64) + ":XY98ZW76"
+	text := renderPasscodeRotated("XY98ZW76", pairingString)
+	for _, want := range []string{"XY98ZW76", "Every device connected with the old passcode has been dropped", "fingerprint to re-check", "Paste this in Hosted AO:\n\n  " + pairingString} {
 		if !strings.Contains(text, want) {
 			t.Errorf("rotation output is missing %q:\n%s", want, text)
 		}
+	}
+	assertNoDashes(t, text)
+}
+
+// TestRenderPasscodeRotated_ExplainsWhenNoPairingStringCouldBeBuilt is
+// rotate-passcode's half of the same "no usable address" fallback: an
+// empty pairingString must produce an explicit line, not a silent gap in
+// the output.
+func TestRenderPasscodeRotated_ExplainsWhenNoPairingStringCouldBeBuilt(t *testing.T) {
+	text := renderPasscodeRotated("XY98ZW76", "")
+	if strings.Contains(text, "Paste this in Hosted AO") {
+		t.Errorf("must not claim to have a pairing string when none was built:\n%s", text)
+	}
+	if !strings.Contains(text, "No pairing string could be built") {
+		t.Errorf("must explicitly say no pairing string could be built, not omit it silently:\n%s", text)
 	}
 	assertNoDashes(t, text)
 }

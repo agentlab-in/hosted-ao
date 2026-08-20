@@ -1,0 +1,123 @@
+{
+  "valid": [
+    {
+      "name": "single ipv4 address",
+      "addrs": [
+        "192.168.1.40:8443"
+      ],
+      "fp": "abababababababababababababababababababababababababababababababab",
+      "passcode": "XK4M2P7Q",
+      "string": "ao-pair://v1/192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
+    },
+    {
+      "name": "multi address private then public",
+      "addrs": [
+        "192.168.1.40:8443",
+        "203.0.113.7:8443"
+      ],
+      "fp": "abababababababababababababababababababababababababababababababab",
+      "passcode": "XK4M2P7Q",
+      "string": "ao-pair://v1/192.168.1.40:8443,203.0.113.7:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
+    },
+    {
+      "name": "bracketed ipv6 address",
+      "addrs": [
+        "[fd00::7]:8443"
+      ],
+      "fp": "abababababababababababababababababababababababababababababababab",
+      "passcode": "XK4M2P7Q",
+      "string": "ao-pair://v1/[fd00::7]:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
+    },
+    {
+      "name": "dns name host",
+      "addrs": [
+        "vm-42.example.com:8443"
+      ],
+      "fp": "abababababababababababababababababababababababababababababababab",
+      "passcode": "XK4M2P7Q",
+      "string": "ao-pair://v1/vm-42.example.com:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
+    },
+    {
+      "name": "multi address bracketed ipv6 then ipv4",
+      "addrs": [
+        "[fd00::7]:8443",
+        "192.168.1.40:8443"
+      ],
+      "fp": "abababababababababababababababababababababababababababababababab",
+      "passcode": "XK4M2P7Q",
+      "string": "ao-pair://v1/[fd00::7]:8443,192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unknown version segment",
+      "string": "ao-pair://v2/192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "version segment must be v1"
+    },
+    {
+      "name": "zero addresses",
+      "string": "ao-pair://v1/#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "at least one address is required"
+    },
+    {
+      "name": "address missing explicit port",
+      "string": "ao-pair://v1/192.168.1.40#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "address must include an explicit port"
+    },
+    {
+      "name": "port outside valid range",
+      "string": "ao-pair://v1/192.168.1.40:70000#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "port must be between 1 and 65535"
+    },
+    {
+      "name": "fingerprint 63 chars",
+      "string": "ao-pair://v1/192.168.1.40:8443#abababababababababababababababababababababababababababababababa:XK4M2P7Q",
+      "reason": "fingerprint must be exactly 64 hex characters"
+    },
+    {
+      "name": "fingerprint uppercase",
+      "string": "ao-pair://v1/192.168.1.40:8443#ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB:XK4M2P7Q",
+      "reason": "fingerprint must be lowercase hex"
+    },
+    {
+      "name": "fingerprint contains colons",
+      "string": "ao-pair://v1/192.168.1.40:8443#ab:ababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "fingerprint must not contain colons"
+    },
+    {
+      "name": "passcode 7 chars",
+      "string": "ao-pair://v1/192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7",
+      "reason": "passcode must be exactly 8 characters"
+    },
+    {
+      "name": "passcode contains hyphen",
+      "string": "ao-pair://v1/192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P-Q",
+      "reason": "passcode must be alphanumeric"
+    },
+    {
+      "name": "trailing query string",
+      "string": "ao-pair://v1/192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q?x=1",
+      "reason": "no query string is permitted"
+    },
+    {
+      "name": "second fragment separator",
+      "string": "ao-pair://v1/192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q#extra",
+      "reason": "only one fragment separator is permitted"
+    },
+    {
+      "name": "username in address",
+      "string": "ao-pair://v1/user@192.168.1.40:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "address must not include a username"
+    },
+    {
+      "name": "port with leading plus",
+      "string": "ao-pair://v1/192.168.1.40:+8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "address must include an explicit port"
+    },
+    {
+      "name": "bare unbracketed ipv6 host",
+      "string": "ao-pair://v1/fd00::7:8443#abababababababababababababababababababababababababababababababab:XK4M2P7Q",
+      "reason": "address must include an explicit port"
+    }
+  ]
+}

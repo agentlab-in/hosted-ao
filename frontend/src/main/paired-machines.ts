@@ -34,7 +34,7 @@ import { fetchWithDeadline } from "./request-deadline";
 /** File under the ~/.ao state dir, beside ao-account.json and ao-machine.json. */
 export const AO_PAIRED_MACHINES_FILE_NAME = "ao-paired-machines.json";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 /** A probe attempt is denied by design (see paired-machine-cert.ts); this just
  * bounds how long the app waits for the TLS handshake that captures the
@@ -46,6 +46,15 @@ export type PairedMachineRecord = {
 	name: string;
 	address: string;
 	port: number;
+	/**
+	 * Ordered address hints as "host:port" strings (IPv6 hosts bracketed, the
+	 * same grammar pair-string.ts parses), first entry is the last-known-good
+	 * address. `address`/`port` above always track this entry's host and port
+	 * so `pairedMachineId`, `baseUrlFor`, and everything else built on a single
+	 * address keep working unchanged; `promoteAddress` is what keeps the two in
+	 * sync when the winning hint changes.
+	 */
+	addresses: string[];
 	/** Null until the user has compared and accepted a fingerprint. */
 	pinnedFingerprint: string | null;
 	lastSeen: string | null;
@@ -110,11 +119,30 @@ export type PairedMachinesController = {
 		port: number;
 		passcode: string;
 		fingerprint: string;
+		/**
+		 * Ordered address hints for this machine, as produced by a parsed
+		 * `ao-pair://` string with the winning candidate promoted to the front
+		 * (see pair-string.ts). Defaults to the single `address:port` hint when
+		 * omitted, matching what a v1-shaped caller always implied.
+		 */
+		addresses?: string[];
 	}) => Promise<AoMachine>;
 	remove: (id: string) => Promise<void>;
 	/** Decrypted passcode for a paired machine, or null if it is not registered. */
 	getPasscode: (id: string) => Promise<string | null>;
 	touchLastSeen: (id: string) => Promise<void>;
+	/** Ordered address hints for a registered machine, or an empty array if it
+	 * is not registered. Read-only, synchronous off the in-memory registry. */
+	getAddresses: (id: string) => string[];
+	/**
+	 * Promote a hint to the front of a machine's address list on a successful
+	 * connect, and make it the current `address`/`port` too, so a future
+	 * candidate race starts from the address that actually worked last time.
+	 * A hint not already in the list is added at the front rather than
+	 * rejected, since a box's address can legitimately change between races.
+	 * No-op for an unregistered id.
+	 */
+	promoteAddress: (id: string, addr: string) => Promise<void>;
 	/**
 	 * Attempt a connection to an address:port that is not (yet) a registered
 	 * paired machine, so the pairing flow can show the presented fingerprint
@@ -150,9 +178,64 @@ function validatePort(port: number): boolean {
 
 /** `AoMachine.baseUrl` for a paired machine, and the validation gate for its
  * address: reuses parseMachineOrigin rather than re-deriving the same rules
- * about scheme, path, and credentials. */
+ * about scheme, path, and credentials. Brackets a bare IPv6 host (stored
+ * unbracketed, the same grammar pair-string.ts's `PairAddr.host` uses) so
+ * `new URL()` inside parseMachineOrigin does not throw on the bare colons. */
 function baseUrlFor(address: string, port: number): string | null {
-	return parseMachineOrigin(`https://${address}:${port}`);
+	const host = address.includes(":") ? `[${address}]` : address;
+	return parseMachineOrigin(`https://${host}:${port}`);
+}
+
+/** "host:port", bracketing an IPv6 host the way pair-string.ts's grammar
+ * requires, so a hint round-trips through parsePairString unchanged. */
+function formatAddress(host: string, port: number): string {
+	return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+/** Inverse of formatAddress. Returns null for anything that is not a
+ * well-formed "host:port" hint (used defensively in promoteAddress, since a
+ * hint's origin -- ultimately a parsed pairing string -- is outside this
+ * module's control). */
+function splitAddress(addr: string): { host: string; port: number } | null {
+	let host: string;
+	let portStr: string;
+	if (addr.startsWith("[")) {
+		const closeIdx = addr.indexOf("]");
+		if (closeIdx === -1 || addr[closeIdx + 1] !== ":") return null;
+		host = addr.slice(1, closeIdx);
+		portStr = addr.slice(closeIdx + 2);
+	} else {
+		const colonIdx = addr.lastIndexOf(":");
+		if (colonIdx === -1) return null;
+		host = addr.slice(0, colonIdx);
+		portStr = addr.slice(colonIdx + 1);
+		if (host.includes(":")) return null;
+	}
+	if (!host || !/^\d+$/.test(portStr)) return null;
+	const port = Number(portStr);
+	return validatePort(port) ? { host, port } : null;
+}
+
+/** Fields shared by every schema version this module has ever written; a v1
+ * record is exactly this shape, with no `addresses`. */
+type PersistedPairedMachineCore = Omit<PersistedPairedMachine, "addresses">;
+
+function hasCoreFields(machine: unknown): machine is PersistedPairedMachineCore {
+	const m = machine as Partial<PersistedPairedMachineCore> | null | undefined;
+	return (
+		!!m &&
+		typeof m.id === "string" &&
+		!!m.id &&
+		typeof m.address === "string" &&
+		!!m.address &&
+		validatePort(m.port as number) &&
+		typeof m.passcode === "string"
+	);
+}
+
+function hasAddressHints(machine: PersistedPairedMachineCore): machine is PersistedPairedMachine {
+	const addresses = (machine as PersistedPairedMachine).addresses;
+	return Array.isArray(addresses) && addresses.length > 0 && addresses.every((a) => typeof a === "string" && !!a);
 }
 
 async function readAll(stateDir: string): Promise<PersistedPairedMachine[]> {
@@ -170,18 +253,15 @@ async function readAll(stateDir: string): Promise<PersistedPairedMachine[]> {
 	} catch {
 		return [];
 	}
-	if (parsed.version !== SCHEMA_VERSION || !Array.isArray(parsed.machines)) return [];
-	return parsed.machines.filter((machine): machine is PersistedPairedMachine => {
-		return (
-			!!machine &&
-			typeof machine.id === "string" &&
-			!!machine.id &&
-			typeof machine.address === "string" &&
-			!!machine.address &&
-			validatePort(machine.port) &&
-			typeof machine.passcode === "string"
-		);
-	});
+	if (!Array.isArray(parsed.machines)) return [];
+	const core = parsed.machines.filter(hasCoreFields);
+
+	// v1 predates `addresses`: synthesize the single hint it always implied.
+	if (parsed.version === 1) {
+		return core.map((machine) => ({ ...machine, addresses: [formatAddress(machine.address, machine.port)] }));
+	}
+	if (parsed.version !== SCHEMA_VERSION) return [];
+	return core.filter(hasAddressHints);
 }
 
 /** Atomic write, mirroring ao-account.json and ao-machine.json: a random-named
@@ -374,6 +454,7 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 				name: input.name || input.address,
 				address: input.address,
 				port: input.port,
+				addresses: input.addresses && input.addresses.length > 0 ? input.addresses : [formatAddress(input.address, input.port)],
 				pinnedFingerprint: input.fingerprint,
 				lastSeen: records.get(input.id)?.lastSeen ?? null,
 				passcode: deps.safeStorage.encryptString(input.passcode).toString("base64"),
@@ -429,6 +510,29 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 				await persist();
 			} catch (err) {
 				records = previous;
+				throw err;
+			}
+		},
+
+		getAddresses(id: string): string[] {
+			return records.get(id)?.addresses ?? [];
+		},
+
+		async promoteAddress(id: string, addr: string): Promise<void> {
+			const record = records.get(id);
+			if (!record) return;
+			const parsed = splitAddress(addr);
+			if (!parsed) throw new Error(`Not a usable address: ${addr}`);
+			const addresses = [addr, ...record.addresses.filter((existing) => existing !== addr)];
+			const updated: PersistedPairedMachine = { ...record, address: parsed.host, port: parsed.port, addresses };
+			const previous = records;
+			records = new Map(previous).set(id, updated);
+			rebuildPinnedByHost();
+			try {
+				await persist();
+			} catch (err) {
+				records = previous;
+				rebuildPinnedByHost();
 				throw err;
 			}
 		},

@@ -150,7 +150,7 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 // subcommands (serve, setup-harness): a verb naming what it does to this
 // machine, run on the box itself.
 func newVMRotatePasscodeCommand(ctx *commandContext) *cobra.Command {
-	var passcodeDir string
+	var passcodeDir, certDir string
 	cmd := &cobra.Command{
 		Use:   "rotate-passcode",
 		Short: "Roll this pair-mode box's passcode and drop every connected client",
@@ -159,31 +159,26 @@ func newVMRotatePasscodeCommand(ctx *commandContext) *cobra.Command {
 			"ao-gateway.service so the change takes effect immediately. Every client still\n" +
 			"connected with the old passcode is dropped and has to enter the new one; the\n" +
 			"pinned certificate is unaffected, so there is no fingerprint to re-check.\n\n" +
-			"The new passcode is printed exactly once, here, and is never written to disk\n" +
+			"The new pairing string is printed exactly once, here, and is never written to disk\n" +
 			"in plaintext. Run this on the box itself, the same place ao setup-vm --pair ran.\n\n" +
 			"This is the deliberate counterpart to ao setup-vm --pair's own guarantee: running\n" +
 			"setup again never rotates the passcode on its own (see\n" +
 			"docs/adr/0003-pair-mode-gateway.md). Use this command when you actually want to.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return ctx.runVMRotatePasscode(cmd, passcodeDir)
+			return ctx.runVMRotatePasscode(cmd, passcodeDir, certDir)
 		},
 	}
-	cmd.Flags().StringVar(&passcodeDir, "passcode-dir", "", "Pair-mode passcode hash storage directory (default under the state root)")
+	flags := cmd.Flags()
+	flags.StringVar(&passcodeDir, "passcode-dir", "", "Pair-mode passcode hash storage directory (default under the state root)")
+	flags.StringVar(&certDir, "cert-dir", "", "Pair-mode certificate directory (default under the state root)")
 	return cmd
 }
 
-func (c *commandContext) runVMRotatePasscode(cmd *cobra.Command, passcodeDirFlag string) error {
-	dir := strings.TrimSpace(passcodeDirFlag)
-	if dir == "" {
-		dir = strings.TrimSpace(os.Getenv("AO_VM_PASSCODE_DIR"))
-	}
-	if dir == "" {
-		plan, err := c.buildSetupVMPlanPair()
-		if err != nil {
-			return err
-		}
-		dir = plan.PasscodeDir
+func (c *commandContext) runVMRotatePasscode(cmd *cobra.Command, passcodeDirFlag, certDirFlag string) error {
+	dir, err := c.resolvePairPasscodeDir(passcodeDirFlag)
+	if err != nil {
+		return err
 	}
 
 	store, err := vmgateway.LoadPasscodeStore(dir)
@@ -203,7 +198,24 @@ func (c *commandContext) runVMRotatePasscode(cmd *cobra.Command, passcodeDirFlag
 	if err := c.runSetupPrivileged(cmd.Context(), "systemctl", "restart", setupVMGatewayUnit); err != nil {
 		return fmt.Errorf("rotated the passcode but could not restart %s so it takes effect: %w", setupVMGatewayUnit, err)
 	}
-	return writeSetupText(cmd.OutOrStdout(), renderPasscodeRotated(newPasscode))
+
+	// The pairing string is a best-effort enrichment on top of a rotation
+	// that has already fully succeeded (the passcode is rotated and the
+	// gateway restarted above): a certificate this command cannot load, or
+	// no address to build a string from, must never turn a successful
+	// rotation into a reported failure, so both are swallowed here and the
+	// output silently falls back to the plaintext-passcode-only line.
+	// vmgateway.PairCertExists gates the load so a missing certificate
+	// directory can never cause this command to mint a brand new
+	// certificate: that would silently break the "pinned certificate is
+	// unaffected" guarantee this command's own help text makes above.
+	var pairingString string
+	if certDir, certErr := c.resolvePairCertDir(certDirFlag); certErr == nil && vmgateway.PairCertExists(certDir) {
+		if cert, certErr := vmgateway.LoadOrCreatePairCertificate(certDir); certErr == nil {
+			pairingString, _, _ = c.buildPairingString(cmd.Context(), cert, newPasscode)
+		}
+	}
+	return writeSetupText(cmd.OutOrStdout(), renderPasscodeRotated(newPasscode, pairingString))
 }
 
 // The claude harness is the only one ao vm setup-harness supports in v1. Its

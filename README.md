@@ -48,7 +48,7 @@ The daemon itself never grows a public listener. That is a hard rule inherited f
 
 ## What the hosting layer adds
 
-- **Pairing, no account required.** Pair a box you can already reach using a self-signed certificate, a pinned SHA-256 fingerprint, and an 8-character passcode. No DNS, no domain, no sign-up.
+- **Pairing, no account required.** Run `ao pair` on any machine you can reach, a homelab box or a cloud VM alike, and paste the one-line string it prints into **Add machine**. AO races every address the string lists and pins the box by its certificate fingerprint automatically. No DNS, no domain, no sign-up.
 - **One account, many machines.** Sign-in, a machine picker in the app, and unbindable machine registrations on the account page.
 - **One-command VM bootstrap.** `ao setup-vm` takes a fresh Ubuntu box to a registered, TLS-serving agent machine: dependency preflight, systemd units for daemon and gateway, device-flow binding, done.
 - **Real remote sessions.** Bearer-authenticated REST and SSE, cookie-authenticated terminal mux and event streams, silent token refresh. The board, the terminal, notifications, all of it works against a remote machine.
@@ -66,12 +66,27 @@ The daemon itself never grows a public listener. That is a hard rule inherited f
 npm install
 cd frontend && npm install && npm run make
 open "out/make/Hosted AO-"*.dmg
-
-# A VM (Ubuntu, with a DNS name pointed at it)
-ao setup-vm
 ```
 
-Sign in or pair from the app, pick your machine, spawn agents.
+### Add a machine
+
+On the box you want to add, a homelab server, a spare laptop, a cloud VM,
+anything you can reach, install the `ao` binary and run:
+
+```bash
+ao pair
+```
+
+It prints an `ao-pair://` string once. Paste that into **Add machine** in the
+desktop app: AO races every address the string lists and pins the box by its
+certificate fingerprint automatically, no compare-by-eye step needed. (A
+one-line installer, `curl -fsSL get.agentlab.in | sh`, lands with Phase 2 and
+does the same thing end to end: fetch the binary, run `ao pair`, print the
+same string.)
+
+Prefer an account instead? `ao setup-vm` takes a fresh Ubuntu box with a DNS
+name pointed at it to a registered, TLS-serving agent machine in one command;
+sign in from the app and pick it from the machine list.
 
 ## Documentation
 

@@ -181,3 +181,30 @@ func TestPairFingerprint_DifferentDirsProduceDifferentFingerprints(t *testing.T)
 		t.Fatal("two independently generated certificates produced the same fingerprint; the generator is not actually randomizing the key/serial")
 	}
 }
+
+// TestPairCertExists is the read-only counterpart's own contract: false
+// against an empty directory, true once a certificate has actually been
+// persisted there, and critically, checking it must never itself create
+// anything (a caller like `ao pair show` or `ao vm rotate-passcode` that
+// gates a LoadOrCreatePairCertificate call behind this must never trip the
+// create-on-missing path just by asking the question).
+func TestPairCertExists(t *testing.T) {
+	dir := t.TempDir()
+	if PairCertExists(dir) {
+		t.Fatal("PairCertExists on an empty directory = true, want false")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("PairCertExists created files in an empty directory: %v", entries)
+	}
+
+	if _, err := LoadOrCreatePairCertificate(dir); err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	if !PairCertExists(dir) {
+		t.Fatal("PairCertExists after LoadOrCreatePairCertificate = false, want true")
+	}
+}
