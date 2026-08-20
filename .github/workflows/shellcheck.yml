@@ -1,0 +1,62 @@
+name: shellcheck
+
+# Lints the curl|sh installer and its test fixtures. install.sh must stay
+# POSIX /bin/sh (no bashisms), since sh is not guaranteed to be bash on a
+# minimal image; shellcheck catches that plus the usual shell footguns.
+# ubuntu-latest ships shellcheck preinstalled, so this needs no setup step.
+
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - "test/cli/install/**"
+      - ".github/workflows/shellcheck.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "install.sh"
+      - "test/cli/install/**"
+      - ".github/workflows/shellcheck.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck install.sh
+        run: shellcheck install.sh
+      - name: shellcheck test fixtures
+        run: shellcheck test/cli/install/*.sh
+      - name: Run install.sh detection fixtures
+        run: sh test/cli/install/install-detect-test.sh
+      - name: install.sh fails cleanly against a repo with no published assets
+        env:
+          AO_INSTALL_OS_OVERRIDE: Linux
+          AO_INSTALL_ARCH_OVERRIDE: x86_64
+          AO_INSTALL_REPO: agentlab-in/does-not-exist-fixture
+        run: |
+          set +e
+          err_out=$(sh install.sh 2>&1 >/dev/null)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "install.sh exited 0 against a nonexistent repo; expected a download failure" >&2
+            exit 1
+          fi
+          echo "$err_out"
+          if [ "$(printf '%s\n' "$err_out" | wc -l)" -ne 1 ]; then
+            echo "expected a single-line error, got:" >&2
+            echo "$err_out" >&2
+            exit 1
+          fi
+          case "$err_out" in
+            *"download failed"*) : ;;
+            *)
+              echo "expected the error to mention 'download failed' (i.e. to actually fail at the download step this check targets, not some earlier check), got:" >&2
+              echo "$err_out" >&2
+              exit 1
+              ;;
+          esac

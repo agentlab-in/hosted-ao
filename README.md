@@ -70,19 +70,26 @@ open "out/make/Hosted AO-"*.dmg
 
 ### Add a machine
 
-On the box you want to add, a homelab server, a spare laptop, a cloud VM,
-anything you can reach, install the `ao` binary and run:
+This is a two-part flow: a command you run on the box, and a paste in the
+desktop app.
+
+**Box side.** On the box you want to add, a homelab server, a spare laptop,
+a cloud VM, run:
 
 ```bash
-ao pair
+curl -fsSL https://raw.githubusercontent.com/agentlab-in/hosted-ao/develop/install.sh | sh
 ```
 
-It prints an `ao-pair://` string once. Paste that into **Add machine** in the
-desktop app: AO races every address the string lists and pins the box by its
-certificate fingerprint automatically, no compare-by-eye step needed. (A
-one-line installer, `curl -fsSL get.agentlab.in | sh`, lands with Phase 2 and
-does the same thing end to end: fetch the binary, run `ao pair`, print the
-same string.)
+The box needs to be a 64-bit Debian-family Linux with systemd (x86_64 or
+aarch64), and you need root or passwordless sudo on it.
+
+This installs the `ao` binary and runs `ao pair`, which prints an
+`ao-pair://` string once. (This is the interim URL; `get.agentlab.in` will
+front the same script later, a hosting swap, not a script change.)
+
+**Desktop side.** Paste that string into **Add machine** in the desktop app:
+AO races every address the string lists and pins the box by its certificate
+fingerprint automatically, no compare-by-eye step needed.
 
 Prefer an account instead? `ao setup-vm` takes a fresh Ubuntu box with a DNS
 name pointed at it to a registered, TLS-serving agent machine in one command;
