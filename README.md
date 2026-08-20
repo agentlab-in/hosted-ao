@@ -74,11 +74,14 @@ This is a two-part flow: a command you run on the box, and a paste in the
 desktop app.
 
 **Box side.** On the box you want to add, a homelab server, a spare laptop,
-a cloud VM, anything you can reach, run:
+a cloud VM, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/agentlab-in/hosted-ao/develop/install.sh | sh
 ```
+
+The box needs to be a 64-bit Debian-family Linux with systemd (x86_64 or
+aarch64), and you need root or passwordless sudo on it.
 
 This installs the `ao` binary and runs `ao pair`, which prints an
 `ao-pair://` string once. (This is the interim URL; `get.agentlab.in` will

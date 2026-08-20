@@ -13,6 +13,20 @@
 # sidecar, installs it to /usr/local/bin/ao, then execs `ao pair` so it can
 # provision (or reuse) this machine and print the pairing string.
 #
+# Environment variables:
+#   AO_INSTALL_REPO          - GitHub "owner/repo" to fetch release assets
+#                               from. Default: agentlab-in/hosted-ao.
+#   AO_INSTALL_BIN_DIR       - Where to install the ao binary. Default:
+#                               /usr/local/bin.
+#   AO_INSTALL_OS_OVERRIDE   - Overrides `uname -s` for OS detection. Honored
+#                               in real runs, not just tests: forcing Linux
+#                               on a non-Linux box still installs and execs a
+#                               Linux ELF binary, which will not run there.
+#   AO_INSTALL_ARCH_OVERRIDE - Overrides `uname -m` for arch detection. Same
+#                               caveat as above: it feeds the same asset-name
+#                               lookup real detection does, with no extra
+#                               validation that the override matches reality.
+#
 # The pairing string ao pair prints is a credential. This script never
 # redirects, tees, logs, or captures that command's stdout/stderr, and prints
 # nothing of its own after it starts. The script's last action is exec, so
@@ -47,6 +61,13 @@ check_requirements() {
   need_cmd curl
   if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     err "'sha256sum' (or 'shasum' as a fallback) is required but neither was found on PATH"
+  fi
+  # Root-or-sudo is required later (copy_binary, the final exec) regardless
+  # of how far the script gets first; check it here so a sudo-less minimal
+  # image fails with one accurate line up front instead of a late
+  # "sudo: not found" once the download has already happened.
+  if [ "$(id -u)" -ne 0 ]; then
+    need_cmd sudo
   fi
 }
 
@@ -87,15 +108,17 @@ download_file() {
   # -S makes curl emit its own one-line diagnostic on failure (DNS,
   # connection refused, TLS, timeout, a 404, ...); without it curl stays
   # fully silent even on error and there is no cause to report at all. That
-  # diagnostic is redirected to a file under $tmp_dir (main() owns its
-  # cleanup) instead of straight to stderr, then folded into err()'s single
-  # line below, so a failure here still produces exactly one line of output
-  # but the line still carries curl's reason: for an unattended curl|sh run
-  # on a box nobody is watching, that reason is often the only signal there
-  # is, and this script's own generic "download failed" should not throw it
-  # away.
-  curl -f -s -S -L -o "$dest" "$url" 2>"$tmp_dir/curl-err" || {
-    cause=$(tr -s '\n' ' ' <"$tmp_dir/curl-err" | head -c 200)
+  # diagnostic is redirected to "$dest.curl-err" (dest already lives under
+  # main()'s $tmp_dir, so this needs no separate reference to that global
+  # and is cleaned up the same way dest is) instead of straight to stderr,
+  # then folded into err()'s single line below, so a failure here still
+  # produces exactly one line of output but the line still carries curl's
+  # reason: for an unattended curl|sh run on a box nobody is watching, that
+  # reason is often the only signal there is, and this script's own generic
+  # "download failed" should not throw it away.
+  err_file="$dest.curl-err"
+  curl -f -s -S -L -o "$dest" "$url" 2>"$err_file" || {
+    cause=$(tr -s '\n' ' ' <"$err_file" | head -c 200)
     cause="${cause% }"
     if [ -n "$cause" ]; then
       err "download failed: $url ($cause)"
@@ -110,7 +133,10 @@ download_file() {
 # workflow publishes). Returns non-zero on mismatch (or on a missing checksum
 # tool) instead of exiting, so callers decide how to report it and tests can
 # call it directly. Always called before chmod +x is applied to file, so a
-# corrupted or tampered download is rejected while still non-executable.
+# corrupted download is rejected while still non-executable. This catches
+# truncation and corruption in transit; it is not a substitution defense
+# (the sidecar travels over the same TLS connection, from the same repo, as
+# the binary it checks), that defense is HTTPS to github.com itself.
 verify_sha256() {
   file="$1"
   sha_file="$2"

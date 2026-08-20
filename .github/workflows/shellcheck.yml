@@ -52,3 +52,11 @@ jobs:
             echo "$err_out" >&2
             exit 1
           fi
+          case "$err_out" in
+            *"download failed"*) : ;;
+            *)
+              echo "expected the error to mention 'download failed' (i.e. to actually fail at the download step this check targets, not some earlier check), got:" >&2
+              echo "$err_out" >&2
+              exit 1
+              ;;
+          esac
