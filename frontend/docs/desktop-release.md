@@ -264,6 +264,66 @@ auto-updater (`update-electron-app` in `src/main.ts`, active only when
 `app.isPackaged`) updates installed apps from the Releases feed. Windows
 code-signing is still a follow-up (issue #401).
 
+## Local signing and notarization runbook
+
+This is the runbook `forge.config.ts` points at for the local (non-CI) signing
+path. It covers producing a signed, and optionally notarized, macOS build on
+your own machine.
+
+### Credentials
+
+- **Signing** uses `APPLE_SIGNING_IDENTITY`, a Developer ID Application
+  identity. Find yours with:
+
+  ```bash
+  security find-identity -v -p codesigning
+  ```
+
+- **Notarization** locally uses `AO_NOTARY_PROFILE`, a notarytool keychain
+  profile rather than a raw API key. Create one once with:
+
+  ```bash
+  xcrun notarytool store-credentials <profile-name> \
+    --apple-id <you@example.com> --team-id <TEAMID> --password <app-specific-password>
+  ```
+
+  Test that a profile works before relying on it in a build:
+
+  ```bash
+  xcrun notarytool history --keychain-profile <profile-name>
+  ```
+
+### The two working combinations
+
+`frontend/makers/maker-dmg.ts` (`sealDmg`, around lines 199-205) hard-fails
+`npm run make` if a signing identity is set but notarization credentials are
+not: "refusing to publish an unnotarized dmg". Set both env vars, or neither.
+There is no partial state that produces a dmg.
+
+| Command | Env vars | Result |
+| --- | --- | --- |
+| `npm run package` | `APPLE_SIGNING_IDENTITY` only | A signed `.app` in `out/`. No dmg, no notarization, no round trip to Apple. Gatekeeper reports "Unnotarized Developer ID" on this app, which is harmless for a locally built copy since it carries no quarantine attribute, but it cannot be distributed to anyone else in this state. |
+| `npm run make` | `APPLE_SIGNING_IDENTITY` and `AO_NOTARY_PROFILE` | The full signed, notarized, stapled dmg, plus the update zip. |
+
+Neither var set at all also works: `npm run package`/`npm run make` produce an
+unsigned local build, useful for quick iteration.
+
+### Notarizing an already-built app
+
+Notarizing a `.app` you already built and signed does not need a rebuild. Zip
+it, submit, then staple:
+
+```bash
+ditto -c -k --keepParent "Hosted AO.app" HostedAO.zip
+xcrun notarytool submit HostedAO.zip --keychain-profile <profile-name> --wait
+xcrun stapler staple "Hosted AO.app"
+```
+
+If packaging itself fails with a TLS error while downloading the Electron
+runtime, that is usually unrelated to signing: see the `ELECTRON_MIRROR`
+entry in [docs/development.md](../../docs/development.md)'s troubleshooting
+table.
+
 ---
 
 ## Feature releases

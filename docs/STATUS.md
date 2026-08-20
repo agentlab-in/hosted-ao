@@ -227,10 +227,37 @@ Details, operator redeploy notes, and snapshot restore behavior:
   `ao_hosted_pair` cookie are gone from the desktop. Remote is accounts only.
   `AO_CONTROL_URL` remains the development hatch (which control plane to trust; never
   skips authentication). `deploy/hosted/` documents the old Caddy pairing proxy as
-  retired.
+  retired. (This predates pair mode below; "accounts only" was true at the time and
+  no longer is.)
 - **Account home on the control plane** (`GET /`): lists machines bound to the signed-in
   account, unbind via `POST /machines/unbind` (session + same-origin), and empty-state
   setup copy for `ao setup-vm`. API unbind: `DELETE /api/v1/machines/{id}`.
+
+### Pair mode and the CLI installer (done)
+
+A second, account-free way to add a machine, on `develop`. Design and history:
+[`docs/adr/0003-pair-mode-gateway.md`](adr/0003-pair-mode-gateway.md),
+[`docs/adr/0004-pairing-string-and-cloud-pair-scope.md`](adr/0004-pairing-string-and-cloud-pair-scope.md),
+[`docs/superpowers/specs/2026-08-19-seamless-machine-onboarding-design.md`](superpowers/specs/2026-08-19-seamless-machine-onboarding-design.md).
+
+- **`ao vm serve` pair mode**: self-signed TLS (no ACME, no domain needed),
+  trust-on-first-use SHA-256 certificate-fingerprint pinning, an 8-character
+  passcode credential with per-source lockout, and a hard refusal on a
+  steady-state fingerprint mismatch. No control plane involved at all.
+- **The `ao-pair://v1/<addr>[,<addr>...]#<fingerprint>:<passcode>` string**:
+  printed once by `ao pair` (re-addressable via `ao pair show`), parsed by two
+  golden-vector-tested implementations (`backend/internal/pairstring`,
+  `frontend/src/shared/pair-string.ts`). The desktop pastes it into Add
+  machine, races every listed address (private addresses given a head start),
+  and pins whichever one first presents the matching fingerprint.
+  Address changes never force a re-pair; only a fingerprint change at an
+  already-pinned address does.
+  Reached by bare IP or by domain, local box or cloud VM alike: pairing is the
+  default way to add any machine, not just a LAN box.
+- **`install.sh`**: the `curl | sh` installer in `README.md`'s "Add a machine"
+  section. Detects OS/arch, downloads the `ao` binary and its sha256 sidecar,
+  installs it, and execs `ao pair` to provision the box and print the pairing
+  string.
 
 Three code-review reports covering batches 1 through 4 are preserved in
 [`reviews/`](reviews/), with every finding mapped to the PR that fixed it.
