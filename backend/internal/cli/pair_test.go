@@ -105,6 +105,145 @@ func TestPairShow_NotProvisionedExitsOneAndPointsAtProvisioning(t *testing.T) {
 	}
 }
 
+// TestPairPasscodeReadError_DistinguishesPermissionFromNotExist is the table
+// test for pairPasscodeReadError: a not-exist (or otherwise unreadable, e.g.
+// corrupt) passcode store still points at provisioning, but a permission
+// error must say to re-run with sudo instead, never the other way around,
+// since a permission error is proof the store is already there.
+func TestPairPasscodeReadError_DistinguishesPermissionFromNotExist(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses file permission checks, so this cannot simulate a permission error")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict the owner's own access on Windows, so this cannot simulate a permission error there")
+	}
+	tests := []struct {
+		name         string
+		buildErr     func(t *testing.T) error
+		wantContains string
+		wantAbsent   string
+	}{
+		{
+			name: "not exist",
+			buildErr: func(t *testing.T) error {
+				_, err := vmgateway.LoadPasscodeStore(t.TempDir())
+				if err == nil {
+					t.Fatal("expected a not-exist error against an empty directory")
+				}
+				return err
+			},
+			wantContains: "run bare `ao pair`, which provisions this box automatically",
+			wantAbsent:   "re-run with sudo",
+		},
+		{
+			name: "permission denied",
+			buildErr: func(t *testing.T) error {
+				dir := t.TempDir()
+				if _, err := vmgateway.GeneratePasscode(dir); err != nil {
+					t.Fatalf("GeneratePasscode: %v", err)
+				}
+				if err := os.Chmod(dir, 0); err != nil {
+					t.Fatalf("Chmod: %v", err)
+				}
+				// t.TempDir()'s own cleanup needs to traverse and remove this
+				// directory; restore it before the test ends so that succeeds.
+				t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+				_, err := vmgateway.LoadPasscodeStore(dir)
+				if err == nil {
+					t.Fatal("expected a permission error against a directory this uid cannot enter")
+				}
+				return err
+			},
+			wantContains: "this box is already provisioned; re-run with sudo: sudo ao pair show",
+			wantAbsent:   "run bare `ao pair`",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.buildErr(t)
+			got := pairPasscodeReadError(err).Error()
+			if !strings.Contains(got, tt.wantContains) {
+				t.Errorf("pairPasscodeReadError(%v) = %q, want it to contain %q", err, got, tt.wantContains)
+			}
+			if strings.Contains(got, tt.wantAbsent) {
+				t.Errorf("pairPasscodeReadError(%v) = %q, must not also contain %q", err, got, tt.wantAbsent)
+			}
+		})
+	}
+}
+
+// TestPairShow_PermissionDeniedSuggestsSudo is TestPairPasscodeReadError's
+// end-to-end counterpart through the real `ao pair show` command: a
+// passcode directory this process cannot enter must produce the sudo
+// suggestion, not the generic "run bare `ao pair`" one, which would be
+// wrong twice over (the box is provisioned, and a non-root bare `ao pair`
+// would hit the identical permission error).
+func TestPairShow_PermissionDeniedSuggestsSudo(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses file permission checks, so this cannot simulate a permission error")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict the owner's own access on Windows, so this cannot simulate a permission error there")
+	}
+	passcodeDir := t.TempDir()
+	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
+	if err := os.Chmod(passcodeDir, 0); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(passcodeDir, 0o700) })
+
+	deps := Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}
+	_, _, err := executeCLI(t, deps, "pair", "show", "--passcode-dir", passcodeDir, "--cert-dir", t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error: the passcode store cannot be read by this uid")
+	}
+	if strings.Contains(err.Error(), "run bare `ao pair`") {
+		t.Errorf("err = %v, must not suggest bare `ao pair` for a permission error: the box is already provisioned and a non-root retry fails identically", err)
+	}
+	if !strings.Contains(err.Error(), "sudo ao pair show") {
+		t.Errorf("err = %v, want it to suggest re-running with sudo ao pair show", err)
+	}
+}
+
+// TestPairBare_PermissionDeniedIsTreatedAsProvisioned is bare `ao pair`'s
+// counterpart: pairIsProvisioned must read a permission error as "yes, this
+// box is provisioned" so runPairBare goes to runPairShow (and its sudo
+// suggestion) rather than attempting to re-provision, which was the second
+// half of the live bug (a non-root re-provision attempt cannot fix a
+// permission problem a privileged one created).
+func TestPairBare_PermissionDeniedIsTreatedAsProvisioned(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses file permission checks, so this cannot simulate a permission error")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict the owner's own access on Windows, so this cannot simulate a permission error there")
+	}
+	passcodeDir := t.TempDir()
+	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
+	if err := os.Chmod(passcodeDir, 0); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(passcodeDir, 0o700) })
+	t.Setenv("AO_VM_PASSCODE_DIR", passcodeDir)
+	t.Setenv("AO_VM_CERT_DIR", t.TempDir())
+
+	deps := Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}
+	_, _, err := executeCLI(t, deps, "pair")
+	if err == nil {
+		t.Fatal("expected an error: the passcode store cannot be read by this uid")
+	}
+	if strings.Contains(err.Error(), "automates Debian-family Linux only") || strings.Contains(err.Error(), "preflight failed") {
+		t.Errorf("err = %v, bare ao pair must not attempt to re-provision an already-provisioned box just because this uid cannot read its passcode store", err)
+	}
+	if !strings.Contains(err.Error(), "sudo ao pair show") {
+		t.Errorf("err = %v, want it to fall through to pair show's own sudo suggestion", err)
+	}
+}
+
 // ao pair show must never mutate anything, including in the corrupted-state
 // case where a passcode exists but the certificate directory is empty:
 // vmgateway.LoadOrCreatePairCertificate would happily mint a fresh

@@ -23,6 +23,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -950,8 +951,22 @@ func (c *commandContext) ensureSetupPasscode(dir string, owner *user.User) (plai
 	if _, loadErr := vmgateway.LoadPasscodeStore(dir); loadErr == nil {
 		return "", false, nil
 	}
+	// Snapshot which ancestors of dir do not exist yet before anything
+	// creates them: vmgateway.GeneratePasscode below reports back a
+	// plaintext passcode, not the directories its own os.MkdirAll minted, so
+	// this is the only point that can still tell a freshly-created
+	// intermediate (typically dir's own vm-gateway parent, and potentially
+	// the state root itself on a box with no prior ao setup-vm run at all)
+	// apart from one that was already there. See setupMissingSetupDirs.
+	createdParents, err := setupMissingSetupDirs(dir)
+	if err != nil {
+		return "", false, err
+	}
 	plaintext, err = vmgateway.GeneratePasscode(dir)
 	if err != nil {
+		return "", false, err
+	}
+	if err := chownSetupDirs(createdParents, owner); err != nil {
 		return "", false, err
 	}
 	if err := chownSetupTree(dir, owner); err != nil {
@@ -965,14 +980,91 @@ func (c *commandContext) ensureSetupPasscode(dir string, owner *user.User) (plai
 // existing certificate rather than generating a new one whenever both files
 // are already present), so re-running this never rotates it either.
 func (c *commandContext) ensureSetupPairCert(dir string, owner *user.User) (tls.Certificate, error) {
+	// See ensureSetupPasscode: the same snapshot-before-create dance, for
+	// vmgateway.LoadOrCreatePairCertificate's own os.MkdirAll.
+	createdParents, err := setupMissingSetupDirs(dir)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
 	cert, err := vmgateway.LoadOrCreatePairCertificate(dir)
 	if err != nil {
+		return tls.Certificate{}, err
+	}
+	if err := chownSetupDirs(createdParents, owner); err != nil {
 		return tls.Certificate{}, err
 	}
 	if err := chownSetupTree(dir, owner); err != nil {
 		return tls.Certificate{}, err
 	}
 	return cert, nil
+}
+
+// setupMissingSetupDirs returns every directory from dir's parent upward
+// that does not exist yet, in top-down order (the outermost missing
+// directory first), stopping at the first ancestor that is already there.
+//
+// It must be called before whatever is about to create dir: dir itself is
+// about to be minted by an os.MkdirAll buried inside
+// vmgateway.GeneratePasscode or vmgateway.LoadOrCreatePairCertificate,
+// neither of which reports which parent directories it had to create along
+// the way, and afterward every one of them exists, so calling this after
+// the fact would report none of them. This is what lets a caller chown
+// exactly the directories that create call is about to mint as root under
+// sudo, and never a directory that already existed before it ran (see the
+// "Do not change ownership of directories that already existed" contract
+// on chownSetupDirs' one caller, ensureSetupPasscode/ensureSetupPairCert).
+//
+// filepath, not path, on purpose: in production dir is always the Linux
+// path a setup-vm plan builds with slashPath (see setupvm_plan.go), and on
+// the Linux box this only ever actually runs against, filepath.Dir behaves
+// identically to path.Dir. Unlike the plan-building code, though, this
+// function's own unit tests hand it a real t.TempDir(), which is a native
+// path (backslash-separated on the Windows leg of the CLI E2E matrix), and
+// only filepath parses that correctly.
+func setupMissingSetupDirs(dir string) ([]string, error) {
+	var missing []string
+	cur := filepath.Dir(filepath.Clean(dir))
+	for {
+		if _, err := os.Stat(cur); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat %s: %w", cur, err)
+		}
+		missing = append(missing, cur)
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	slices.Reverse(missing)
+	return missing, nil
+}
+
+// chownSetupDirs hands each directory in dirs to owner, non-recursively.
+// It is setupMissingSetupDirs' consumer: dirs is meant to be exactly the
+// list that function returned before dir was created, so this only ever
+// touches directories provisioning itself just minted as root, never one
+// that already existed under the target user. This is the fix for the live
+// incident where /home/azureuser/.ao/hosted/vm-gateway was minted root:root
+// by a sudo'd `ao pair` (its leaf children, pair-cert/ and pair-passcode/,
+// were correctly chowned by chownSetupTree below, but vm-gateway itself,
+// never visited by either call, was not), leaving ao-gateway.service
+// (User=azureuser) unable to traverse into its own state at all.
+func chownSetupDirs(dirs []string, owner *user.User) error {
+	uid, gid, ok := setupChownIDs(owner)
+	if !ok {
+		return nil
+	}
+	for _, dir := range dirs {
+		// Lchown, matching chownSetupTree, for the same symlink-planting
+		// reason: this runs as root against a path inside an unprivileged
+		// user's home.
+		if err := os.Lchown(dir, uid, gid); err != nil {
+			return fmt.Errorf("chown %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // chownSetupTree hands every file under dir to owner, recursively. It is a
@@ -984,20 +1076,14 @@ func (c *commandContext) ensureSetupPairCert(dir string, owner *user.User) (tls.
 // euid, with no idea who the target unit's user is, so this is what stops a
 // root-owned passcode.hash or cert.pem from leaving the gateway unable to
 // start on a machine that was just provisioned or rotated successfully.
-// Mirrors chownMachineFile's reasoning in setupvm_bind.go.
+// Mirrors chownMachineFile's reasoning in setupvm_bind.go. It only ever
+// reaches dir and what is inside it; chownSetupDirs above is its
+// counterpart for the parent directories that same create call may have
+// minted above dir.
 func chownSetupTree(dir string, owner *user.User) error {
-	if owner == nil || os.Getuid() != 0 {
+	uid, gid, ok := setupChownIDs(owner)
+	if !ok {
 		return nil
-	}
-	uid, err := strconv.Atoi(owner.Uid)
-	if err != nil {
-		// A non-numeric id is a Windows user, and this path only ever runs on
-		// the Debian-family box the platform gate already checked for.
-		return nil //nolint:nilerr // deliberate: a non-numeric id means there is nothing to chown here, not a failure to report
-	}
-	gid, err := strconv.Atoi(owner.Gid)
-	if err != nil {
-		return nil //nolint:nilerr // same as above
 	}
 	// Root-scoped traversal, and Lchown rather than Chown, because this runs as
 	// root against a directory inside an unprivileged user's home. That user can
@@ -1016,4 +1102,28 @@ func chownSetupTree(dir string, owner *user.User) error {
 		}
 		return root.Lchown(path, uid, gid)
 	})
+}
+
+// setupChownIDs resolves owner's numeric uid and gid for a chown syscall, or
+// reports ok=false when there is nothing to chown here: owner is unknown,
+// this process is not root (an unprivileged invocation already writes as
+// the right user), or owner's ids are not numeric (a Windows account,
+// impossible on the Debian-family box this only ever runs against). Shared
+// by chownSetupTree and chownSetupDirs so the two can never disagree about
+// when a chown is a no-op.
+func setupChownIDs(owner *user.User) (uid, gid int, ok bool) {
+	if owner == nil || os.Getuid() != 0 {
+		return 0, 0, false
+	}
+	uid, err := strconv.Atoi(owner.Uid)
+	if err != nil {
+		// A non-numeric id is a Windows user, and this path only ever runs on
+		// the Debian-family box the platform gate already checked for.
+		return 0, 0, false
+	}
+	gid, err = strconv.Atoi(owner.Gid)
+	if err != nil {
+		return 0, 0, false
+	}
+	return uid, gid, true
 }
