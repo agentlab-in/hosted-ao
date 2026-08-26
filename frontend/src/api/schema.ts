@@ -123,6 +123,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/desktop/sessions/{sessionId}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve a session workspace for the loopback desktop supervisor */
+        get: operations["getDesktopSessionWorkspace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/import-projects": {
         parameters: {
             query?: never;
@@ -1066,6 +1083,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-dispatch a failed turn's durable prompt as a new turn */
+        post: operations["retrySessionConversationTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback": {
         parameters: {
             query?: never;
@@ -1566,6 +1600,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/file/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one side of a session workspace image file */
+        get: operations["getSessionWorkspaceFileBlob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/files": {
         parameters: {
             query?: never;
@@ -1670,6 +1721,41 @@ export interface paths {
         patch: operations["renameShellTerminal"];
         trace?: never;
     };
+    "/api/v1/system/install/{target}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the current or last known install job status for a system target */
+        get: operations["getSystemInstallStatus"];
+        put?: never;
+        /** Start (or return the already-running) install job for a fixed system target */
+        post: operations["startSystemInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Check local machine readiness (git, tmux, agent harness, gh) */
+        get: operations["getSystemRequirements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -1746,6 +1832,13 @@ export interface components {
             authStatus?: "authorized" | "unauthorized" | "unknown";
             id: string;
             label: string;
+            /**
+             * Format: date-time
+             * @description Creation time of the newest retained session currently attributed to this agent.
+             */
+            lastUsedAt?: null | string;
+            /** @description Number of retained sessions currently attributed to this agent. */
+            usageCount?: number;
         };
         AgentModelInfo: {
             id: string;
@@ -1792,6 +1885,12 @@ export interface components {
         };
         AgentSwitchResponse: {
             switch: components["schemas"]["AgentSwitch"];
+        };
+        AnthropicUsageDetailsResponse: {
+            anthropicCacheCreation1hInputTokens: null | number;
+            anthropicCacheCreation5mInputTokens: null | number;
+            anthropicCacheCreationInputTokens: null | number;
+            anthropicDirectUncachedInputTokens: null | number;
         };
         AttachmentInput: {
             data: string;
@@ -1860,8 +1959,13 @@ export interface components {
         };
         CompactSessionUsageResponse: {
             incomplete: boolean;
+            /** @description Canonical input plus output. Null when either component is unknown. */
+            processedTokens: null | number;
             sessionId: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Deprecated compatibility alias for processedTokens.
+             */
             totalTokens: number;
         };
         ContainerReapConfig: {
@@ -1959,7 +2063,7 @@ export interface components {
             /** Format: int64 */
             sequence: number;
             /** @enum {string} */
-            status: "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
+            status: "running" | "completed" | "recovered" | "failed" | "cancelled" | "pending" | "resolved";
             summary: string;
             turnId?: string;
         };
@@ -2136,14 +2240,16 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            hasRetryAttempt?: boolean;
             id: string;
             plan?: components["schemas"]["ConversationPlanResponse"];
             providerTurnId?: string;
             requestedAt: string;
+            retryOfTurnId?: string;
             rolledBack?: boolean;
             startedAt?: null | string;
             /** @enum {string} */
-            state: "queued" | "running" | "completed" | "interrupted" | "failed";
+            state: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
         };
         ConversationTurnSettingsPayload: {
             /** @enum {string} */
@@ -2177,7 +2283,9 @@ export interface components {
         };
         DelegateTaskRequest: {
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "prime-agent" | "autohand" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand" | "fake";
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
             brief: string;
             /** @enum {string} */
@@ -2189,6 +2297,10 @@ export interface components {
             ok: boolean;
             orchestratorId?: string;
             workerId: string;
+        };
+        DesktopWorkspaceLocationResponse: {
+            sessionId: string;
+            workspacePath: string;
         };
         DevImportProjectsConflict: {
             path: string;
@@ -2253,7 +2365,7 @@ export interface components {
             providerTurnId?: string;
             sourceBranchId: string;
             /** @enum {string} */
-            state?: "queued" | "running" | "completed" | "interrupted" | "failed";
+            state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
         ImportReport: {
@@ -2274,6 +2386,31 @@ export interface components {
         };
         InitializeRepositoryResult: {
             path: string;
+        };
+        InstallJob: {
+            /** @description Human-readable install command, e.g. "brew install tmux", for display even before/without output. */
+            command?: string;
+            /** @description Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message. */
+            error?: string;
+            /**
+             * Format: date-time
+             * @description Absent until the job finishes.
+             */
+            finishedAt?: null | string;
+            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. */
+            output?: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            /**
+             * @description Current lifecycle state of the job.
+             * @enum {string}
+             */
+            status: "idle" | "running" | "succeeded" | "failed" | "unsupported";
+            /**
+             * @description Install target this job ran (or is running) for.
+             * @enum {string}
+             */
+            target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "copilot";
         };
         KillReviewResponse: {
             reviewerHandleId: string;
@@ -2326,12 +2463,17 @@ export interface components {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
         };
         ListWorkspaceFilesResponse: {
+            ahead?: null | number;
+            behind?: null | number;
+            commits: components["schemas"]["WorkspaceCommitSummary"][];
             compareBaseRef?: string;
             compareBaseSha?: string;
             /** @enum {string} */
             compareMode?: "base" | "head_fallback";
             files: components["schemas"]["WorkspaceFileSummary"][];
+            sections: components["schemas"]["WorkspaceFileSections"];
             sessionId: string;
+            summary: components["schemas"]["WorkspaceSummary"];
             truncated: boolean;
         };
         MarkAllNotificationsReadRequest: {
@@ -2423,6 +2565,10 @@ export interface components {
             kind: "session" | "pr";
             prUrl?: string;
             sessionId: string;
+        };
+        OpenAIUsageDetailsResponse: {
+            openaiCacheWriteInputTokens: null | number;
+            openaiReasoningOutputTokens: null | number;
         };
         OpenShellTerminalRequest: {
             /** @description Project whose root the shell starts in. Omitted opens the shell in the daemon data dir. */
@@ -2593,6 +2739,12 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        RetryTurnResponse: {
+            providerTurnId?: string;
+            /** @enum {string} */
+            state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
+            turnId?: string;
+        };
         ReviewRun: {
             autoInjectReview: boolean;
             batchId: string;
@@ -2641,7 +2793,7 @@ export interface components {
             duplicate: boolean;
             providerTurnId?: string;
             /** @enum {string} */
-            state?: "queued" | "running" | "completed" | "interrupted" | "failed";
+            state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
         SendSessionMessageRequest: {
@@ -2727,6 +2879,7 @@ export interface components {
             body?: string;
             file?: string;
             line?: number;
+            reviewId?: string;
             url?: string;
         };
         SessionPRReviewEntry: {
@@ -2928,7 +3081,7 @@ export interface components {
             branch?: string;
             displayName?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "prime-agent" | "autohand";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "prime-agent" | "autohand";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -3014,6 +3167,27 @@ export interface components {
              */
             targetHarness: "claude-code" | "codex";
         };
+        SystemRequirement: {
+            /** @description Extra context: the resolved path when satisfied, or why it is not. */
+            detail?: string;
+            /**
+             * @description Stable requirement identifier.
+             * @enum {string}
+             */
+            id: "git" | "tmux" | "harness" | "gh";
+            /** @description Human-readable requirement name. */
+            label: string;
+            /** @description Whether this requirement blocks the overall Ready state. */
+            required: boolean;
+            /** @description Whether this requirement is currently met. */
+            satisfied: boolean;
+        };
+        SystemRequirementsResponse: {
+            /** @description True iff every requirement with Required=true is satisfied. Requirements with Required=false (e.g. gh) are advisory and never block readiness. */
+            ready: boolean;
+            /** @description Individual checks in stable order for the selected probe. */
+            requirements: components["schemas"]["SystemRequirement"][];
+        };
         TrackerIntakeConfig: {
             assignee?: string;
             enabled?: boolean;
@@ -3061,17 +3235,50 @@ export interface components {
             subagentTranscriptPath?: string;
             transcriptPath?: string;
         };
+        UsageMetricProvenanceResponse: {
+            /** @enum {string} */
+            cachedInputTokens: "reported" | "derived" | "unsupported" | "unknown";
+            /** @enum {string} */
+            inputTokens: "reported" | "derived" | "unsupported" | "unknown";
+            /** @enum {string} */
+            outputTokens: "reported" | "derived" | "unsupported" | "unknown";
+            /** @enum {string} */
+            uncachedInputTokens: "reported" | "derived" | "unsupported" | "unknown";
+        };
         UsageModelResponse: {
             modelId: string;
             totals: components["schemas"]["UsageTotalsResponse"];
         };
+        UsageProviderDetailsResponse: {
+            anthropic?: components["schemas"]["AnthropicUsageDetailsResponse"];
+            openai?: components["schemas"]["OpenAIUsageDetailsResponse"];
+        };
         UsageTotalsResponse: {
+            /** @description Deprecated compatibility alias for cachedInputTokens. */
             cacheReadTokens: null | number;
+            /** @description Deprecated compatibility aggregate of provider cache-write input counters. */
             cacheWriteTokens: null | number;
+            /** @description Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens. */
+            cachedInputTokens: null | number;
+            /** @description Total input, including cached and uncached input. */
             inputTokens: null | number;
+            /** @description Total output, including provider-specific subsets such as reasoning output. */
             outputTokens: null | number;
+            /** @description Canonical input plus output. Null when either component is unknown. */
+            processedTokens: null | number;
+            provenance: components["schemas"]["UsageMetricProvenanceResponse"];
+            providerDetails: components["schemas"]["UsageProviderDetailsResponse"];
+            /** @description Deprecated compatibility alias for the OpenAI reasoning-output subset. */
             reasoningTokens: null | number;
+            /** @description Input not read from an existing provider cache. */
             uncachedInputTokens: null | number;
+        };
+        WorkspaceCommitSummary: {
+            author: string;
+            sha: string;
+            subject: string;
+            /** Format: date-time */
+            timestamp: string;
         };
         WorkspaceFileResponse: {
             additions: number;
@@ -3086,6 +3293,7 @@ export interface components {
             deletions: number;
             diff: string;
             diffTruncated: boolean;
+            imageMediaType?: string;
             path: string;
             previousPath?: string;
             sessionId: string;
@@ -3093,6 +3301,12 @@ export interface components {
             size: number;
             /** @enum {string} */
             status: "unmodified" | "modified" | "added" | "deleted" | "renamed";
+        };
+        WorkspaceFileSections: {
+            committed: components["schemas"]["WorkspaceFileSummary"][];
+            staged: components["schemas"]["WorkspaceFileSummary"][];
+            unstaged: components["schemas"]["WorkspaceFileSummary"][];
+            untracked: components["schemas"]["WorkspaceFileSummary"][];
         };
         WorkspaceFileSummary: {
             additions: number;
@@ -3110,6 +3324,11 @@ export interface components {
             name: string;
             relativePath: string;
             repo: string;
+        };
+        WorkspaceSummary: {
+            additions: number;
+            deletions: number;
+            files: number;
         };
     };
     responses: never;
@@ -3515,6 +3734,56 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getDesktopSessionWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopWorkspaceLocationResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6939,6 +7208,76 @@ export interface operations {
             };
         };
     };
+    retrySessionConversationTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryTurnResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     rollbackSessionConversation: {
         parameters: {
             query?: never;
@@ -9058,6 +9397,8 @@ export interface operations {
             query?: {
                 /** @description Session-worktree-relative file path. */
                 path?: string;
+                /** @description Git-state section the file was opened from (see WorkspaceFileSections). staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base. */
+                section?: "committed" | "staged" | "unstaged" | "untracked";
             };
             header?: never;
             path: {
@@ -9075,6 +9416,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceFileResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionWorkspaceFileBlob: {
+        parameters: {
+            query: {
+                /** @description Session-worktree-relative file path. */
+                path: string;
+                /** @description Which revision to read: the compare base (before) or the session worktree (after). Defaults to after. */
+                side?: "before" | "after";
+                /** @description Cache-busting token. Ignored by the server; the response is never cached. */
+                v?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
                 };
             };
             /** @description Bad Request */
@@ -9491,6 +9898,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSystemInstallStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, or copilot. */
+                target: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallJob"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startSystemInstall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, or copilot. */
+                target: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallJob"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSystemRequirements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemRequirementsResponse"];
                 };
             };
             /** @description Internal Server Error */

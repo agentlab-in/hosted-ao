@@ -107,7 +107,8 @@ type SessionService interface {
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
-	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceFileDetail, error)
+	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
+	GetWorkspaceFileBlob(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide) (sessionsvc.WorkspaceFileBlob, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
 	Pin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -169,6 +170,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
+	r.Get("/sessions/{sessionId}/workspace/file/blob", c.getWorkspaceFileBlob)
 	r.Get("/sessions/{sessionId}/pr", c.listPRs)
 	r.Post("/sessions/{sessionId}/pr/claim", c.claimPR)
 	r.Patch("/sessions/{sessionId}", c.rename)
@@ -561,12 +563,46 @@ func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Req
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "WORKSPACE_PATH_REQUIRED", "path is required", nil)
 		return
 	}
-	file, err := c.Svc.GetWorkspaceFile(r.Context(), sessionID(r), relPath)
+	section := sessionsvc.WorkspaceFileSection(strings.TrimSpace(r.URL.Query().Get("section")))
+	file, err := c.Svc.GetWorkspaceFile(r.Context(), sessionID(r), relPath, section)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFileResponse(file))
+}
+
+// getWorkspaceFileBlob streams one side of an image file's diff. The renderer
+// points an <img> straight at this route, so the response is the raw bytes with
+// their media type rather than a JSON envelope.
+func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/file/blob")
+		return
+	}
+	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if relPath == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "WORKSPACE_PATH_REQUIRED", "path is required", nil)
+		return
+	}
+	side := sessionsvc.WorkspaceFileBlobSide(strings.TrimSpace(r.URL.Query().Get("side")))
+	if side == "" {
+		side = sessionsvc.WorkspaceBlobAfter
+	}
+	blob, err := c.Svc.GetWorkspaceFileBlob(r.Context(), sessionID(r), relPath, side)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", blob.MediaType)
+	h.Set("Content-Length", strconv.Itoa(len(blob.Data)))
+	// The worktree changes under the viewer, and the URL carries no content
+	// hash, so a cached response would show a stale image after every edit.
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(blob.Data)
 }
 
 func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
@@ -1328,6 +1364,10 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		}
 		in.Mode = mode
 	}
+	if !in.ApprovalMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
+		return
+	}
 	attachments, attachErr := decodeSpawnAttachments(in.Attachments)
 	if attachErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
@@ -1339,6 +1379,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		Brief:          domain.SanitizeControlChars(in.Brief),
 		RequestedAgent: in.Agent,
 		Model:          domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
+		ApprovalMode:   in.ApprovalMode,
 		RequestedMode:  in.Mode,
 		Attachments:    attachments,
 	})
@@ -1597,8 +1638,9 @@ func discoverPreviewEntry(workspacePath string) (string, bool) {
 // "./dist/index.html") to its preview/files proxy URL when the path resolves to
 // a regular file inside the session workspace. It returns ok=false for anything
 // that already looks like a URL (an http(s)/file scheme, or a host:port dev
-// server) and for paths that escape the workspace or do not point at a file, so
-// the caller keeps those targets verbatim.
+// server) and for paths that do not point at a workspace file, so the caller
+// keeps those targets verbatim. Explicit parent traversal is rejected by
+// resolvePreviewTarget before this function is called.
 func resolveLocalPreview(r *http.Request, id domain.SessionID, workspacePath, raw string) (string, bool, error) {
 	if raw == "" || hasURLScheme(raw) {
 		return "", false, nil
@@ -1622,10 +1664,23 @@ func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, r
 	if isAbsolutePreviewPath(raw) {
 		return workspaceAbsolutePreviewURL(r, id, workspacePath, raw)
 	}
+	if !hasURLScheme(raw) && containsParentPathSegment(raw) {
+		return "", errPreviewFileOutsideWorkspace
+	}
 	if resolved, ok, err := resolveLocalPreview(r, id, workspacePath, raw); ok || err != nil {
 		return resolved, err
 	}
 	return raw, nil
+}
+
+func containsParentPathSegment(raw string) bool {
+	raw = strings.ReplaceAll(raw, `\`, "/")
+	for _, segment := range strings.Split(raw, "/") {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func isAbsolutePreviewPath(raw string) bool {
@@ -1795,26 +1850,61 @@ func sessionPRSummaries(prs []sessionsvc.PRSummary) []SessionPRSummary {
 }
 
 func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesResponse {
-	out := make([]WorkspaceFileSummary, 0, len(files.Files))
-	for _, file := range files.Files {
-		out = append(out, WorkspaceFileSummary{
-			Path:         file.Path,
-			PreviousPath: file.PreviousPath,
-			Status:       file.Status,
-			Additions:    file.Additions,
-			Deletions:    file.Deletions,
-			Size:         file.Size,
-			Binary:       file.Binary,
-		})
-	}
 	return ListWorkspaceFilesResponse{
 		SessionID:      files.SessionID,
 		CompareBaseSHA: files.CompareBaseSHA,
 		CompareBaseRef: files.CompareBaseRef,
 		CompareMode:    files.CompareMode,
-		Files:          out,
+		Files:          workspaceFileSummariesResponse(files.Files),
 		Truncated:      files.Truncated,
+		Sections:       workspaceFileSectionsResponse(files.Sections),
+		Commits:        workspaceCommitsResponse(files.Commits),
+		Summary:        WorkspaceSummary(files.Summary),
+		Ahead:          files.Ahead,
+		Behind:         files.Behind,
 	}
+}
+
+func workspaceFileSummaryResponse(file sessionsvc.WorkspaceFileSummary) WorkspaceFileSummary {
+	return WorkspaceFileSummary{
+		Path:         file.Path,
+		PreviousPath: file.PreviousPath,
+		Status:       file.Status,
+		Additions:    file.Additions,
+		Deletions:    file.Deletions,
+		Size:         file.Size,
+		Binary:       file.Binary,
+	}
+}
+
+func workspaceFileSummariesResponse(files []sessionsvc.WorkspaceFileSummary) []WorkspaceFileSummary {
+	out := make([]WorkspaceFileSummary, 0, len(files))
+	for _, file := range files {
+		out = append(out, workspaceFileSummaryResponse(file))
+	}
+	return out
+}
+
+func workspaceFileSectionsResponse(sections sessionsvc.WorkspaceFileSections) WorkspaceFileSections {
+	return WorkspaceFileSections{
+		Staged:    workspaceFileSummariesResponse(sections.Staged),
+		Unstaged:  workspaceFileSummariesResponse(sections.Unstaged),
+		Untracked: workspaceFileSummariesResponse(sections.Untracked),
+		Committed: workspaceFileSummariesResponse(sections.Committed),
+	}
+}
+
+func workspaceCommitsResponse(commits []sessionsvc.CommitSummary) []WorkspaceCommitSummary {
+	out := make([]WorkspaceCommitSummary, 0, len(commits))
+	for _, commit := range commits {
+		out = append(out, WorkspaceCommitSummary{
+			SHA:       commit.SHA,
+			Subject:   commit.Subject,
+			Author:    commit.Author,
+			Timestamp: commit.Timestamp,
+		})
+	}
+	return out
 }
 
 func workspaceFileResponse(file sessionsvc.WorkspaceFileDetail) WorkspaceFileResponse {
@@ -1828,6 +1918,7 @@ func workspaceFileResponse(file sessionsvc.WorkspaceFileDetail) WorkspaceFileRes
 		Size:             file.Size,
 		Binary:           file.Binary,
 		Deleted:          file.Deleted,
+		ImageMediaType:   file.ImageMediaType,
 		Content:          file.Content,
 		ContentTruncated: file.ContentTruncated,
 		Diff:             file.Diff,
