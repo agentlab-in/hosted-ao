@@ -706,19 +706,19 @@ func normalizeAnthropicUsage(directInput, cacheCreationInput, cachedInput, outpu
 		return domain.UsageTokenMetrics{}, domain.AnthropicUsageDetails{}, false
 	}
 	return domain.UsageTokenMetrics{
-		InputTokens:         int64Ptr(input),
-		CachedInputTokens:   int64Ptr(cachedInput),
-		UncachedInputTokens: int64Ptr(uncachedInput),
-		OutputTokens:        int64Ptr(output),
-		Provenance: domain.UsageMetricProvenanceSet{
-			InputTokens: domain.UsageMetricDerived, CachedInputTokens: domain.UsageMetricReported,
-			UncachedInputTokens: domain.UsageMetricDerived,
-			OutputTokens:        domain.UsageMetricReported,
-		},
-	}, domain.AnthropicUsageDetails{
-		DirectUncachedInputTokens: int64Ptr(directInput), CacheCreationInputTokens: int64Ptr(cacheCreationInput),
-		CacheCreation5mInputTokens: creation5m, CacheCreation1hInputTokens: creation1h,
-	}, true
+			InputTokens:         int64Ptr(input),
+			CachedInputTokens:   int64Ptr(cachedInput),
+			UncachedInputTokens: int64Ptr(uncachedInput),
+			OutputTokens:        int64Ptr(output),
+			Provenance: domain.UsageMetricProvenanceSet{
+				InputTokens: domain.UsageMetricDerived, CachedInputTokens: domain.UsageMetricReported,
+				UncachedInputTokens: domain.UsageMetricDerived,
+				OutputTokens:        domain.UsageMetricReported,
+			},
+		}, domain.AnthropicUsageDetails{
+			DirectUncachedInputTokens: int64Ptr(directInput), CacheCreationInputTokens: int64Ptr(cacheCreationInput),
+			CacheCreation5mInputTokens: creation5m, CacheCreation1hInputTokens: creation1h,
+		}, true
 }
 
 func validAnthropicCacheCreation(total int64, creation5m, creation1h *int64) bool {
