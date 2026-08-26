@@ -48,6 +48,24 @@ updated `develop`; do not rewrite shared branches.
 
 ## 3. Preflight and evidence record
 
+### Scope boundary: the intake is only the upstream intake
+
+Do not use an upstream intake to repair unrelated downstream behavior, enforce
+new product policy, build missing acceptance infrastructure, or collect evidence
+for capabilities that upstream does not contain. The scope is the upstream delta,
+its merge conflicts, generated artifacts affected by that delta, and regressions
+the delta could introduce at an existing hosted seam. Nothing else.
+
+A pre-existing downstream defect, policy mismatch, missing test, or unverified
+hosted-only capability is separate follow-up work. Record it as a non-blocking
+follow-up and give it its own branch and PR when appropriate. Do not put its fix
+on the sync branch, widen the sync diff for it, or block the intake on completing
+it. A hosted-only check becomes part of the intake only when the upstream delta
+or a conflict resolution changes code on which that behavior depends.
+
+Apply this rule strictly. The existence of a useful adjacent improvement is not
+evidence that it belongs in the intake.
+
 Start clean, fetch both sides, and branch from the current remote integration
 branch:
 
@@ -244,7 +262,8 @@ cd backend && go test -race ./...
 cd ../frontend && npm test && npm run typecheck:e2e
 ```
 
-Also run or obtain CI evidence for:
+For areas changed by the upstream delta or a conflict resolution, run or obtain
+the applicable CI evidence for:
 
 - route/spec parity and generated-artifact drift;
 - fresh and released-database migration paths;
@@ -254,8 +273,10 @@ Also run or obtain CI evidence for:
 - cross-platform unsigned artifact builds and checksums;
 - secret scanning.
 
-Before merging, perform product acceptance with a packaged unsigned build and a
-real or production-faithful remote machine:
+When the upstream delta or a conflict resolution changes packaged desktop,
+remote transport, gateway, state-root, or distribution behavior, perform the
+applicable product acceptance with a packaged unsigned build and a real or
+production-faithful remote machine:
 
 1. Confirm state appears only below `~/.ao/hosted`.
 2. Add or select a machine and load its board.
@@ -268,8 +289,10 @@ real or production-faithful remote machine:
 6. Run `ao doctor` on the remote machine.
 7. Confirm the release artifacts and docs make no signed/notarized claim.
 
-CI green is necessary but not sufficient. Record this acceptance evidence in
-the PR.
+CI green is necessary but not sufficient for a boundary actually changed by the
+intake. Record the applicable acceptance evidence in the PR. Do not make
+unrelated hosted-only acceptance or missing downstream infrastructure a merge
+gate; track it separately.
 
 ## 8. PR and rollback
 
@@ -318,5 +341,6 @@ Do not combine an emergency release with a broad upstream intake.
 - [ ] Migration ordinals and upgrade paths verified
 - [ ] API and sqlc artifacts regenerated from source
 - [ ] Required CI green
-- [ ] Packaged remote-machine acceptance recorded
+- [ ] Packaged remote-machine acceptance recorded when the intake changed that boundary
+- [ ] Pre-existing downstream issues and hosted-only follow-ups kept outside the intake
 - [ ] PR targets `develop` and names owners, omissions, and rollback
