@@ -1,345 +1,322 @@
-# Merging upstream agent-orchestrator into hosted-ao
+# Upstream maintenance playbook
 
-How to think before pulling `Untrivial-ai/agent-orchestrator:main` into this
-repo. This is not a runbook you execute top to bottom without reading. It is the
-set of judgements the merge needs, in the order you need them, plus the list of
-things that must survive it.
+Use this playbook for every intake of
+`Untrivial-ai/agent-orchestrator:main` into `agentlab-in/hosted-ao:develop`.
+It is a reusable operating system for the fork, not a record of one merge.
 
-Read this whole file before starting. The dangerous parts of this merge are
-silent: nothing fails, tests stay green, and a boundary this fork exists to
-maintain quietly goes back to the way upstream does it.
+The dangerous failures are silent: a merge can compile and pass local tests
+while reverting the state root, remote-machine transport, packaged-app CSP, or
+gateway boundary. Record the evidence for every intake and review the hosted
+seams explicitly.
 
-## 1. What this repo is, relative to upstream
+## 1. Repository relationship and policy
 
-`agentlab-in/hosted-ao` is **not** a GitHub fork. `isFork` is false and there is
-no parent. It is an independent repository that shares git history with
-`Untrivial-ai/agent-orchestrator`, wired up through a remote:
+This is an independent repository with shared Git history, not a GitHub fork:
 
-```
-upstream  https://github.com/Untrivial-ai/agent-orchestrator.git
+```text
 origin    https://github.com/agentlab-in/hosted-ao
+upstream  https://github.com/Untrivial-ai/agent-orchestrator.git
 ```
 
-That distinction matters. GitHub will not compute a comparison for you, there is
-no "sync fork" button, and nothing on the platform is tracking how far the two
-have drifted. Every merge is a local, manual, deliberate act.
+`origin/develop` is the hosted-ao integration and release branch.
+`upstream/main` is the upstream tracking branch. Configure `upstream` as
+fetch-only so an operator cannot accidentally push to it.
 
-hosted-ao's reason to exist is a **hosting layer** that upstream does not have:
-a control plane that owns accounts and machines, a public VM gateway, a desktop
-app that can point at a remote machine, and a state root that does not collide
-with upstream's. Everything else is upstream's product and hosted-ao should
-follow it, not fight it.
+The default resolution policy is:
 
-That gives you the default posture for the whole merge:
+> Take upstream behavior everywhere except at a documented hosted-ao product
+> boundary. Preserve the boundary, not the old implementation around it.
 
-> Take upstream's version everywhere, except where hosted-ao's hosting layer
-> deliberately differs. When in doubt, upstream wins. The exceptions are
-> enumerated in section 4 and they are the only exceptions.
+Use a true merge. Do not rebase or squash `develop`: released downstream
+history, earlier intake decisions, and the exact consumed upstream SHA must
+remain auditable. Developers may rebase unpublished personal branches onto the
+updated `develop`; do not rewrite shared branches.
 
-## 2. Before anything: verify the merge base is real
+## 2. Cadence and ownership
 
-Do this first. If it fails, stop, because every three-way merge decision below
-is computed from the base and a wrong base produces confident garbage.
+- Run a scheduled intake weekly.
+- Start an out-of-cycle intake for an upstream security, data-loss, or critical
+  compatibility fix.
+- Sync before starting a large hosted feature and several days before a stable
+  release, not during the release.
+- Assign one merge conductor, one backend reviewer, one desktop reviewer, and
+  one release/acceptance owner. A person may hold more than one role, but every
+  role must be named in the PR.
+- Freeze unrelated merges to `develop` from final conflict resolution through
+  acceptance. If the intake cannot finish within two working days, reduce the
+  batch or split follow-up work; do not let a large sync branch rot.
+
+## 3. Preflight and evidence record
+
+Start clean, fetch both sides, and branch from the current remote integration
+branch:
 
 ```bash
+git status --short
+git fetch origin develop
 git fetch upstream main
-BASE=$(git merge-base develop upstream/main)
+git switch -c sync/upstream-YYYY-MM-DD origin/develop
+
+OURS=$(git rev-parse origin/develop)
+THEIRS=$(git rev-parse upstream/main)
+BASE=$(git merge-base "$OURS" "$THEIRS")
+
+git merge-base --is-ancestor "$BASE" "$OURS"
+git merge-base --is-ancestor "$BASE" "$THEIRS"
 git log -1 --format='%H %ci %s' "$BASE"
-
-git diff --shortstat "$BASE"..develop
-git diff --shortstat "$BASE"..upstream/main
+git rev-list --left-right --count "$THEIRS...$OURS"
+git diff --shortstat "$BASE..$OURS"
+git diff --shortstat "$BASE..$THEIRS"
 ```
 
-**What a healthy base looks like:** each side shows insertions *and* a
-proportionate number of deletions, and the two sides report different deletion
-counts.
+Stop if the base is not an ancestor of both branches. Also stop if both diffs
+show suspiciously identical deletion patterns or otherwise look like imported
+or unrelated histories. In that case this is a subsystem-by-subsystem port,
+not a safe three-way merge.
 
-**What was observed on 2026-08-07, which is why this section exists:** the base
-resolved to a commit dated 2026-05-26, roughly 1900 commits behind on our side
-and 2000 behind on theirs, and both sides reported the *same* 943 deletions with
-enormous insertion counts and near-zero deletions per file. That pattern is not
-what genuine divergence looks like. It suggests the shared history is weaker
-than it appears, for example an imported or squashed history rather than a true
-common ancestor.
-
-If you see that pattern, do not proceed with a plain `git merge`. Investigate
-first:
+Measure the conflict surface:
 
 ```bash
-# Do the two sides actually share the tree at the base?
-git diff --stat "$BASE" upstream/main -- backend/internal/config/config.go
-# Is the base an ancestor of both, genuinely?
-git merge-base --is-ancestor "$BASE" develop && echo "ancestor of ours"
-git merge-base --is-ancestor "$BASE" upstream/main && echo "ancestor of theirs"
+git diff --name-only "$BASE..$OURS"   | sort > /tmp/hosted-ours.txt
+git diff --name-only "$BASE..$THEIRS" | sort > /tmp/hosted-theirs.txt
+
+comm -12 /tmp/hosted-ours.txt /tmp/hosted-theirs.txt | tee /tmp/hosted-both.txt | wc -l
+comm -23 /tmp/hosted-ours.txt /tmp/hosted-theirs.txt | wc -l
+comm -13 /tmp/hosted-ours.txt /tmp/hosted-theirs.txt | wc -l
 ```
 
-If the base is not trustworthy, the merge becomes a **port**, not a merge: you
-pick upstream changes subsystem by subsystem rather than asking git to reconcile
-two trees. That is slower and it is the honest option. Do not paper over a bad
-base by taking `--theirs` in bulk.
+Put the following in the PR description before resolving the merge:
 
-## 3. Sizing the job honestly
+- upstream and downstream SHAs;
+- merge-base SHA and date;
+- left/right commit counts;
+- files touched by both sides, ours only, and upstream only;
+- high-risk shared files;
+- named owners and planned acceptance environment;
+- rollback tag.
 
-Get these numbers before you commit to a plan, and write them in the merge PR
-description so a reviewer knows what they are looking at:
+Tag the exact pre-intake `origin/develop` commit and push the tag before the
+merge. Use `pre-upstream-merge-YYYYMMDD`, adding a numeric suffix if needed.
+
+## 4. Perform the merge
 
 ```bash
-BASE=$(git merge-base develop upstream/main)
-git diff --name-only "$BASE"..develop        | sort > /tmp/ours.txt
-git diff --name-only "$BASE"..upstream/main  | sort > /tmp/theirs.txt
-
-comm -12 /tmp/ours.txt /tmp/theirs.txt | wc -l   # both touched: the conflict surface
-comm -23 /tmp/ours.txt /tmp/theirs.txt | wc -l   # only we touched
-comm -13 /tmp/ours.txt /tmp/theirs.txt | wc -l   # only they touched
+git merge --no-ff upstream/main
 ```
 
-As of 2026-08-07 that was **1352 files touched by both sides**. A conflict
-surface in the thousands is not a single sitting and it is not one PR. Plan for
-a sequence of scoped merges (section 6) rather than one heroic branch that is
-never reviewable and never lands.
+Do not use repository-wide `--ours` or `--theirs`. Resolve by ownership.
 
-Also list what is genuinely ours, because those files cannot conflict and should
-never appear in a conflict list. If one does, something is wrong with your merge
-strategy, not with the file:
+### Upstream-owned by default
+
+- agent and reviewer adapters, harnesses, runtimes, SCM and tracker adapters;
+- generic daemon, CLI, session, workspace, and renderer behavior;
+- generic renderer components, styling, and test fixtures;
+- upstream dependencies, tooling, and documentation.
+
+Accept upstream structure first, then reapply the smallest hosted seam needed.
+Do not retain obsolete upstream architecture just because hosted code was
+embedded in it.
+
+### Hosted-owned by default
+
+- `backend/internal/vmgateway/**` and pair-mode behavior;
+- hosted setup, machine binding, and pairing-string behavior;
+- remote-machine identity, credentials, transport, and certificate pinning;
+- the isolated hosted state root;
+- AgentLab release targeting and unsigned-only distribution policy;
+- hosted ADRs, contracts, and acceptance tests.
+
+### Shared seams requiring line-by-line review
+
+- `backend/internal/config/**`;
+- daemon and HTTP route wiring;
+- CLI root, start, doctor, project clone, setup, pair, and VM commands;
+- `backend/internal/httpd/controllers/dto.go` and API spec registration;
+- SQLite migrations, schema, queries, and store wiring;
+- `frontend/src/main.ts`, preload, and shared bridge types;
+- API client and event transport;
+- machine-aware board, project creation, and settings components;
+- `frontend/vite.renderer.config.ts`;
+- Electron Forge configuration and release workflows;
+- dependency manifests and lockfiles.
+
+Enable Git's recorded-resolution reuse for future intakes:
 
 ```bash
-git ls-tree -r --name-only develop      | sort > /tmp/ours-files.txt
-git ls-tree -r --name-only upstream/main | sort > /tmp/theirs-files.txt
-comm -23 /tmp/ours-files.txt /tmp/theirs-files.txt
+git config rerere.enabled true
 ```
 
-That was 338 files, concentrated in `controlplane/**`,
-`backend/internal/vmgateway/**`, and the machine-aware parts of
-`frontend/src/main` and `frontend/src/shared`.
+Always inspect a reused resolution before staging it. `rerere` saves typing; it
+does not prove that an old product decision remains correct.
 
-## 4. What must not change
+## 5. Hosted invariants
 
-These are the invariants hosted-ao exists to hold. Upstream has no reason to
-respect any of them, so a merge will attack them by accident. Each one below is
-a thing to grep for *after* the merge resolves, not just during.
+Every intake PR must explicitly attest to these invariants.
 
-### 4.1 The state root: `~/.ao/hosted`
+### State isolation
 
-**The single most dangerous regression in this merge.**
+All application state remains under `~/.ao/hosted`, overridable only through
+the documented environment variables. Go derives it through
+`config.StateRootSegments()` and Electron/renderer code through
+`frontend/src/shared/state-root.ts`. `frontend/src/main.ts` must continue to pin
+Electron `userData` to `~/.ao/hosted/electron`.
 
-Upstream writes `running.json` and `ao.db` directly under `~/.ao`. hosted-ao puts
-everything under `~/.ao/hosted`. If a merge reverts that, the two builds fight
-over daemon discovery, the pid, the port, and a SQLite file whose goose
-migration history the other build owns. Nothing errors. It corrupts quietly, on
-a machine that has both builds installed.
+Nothing may fall back to bare `~/.ao`, `~/Library/Application Support`, or an
+OS-default application-data directory. Otherwise upstream and hosted builds can
+silently share discovery files and incompatible SQLite histories.
 
-Guard:
+### Network boundary
 
-- `config.StateRootSegments()` (Go) and `frontend/src/shared/state-root.ts`
-  (main/renderer) are the only places the path is spelled. Any upstream hunk
-  that re-spells a state path is a revert, not an improvement.
-- `frontend/src/main.ts` pins Electron `userData` to `~/.ao/hosted/electron`.
-  Upstream has no such pin and its version of this file will not have it.
-- Nothing may resolve to `~/Library/Application Support` or any OS-default
-  app-data location.
+- The daemon's primary listener stays unauthenticated on `127.0.0.1`.
+- The optional LAN listener remains explicit, authenticated, and unable to
+  serve loopback-only control routes.
+- `ao vm serve` remains a separate gateway process in hosted and pair modes.
+- Every gateway request is authenticated before proxying.
+- Shutdown, telemetry, and mobile-control routes are never exposed through a
+  gateway.
+- Pair mode retains its pinned self-signed certificate, passcode verification,
+  lockout, and no-control-plane behavior.
 
-After merging, before anything else:
+After route changes, review both the daemon route table and the gateway's
+blocked prefixes/allowlist. A clean textual merge is not evidence that the
+security boundary stayed equivalent.
+
+### Remote-machine desktop behavior
+
+Preserve machine selection, credential attachment, certificate pinning,
+remote API rebasing, SSE, terminal transport, and local fallback behavior.
+The preload bridge and renderer types must remain aligned with Electron main.
+
+The packaged renderer CSP must allow the HTTPS and WSS origins required by a
+registered machine. Dev mode is not an adequate CSP test because its proxy can
+hide this regression.
+
+### Product identity
+
+Hosted AO owns the account/machine experience and intentionally disables any
+overlapping upstream AO Cloud sign-in surface. An upstream merge must not
+restore duplicate sign-in, protocol ownership, state paths, update feeds, or
+release repositories.
+
+### Unsigned AgentLab distribution
+
+`agentlab-in/hosted-ao` publishes unsigned builds only. Do not add signing or
+notarization secrets, signing setup, signed-artifact claims, or a release gate
+that requires signed artifacts. User-facing notes must clearly identify the
+builds as unsigned where platform warnings are relevant. This policy does not
+weaken checksum, provenance, artifact-completeness, or updater-feed checks.
+
+### Migrations
+
+Never modify an already-merged SQLite migration. Detect ordinal collisions
+between the two lineages even when Git reports no conflict, renumber only new
+unreleased migrations, and test both an empty database and an upgrade from the
+latest hosted release. The control plane has a separate migration history.
+
+## 6. Generated artifacts
+
+Never hand-merge generated output. Resolve source files, choose either side as
+a temporary conflict resolution if necessary, and regenerate:
+
+| Generated output                              | Source of truth                   | Command            |
+| --------------------------------------------- | --------------------------------- | ------------------ |
+| `backend/internal/httpd/apispec/openapi.yaml` | controller DTOs and spec registry | `npm run api:spec` |
+| `frontend/src/api/schema.ts`                  | generated OpenAPI document        | `npm run api:ts`   |
+| `backend/internal/storage/sqlite/gen/*`       | migrations and SQL queries        | `npm run sqlc`     |
+
+Prefer one follow-up commit for generated output so reviewers can distinguish
+judgment from deterministic regeneration. Finish with a clean regeneration:
 
 ```bash
-grep -rn --include='*.go' --include='*.ts' -e '"\.ao"' -e "'\.ao'" \
-  backend frontend/src controlplane | grep -v hosted
-grep -rn 'userData' frontend/src/main.ts
-grep -rn 'Application Support' backend frontend/src controlplane
+npm run api
+npm run sqlc
+git diff --exit-code
 ```
 
-### 4.2 The network boundary
+## 7. Required verification
 
-From `AGENTS.md`, and non-negotiable:
-
-- The daemon's loopback listener stays on `127.0.0.1` and stays
-  **unauthenticated**. Do not let a merge add auth to it or change its bind.
-- The only other permitted network-facing bind is `ao vm serve`, the VM gateway,
-  a **separate process** from the daemon (ADR 0002). It is never collapsed into
-  the daemon, however tempting an upstream refactor makes it look.
-- The opt-in LAN listener (ADR 0001) keeps its bearer-password middleware and
-  keeps the loopback-gated control routes (`/shutdown`, telemetry, mobile
-  control) unreachable.
-- Neither the gateway nor the LAN listener may start proxying the loopback-gated
-  control routes.
-
-Upstream does not have `backend/internal/vmgateway/**` at all, so the gateway
-itself cannot conflict. The risk is upstream refactoring the *daemon* in a way
-that changes what the gateway proxies to, or moving a route between the
-gated and ungated sets. Re-read `vmgateway/proxy.go`'s allowlist and
-`blockedAPIPrefixes` after any merge that touches daemon routing.
-
-### 4.3 The renderer CSP
-
-`frontend/vite.renderer.config.ts` allows `https:` and `wss:` in `connect-src`
-so the packaged renderer can reach a registered machine's gateway. Upstream has
-no registered machines, so **upstream's version pins `connect-src` to
-`127.0.0.1` and a merge will silently restore that.**
-
-The failure mode is nasty: dev builds keep working, because Vite proxies `/api`
-to loopback. Only a packaged build against a real machine fails, with
-`Refused to connect ... violates the document's Content Security Policy`. That
-means CI will not catch it and you will find it on a demo.
-
-Check after merging:
+Run narrow tests while resolving each subsystem, then the repository gates:
 
 ```bash
-grep -n 'connect-src' frontend/vite.renderer.config.ts   # must contain https: and wss:
-```
-
-### 4.4 The account and machine model
-
-`controlplane/**` does not exist upstream (zero files), so it cannot conflict.
-What *can* conflict is the desktop side that consumes it, because those files
-also exist upstream:
-
-- `frontend/src/main/ao-machines.ts`, `machine-transport.ts`,
-  `remote-daemon.ts`, `ao-machine-token.ts`, `ao-control-token.ts`
-- `frontend/src/shared/ao-machines.ts`, `remote-daemon.ts`, `control-plane.ts`
-- `frontend/src/main.ts` and the preload bridge, where the `machines.*` IPC
-  channels are registered
-- `frontend/src/renderer/lib/api-client.ts`, whose `runtimeFetch` rebases calls
-  onto the active machine's base URL and attaches the gateway bearer
-
-Upstream's versions of the shared ones assume a single local daemon. Taking
-theirs wholesale removes remote machines. These need line-level judgement.
-
-### 4.5 Migrations
-
-- Never modify an already-merged SQLite migration. Add a new one.
-- Upstream will have added migrations since the base. **Numbering will
-  collide.** Two migrations with the same ordinal from two lineages is a merge
-  conflict git cannot see, because the files have different names and both apply
-  cleanly to the directory.
-- Before merging, list both sides' migration directories and plan the
-  renumbering deliberately. Then run the migration chain from empty on a scratch
-  data dir and confirm it applies in order.
-
-The control plane has its own goose history under
-`controlplane/internal/storage`, entirely ours, and is not affected.
-
-### 4.6 Generated files: never merge, always regenerate
-
-Merging generated output produces plausible garbage that compiles. These are
-generated and must be rebuilt from source after the merge resolves, not
-hand-reconciled:
-
-| File | Regenerate with |
-|---|---|
-| `backend/internal/httpd/apispec/openapi.yaml` | `npm run api:spec` |
-| `frontend/src/api/schema.ts` | `npm run api:ts` (or `npm run api` for both) |
-| `backend/internal/storage/sqlite/gen/*` | `npm run sqlc` |
-
-`openapi.yaml` was the single highest-churn shared file in the last measurement.
-Do not spend a minute resolving it by hand. Take either side, then regenerate
-and commit the result.
-
-## 5. What is fine to take
-
-Default to upstream for everything that is upstream's product. Being behind
-upstream is a cost hosted-ao pays for nothing, and `DESIGN.md` already says the
-renderer clones the agent-orchestrator web app verbatim, so taking upstream UI
-is *aligned with*, not contrary to, this repo's design rules.
-
-Take theirs, with normal review and no special ceremony:
-
-- `backend/internal/adapters/**`: agent harnesses (claudecode, codex, copilot,
-  kiro, opencode, vibe, and the rest), `runtime/tmux`, `scm/github`,
-  `tracker/github`, `workspace/gitworktree`. This is the bulk of the churn and
-  almost none of it touches hosting.
-- Renderer components, styling, and shadcn primitives that are not machine-aware.
-- Test fixtures and test-only helpers for upstream subsystems.
-- Dependency bumps, lockfiles, tooling, CI for upstream-owned jobs.
-- Docs that describe upstream behaviour.
-
-The heuristic: **if the change would make sense in a world with no control plane
-and no VMs, take upstream's version.** If it only makes sense because hosted-ao
-hosts things, it is ours and needs judgement.
-
-## 6. How to actually sequence it
-
-Do not open one branch called `merge-upstream` and try to resolve 1352 files.
-That PR is unreviewable, unrevertable, and will rot.
-
-Sequence it so each step is independently reviewable, independently verifiable,
-and independently revertable:
-
-1. **Land the base check.** Section 2. If the base is bad, stop and convert to a
-   port. Write down which it is.
-2. **Freeze.** Do not merge unrelated feature PRs into `develop` while the merge
-   is in flight. Every one of them widens the conflict surface.
-3. **Take the safe bulk first.** Adapters, harnesses, upstream-only subsystems.
-   One PR per coherent subsystem. Each one should be nearly conflict-free; if it
-   is not, you have mis-classified it, so re-read section 4.
-4. **Then the shared-but-mechanical.** Dependency bumps, lockfiles, tooling.
-5. **Then regenerate.** `npm run api`, `npm run sqlc`. Commit generated output
-   separately from hand-written changes so a reviewer can skip it.
-6. **Then the hosting seams, one at a time, slowly.** `frontend/src/main.ts`,
-   the machine transport files, `api-client.ts`, `config.go`, the CSP. These are
-   the files where you read every hunk. Budget real time here; it is a small
-   number of files and most of the risk.
-7. **Then migrations.** Renumber deliberately, apply from empty, verify order.
-
-Each step is a PR into `develop`, which is protected and requires the five
-status checks. Do not try to bypass that for a merge; the checks are the only
-mechanical guard you have.
-
-## 7. Verification that actually proves something
-
-CI green is necessary and not sufficient. The regressions this merge causes are
-mostly invisible to the test suite, because the suite runs against a local
-daemon and the hosting layer is what breaks.
-
-Mechanical gates:
-
-```bash
-npm run lint                  # backend go test ./... + golangci-lint
+npm run lint
 npm run frontend:typecheck
-cd frontend && npm test && npm run typecheck:e2e
+cd backend && go test -race ./...
+cd ../frontend && npm test && npm run typecheck:e2e
 ```
 
-Then the things CI cannot see. Do all of these before declaring the merge done:
+Also run or obtain CI evidence for:
 
-- **State root.** Start the app, confirm `~/.ao/hosted/running.json` appears and
-  nothing is written to `~/.ao` directly or to `~/Library/Application Support`.
-- **Packaged build, not dev.** `npm run make`. Several hosting bugs only exist in
-  a package: the CSP one in 4.3, and the `app://renderer` origin the gateway's
-  CORS allowlist expects. A dev build proves nothing about either.
-  Build on **Node 20**, matching CI; on newer Node the packager dies mid-extract
-  and exits 0 with no output.
-- **A real remote machine.** Sign in, switch to a registered machine, confirm the
-  board loads, the SSE stream connects, and a terminal attaches. This is the
-  single best end-to-end check that the hosting layer survived, because it
-  exercises the control plane, the token mint, the cookie, the gateway, CORS,
-  CSP, and the proxy in one action.
-- **`ao doctor` on a VM.** Confirms daemon, data dir, migrations, and harness
-  readiness on the hosted side.
-- **The gateway boundary.** Confirm `/shutdown`, telemetry, and mobile control
-  are still unreachable through the public gateway, and that a request with no
-  token still gets 401 rather than being proxied.
+- route/spec parity and generated-artifact drift;
+- fresh and released-database migration paths;
+- state-root isolation;
+- gateway authentication and blocked routes;
+- pairing and remote-machine transport;
+- cross-platform unsigned artifact builds and checksums;
+- secret scanning.
 
-## 8. Rollback
+Before merging, perform product acceptance with a packaged unsigned build and a
+real or production-faithful remote machine:
 
-Decide the rollback before you start, not after something breaks.
+1. Confirm state appears only below `~/.ao/hosted`.
+2. Add or select a machine and load its board.
+3. Clone or open a project, start a session, receive SSE updates, and attach a
+   terminal.
+4. Confirm the packaged renderer can reach the gateway without CSP or CORS
+   failures.
+5. Confirm unauthenticated gateway requests return `401` and blocked control
+   routes are not proxied.
+6. Run `ao doctor` on the remote machine.
+7. Confirm the release artifacts and docs make no signed/notarized claim.
 
-- Every step in section 6 is its own PR, so rollback is reverting one PR, not
-  unpicking a 1352-file merge.
-- Tag `develop` before the first merge PR lands:
-  `git tag pre-upstream-merge-$(date +%Y%m%d)` and push the tag.
-- If a hosting invariant broke and you cannot see which step did it, revert to
-  the tag and redo the sequence with smaller steps. Do not debug forward through
-  a merge of this size.
+CI green is necessary but not sufficient. Record this acceptance evidence in
+the PR.
 
-## 9. The short version
+## 8. PR and rollback
 
-If you read nothing else:
+Keep the true merge and small follow-up fixes on one sync branch when the
+conflict surface is reviewable. If it is too large for coherent review, pause
+and split upstream-owned subsystem ports or preparatory seam extractions into
+separate PRs; do not create multiple partial merge commits with ambiguous
+ancestry.
 
-1. Verify the merge base is real before trusting any three-way merge.
-2. Default to upstream. The exceptions are only the hosting layer.
-3. `~/.ao/hosted` is the thing most likely to silently revert. Grep for it after.
-4. The daemon stays loopback and unauthenticated. The gateway stays a separate
-   process.
-5. Never merge generated files. Regenerate them.
-6. Migration numbering collides across two lineages and git will not tell you.
-7. Sequence it into reviewable PRs. One giant merge branch will not land.
-8. Verify with a packaged build against a real machine, on Node 20. CI cannot
-   see the regressions that matter here.
+The sync PR targets `develop` and includes:
+
+- the evidence record from section 3;
+- upstream release notes or a categorized commit summary;
+- every conflict and its ownership decision;
+- generated-artifact regeneration results;
+- CI and manual acceptance evidence;
+- intentional omissions and follow-ups;
+- the rollback tag.
+
+If an invariant fails before release, revert the intake merge PR or its focused
+follow-up commit. If the failure cannot be localized, return to the rollback tag
+and repeat with a smaller conflict surface. Do not debug forward through an
+unreviewable merge.
+
+## 9. Emergency hotfix flow
+
+Do not combine an emergency release with a broad upstream intake.
+
+1. Branch from the exact affected hosted release tag.
+2. Apply the smallest fix and regression test. If it comes from upstream,
+   record the upstream commit SHA.
+3. Run affected CI, security, migration, and unsigned packaging gates.
+4. Publish through the designated AgentLab release conductor.
+5. Merge or cherry-pick the fix into `develop` and every open sync branch.
+6. Resume the regular intake only after the hotfix is released and reconciled.
+
+## 10. Completion checklist
+
+- [ ] Upstream, downstream, and merge-base SHAs recorded
+- [ ] Merge base verified as an ancestor of both sides
+- [ ] Conflict surface and high-risk files recorded
+- [ ] Rollback tag pushed
+- [ ] True merge used; no shared history rewritten
+- [ ] Every conflict assigned to upstream, hosted, or shared-seam ownership
+- [ ] State, network, remote transport, CSP, identity, and unsigned-release invariants reviewed
+- [ ] Migration ordinals and upgrade paths verified
+- [ ] API and sqlc artifacts regenerated from source
+- [ ] Required CI green
+- [ ] Packaged remote-machine acceptance recorded
+- [ ] PR targets `develop` and names owners, omissions, and rollback

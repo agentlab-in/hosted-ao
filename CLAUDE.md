@@ -2,6 +2,15 @@
 
 Read and follow [`AGENTS.md`](AGENTS.md) for repository layout, commands, coding conventions, and hard rules.
 
+## AgentLab releases are unsigned
+
+Publish only unsigned builds from `agentlab-in/hosted-ao`. Do not configure or
+use code-signing or notarization credentials, and do not describe AgentLab
+artifacts as signed or notarized. Preserve checksums, provenance, updater feeds,
+and artifact-completeness verification. See the distribution rules in
+`AGENTS.md` and the reusable intake procedure in
+`docs/upstream-merge-playbook.md`.
+
 ## App state lives under `~/.ao/hosted` only
 
 All app state, the daemon's data dir, `running.json`, worktrees, repos,
