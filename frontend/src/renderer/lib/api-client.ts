@@ -5,6 +5,7 @@ import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
 import { aoBridge } from "./bridge";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
+import { captureApiErrorToSentry } from "./sentry";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
@@ -66,6 +67,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/{agent}/models",
 	"/api/v1/agents/{agent}/models/refresh",
 	"/api/v1/agents/{agent}/probe",
+	"/api/v1/desktop/sessions/{sessionId}/workspace",
 	"/api/v1/events",
 	"/api/v1/import",
 	"/api/v1/notifications",
@@ -187,7 +189,13 @@ type ApiErrorCategory =
 const API_ERROR_DEDUPE_MS = 30_000;
 const lastApiErrorAt = new Map<string, number>();
 
-function reportApiError(operation: string, category: ApiErrorCategory, status?: number): void {
+function reportApiError(
+	operation: string,
+	category: ApiErrorCategory,
+	status?: number,
+	code?: string,
+	requestId?: string,
+): void {
 	const key = `${operation}|${category}|${status ?? ""}`;
 	const now = Date.now();
 	const last = lastApiErrorAt.get(key);
@@ -198,6 +206,11 @@ function reportApiError(operation: string, category: ApiErrorCategory, status?: 
 		error_category: category,
 		status,
 	});
+	// Mirror into Sentry (no-op unless a DSN is configured). The daemon `code`
+	// is what drives the fine-grained severity/owner classification; `requestId`
+	// (when present) is tagged so a client event pivots to the daemon's own
+	// capture of the same request, which carries the matching request_id.
+	captureApiErrorToSentry(operation, category, status, code, requestId);
 }
 
 // Backstop against a blackholed connection (dead gateway, network that changed
@@ -354,7 +367,18 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	}
 
 	if (!response.ok) {
-		reportApiError(operation, response.status >= 500 ? "http_5xx" : "http_4xx", response.status);
+		// Best-effort read the daemon error envelope's `code` (via a clone so the
+		// caller still gets an unconsumed body) to drive classification.
+		let code: string | undefined;
+		let requestId: string | undefined;
+		try {
+			const body = (await response.clone().json()) as { code?: unknown; requestId?: unknown };
+			if (typeof body?.code === "string" && body.code !== "") code = body.code;
+			if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+		} catch {
+			// Non-JSON or empty body: fall back to status-only classification.
+		}
+		reportApiError(operation, response.status >= 500 ? "http_5xx" : "http_4xx", response.status, code, requestId);
 	}
 	return response;
 }

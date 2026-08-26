@@ -3,7 +3,9 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { sealDmg, verifyDmg } from "./makers/maker-dmg";
 import MakerAppImage from "./makers/maker-appimage";
-import { writeFileSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 // Default GitHub release target (production). Hosted AO releases land on the
 // hosted repo, never on upstream's, so a packaged Hosted AO cannot auto-update
@@ -29,6 +31,20 @@ const EXECUTABLE_NAME = "hosted-ao";
 // agent-orchestrator's sign-in callback on a machine that has both
 // installed. So no maker below declares a protocols/mimeType entry for it.
 
+export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
+	return [
+		"daemon",
+		"agent-browser",
+		"resources/acp-runtime",
+		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
+		"assets/icon.png",
+		"assets/icon.ico",
+		"assets/trayIconTemplate.png",
+		"assets/trayIconTemplate@2x.png",
+		"app-update.yml",
+	];
+}
+
 // parseReleaseRepo turns an "owner/repo" string (from AO_RELEASE_REPO) into the
 // publisher-github { owner, name } shape, falling back to the production default
 // when unset or malformed.
@@ -52,16 +68,7 @@ const config: ForgeConfig = {
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
 		icon: "assets/icon",
-		extraResource: [
-			"daemon",
-				"agent-browser",
-				"resources/acp-runtime",
-			"assets/icon.png",
-			"assets/icon.ico",
-			"assets/trayIconTemplate.png",
-			"assets/trayIconTemplate@2x.png",
-			"app-update.yml",
-		],
+		extraResource: extraResourcesForPlatform(process.platform),
 		// Notarization. Two paths:
 		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8
 		//    (the workflow decodes APPLE_API_KEY_BASE64 to a temp file), plus the
@@ -103,6 +110,26 @@ const config: ForgeConfig = {
 				"",
 			].join("\n");
 			writeFileSync("app-update.yml", yml);
+		},
+		// Assert the native resource survived Electron Packager's copy/asar/sign
+		// pipeline. A source build succeeding is not enough: a missing extraResource
+		// would otherwise publish an app that silently fell back to machine tmux.
+		postPackage: async (_forgeConfig, packageResult) => {
+			if (packageResult.platform !== "darwin" && packageResult.platform !== "linux") return;
+			for (const outputPath of packageResult.outputPaths) {
+				let resourcesPath = path.join(outputPath, "resources");
+				if (packageResult.platform === "darwin") {
+					const appBundle = readdirSync(outputPath).find((entry) => entry.endsWith(".app"));
+					if (!appBundle) throw new Error(`packaged macOS app bundle missing from ${outputPath}`);
+					resourcesPath = path.join(outputPath, appBundle, "Contents", "Resources");
+				}
+				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
+				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);
+				const version = spawnSync(binary, ["-V"], { encoding: "utf8" });
+				if (version.status !== 0 || version.stdout.trim() !== "tmux 3.5a") {
+					throw new Error(`packaged tmux failed verification at ${binary}: ${version.stderr || version.stdout}`);
+				}
+			}
 		},
 		// The dmg container is NOT signed, notarized or stapled by any maker
 		// (neither Forge's maker-dmg nor app-builder-lib's dmg target does it), and

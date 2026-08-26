@@ -83,6 +83,8 @@ func Build() ([]byte, error) {
 			"Machine health checks (the `ao doctor` checks, read remotely)"),
 		*(&openapi31.Tag{Name: "browser"}).WithDescription(
 			"Target-isolated desktop browser runtime (loopback only)"),
+		*(&openapi31.Tag{Name: "system"}).WithDescription(
+			"Local machine readiness checks the desktop app runs before showing the board"),
 	}
 
 	for _, op := range operations() {
@@ -141,6 +143,7 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{
 	"ControllersSettingsResponse":                     "SettingsResponse",
+	"ControllersDesktopWorkspaceLocationResponse":     "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":        "UpdateSessionInterfaceRequest",
 	"ControllersConversationSnapshotResponse":         "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":             "ConversationTurnResponse",
@@ -179,6 +182,7 @@ var schemaNames = map[string]string{
 	"ControllersReloadConversationMCPServersResponse": "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":          "CompactConversationResponse",
 	"ControllersRollbackConversationResponse":         "RollbackConversationResponse",
+	"ControllersRetryTurnResponse":                    "RetryTurnResponse",
 	"ControllersSetConversationTitleRequest":          "SetConversationTitleRequest",
 	"ControllersSetConversationTitleResponse":         "SetConversationTitleResponse",
 	"ControllersSteerConversationRequest":             "SteerConversationRequest",
@@ -242,12 +246,20 @@ var schemaNames = map[string]string{
 	"ControllersCleanupSessionsResponse":                  "CleanupSessionsResponse",
 	"ControllersCleanupSkippedSession":                    "CleanupSkippedSession",
 	"ControllersWorkspaceFileQuery":                       "WorkspaceFileQuery",
+	"ControllersWorkspaceFileBlobQuery":                   "WorkspaceFileBlobQuery",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
 	"ControllersListWorkspaceFilesResponse":               "ListWorkspaceFilesResponse",
 	"ControllersWorkspaceFileSummary":                     "WorkspaceFileSummary",
+	"ControllersWorkspaceFileSections":                    "WorkspaceFileSections",
+	"ControllersWorkspaceCommitSummary":                   "WorkspaceCommitSummary",
+	"ControllersWorkspaceSummary":                         "WorkspaceSummary",
 	"ControllersWorkspaceFileResponse":                    "WorkspaceFileResponse",
+	"ControllersListEditorsResponse":                      "ListEditorsResponse",
+	"ControllersEditorSummary":                            "EditorSummary",
+	"ControllersOpenSessionEditorRequest":                 "OpenSessionEditorRequest",
+	"ControllersOpenSessionEditorResponse":                "OpenSessionEditorResponse",
 	"ControllersKillSessionResponse":                      "KillSessionResponse",
 	"ControllersRollbackSessionResponse":                  "RollbackSessionResponse",
 	"ControllersSendSessionMessageRequest":                "SendSessionMessageRequest",
@@ -277,26 +289,40 @@ var schemaNames = map[string]string{
 	"AgentInventory":                                      "ListAgentsResponse",
 	"AgentInfo":                                           "AgentInfo",
 	"AgentProbeResult":                                    "ProbeAgentResponse",
-	"PortsAgentModelCatalog":                              "AgentModelsResponse",
-	"PortsAgentModelInfo":                                 "AgentModelInfo",
-	"ControllersListNotificationsQuery":                   "ListNotificationsQuery",
-	"ControllersNotificationStreamQuery":                  "NotificationStreamQuery",
-	"ControllersNotificationIDParam":                      "NotificationIDParam",
-	"ControllersNotificationTarget":                       "NotificationTarget",
-	"ControllersNotificationResponse":                     "NotificationResponse",
-	"ControllersListNotificationsResponse":                "ListNotificationsResponse",
-	"ControllersMarkNotificationReadRequest":              "MarkNotificationReadRequest",
-	"ControllersNotificationEnvelope":                     "NotificationEnvelope",
-	"ControllersMarkAllNotificationsReadRequest":          "MarkAllNotificationsReadRequest",
-	"ControllersMarkAllNotificationsReadResponse":         "MarkAllNotificationsReadResponse",
-	"ControllersUsageHookMetadata":                        "UsageHookMetadata",
-	"ControllersListUsageSessionsQuery":                   "ListUsageSessionsQuery",
-	"ControllersCompactSessionUsageResponse":              "CompactSessionUsageResponse",
-	"ControllersListCompactSessionUsageResponse":          "ListCompactSessionUsageResponse",
-	"ControllersUsageTotalsResponse":                      "UsageTotalsResponse",
-	"ControllersUsageModelResponse":                       "UsageModelResponse",
-	"ControllersUsageHarnessResponse":                     "UsageHarnessResponse",
-	"ControllersSessionUsageResponse":                     "SessionUsageResponse",
+	// service/systemcheck: "SystemcheckReport" is a generic default name that
+	// reads like an internal type, not a wire response — rename to match the
+	// endpoint it serves, same treatment as AgentInventory above.
+	"SystemcheckReport":             "SystemRequirementsResponse",
+	"SystemcheckRequirement":        "SystemRequirement",
+	"ControllersInstallTargetParam": "InstallTargetParam",
+	// service/systeminstall: Job backs both StartInstallResponse and
+	// InstallStatusResponse (they're the same Go type), so it reflects to one
+	// shared component — name it after the domain concept, not either alias.
+	"SysteminstallJob":                            "InstallJob",
+	"PortsAgentModelCatalog":                      "AgentModelsResponse",
+	"PortsAgentModelInfo":                         "AgentModelInfo",
+	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
+	"ControllersNotificationStreamQuery":          "NotificationStreamQuery",
+	"ControllersNotificationIDParam":              "NotificationIDParam",
+	"ControllersNotificationTarget":               "NotificationTarget",
+	"ControllersNotificationResponse":             "NotificationResponse",
+	"ControllersListNotificationsResponse":        "ListNotificationsResponse",
+	"ControllersMarkNotificationReadRequest":      "MarkNotificationReadRequest",
+	"ControllersNotificationEnvelope":             "NotificationEnvelope",
+	"ControllersMarkAllNotificationsReadRequest":  "MarkAllNotificationsReadRequest",
+	"ControllersMarkAllNotificationsReadResponse": "MarkAllNotificationsReadResponse",
+	"ControllersUsageHookMetadata":                "UsageHookMetadata",
+	"ControllersListUsageSessionsQuery":           "ListUsageSessionsQuery",
+	"ControllersCompactSessionUsageResponse":      "CompactSessionUsageResponse",
+	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
+	"ControllersUsageMetricProvenanceResponse":    "UsageMetricProvenanceResponse",
+	"ControllersOpenAIUsageDetailsResponse":       "OpenAIUsageDetailsResponse",
+	"ControllersAnthropicUsageDetailsResponse":    "AnthropicUsageDetailsResponse",
+	"ControllersUsageProviderDetailsResponse":     "UsageProviderDetailsResponse",
+	"ControllersUsageTotalsResponse":              "UsageTotalsResponse",
+	"ControllersUsageModelResponse":               "UsageModelResponse",
+	"ControllersUsageHarnessResponse":             "UsageHarnessResponse",
+	"ControllersSessionUsageResponse":             "SessionUsageResponse",
 	// httpd/controllers — standalone shell terminal wire envelopes
 	"ControllersShellTerminalHandleIDParam": "ShellTerminalHandleIDParam",
 	"ControllersOpenShellTerminalRequest":   "OpenShellTerminalRequest",
@@ -452,6 +478,7 @@ func operations() []operation {
 	ops = append(ops, browserOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, doctorOperations()...)
+	ops = append(ops, systemOperations()...)
 	return ops
 }
 
@@ -466,6 +493,45 @@ func doctorOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.DoctorReportResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// systemOperations declares the startup requirements gate the desktop loading
+// screen polls before showing the board, plus the real-install operations for
+// the fixed system/install target allowlist.
+func systemOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/system/requirements", id: "getSystemRequirements", tag: "system",
+			summary: "Check local machine readiness (git, tmux, agent harness, gh)",
+			resps: []respUnit{
+				{http.StatusOK, controllers.SystemRequirementsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/system/install/{target}", id: "startSystemInstall", tag: "system",
+			summary:    "Start (or return the already-running) install job for a fixed system target",
+			pathParams: []any{controllers.InstallTargetParam{}},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.StartInstallResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/system/install/{target}", id: "getSystemInstallStatus", tag: "system",
+			summary:    "Get the current or last known install job status for a system target",
+			pathParams: []any{controllers.InstallTargetParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.InstallStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
 	}
@@ -773,6 +839,19 @@ func shellTerminalOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}, controllers.ConversationTurnIDParam{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.RollbackConversationResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry", id: "retrySessionConversationTurn", tag: "conversations",
+			summary:    "Re-dispatch a failed turn's durable prompt as a new turn",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.ConversationTurnIDParam{}},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.RetryTurnResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -1554,6 +1633,30 @@ func sessionOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/desktop/sessions/{sessionId}/workspace", id: "getDesktopSessionWorkspace", tag: "sessions",
+			summary:    "Resolve a session workspace for the loopback desktop supervisor",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.DesktopWorkspaceLocationResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/file/blob", id: "getSessionWorkspaceFileBlob", tag: "sessions",
+			summary:    "Read one side of a session workspace image file",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.WorkspaceFileBlobQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "application/octet-stream"},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/pr", id: "listSessionPRs", tag: "sessions",

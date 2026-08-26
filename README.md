@@ -38,11 +38,11 @@ Everything upstream ships, this ships. The highlights:
 
 Three pieces, each with one job:
 
-| Piece | Job |
-|---|---|
-| **Hosted AO desktop** (this repo) | The Electron app. Runs the local daemon, signs in to the control plane or holds a pinned pairing, and speaks an authenticated transport (REST, SSE, terminal WebSocket) to whichever machine you point it at. |
-| **VM gateway** (`ao vm serve`, this repo) | The only public-facing process on a machine. TLS, per-machine credential verification, and a deny-by-default reverse proxy in front of a loopback-only daemon. |
-| **Control plane** (private, [ao.agentlab.in](https://ao.agentlab.in)) | Accounts, the machine registry, and short-lived token minting. Optional, and never in the data path: your code and your terminals flow desktop-to-machine directly. |
+| Piece                                                                 | Job                                                                                                                                                                                                           |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hosted AO desktop** (this repo)                                     | The Electron app. Runs the local daemon, signs in to the control plane or holds a pinned pairing, and speaks an authenticated transport (REST, SSE, terminal WebSocket) to whichever machine you point it at. |
+| **VM gateway** (`ao vm serve`, this repo)                             | The only public-facing process on a machine. TLS, per-machine credential verification, and a deny-by-default reverse proxy in front of a loopback-only daemon.                                                |
+| **Control plane** (private, [ao.agentlab.in](https://ao.agentlab.in)) | Accounts, the machine registry, and short-lived token minting. Optional, and never in the data path: your code and your terminals flow desktop-to-machine directly.                                           |
 
 The daemon itself never grows a public listener. That is a hard rule inherited from upstream and enforced harder here: the gateway is a separate process, the loopback daemon stays unauthenticated on 127.0.0.1, and the gateway's path allowlist decides what the outside world may ever ask.
 
@@ -109,15 +109,15 @@ sign in from the app and pick it from the machine list.
 
 ## Documentation
 
-| Document | Start here when you need |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | Backend mental model, lifecycle, persistence, CDC, status derivation, and daemon boundaries. |
-| [docs/backend-code-structure.md](docs/backend-code-structure.md) | Package ownership and where each backend concern belongs. |
-| [docs/cli/README.md](docs/cli/README.md) | CLI behavior and daemon route mapping. |
-| [docs/development.md](docs/development.md) | Prerequisites, build steps, running tests, and troubleshooting for local development. |
-| [docs/STATUS.md](docs/STATUS.md) | What currently ships and what remains in flight. |
-| [docs/upstream-merge-playbook.md](docs/upstream-merge-playbook.md) | How to merge upstream into this repo without losing the hosting layer. |
-| [Upstream product docs](https://aoagents.dev/docs) | Installation, agent setup, and day-to-day product usage. |
+| Document                                                           | Start here when you need                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)                       | Backend mental model, lifecycle, persistence, CDC, status derivation, and daemon boundaries. |
+| [docs/backend-code-structure.md](docs/backend-code-structure.md)   | Package ownership and where each backend concern belongs.                                    |
+| [docs/cli/README.md](docs/cli/README.md)                           | CLI behavior and daemon route mapping.                                                       |
+| [docs/development.md](docs/development.md)                         | Prerequisites, build steps, running tests, and troubleshooting for local development.        |
+| [docs/STATUS.md](docs/STATUS.md)                                   | What currently ships and what remains in flight.                                             |
+| [docs/upstream-merge-playbook.md](docs/upstream-merge-playbook.md) | How to merge upstream into this repo without losing the hosting layer.                       |
+| [Upstream product docs](https://aoagents.dev/docs)                 | Installation, agent setup, and day-to-day product usage.                                     |
 
 ## Relationship to upstream
 
@@ -125,7 +125,7 @@ This repo is a true fork of [Untrivial-ai/agent-orchestrator](https://github.com
 
 ## Anonymous telemetry
 
-AO uses privacy-preserving product usage and reliability metrics designed to exclude PII and project content. [Learn more about telemetry and privacy](docs/telemetry.md).
+AO uses privacy-preserving product usage and reliability metrics designed to exclude PII and project content. These metrics help us understand adoption and improve the product. To understand which teams and developers get the most value from AO, we also record the GitHub organization or account that owns a project (the owner segment only, never the repository, path, or URL); for a personal repository this is the owner's own username, so that single field is not anonymous. We use it to prioritize improvements and reach out for feedback. [Learn more about telemetry and privacy](docs/telemetry.md).
 
 ## License
 

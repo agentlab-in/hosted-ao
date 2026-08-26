@@ -64,27 +64,19 @@ func (c *conversation) abortHistoryReplay() {
 	c.mu.Unlock()
 }
 
-// finishHistoryReplay settles the last reconstructed turn, then exposes the
-// captured facts through ChatHistoryReader for the controller's transactional,
-// idempotent import path.
+// finishHistoryReplay closes the capture without inventing an outcome for its
+// final turn. ACP session/load guarantees only that all stored entries were
+// replayed; it does not report their terminal outcomes. Recovered is the shared
+// terminal state for that evidence gap; service reconciliation replaces it with
+// AO's known completed/interrupted/failed result when a durable turn matches.
 func (c *conversation) finishHistoryReplay() {
 	c.historyMu.Lock()
-	unsettled := c.history != nil && c.history.turnID != "" &&
-		c.history.turnUserID != "" && !c.history.turnHasProvider
-	if unsettled {
-		c.historyEvents = nil
-		c.historyErr = fmt.Errorf("%w: final replayed user turn has no provider output",
-			ports.ErrChatHistoryUnsettled)
-		c.historyLoaded = true
-		c.history = nil
-	}
+	hasTail := c.history != nil && c.history.turnID != ""
 	c.historyMu.Unlock()
-	if unsettled {
-		c.resetHistoryItems("")
-		return
-	}
 
-	c.finishHistoryTurn()
+	if hasTail {
+		c.finishHistoryTurn(domain.TurnStateRecovered)
+	}
 
 	c.historyMu.Lock()
 	if c.history != nil {
@@ -179,7 +171,7 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 	c.historyMu.Unlock()
 
 	if finishPrevious {
-		c.finishHistoryTurn()
+		c.finishHistoryTurn(domain.TurnStateRecovered)
 		startTurn = true
 	}
 	if startTurn {
@@ -250,7 +242,7 @@ func (c *conversation) flushHistoryUserMessage() {
 	})
 }
 
-func (c *conversation) finishHistoryTurn() {
+func (c *conversation) finishHistoryTurn(state domain.TurnState) {
 	c.flushHistoryUserMessage()
 
 	c.historyMu.Lock()
@@ -261,12 +253,14 @@ func (c *conversation) finishHistoryTurn() {
 	turnID := c.history.turnID
 	c.historyMu.Unlock()
 
-	c.settleOpenItems(turnID)
-	c.emit(ports.ChatEvent{
-		Kind:           ports.ChatEventTurnCompleted,
-		ProviderTurnID: turnID,
-		TurnState:      domain.TurnStateCompleted,
-	})
+	c.settleOpenItems(turnID, state)
+	if state != "" {
+		c.emit(ports.ChatEvent{
+			Kind:           ports.ChatEventTurnCompleted,
+			ProviderTurnID: turnID,
+			TurnState:      state,
+		})
+	}
 
 	c.historyMu.Lock()
 	if c.history != nil && c.history.turnID == turnID {
