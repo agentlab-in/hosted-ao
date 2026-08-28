@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "stateRootSegments": [".ao", "hosted"],
+  "binaryPath": "/usr/local/bin/ao",
+  "unitDirectory": "/etc/systemd/system",
+  "services": [
+    { "shape": "daemon", "unitName": "ao-daemon.service", "fixture": "service-shapes.json", "entrypoint": ["/usr/local/bin/ao", "daemon"] },
+    { "shape": "hosted-gateway", "unitName": "ao-gateway.service", "fixture": "service-shapes.json", "entrypoint": ["/usr/local/bin/ao", "vm", "serve"] },
+    { "shape": "pair-gateway", "unitName": "ao-gateway.service", "fixture": "service-shapes.json", "entrypoint": ["/usr/local/bin/ao", "vm", "serve"] }
+  ],
+  "state": [
+    { "shape": "hosted-machine", "path": "machine.json", "fixture": "machine.json" },
+    { "shape": "pair-certificate", "path": "vm-gateway/pair-cert", "entries": ["cert.pem", "key.pem"] },
+    { "shape": "pair-passcode", "path": "vm-gateway/pair-passcode", "entries": ["passcode.hash"] }
+  ],
+  "cliEntryPoints": [
+    ["ao", "setup-vm"],
+    ["ao", "setup-vm", "--pair"],
+    ["ao", "pair"],
+    ["ao", "pair", "show"],
+    ["ao", "vm", "serve"],
+    ["ao", "vm", "setup-harness"],
+    ["ao", "vm", "rotate-passcode"]
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "daemon": {
+    "unitName": "ao-daemon.service",
+    "user": "ubuntu",
+    "workingDirectory": "/home/ubuntu/.ao/hosted/data",
+    "environment": {
+      "HOME": "/home/ubuntu",
+      "AO_DATA_DIR": "/home/ubuntu/.ao/hosted/data",
+      "AO_RUN_FILE": "/home/ubuntu/.ao/hosted/running.json"
+    },
+    "execStart": "/usr/local/bin/ao daemon"
+  },
+  "hostedGateway": {
+    "unitName": "ao-gateway.service",
+    "after": ["ao-daemon.service"],
+    "environment": {
+      "AO_MACHINE_FILE": "/home/ubuntu/.ao/hosted/machine.json",
+      "AO_VM_DOMAIN": "vm.example.com",
+      "AO_VM_CERT_DIR": "/home/ubuntu/.ao/hosted/data/vm-gateway/certs"
+    },
+    "execStart": "/usr/local/bin/ao vm serve"
+  },
+  "pairGateway": {
+    "unitName": "ao-gateway.service",
+    "after": ["ao-daemon.service"],
+    "environment": {
+      "AO_VM_PAIR": "on",
+      "AO_VM_CERT_DIR": "/home/ubuntu/.ao/hosted/vm-gateway/pair-cert",
+      "AO_VM_PASSCODE_DIR": "/home/ubuntu/.ao/hosted/vm-gateway/pair-passcode"
+    },
+    "execStart": "/usr/local/bin/ao vm serve"
+  }
+}

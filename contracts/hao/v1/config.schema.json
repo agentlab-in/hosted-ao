@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentlab.in/schemas/hao/config-v1.schema.json",
+  "title": "hao non-secret machine configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "machine", "mode", "components", "harness", "install", "service"],
+  "properties": {
+    "version": { "const": 1 },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$" }
+      }
+    },
+    "mode": { "enum": ["local", "pair"] },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aoVersion"],
+      "properties": {
+        "aoVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependencies"],
+      "properties": {
+        "dependencies": { "enum": ["missing", "none"] }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["listenPort"],
+      "properties": {
+        "listenPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "pair" } }, "required": ["mode"] },
+      "then": { "required": ["pair"] },
+      "else": { "not": { "required": ["pair"] } }
+    }
+  ]
+}

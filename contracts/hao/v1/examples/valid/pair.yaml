@@ -1,0 +1,14 @@
+version: 1
+machine:
+  name: build-box
+mode: pair
+components:
+  aoVersion: "0.14.0"
+harness:
+  id: claude-code
+install:
+  dependencies: missing
+service:
+  enabled: true
+pair:
+  listenPort: 443

@@ -1,0 +1,12 @@
+version: 1
+machine:
+  name: laptop
+mode: local
+components:
+  aoVersion: "0.14.0"
+harness:
+  id: claude-code
+install:
+  dependencies: none
+service:
+  enabled: false

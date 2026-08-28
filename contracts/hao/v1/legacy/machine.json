@@ -1,0 +1,6 @@
+{
+  "machineId": "machine_fixture_01",
+  "accountId": "account_fixture_01",
+  "publicUrl": "https://vm.example.com",
+  "issuedAt": "2026-01-02T03:04:05Z"
+}

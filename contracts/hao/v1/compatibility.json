@@ -1,0 +1,12 @@
+{
+  "contractVersion": 1,
+  "policy": "interface-versioned",
+  "unknownInterfaceVersion": "unsupported",
+  "interfaces": [
+    { "id": "hao-config", "consumer": "hao", "provider": "config", "versions": [1] },
+    { "id": "ao-pair", "consumer": "desktop,hao", "provider": "gateway", "versions": [1] },
+    { "id": "gateway-route-policy", "consumer": "desktop,hao", "provider": "gateway", "versions": [1] },
+    { "id": "legacy-installation-shape", "consumer": "hao", "provider": "legacy-ao", "versions": [1] }
+  ],
+  "components": ["hao", "ao-daemon", "gateway", "desktop", "config-schema", "legacy-service"]
+}
