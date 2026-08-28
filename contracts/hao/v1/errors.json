@@ -1,0 +1,36 @@
+{
+  "contractVersion": 1,
+  "exitStatuses": [
+    { "status": 0, "meaning": "success_or_already_satisfied" },
+    { "status": 1, "meaning": "operational_failure" },
+    { "status": 2, "meaning": "usage_or_configuration_error" },
+    { "status": 3, "meaning": "privilege_required" },
+    { "status": 4, "meaning": "unsupported_or_deferred" }
+  ],
+  "codes": [
+    { "code": "operation_failed", "exitStatus": 1 },
+    { "code": "desired_state_unhealthy", "exitStatus": 1 },
+    { "code": "authentication_failed", "exitStatus": 1 },
+    { "code": "rollback_required", "exitStatus": 1 },
+    { "code": "invalid_usage", "exitStatus": 2 },
+    { "code": "invalid_config", "exitStatus": 2 },
+    { "code": "unsupported_config_version", "exitStatus": 2 },
+    { "code": "missing_non_interactive_input", "exitStatus": 2 },
+    { "code": "privilege_required", "exitStatus": 3 },
+    { "code": "unsupported_platform", "exitStatus": 4 },
+    { "code": "feature_deferred", "exitStatus": 4 }
+  ],
+  "errorEnvelope": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["code", "message", "component", "operation", "remediation", "details"],
+    "properties": {
+      "code": { "enum": ["operation_failed", "desired_state_unhealthy", "authentication_failed", "rollback_required", "invalid_usage", "invalid_config", "unsupported_config_version", "missing_non_interactive_input", "privilege_required", "unsupported_platform", "feature_deferred"] },
+      "message": { "type": "string", "minLength": 1 },
+      "component": { "type": "string", "minLength": 1 },
+      "operation": { "type": "string", "minLength": 1 },
+      "remediation": { "type": "string", "minLength": 1 },
+      "details": { "type": "object" }
+    }
+  }
+}

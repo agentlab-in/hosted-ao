@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "policy": "interface-versioned",
+  "unknownInterfaceVersion": "unsupported",
+  "interfaces": [
+    { "id": "hao-config", "consumer": "hao", "provider": "config-schema", "versions": [1], "negotiation": "declared-version" },
+    { "id": "ao-daemon-api", "consumer": "hao", "provider": "ao-daemon", "versions": [], "negotiation": "compatibility-pinned-current-wire", "wireContract": { "endpoint": "/api/v1/doctor", "responseFields": [{"name":"ok","type":"boolean","required":true},{"name":"failures","type":"integer","required":true},{"name":"checks","type":"array<DoctorCheckResponse>","required":true}], "checkFields": [{"name":"level","type":"string","required":true},{"name":"section","type":"string","required":false},{"name":"name","type":"string","required":true},{"name":"message","type":"string","required":true},{"name":"remediation","type":"string","required":false}], "checkIDs": "daemon-defined-unversioned" } },
+    { "id": "daemon-gateway-api", "consumer": "gateway", "provider": "ao-daemon", "versions": [1], "negotiation": "compatibility-pinned-release-bundle", "routePolicy": 1 },
+    { "id": "gateway-desktop-transport", "consumer": "desktop", "provider": "gateway", "versions": [1], "negotiation": "rest-sse-mux-and-auth-mode", "routePolicy": 1 },
+    { "id": "ao-pair", "consumer": "desktop,hao", "provider": "gateway", "versions": [1], "negotiation": "uri-version" },
+    { "id": "gateway-route-policy", "consumer": "desktop,hao", "provider": "gateway", "versions": [1], "negotiation": "manifest-version" },
+    { "id": "legacy-installation-shape", "consumer": "hao", "provider": "legacy-service", "versions": [1], "negotiation": "fixture-shape" }
+  ],
+  "components": ["hao", "ao-daemon", "gateway", "desktop", "config-schema", "legacy-service"]
+}

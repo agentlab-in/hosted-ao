@@ -1,0 +1,8 @@
+{
+  "code": "feature_deferred",
+  "message": "domain HTTPS mode is deferred",
+  "component": "hao",
+  "operation": "init",
+  "remediation": "use pair mode",
+  "details": { "requestedMode": "https" }
+}

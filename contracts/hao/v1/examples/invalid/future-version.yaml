@@ -1,0 +1,12 @@
+version: 2
+machine:
+  name: build-box
+mode: local
+components:
+  aoVersion: "0.14.0"
+harness:
+  id: claude-code
+install:
+  dependencies: missing
+service:
+  enabled: false
