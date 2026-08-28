@@ -1,7 +1,9 @@
 # `hao` machine management and the AO daemon boundary
 
-Status: Proposed  
-Audience: Hosted AO maintainers, AO upstream maintainers, release operators, and implementation workers  
+Status: Proposed
+
+Audience: Hosted AO maintainers, AO upstream maintainers, release operators, and implementation workers
+
 Scope: machine preparation and lifecycle only; this document does not authorize runtime or API changes
 
 ## 1. Decision summary
