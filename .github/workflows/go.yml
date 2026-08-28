@@ -9,15 +9,68 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      api: ${{ steps.filter.outputs.api }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select affected checks
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          backend=false
+          api=false
+
+          # Pushes to main retain the existing full validation. For pull requests,
+          # keep every required job present but only run its expensive steps when
+          # files in that job's contract changed.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            backend=true
+            api=true
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                backend/*|.github/workflows/go.yml)
+                  backend=true
+                  ;;
+              esac
+
+              case "$path" in
+                backend/internal/httpd/apispec/*|backend/internal/httpd/controllers/dto.go|frontend/src/api/schema.ts|package.json|package-lock.json|.github/workflows/go.yml)
+                  api=true
+                  ;;
+              esac
+            done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          fi
+
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+
   build-test:
+    needs: changes
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     steps:
+      - name: No backend changes
+        if: needs.changes.outputs.backend != 'true'
+        working-directory: .
+        run: echo "Skipping Go build and tests because this change does not affect the backend."
+
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.backend == 'true'
 
       - uses: actions/setup-go@v5
+        if: needs.changes.outputs.backend == 'true'
         with:
           # Read the version from go.mod so CI can't drift from the module
           # (it previously pinned 1.22 while go.mod declared 1.25).
@@ -25,6 +78,7 @@ jobs:
           cache: false
 
       - name: Check formatting
+        if: needs.changes.outputs.backend == 'true'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -34,25 +88,36 @@ jobs:
           fi
 
       - name: Build
+        if: needs.changes.outputs.backend == 'true'
         run: go build ./...
 
       - name: Vet
+        if: needs.changes.outputs.backend == 'true'
         run: go vet ./...
 
       - name: Test
+        if: needs.changes.outputs.backend == 'true'
         run: go test -race ./...
 
   lint:
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: No backend changes
+        if: needs.changes.outputs.backend != 'true'
+        run: echo "Skipping Go lint because this change does not affect the backend."
+
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.backend == 'true'
 
       - uses: actions/setup-go@v5
+        if: needs.changes.outputs.backend == 'true'
         with:
           go-version-file: backend/go.mod
           cache: false
 
       - name: golangci-lint
+        if: needs.changes.outputs.backend == 'true'
         # v8 of the action drives golangci-lint v2 (the schema this config uses);
         # the v6 action speaks v1 CLI flags and errors against a v2 binary.
         uses: golangci/golangci-lint-action@v8
@@ -67,26 +132,37 @@ jobs:
           # any new issue fails CI rather than being grandfathered.
 
   api-drift:
+    needs: changes
     runs-on: ubuntu-latest
     steps:
+      - name: No API contract changes
+        if: needs.changes.outputs.api != 'true'
+        run: echo "Skipping API drift checks because this change does not affect the generated API contract."
+
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.api == 'true'
 
       - uses: actions/setup-go@v5
+        if: needs.changes.outputs.api == 'true'
         with:
           go-version-file: backend/go.mod
           cache: false
 
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.api == 'true'
         with:
           node-version: "24"
 
       - name: Install dependencies
+        if: needs.changes.outputs.api == 'true'
         run: npm ci
 
       - name: Regenerate API spec and TS types
+        if: needs.changes.outputs.api == 'true'
         run: npm run api
 
       # openapi.yaml drift is already caught by TestBuild_MatchesEmbedded in
       # the build-test job (go test -race ./...). Only schema.ts needs checking here.
       - name: Check for schema.ts drift
+        if: needs.changes.outputs.api == 'true'
         run: git diff --exit-code -- frontend/src/api/schema.ts
