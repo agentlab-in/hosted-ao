@@ -20,10 +20,10 @@ func TestHAODaemonDoctorWireContractMatchesDTO(t *testing.T) {
 			ID           string `json:"id"`
 			Versions     []int  `json:"versions"`
 			WireContract struct {
-				Endpoint       string   `json:"endpoint"`
-				ResponseFields []string `json:"responseFields"`
-				CheckFields    []string `json:"checkFields"`
-				CheckIDs       string   `json:"checkIDs"`
+				Endpoint       string           `json:"endpoint"`
+				ResponseFields []wireFieldShape `json:"responseFields"`
+				CheckFields    []wireFieldShape `json:"checkFields"`
+				CheckIDs       string           `json:"checkIDs"`
 			} `json:"wireContract"`
 		} `json:"interfaces"`
 	}
@@ -37,10 +37,10 @@ func TestHAODaemonDoctorWireContractMatchesDTO(t *testing.T) {
 		if len(iface.Versions) != 0 || iface.WireContract.Endpoint != "/api/v1/doctor" || iface.WireContract.CheckIDs != "daemon-defined-unversioned" {
 			t.Fatalf("daemon doctor compatibility must describe the current unversioned wire: %+v", iface)
 		}
-		if got := jsonFieldNames(reflect.TypeOf(DoctorReportResponse{})); !reflect.DeepEqual(got, iface.WireContract.ResponseFields) {
+		if got := jsonFieldShapes(reflect.TypeOf(DoctorReportResponse{})); !reflect.DeepEqual(got, iface.WireContract.ResponseFields) {
 			t.Fatalf("DoctorReportResponse fields = %v, contract = %v", got, iface.WireContract.ResponseFields)
 		}
-		if got := jsonFieldNames(reflect.TypeOf(DoctorCheckResponse{})); !reflect.DeepEqual(got, iface.WireContract.CheckFields) {
+		if got := jsonFieldShapes(reflect.TypeOf(DoctorCheckResponse{})); !reflect.DeepEqual(got, iface.WireContract.CheckFields) {
 			t.Fatalf("DoctorCheckResponse fields = %v, contract = %v", got, iface.WireContract.CheckFields)
 		}
 		return
@@ -48,13 +48,50 @@ func TestHAODaemonDoctorWireContractMatchesDTO(t *testing.T) {
 	t.Fatal("compatibility contract is missing ao-daemon-api")
 }
 
-func jsonFieldNames(typ reflect.Type) []string {
-	fields := make([]string, 0, typ.NumField())
+type wireFieldShape struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+}
+
+func jsonFieldShapes(typ reflect.Type) []wireFieldShape {
+	fields := make([]wireFieldShape, 0, typ.NumField())
 	for i := 0; i < typ.NumField(); i++ {
-		name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		field := typ.Field(i)
+		parts := strings.Split(field.Tag.Get("json"), ",")
+		name := parts[0]
 		if name != "" && name != "-" {
-			fields = append(fields, name)
+			required := true
+			for _, option := range parts[1:] {
+				if option == "omitempty" {
+					required = false
+				}
+			}
+			fields = append(fields, wireFieldShape{Name: name, Type: wireType(field.Type), Required: required})
 		}
 	}
 	return fields
+}
+
+func wireType(typ reflect.Type) string {
+	switch typ.Kind() {
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.String:
+		return "string"
+	case reflect.Slice:
+		return "array<" + wireTypeName(typ.Elem()) + ">"
+	default:
+		return wireTypeName(typ)
+	}
+}
+
+func wireTypeName(typ reflect.Type) string {
+	if typ.Name() != "" {
+		return typ.Name()
+	}
+	return typ.String()
 }

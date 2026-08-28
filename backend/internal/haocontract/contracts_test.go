@@ -193,10 +193,18 @@ func TestCompatibilityContractNamesEveryBoundaryComponent(t *testing.T) {
 			Negotiation  string `json:"negotiation"`
 			Versions     []int  `json:"versions"`
 			WireContract struct {
-				Endpoint       string   `json:"endpoint"`
-				ResponseFields []string `json:"responseFields"`
-				CheckFields    []string `json:"checkFields"`
-				CheckIDs       string   `json:"checkIDs"`
+				Endpoint       string `json:"endpoint"`
+				ResponseFields []struct {
+					Name     string `json:"name"`
+					Type     string `json:"type"`
+					Required bool   `json:"required"`
+				} `json:"responseFields"`
+				CheckFields []struct {
+					Name     string `json:"name"`
+					Type     string `json:"type"`
+					Required bool   `json:"required"`
+				} `json:"checkFields"`
+				CheckIDs string `json:"checkIDs"`
 			} `json:"wireContract"`
 		} `json:"interfaces"`
 	}

@@ -39,7 +39,7 @@ Focused validation is part of the Go tests:
 
 ```sh
 cd backend
-go test ./internal/haocontract ./internal/pairstring ./internal/vmgateway ./internal/cli
+go test ./internal/haocontract ./internal/pairstring ./internal/vmgateway ./internal/cli ./internal/httpd/controllers
 ```
 
 These tests validate the examples and JSON contracts, exercise the shared pair
