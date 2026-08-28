@@ -6,10 +6,10 @@
     "github": { "requires": ["git", "harness", "gh"] }
   },
   "prerequisites": [
-    { "id": "git", "owner": "user-package-manager", "condition": "required", "installableByHao": true },
-    { "id": "harness", "owner": "selected-harness-vendor", "condition": "required", "installableByHao": "allowlisted-only" },
-    { "id": "gh", "owner": "user-package-manager", "condition": "workflow-profile:github", "installableByHao": true },
-    { "id": "ao-runtime", "owner": "ao-artifact", "condition": "reported-capable-by-daemon", "installableByHao": false }
+    { "id": "git", "owner": "user-package-manager", "condition": "required", "installPolicy": "always" },
+    { "id": "harness", "owner": "selected-harness-vendor", "condition": "required", "installPolicy": "allowlisted-only" },
+    { "id": "gh", "owner": "user-package-manager", "condition": "workflow-profile:github", "installPolicy": "always" },
+    { "id": "ao-runtime", "owner": "ao-artifact", "condition": "reported-by-current-doctor-wire", "installPolicy": "never" }
   ],
   "forbiddenMachinePolicyKeys": ["runtimeBackend", "tmux"]
 }

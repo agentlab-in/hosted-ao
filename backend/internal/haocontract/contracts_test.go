@@ -187,13 +187,17 @@ func TestCompatibilityContractNamesEveryBoundaryComponent(t *testing.T) {
 		UnknownInterfaceVersion string   `json:"unknownInterfaceVersion"`
 		Components              []string `json:"components"`
 		Interfaces              []struct {
-			ID           string   `json:"id"`
-			Consumer     string   `json:"consumer"`
-			Provider     string   `json:"provider"`
-			Negotiation  string   `json:"negotiation"`
-			Versions     []int    `json:"versions"`
-			Endpoint     string   `json:"endpoint"`
-			Capabilities []string `json:"requiredCapabilities"`
+			ID           string `json:"id"`
+			Consumer     string `json:"consumer"`
+			Provider     string `json:"provider"`
+			Negotiation  string `json:"negotiation"`
+			Versions     []int  `json:"versions"`
+			WireContract struct {
+				Endpoint       string   `json:"endpoint"`
+				ResponseFields []string `json:"responseFields"`
+				CheckFields    []string `json:"checkFields"`
+				CheckIDs       string   `json:"checkIDs"`
+			} `json:"wireContract"`
 		} `json:"interfaces"`
 	}
 	decodeJSON(t, filepath.Join(contractDir(t), "compatibility.json"), &compatibility)
@@ -206,18 +210,29 @@ func TestCompatibilityContractNamesEveryBoundaryComponent(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	byInterface := map[string]struct {
-		Endpoint     string
-		Capabilities []string
+		Negotiation string
+		Versions    []int
+		Endpoint    string
+		CheckIDs    string
 	}{}
 	for _, iface := range compatibility.Interfaces {
-		if iface.ID == "" || iface.Consumer == "" || iface.Provider == "" || iface.Negotiation == "" || seen[iface.ID] || !reflect.DeepEqual(iface.Versions, []int{1}) {
+		if iface.ID == "" || iface.Consumer == "" || iface.Provider == "" || iface.Negotiation == "" || seen[iface.ID] {
 			t.Fatalf("invalid compatibility interface: %+v", iface)
+		}
+		if iface.ID == "ao-daemon-api" {
+			if len(iface.Versions) != 0 {
+				t.Fatalf("unversioned daemon doctor wire must not advertise versions: %+v", iface)
+			}
+		} else if !reflect.DeepEqual(iface.Versions, []int{1}) {
+			t.Fatalf("versioned interface must support exactly v1: %+v", iface)
 		}
 		seen[iface.ID] = true
 		byInterface[iface.ID] = struct {
-			Endpoint     string
-			Capabilities []string
-		}{iface.Endpoint, iface.Capabilities}
+			Negotiation string
+			Versions    []int
+			Endpoint    string
+			CheckIDs    string
+		}{iface.Negotiation, iface.Versions, iface.WireContract.Endpoint, iface.WireContract.CheckIDs}
 	}
 	for _, required := range []string{"hao-config", "ao-daemon-api", "daemon-gateway-api", "gateway-desktop-transport", "ao-pair", "gateway-route-policy", "legacy-installation-shape"} {
 		if !seen[required] {
@@ -225,7 +240,7 @@ func TestCompatibilityContractNamesEveryBoundaryComponent(t *testing.T) {
 		}
 	}
 	daemon := byInterface["ao-daemon-api"]
-	if daemon.Endpoint != "/api/v1/doctor" || !reflect.DeepEqual(daemon.Capabilities, []string{"runtime", "terminal", "git", "harness"}) {
+	if daemon.Negotiation != "compatibility-pinned-current-wire" || daemon.Endpoint != "/api/v1/doctor" || daemon.CheckIDs != "daemon-defined-unversioned" {
 		t.Fatalf("daemon negotiation contract is incomplete: %+v", daemon)
 	}
 	readme, err := os.ReadFile(filepath.Join(contractDir(t), "README.md"))
@@ -246,9 +261,10 @@ func TestPrerequisiteOwnershipAndProfiles(t *testing.T) {
 			Requires []string `json:"requires"`
 		} `json:"workflowProfiles"`
 		Prerequisites []struct {
-			ID        string `json:"id"`
-			Owner     string `json:"owner"`
-			Condition string `json:"condition"`
+			ID            string `json:"id"`
+			Owner         string `json:"owner"`
+			Condition     string `json:"condition"`
+			InstallPolicy string `json:"installPolicy"`
 		} `json:"prerequisites"`
 		ForbiddenMachinePolicyKeys []string `json:"forbiddenMachinePolicyKeys"`
 	}
@@ -260,12 +276,27 @@ func TestPrerequisiteOwnershipAndProfiles(t *testing.T) {
 		!reflect.DeepEqual(contract.WorkflowProfiles["github"].Requires, []string{"git", "harness", "gh"}) {
 		t.Fatalf("workflow prerequisite profiles = %+v", contract.WorkflowProfiles)
 	}
-	byID := map[string]struct{ Owner, Condition string }{}
+	byID := map[string]struct{ Owner, Condition, InstallPolicy string }{}
+	validInstallPolicies := map[string]bool{"always": true, "allowlisted-only": true, "never": true}
 	for _, prerequisite := range contract.Prerequisites {
-		byID[prerequisite.ID] = struct{ Owner, Condition string }{prerequisite.Owner, prerequisite.Condition}
+		if prerequisite.ID == "" || prerequisite.Owner == "" || prerequisite.Condition == "" || !validInstallPolicies[prerequisite.InstallPolicy] {
+			t.Fatalf("invalid prerequisite contract: %+v", prerequisite)
+		}
+		if _, exists := byID[prerequisite.ID]; exists {
+			t.Fatalf("duplicate prerequisite id %q", prerequisite.ID)
+		}
+		byID[prerequisite.ID] = struct{ Owner, Condition, InstallPolicy string }{prerequisite.Owner, prerequisite.Condition, prerequisite.InstallPolicy}
 	}
-	if byID["ao-runtime"].Owner != "ao-artifact" || byID["gh"].Condition != "workflow-profile:github" {
+	if byID["ao-runtime"].Owner != "ao-artifact" || byID["ao-runtime"].InstallPolicy != "never" ||
+		byID["gh"].Condition != "workflow-profile:github" || byID["harness"].InstallPolicy != "allowlisted-only" {
 		t.Fatalf("prerequisite ownership/conditions = %+v", byID)
+	}
+	for profile, definition := range contract.WorkflowProfiles {
+		for _, required := range definition.Requires {
+			if _, exists := byID[required]; !exists {
+				t.Errorf("workflow profile %q references unknown prerequisite %q", profile, required)
+			}
+		}
 	}
 	if !reflect.DeepEqual(contract.ForbiddenMachinePolicyKeys, []string{"runtimeBackend", "tmux"}) {
 		t.Fatalf("forbidden machine policy keys = %v", contract.ForbiddenMachinePolicyKeys)

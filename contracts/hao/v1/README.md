@@ -23,7 +23,7 @@ interfaces:
 | Consumer | Provider | Interface | Negotiation | Supported |
 | --- | --- | --- | --- | --- |
 | `hao` | config schema | `hao-config` | declared version | v1 |
-| `hao` | AO daemon | `ao-daemon-api` | `/api/v1/doctor` capability report | v1 |
+| `hao` | AO daemon | `ao-daemon-api` | compatibility-pinned current `/api/v1/doctor` wire shape; daemon-defined check IDs | unversioned |
 | gateway | AO daemon | `daemon-gateway-api` | compatibility-pinned release bundle | v1 |
 | desktop | gateway | `gateway-desktop-transport` | REST/SSE/mux plus auth mode | v1 |
 | desktop / `hao` | gateway | `ao-pair` | URI version | v1 |
