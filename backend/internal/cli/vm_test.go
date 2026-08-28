@@ -68,17 +68,17 @@ func TestVMServe_StartsAndShutsDownCleanly(t *testing.T) {
 	var out, errOut bytes.Buffer
 	deps.Out = &out
 	deps.Err = &errOut
+	passcodeDir := t.TempDir()
+	if _, err := vmgateway.GeneratePasscode(passcodeDir); err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
 
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs([]string{
 		"vm", "serve",
-		"--domain", "vm.example.com",
-		"--machine-id", "machine-1",
-		"--account-id", "account-1",
 		"--daemon-addr", "127.0.0.1:1",
-		"--jwks-url", "http://127.0.0.1:1/jwks.json",
 		"--cert-dir", t.TempDir(),
-		"--http-addr", "127.0.0.1:0",
+		"--passcode-dir", passcodeDir,
 		"--https-addr", "127.0.0.1:0",
 	})
 	ctx, cancel := context.WithCancel(context.Background())

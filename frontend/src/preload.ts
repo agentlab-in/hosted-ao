@@ -15,7 +15,6 @@ import {
 	type TrayAttentionState,
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
-import type { AoAccountState } from "./shared/ao-account";
 import type { AoMachine, AoMachinesState } from "./shared/ao-machines";
 import type { PeerWorkspacesResult } from "./shared/peer-workspaces";
 import type { PairFingerprintResult } from "./main/paired-machines";
@@ -417,14 +416,6 @@ const api = {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
 	},
-	// AO account sign-in. The renderer only ever sees identity and status: the
-	// refresh token stays in the main process, encrypted on disk, and the whole
-	// PKCE exchange happens there too.
-	account: {
-		getState: () => ipcRenderer.invoke("aoAccount:getState") as Promise<AoAccountState>,
-		signIn: () => ipcRenderer.invoke("aoAccount:signIn") as Promise<AoAccountState>,
-		signOut: () => ipcRenderer.invoke("aoAccount:signOut") as Promise<AoAccountState>,
-	},
 	// The machine list and the picker. No URL and no token is ever typed into
 	// the app, so there is nothing here that takes either: the renderer picks an
 	// id out of a list the main process fetched.
@@ -434,11 +425,8 @@ const api = {
 		select: (machineId: string) => ipcRenderer.invoke("aoMachines:select", machineId) as Promise<AoMachinesState>,
 		// The Bearer credential for a REST call to the active machine's gateway,
 		// asked for per request so the renderer never has to reason about expiry.
-		// It is a fifteen minute token scoped to one machine; the refresh token it
-		// descends from never leaves the main process. Pass forceRefresh=true after
-		// the gateway itself 401/403s a request, so the main process drops the
-		// cached token and mints a genuinely fresh one instead of handing back the
-		// same doomed bearer.
+		// Paired gateways use the box's persisted passcode. forceRefresh is retained
+		// in the bridge signature for callers retrying an authenticated request.
 		gatewayToken: (forceRefresh?: boolean) =>
 			ipcRenderer.invoke("aoMachines:gatewayToken", forceRefresh) as Promise<string | null>,
 		// Read-only: the peer (non-active) daemon's projects and sessions, for

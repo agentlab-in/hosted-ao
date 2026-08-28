@@ -9,7 +9,11 @@ import {
 	type AoMachineHarness,
 	type AoMachineReachability,
 } from "../shared/ao-machines";
-import type { SafeStorageLike } from "./ao-account-store";
+export type SafeStorageLike = {
+	isEncryptionAvailable: () => boolean;
+	encryptString: (plainText: string) => Buffer;
+	decryptString: (encrypted: Buffer) => string;
+};
 import { createPairCertificateVerifyProc, type PairCertificateVerifyProc } from "./paired-machine-cert";
 import { fetchWithDeadline } from "./request-deadline";
 

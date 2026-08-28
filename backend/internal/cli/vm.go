@@ -17,11 +17,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
-// newVMCommand groups commands that run on a hosted VM gateway machine.
+// newVMCommand groups commands that run on a directly paired machine.
 func newVMCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "vm",
-		Short: "Commands for a hosted VM gateway machine",
+		Short: "Commands for a directly paired machine",
 	}
 	cmd.AddCommand(newVMServeCommand(ctx))
 	cmd.AddCommand(newVMSetupHarnessCommand(ctx))
@@ -33,33 +33,23 @@ func newVMServeCommand(ctx *commandContext) *cobra.Command {
 	var opts vmgateway.Options
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the public TLS gateway that fronts the loopback daemon on a hosted VM",
-		Long: "ao vm serve binds :80 and :443, obtains and renews a Let's Encrypt\n" +
-			"certificate for the configured domain via ACME, verifies the AO access\n" +
-			"token on every request, and reverse-proxies authenticated requests to the\n" +
-			"loopback daemon. It never proxies loopback-only control routes.\n\n" +
+		Short: "Run the certificate-pinned TLS gateway for a directly paired machine",
+		Long: "ao vm serve binds the HTTPS listener, verifies the box passcode on every\n" +
+			"request, and reverse-proxies authenticated requests to the loopback daemon.\n" +
+			"It never proxies loopback-only control routes.\n\n" +
 			"It runs as its own process, separate from the daemon, normally started by\n" +
-			"systemd on a machine provisioned by `ao setup-vm` (see\n" +
-			"docs/adr/0002-hosted-public-gateway.md). Configuration is read from\n" +
-			"~/.ao/hosted/machine.json when present; every value can also be set with a flag\n" +
-			"or environment variable, which take precedence over machine.json.",
+			"systemd on a machine provisioned by `ao pair`.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return ctx.runVMServe(cmd, opts)
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&opts.Domain, "domain", "", "Public domain this gateway serves (default: machine.json)")
-	flags.StringVar(&opts.MachineID, "machine-id", "", "This machine's id, checked against the token's aud (default: machine.json)")
-	flags.StringVar(&opts.AccountID, "account-id", "", "The single allowlisted account id, checked against the token's sub (default: machine.json)")
-	flags.StringVar(&opts.Issuer, "issuer", "", fmt.Sprintf("Expected token issuer (default %s)", vmgateway.DefaultIssuer))
-	flags.StringVar(&opts.JWKSURL, "jwks-url", "", "Control-plane JWKS URL (default <issuer>/.well-known/jwks.json)")
 	flags.StringVar(&opts.DaemonAddr, "daemon-addr", "", "Loopback daemon host:port (default: discovered from running.json)")
-	flags.StringVar(&opts.MachineFile, "machine-file", "", "machine.json path (default ~/.ao/hosted/machine.json)")
-	flags.StringVar(&opts.CertDir, "cert-dir", "", "ACME certificate cache directory (default under the AO data dir)")
-	flags.StringVar(&opts.HTTPAddr, "http-addr", "", fmt.Sprintf("ACME HTTP-01 challenge / redirect listener address (default %s)", vmgateway.DefaultHTTPAddr))
+	flags.StringVar(&opts.CertDir, "cert-dir", "", "Persisted self-signed certificate directory (default under the state root)")
 	flags.StringVar(&opts.HTTPSAddr, "https-addr", "", fmt.Sprintf("Public TLS listener address (default %s)", vmgateway.DefaultHTTPSAddr))
-	flags.StringVar(&opts.PasscodeDir, "passcode-dir", "", "Pair-mode passcode hash storage directory (default under the state root; pair mode only)")
+	flags.StringVar(&opts.PasscodeDir, "passcode-dir", "", "Passcode hash storage directory (default under the state root)")
+	opts.Pair = true
 	return cmd
 }
 
@@ -110,24 +100,12 @@ func (c *commandContext) runVMServe(cmd *cobra.Command, opts vmgateway.Options) 
 	// mode loads the persisted passcode store instead and never touches JWKS
 	// at all. A missing or corrupt passcode store is fatal here, before any
 	// socket is bound, per docs/adr/0003-pair-mode-gateway.md.
-	var handler http.Handler
-	switch gwCfg.Mode {
-	case vmgateway.ModePair:
-		passcodes, loadErr := vmgateway.LoadPasscodeStore(gwCfg.PasscodeDir)
-		if loadErr != nil {
-			return loadErr
-		}
-		handler, err = vmgateway.NewPairHandler(gwCfg.DaemonAddr, resolveDaemonAddr, passcodes, cfg.AllowedOrigins, log)
-	default:
-		verify := vmgateway.VerifyOptions{
-			Issuer:   gwCfg.Issuer,
-			Audience: gwCfg.MachineID,
-			Subject:  gwCfg.AccountID,
-			Skew:     vmgateway.DefaultSkew,
-		}
-		jwks := vmgateway.NewJWKSCache(gwCfg.JWKSURL, nil)
-		handler, err = vmgateway.NewHandler(gwCfg.DaemonAddr, resolveDaemonAddr, jwks, verify, cfg.AllowedOrigins, log)
+	passcodes, loadErr := vmgateway.LoadPasscodeStore(gwCfg.PasscodeDir)
+	if loadErr != nil {
+		return loadErr
 	}
+	var handler http.Handler
+	handler, err = vmgateway.NewPairHandler(gwCfg.DaemonAddr, resolveDaemonAddr, passcodes, cfg.AllowedOrigins, log)
 	if err != nil {
 		return fmt.Errorf("build gateway handler: %w", err)
 	}

@@ -112,14 +112,10 @@ export async function installFakeBridge(
       updateSettings,
     }) => {
       const unsubscribe = () => () => undefined;
-      const signedOutAoAccount = {
-        status: "signed-out" as const,
-        controlPlaneUrl: "https://ao.agentlab.in",
-      };
       // This computer is machine zero and stays selectable with no account,
       // which is what the renderer smoke suite sees.
       const signedOutAoMachines = {
-        status: "signed-out" as const,
+        status: "ready" as const,
         activeMachineId: "local",
         machines: [
           {
@@ -339,17 +335,9 @@ export async function installFakeBridge(
           list: async () => [],
           getActive: async () => null,
         },
-        // AccountSection reads account.getState() on mount. Signed out is the honest
-        // shape here: the browser harness has no main process, so no OS keychain and
-        // no loopback listener.
-        account: {
-          getState: async () => signedOutAoAccount,
-          signIn: async () => signedOutAoAccount,
-          signOut: async () => signedOutAoAccount,
-        },
         machines: {
-          getState: async () => signedOutAoMachines,
-          refresh: async () => signedOutAoMachines,
+          getState: async () => ({ ...signedOutAoMachines, machines: [...signedOutAoMachines.machines, ...pairedList] }),
+          refresh: async () => ({ ...signedOutAoMachines, machines: [...signedOutAoMachines.machines, ...pairedList] }),
           select: async () => signedOutAoMachines,
           // api-client's runtimeFetch answers a local 503 for any remote-base
           // request when this is null, before the request ever reaches the
@@ -740,14 +728,10 @@ export async function installFakeAgent(
         controller;
 
       const unsubscribe = () => () => undefined;
-      const signedOutAoAccount = {
-        status: "signed-out" as const,
-        controlPlaneUrl: "https://ao.agentlab.in",
-      };
       // This computer is machine zero and stays selectable with no account,
       // which is what the renderer smoke suite sees.
       const signedOutAoMachines = {
-        status: "signed-out" as const,
+        status: "ready" as const,
         activeMachineId: "local",
         machines: [
           {
@@ -960,14 +944,6 @@ export async function installFakeAgent(
         featureBuilds: {
           list: async () => [],
           getActive: async () => null,
-        },
-        // AccountSection reads account.getState() on mount. Signed out is the honest
-        // shape here: the browser harness has no main process, so no OS keychain and
-        // no loopback listener.
-        account: {
-          getState: async () => signedOutAoAccount,
-          signIn: async () => signedOutAoAccount,
-          signOut: async () => signedOutAoAccount,
         },
         machines: {
           getState: async () => signedOutAoMachines,

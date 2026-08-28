@@ -1,6 +1,22 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { parseCallback } from "./ao-pkce";
+
+type CallbackResult = { code: string } | { error: string } | { mismatch: string };
+
+function parseCallback(rawURL: string, expectedState: string): CallbackResult {
+	const url = new URL(rawURL, "http://127.0.0.1");
+	if (url.searchParams.get("state") !== expectedState) {
+		return { mismatch: "The callback state did not match this sign-in attempt." };
+	}
+	const oauthError = url.searchParams.get("error");
+	if (oauthError) {
+		if (oauthError === "access_denied") return { error: "Sign-in was declined." };
+		const detail = url.searchParams.get("error_description")?.trim();
+		return { error: detail ? `Sign-in failed: ${detail}` : `Sign-in failed (${oauthError}).` };
+	}
+	const code = url.searchParams.get("code")?.trim();
+	return code ? { code } : { error: "The sign-in callback did not include an authorization code." };
+}
 
 /**
  * The RFC 8252 loopback redirect receiver for desktop login.

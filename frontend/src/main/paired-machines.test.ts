@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { SafeStorageLike } from "./ao-account-store";
+import type { SafeStorageLike } from "./paired-machines";
 import type { PairCertificateVerifyProc } from "./paired-machine-cert";
 import { AO_PAIRED_MACHINES_FILE_NAME, createPairedMachinesController } from "./paired-machines";
 
