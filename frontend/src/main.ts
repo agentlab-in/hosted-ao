@@ -2453,7 +2453,7 @@ ipcMain.handle("aoMachines:select", (_event, machineId: string) =>
 // forceRefresh: the renderer's runtimeFetch sends this after the gateway
 // itself 401/403s a request, so a revoked/rotated token is not repeated
 // verbatim. Ignored on the paired path: there is nothing to refresh.
-ipcMain.handle("aoMachines:gatewayToken", (_event, forceRefresh?: boolean) =>
+ipcMain.handle("aoMachines:gatewayToken", (_event) =>
   machineSelection().gatewayToken(),
 );
 ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
