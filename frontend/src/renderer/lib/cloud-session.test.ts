@@ -31,9 +31,13 @@ describe("isCloudSignInConfigured reads the shared cloud-pin constant", () => {
   });
 
   it("would unhide Cloud sign-in if the shared pin were flipped on", async () => {
-    vi.doMock("../../shared/cloud-pin", () => ({ CLOUD_SIGN_IN_ENABLED: true }));
+    vi.doMock("../../shared/cloud-pin", () => ({
+      CLOUD_SIGN_IN_ENABLED: true,
+    }));
     vi.resetModules();
-    const { isCloudSignInConfigured: reloaded } = await import("./cloud-session");
+    const { isCloudSignInConfigured: reloaded } = await import(
+      "./cloud-session"
+    );
     expect(reloaded("client_123")).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import { CloudSection } from "./settings/CloudSection";
 import { MachinesSection } from "./settings/MachinesSection";
 import type { GlobalSettingsSection as GlobalSettingsPage } from "../stores/ui-store";
 import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
+import { CloudCredentialsSection } from "./settings/CloudCredentialsSection";
 import { ConnectMobileContent } from "./settings/ConnectMobileContent";
 import { KeyboardShortcutsContent } from "./settings/KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./settings/MobileDevicesSection";
@@ -65,6 +66,10 @@ export function GlobalSettingsForm({
             <MobileDevicesSection />
           </div>
         </SettingsSection>
+      )}
+
+      {(all || section === "cloud") && (
+        <CloudCredentialsSection titleHidden={titleHidden} />
       )}
 
       {(all || section === "shortcuts") && (

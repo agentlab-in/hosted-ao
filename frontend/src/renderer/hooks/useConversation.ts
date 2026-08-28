@@ -106,15 +106,17 @@ export function useConversation(
     queryKey: conversationQueryKey(sessionId ?? ""),
     enabled: Boolean(sessionId),
     initialPageParam: undefined as number | undefined,
-    queryFn: async ({ pageParam, signal }) => {
+    queryFn: async ({ pageParam }) => {
       const { data, error } = await apiClient.GET(
         "/api/v1/sessions/{sessionId}/conversation",
         {
           params: {
             path: { sessionId: sessionId as string },
-            query: { beforeSequence: pageParam, limit: CONVERSATION_PAGE_SIZE },
+            query: {
+              beforeSequence: pageParam,
+              limit: CONVERSATION_PAGE_SIZE,
+            },
           },
-          signal,
         },
       );
       if (error) throw error;
@@ -248,7 +250,9 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async () => {
       const { error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/interrupt",
-        { params: { path: { sessionId: sessionId as string } } },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
     },
@@ -263,7 +267,9 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async () => {
       const { data, error, response } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/resume-agent",
-        { params: { path: { sessionId: sessionId as string } } },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error)
         throw new Error(
@@ -295,7 +301,9 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async () => {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/compact",
-        { params: { path: { sessionId: sessionId as string } } },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
       return data;
@@ -356,7 +364,11 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async (turnId: string) => {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer",
-        { params: { path: { sessionId: sessionId as string, turnId } } },
+        {
+          params: {
+            path: { sessionId: sessionId as string, turnId },
+          },
+        },
       );
       if (error) throw error;
       return data;
@@ -376,7 +388,9 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async () => {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/mcp/reload",
-        { params: { path: { sessionId: sessionId as string } } },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
       return data;
@@ -388,7 +402,11 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async (turnId: string) => {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
-        { params: { path: { sessionId: sessionId as string, turnId } } },
+        {
+          params: {
+            path: { sessionId: sessionId as string, turnId },
+          },
+        },
       );
       if (error) throw error;
       return data;
@@ -400,7 +418,11 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async (turnId: string) => {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry",
-        { params: { path: { sessionId: sessionId as string, turnId } } },
+        {
+          params: {
+            path: { sessionId: sessionId as string, turnId },
+          },
+        },
       );
       if (error) throw error;
       return data;
@@ -413,7 +435,9 @@ export function useConversationCommands(sessionId: string | undefined) {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/edit",
         {
-          params: { path: { sessionId: sessionId as string, turnId } },
+          params: {
+            path: { sessionId: sessionId as string, turnId },
+          },
           body: { text, clientMessageId: crypto.randomUUID() },
         },
       );
@@ -427,7 +451,11 @@ export function useConversationCommands(sessionId: string | undefined) {
     mutationFn: async (branchId: string) => {
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/conversation/branches/{branchId}/activate",
-        { params: { path: { sessionId: sessionId as string, branchId } } },
+        {
+          params: {
+            path: { sessionId: sessionId as string, branchId },
+          },
+        },
       );
       if (error) throw error;
       return data;
@@ -570,10 +598,12 @@ export function useConversationModels(
     // The catalog changes on the scale of provider releases, not turns.
     staleTime: 5 * 60 * 1000,
     retry: false,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       const { data, error } = await apiClient.GET(
         "/api/v1/sessions/{sessionId}/conversation/models",
-        { params: { path: { sessionId: sessionId as string } }, signal },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
       return (data?.models ?? []) as ChatModel[];
@@ -614,10 +644,12 @@ export function useConversationConfigOptions(
     // renderer consumes daemon change events, a light poll keeps those updates
     // visible without coupling them to conversation history polling.
     refetchInterval: writing ? false : CONFIG_OPTIONS_POLL_INTERVAL_MS,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       const { data, error } = await apiClient.GET(
         "/api/v1/sessions/{sessionId}/conversation/config-options",
-        { params: { path: { sessionId: sessionId as string } }, signal },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
       return (data?.options ?? []) as ChatConfigOption[];
@@ -644,7 +676,10 @@ export function useConversationConfigOptions(
         "/api/v1/sessions/{sessionId}/conversation/config-options/{configId}",
         {
           params: {
-            path: { sessionId: sessionId as string, configId: optionId },
+            path: {
+              sessionId: sessionId as string,
+              configId: optionId,
+            },
           },
           body: value,
         },
@@ -690,10 +725,12 @@ export function useConversationSkills(
     staleTime: 60 * 1000,
     refetchInterval: 60 * 1000,
     retry: false,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       const { data, error } = await apiClient.GET(
         "/api/v1/sessions/{sessionId}/conversation/skills",
-        { params: { path: { sessionId: sessionId as string } }, signal },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
       return (data?.skills ?? []) as ChatSkill[];
@@ -723,10 +760,12 @@ export function useWorkspaceFilePaths(
     // still useful and polling every session would not be.
     staleTime: 30 * 1000,
     retry: false,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       const { data, error } = await apiClient.GET(
         "/api/v1/sessions/{sessionId}/workspace/files",
-        { params: { path: { sessionId: sessionId as string } }, signal },
+        {
+          params: { path: { sessionId: sessionId as string } },
+        },
       );
       if (error) throw error;
       return {
@@ -761,7 +800,10 @@ export function useStageAttachments(sessionId: string | undefined) {
       if (!sessionId || attachments.length === 0) return [];
       const { data, error } = await apiClient.POST(
         "/api/v1/sessions/{sessionId}/attachments",
-        { params: { path: { sessionId } }, body: { attachments } },
+        {
+          params: { path: { sessionId } },
+          body: { attachments },
+        },
       );
       if (error) throw error;
       return data?.paths ?? [];
@@ -794,6 +836,8 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
     latestSequence: wire.latestSequence,
     oldestSequence: wire.oldestSequence ?? wire.latestSequence + 1,
     hasMoreBefore: wire.hasMoreBefore ?? false,
+    nativeForkAvailableAfterSequence:
+      wire.nativeForkAvailableAfterSequence ?? 0,
     settings: {
       model: wire.settings?.model || undefined,
       reasoningEffort: wire.settings?.reasoningEffort || undefined,
@@ -840,16 +884,24 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
         }
       : undefined,
     mcpServers: wire.mcpServers?.length
-      ? wire.mcpServers.map((server): McpServer => ({
-          name: server.name,
-          status: server.status as McpServer["status"],
-          error: server.error || undefined,
-          failureReason: server.failureReason || undefined,
-        }))
+      ? wire.mcpServers.map(
+          (server): McpServer => ({
+            name: server.name,
+            status: server.status as McpServer["status"],
+            error: server.error || undefined,
+            failureReason: server.failureReason || undefined,
+          }),
+        )
       : undefined,
     capabilities: wire.capabilities?.length ? wire.capabilities : undefined,
     activeBranchId: wire.activeBranchId || undefined,
     branchedFromEarlierMessage: wire.branchedFromEarlierMessage ?? undefined,
+    branchMaterialization: wire.branchMaterialization
+      ? {
+          strategy: wire.branchMaterialization.strategy,
+          replayTruncated: wire.branchMaterialization.replayTruncated,
+        }
+      : undefined,
     branchPoints: (wire.branchPoints ?? []).map((point) => ({
       turnId: point.turnId,
       position: point.position,
@@ -887,10 +939,12 @@ function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
       plan: turn.plan
         ? {
             explanation: turn.plan.explanation || undefined,
-            steps: (turn.plan.steps ?? []).map((step): PlanStep => ({
-              text: step.text,
-              status: step.status as PlanStepStatus,
-            })),
+            steps: (turn.plan.steps ?? []).map(
+              (step): PlanStep => ({
+                text: step.text,
+                status: step.status as PlanStepStatus,
+              }),
+            ),
           }
         : undefined,
       rolledBack: turn.rolledBack ?? undefined,
@@ -979,7 +1033,11 @@ function readDecisions(
   const options: DecisionOption[] = [];
   for (const entry of raw) {
     if (entry && typeof entry === "object" && "id" in entry) {
-      const option = entry as { id?: unknown; label?: unknown; kind?: unknown };
+      const option = entry as {
+        id?: unknown;
+        label?: unknown;
+        kind?: unknown;
+      };
       if (typeof option.id === "string" && option.id !== "") {
         const kind = isDecisionKind(option.kind) ? option.kind : undefined;
         options.push({
