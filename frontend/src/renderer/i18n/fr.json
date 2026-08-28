@@ -653,6 +653,7 @@
   "settings.connectMobile": "Connecter le mobile",
   "settings.developerMode": "Mode développeur",
   "settings.general": "Général",
+  "settings.selfHosting": "Auto-hébergement",
   "settings.appearance": "Apparence",
   "settings.sessions": "Sessions",
   "settings.shortcuts": "Raccourcis",

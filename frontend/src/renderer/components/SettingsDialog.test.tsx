@@ -63,4 +63,12 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("aria-current", "page");
 	});
+
+	it("opens self-hosting from a deep-linked settings request", async () => {
+		useUiStore.getState().openGlobalSettings("self-hosting");
+		render(<SettingsDialog />);
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("self-hosting");
+		expect(screen.getByRole("button", { name: "Self-hosting" })).toHaveAttribute("aria-current", "page");
+	});
 });

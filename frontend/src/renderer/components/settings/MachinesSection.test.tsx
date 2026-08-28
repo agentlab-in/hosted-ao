@@ -75,6 +75,20 @@ test("lists this computer first and active", async () => {
 	expect(within(rows[0]).getByText("Active")).toBeInTheDocument();
 });
 
+test("first run explains local work and directly paired remote machines", async () => {
+	refresh.mockResolvedValue({
+		status: "ready",
+		machines: [localMachine("This Mac")],
+		activeMachineId: LOCAL_MACHINE_ID,
+	} satisfies AoMachinesState);
+	renderSection();
+
+	expect(await screen.findByText("This Mac")).toBeInTheDocument();
+	expect(screen.getByTestId("self-hosting-empty-state")).toHaveTextContent(/ready for local work/i);
+	expect(screen.getByTestId("self-hosting-empty-state")).toHaveTextContent(/pair another machine/i);
+	expect(screen.queryByText(/account/i)).not.toBeInTheDocument();
+});
+
 test("lists paired machines from the unified machine state", async () => {
 	renderSection();
 	await screen.findAllByTestId("ao-machine");

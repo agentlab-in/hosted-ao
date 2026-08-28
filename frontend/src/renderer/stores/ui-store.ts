@@ -24,6 +24,7 @@ export {
 
 export type GlobalSettingsSection =
   | "general"
+  | "self-hosting"
   | "cloud"
   | "mobile"
   | "shortcuts"

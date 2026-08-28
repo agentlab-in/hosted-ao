@@ -644,6 +644,7 @@
   "settings.connectMobile": "모바일 연결",
   "settings.developerMode": "개발자 모드",
   "settings.general": "일반",
+  "settings.selfHosting": "셀프 호스팅",
   "settings.appearance": "모양",
   "settings.sessions": "세션",
   "settings.shortcuts": "단축키",

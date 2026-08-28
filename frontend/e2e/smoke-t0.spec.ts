@@ -247,19 +247,24 @@ test("renderer: route nav home to board to session detail and back @T0 @BRD", as
 test("renderer: global settings page renders all sections @T0 @SET", async ({
   page,
 }) => {
-  // The settings modal (#3497) tabs General / Updates / Developer / Help, one
-  // section per tab. AO account sign-in (#25) put Account on the General tab
-  // (the default), while the upstream settings revamp renders Help inline.
-  // "All sections" here means walking the tabs rather than one flat scroll.
+  // The settings modal renders one section per tab. "All sections" here means
+  // walking the relevant tabs rather than one flat scroll.
   await page.goto("/#/settings");
   await expect(page.getByTestId("settings-page")).toBeVisible();
-  // General is the default tab. Hosted AO account UI has been removed; direct
-  // pairing remains available in the machine section.
+  // General is the default tab. Account and machine controls do not live here.
   await expect(
     page.locator('[data-testid="settings-section"][data-section="account"]'),
   ).toHaveCount(0);
   await expect(
     page.locator('[data-testid="settings-section"][data-section="machines"]'),
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Self-hosting" }).click();
+  await expect(
+    page.locator('[data-testid="settings-section"][data-section="machines"]'),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/paired machines connect directly to remote boxes/i),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Updates" }).click();
