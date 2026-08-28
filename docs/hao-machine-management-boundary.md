@@ -46,7 +46,9 @@ A user should be able to take a supported machine from a known starting state to
 
 | Term | Meaning |
 | --- | --- |
-| AO daemon | The upstream Go process serving the AO application API, terminal mux, events, and local control routes on loopback. |
+| AO daemon | The upstream Go process serving the AO application API, runtime-backed terminal streams, events, and local control routes on loopback. |
+| runtime capability | AO's provider-neutral ability to create, observe, communicate with, restart where supported, and destroy a durable session process. The current ports are `ports.Runtime` plus optional capability interfaces. |
+| terminal capability | AO's provider-neutral ability to attach a resizable byte stream and obtain bounded terminal output. The current boundary includes `ports.Attacher`, `ports.Stream`, and the terminal manager/protocol. |
 | local machine | The machine running Hosted AO desktop and its supervised AO daemon. |
 | managed machine | A local or remote user-controlled host whose desired hosting state is managed by `hao`. |
 | gateway | The separate `ao vm serve` process (eventually a separately packaged Hosted AO component) that authenticates and proxies off-box traffic to the loopback daemon. |
@@ -70,7 +72,7 @@ A user should be able to take a supported machine from a known starting state to
 
 | Component | Owns | Must not own |
 | --- | --- | --- |
-| `hao` | Desired machine configuration; prerequisite planning and installation; privilege escalation handoff; service install/start/stop/restart/status/log discovery; local preparation; remote pair provisioning; config validation; migration of legacy Hosted AO host state; host-level diagnostics; version compatibility reporting. | Sessions, agents, worktrees, projects, PRs, terminal traffic, daemon business logic, public request authentication, desktop UI state, control-plane accounts. |
+| `hao` | Desired machine configuration; user-facing prerequisite planning and installation; privilege escalation handoff; service install/start/stop/restart/status/log discovery; local preparation; remote pair provisioning; config validation; migration of legacy Hosted AO host state; host-level diagnostics; version compatibility reporting. | Sessions, agents, worktrees, projects, PRs, terminal traffic, daemon business logic, runtime implementation selection or dependencies, public request authentication, desktop UI state, control-plane accounts. |
 | upstream `ao` CLI | Thin client commands for AO orchestration and daemon-local control; daemon launch/status where upstream requires it; user-visible orchestration errors. | Machine provisioning, public exposure, TLS/ACME, remote-machine registry, privileged dependency installation as a hosting workflow. |
 | AO daemon | AO domain services and durable facts; project/session/review lifecycle; local system capability reporting needed to run sessions; app API, SSE, mux; loopback health/readiness; shared local repair APIs when the desktop requires them. | General network exposure, gateway credentials, machine identity, certificate issuance/pinning, account selection, remote endpoint selection, system service definitions. |
 | Hosted AO gateway/pairing | The only remote ingress; TLS; passcode or machine-audience-token verification; lockout; CORS for the exposed endpoint; request limits; credential stripping; deny-by-default route policy; proxying to the currently discovered loopback daemon. | AO session semantics, SQLite access, dependency installation, desktop pin persistence, account UI, loopback-only control routes. |
@@ -78,7 +80,7 @@ A user should be able to take a supported machine from a known starting state to
 
 Two nuances are load-bearing:
 
-1. Capability detection belongs with the component that knows the capability. The daemon may continue to report whether Git, a runtime, or an installed harness is usable because session correctness depends on those facts. `hao doctor` may aggregate that report with host/service/gateway checks; it must not create a divergent definition of AO readiness.
+1. Capability detection belongs with the component that knows the capability. The daemon reports whether Git, its internal runtime/terminal implementation, or an installed harness is usable because session correctness depends on those facts. `hao doctor` aggregates that report with host/service/gateway checks; it does not independently select, install, or manage AO's runtime implementation and must not create a divergent definition of AO readiness.
 2. The existing Connect Mobile listener is not the general remote-machine gateway. It is an explicit, authenticated secondary listener owned by the daemon for the mobile product. It remains until that product has a replacement, and it must not be widened or reused by `hao`.
 
 ## 4. Proposed v1 CLI
@@ -98,7 +100,7 @@ Semantics:
 
 - Detect the OS, architecture, init system, current user, package managers, and existing AO/`hao` installations.
 - Resolve a plan before mutation and print it in interactive mode.
-- Verify/install the `hao`-owned AO daemon/gateway artifact and hard host dependencies.
+- Verify/install the `hao`-owned AO daemon/gateway artifact and user-facing machine prerequisites such as Git, `gh` when the selected workflow requires it, and the selected harness. The AO artifact owns its internal terminal/runtime implementation.
 - Verify a selected harness and optionally invoke its documented installer. Authentication is not part of setup.
 - Create the state/config tree with least-privilege ownership.
 - Install service definitions, but do not expose a remote listener unless the config explicitly requests pair mode and initialization succeeds.
@@ -115,7 +117,7 @@ hao init [--mode local|pair] [--config hosted-ao.yaml]
          [--non-interactive] [--dry-run]
 ```
 
-- `local` validates the AO daemon and selected harness, writes configuration atomically, and enables/starts the local daemon service if service management was selected.
+- `local` validates the AO daemon's reported runtime and terminal capabilities and the selected harness, writes configuration atomically, and enables/starts the local daemon service if service management was selected.
 - `pair` additionally provisions the gateway's persistent self-signed certificate and hashed passcode, enables daemon and pair-gateway services in dependency order, verifies the gateway locally, and prints the existing `ao-pair://v1/...` secret exactly once.
 - `https` is rejected in v1 with a stable `feature_deferred` error and a pointer to pair mode. Existing legacy hosted/domain services are detected and preserved, not rewritten.
 - Harness and GitHub authentication are verified, not automated. Interactive mode may offer to launch the harness's own login command or `gh auth login`, with the exact command shown and explicit consent.
@@ -132,6 +134,7 @@ Read-only summary of desired and observed state:
 - loopback health/readiness and gateway reachability;
 - credential presence/validity without printing secrets;
 - selected harness binary/auth state and GitHub auth state;
+- AO-reported runtime/terminal capability state, without turning its internal implementation into desired machine configuration;
 - drift between config, files, and service definitions.
 
 An inactive intentionally-disabled service is not an error. Exit 0 means observations completed; `--strict` exits 1 when desired state is unhealthy or drifted.
@@ -141,7 +144,7 @@ An inactive intentionally-disabled service is not an error. Exit 0 means observa
 Run deeper diagnostics. It combines:
 
 - host checks owned by `hao` (platform, disk, permissions, package manager, init system, ports, service files, state ownership, gateway certificate/passcode stores);
-- AO readiness from the daemon/its shared doctor implementation;
+- AO readiness from the daemon/its shared doctor implementation, including its runtime/terminal capability report;
 - harness and GitHub credential probes with explicit timeouts;
 - pair-mode end-to-end tests through the gateway while asserting blocked paths remain inaccessible.
 
@@ -195,6 +198,7 @@ pair:
 Rules:
 
 - Configuration describes desired state and contains no passcode, private key, OAuth token, harness credential, GitHub token, or pairing string.
+- Configuration has no runtime-backend key. Runtime selection is an AO daemon concern, not machine-management policy.
 - Environment/flag precedence is `flags > environment overrides > config file > defaults`; `hao config show --effective` reports each value's source.
 - A schema version is mandatory. New binaries may read older versions and migrate through an explicit backup; they refuse unknown future versions.
 - Config is user-readable only when it contains sensitive topology. Credential and private-key files are user-only regardless.
@@ -244,12 +248,10 @@ V1 should keep this root to avoid breaking installations. Proposed additions are
 | --- | --- | --- | --- |
 | Ubuntu LTS x64/arm64 | Supported | Supported | Primary service target: systemd; package manager apt; real-VM acceptance required. |
 | macOS current + previous, arm64/x64 | Supported | Manual/experimental | Desktop owns its local daemon; Homebrew may be offered but never assumed. Remote service needs launchd design before supported. |
-| Windows 11 x64 | Supported for local AO | Not supported initially | No tmux requirement because AO uses ConPTY (`systemcheck.checkTmux`); remote Windows service/gateway lifecycle is deferred. |
+| Windows 11 x64 | Supported for local AO | Not supported initially | AO owns its platform terminal/runtime implementation; remote Windows service/gateway lifecycle is deferred. |
 | Other Linux distributions | Inspect/manual | Unsupported | `hao doctor` may report compatible binaries but must not claim managed service support. |
 
-Hard prerequisites are Git, the platform terminal runtime (tmux on Unix or ConPTY on Windows), and at least one supported harness. `gh` is advisory for AO readiness today: `systemcheck.checkGH` deliberately sets `Required: false` because sessions can run without GitHub CLI. `hao` must not turn `gh` into a universal blocker; it becomes required only for a config/profile whose workflows explicitly require GitHub.
-
-The current daemon installer service permits only `tmux`, `gh`, `claude`, `codex`, `opencode`, and `copilot`, builds fixed argv, tracks bounded async jobs, and refuses privileged Linux execution (`backend/internal/service/systeminstall/systeminstall.go`). `hao` should reuse the same install-plan vocabulary initially, then own privileged host execution outside the daemon. It must retain a closed target allowlist and platform-specific fixed argv.
+Hard user-facing prerequisites are Git and at least one supported harness, for example Claude Code. `gh` is advisory for general AO readiness because sessions can run without GitHub CLI; `hao` requires it only for a config/profile whose workflows explicitly require GitHub. AO owns the platform terminal/runtime implementation shipped with the selected AO artifact. `hao` verifies AO's reported runtime capability but does not independently install or manage a terminal multiplexer or other internal runtime dependency.
 
 ### Error contract
 
@@ -269,11 +271,12 @@ The inventory below is based on current `origin/develop`, existing ADRs/specs, a
 | --- | --- | --- |
 | Loopback-only bind: `config.LoopbackHost`, `Config.Load`, and absence of an `AO_HOST` override in `backend/internal/config/config.go`; primary server wiring in `backend/internal/httpd/server.go`. | **Keep in AO daemon** | Core security invariant. `hao` configures discovery paths/ports but cannot widen the bind. |
 | Shared local health runner `doctor.Run` and `doctor.Deps` in `backend/internal/doctor/doctor.go`, used by `ao doctor` in `backend/internal/cli/doctor.go` and `GET /api/v1/doctor` in `backend/internal/httpd/controllers/doctor.go`. | **Keep in AO daemon/upstream `ao`** | Remote and local clients need one truthful AO-readiness definition. `hao doctor` aggregates it rather than forks it. |
-| Startup requirements `systemcheck.Service.CheckStartup`/`Check` and `Requirement` in `backend/internal/service/systemcheck/systemcheck.go`, exposed by `backend/internal/httpd/controllers/system.go`. | **Keep in AO daemon** | Git/runtime/harness availability affects whether AO can start sessions and must remain visible to desktop. `gh` remains advisory. |
-| Host mutation API and jobs in `backend/internal/service/systeminstall/systeminstall.go`, ports in `backend/internal/ports/system.go`, controller in `backend/internal/httpd/controllers/systeminstall.go`, routes under `/api/v1/system/install/{target}`. | **Move privileged installation to `hao`; keep a compatibility/local-repair window, then reassess/remove daemon mutation routes** | Desktop one-click local repair currently depends on fixed allowlisted jobs. New machine provisioning must not expose privileged mutation through the daemon. During migration the route remains loopback-only and is already blocked from LAN/gateway; desktop should eventually invoke a `hao` host-operation boundary or show manual remediation. Read-only requirements stay in daemon. |
+| Runtime/terminal ports: `ports.Runtime`, `RuntimeHandle`, `RuntimeRestarter`, runtime observation interfaces, `ports.Attacher`/`Stream`, and `backend/internal/terminal`. | **Keep in AO daemon** | AO owns runtime selection, process supervision, terminal attachment, and the implementation it ships for each platform. `hao` consumes only backend-neutral health/capability results. |
+| Startup requirements `systemcheck.Service.CheckStartup`/`Check` and `Requirement` in `backend/internal/service/systemcheck/systemcheck.go`, exposed by `backend/internal/httpd/controllers/system.go`; shared doctor checks in `backend/internal/doctor/doctor.go`. | **Keep in AO daemon** | Git/runtime/harness availability affects whether AO can start sessions and must remain visible to desktop. `hao` aggregates the daemon's report rather than duplicating internal runtime checks. `gh` remains advisory unless the selected workflow requires it. |
+| Host mutation API and jobs in `backend/internal/service/systeminstall/systeminstall.go`, ports in `backend/internal/ports/system.go`, controller in `backend/internal/httpd/controllers/systeminstall.go`, routes under `/api/v1/system/install/{target}`. | **Move user-facing prerequisite installation to `hao`; keep a compatibility/local-repair window, then reassess/remove daemon mutation routes** | Desktop one-click local repair currently depends on fixed allowlisted jobs. New machine provisioning must not expose privileged mutation through the daemon. During migration the route remains loopback-only and is already blocked from LAN/gateway; desktop should eventually invoke a `hao` host-operation boundary or show manual remediation. AO-internal runtime dependencies remain AO-owned. |
 | Connect Mobile bridge state in `backend/internal/mobilebridge`, `LANManager`/`NewMobileLAN` in `backend/internal/httpd/lan_listener.go`, auth/lockout in `backend/internal/httpd/auth.go`, control routes `/api/v1/mobile/*`, and restore wiring in `backend/internal/daemon/daemon.go`. | **Keep in AO daemon until a separate mobile migration** | It is active product behavior and shares the daemon API deliberately. It is not `hao` remote transport. Preserve explicit enablement, `0.0.0.0` only while enabled, bearer auth, lockout, plaintext/home-network warning, and blocked control/install routes. |
 | LAN blocklist in `backend/internal/httpd/lan_listener.go`: `/shutdown`, `/internal`, `/api/v1/mobile`, `/api/v1/dev`, `/api/v1/system/install`. | **Keep in AO daemon** | Required safety boundary for Connect Mobile; additions must be mirrored when sensitive loopback routes appear. |
-| `ao setup-vm` and plan/bind/systemd implementation in `backend/internal/cli/setupvm*.go`. | **Move to `hao`; remove `ao setup-vm` after migration** | It installs host dependencies, creates systemd units, chooses target user, writes `machine.json`, and binds account/device state: machine management, not orchestration. Preserve its preflight, absolute path, non-root service, port, rollback, and ownership lessons. |
+| `ao setup-vm` and plan/bind/systemd implementation in `backend/internal/cli/setupvm*.go`. | **Move to `hao`; remove `ao setup-vm` after migration** | It installs user-facing host prerequisites, creates systemd units, chooses target user, writes `machine.json`, and binds account/device state: machine management, not orchestration. Preserve its preflight, absolute path, non-root service, port, rollback, and ownership lessons while leaving AO's internal runtime implementation with AO. |
 | `ao vm serve` and `ao vm setup-harness` in `backend/internal/cli/vm.go`. | **Move command ownership to `hao`/gateway package; retain a hidden/service compatibility entry point temporarily** | Gateway process lifecycle and harness preparation belong to machine management. Existing systemd `ExecStart` lines must keep working throughout the compatibility window. The reusable gateway code may remain in the repository. |
 | Pair provisioning and display in `backend/internal/cli/pair.go`; shared codec/vectors in `backend/internal/pairstring`; pair flags/plans in `setupvm_plan.go`. | **Move user-facing commands to `hao`; keep codec shared with desktop** | `hao init --mode pair` becomes the normal entry point. A `hao pair show`/`rotate` subcommand may expose recovery. The grammar must remain golden-vector compatible with `frontend/src/shared/pair-string.ts`. Keep `ao pair` as a compatibility alias before removal. |
 | Hosted gateway implementation in `backend/internal/vmgateway`: `Server`, `NewHandler`, `NewPairHandler`, `denyByDefault`, `requireToken`, `requirePasscode`, `PairCertificate`, `PasscodeStore`, machine/JWKS config. | **Move to gateway ownership, not daemon; keep implementation until packaging is deliberately split** | It already runs as a separate process and owns TLS/auth/proxy policy correctly. Command/binary packaging may move under `hao`, but never fold it into the daemon. |
@@ -361,12 +364,12 @@ Acceptance: old services and pairing strings are represented in fixtures; no run
 Dependencies: Phase 0; released `hao` artifact channel and checksum metadata.
 
 - Implement config/status/doctor/setup/init-local and lifecycle commands.
-- Reuse daemon readiness semantics; do not duplicate orchestration checks.
+- Reuse daemon readiness semantics; do not duplicate orchestration or internal runtime checks.
 - Support Ubuntu, macOS local desktop, and Windows local desktop per the matrix.
 - Make installation plans deterministic and dry-runnable; privilege boundary is separately testable.
 - Keep desktop local supervision authoritative unless the user explicitly selects a system service model.
 
-Acceptance: a clean supported local host becomes AO-ready; a second identical run is a no-op; non-interactive setup is reproducible; rollback restores pre-run files/services; the daemon still binds only loopback; existing desktop startup and one-click repair continue to work.
+Acceptance: a clean supported local host becomes AO-ready; a second identical run is a no-op; non-interactive setup is reproducible; rollback restores pre-run files/services; the daemon still binds only loopback; existing desktop startup and one-click repair continue to work; `hao` manages user-facing prerequisites while treating AO's runtime implementation as part of the AO artifact.
 
 ### Phase 2: pair-mode remote machines
 
@@ -409,8 +412,8 @@ Existing hosted/account machines are preserved throughout. Domain onboarding may
 
 | Mode | Ubuntu x64 | Ubuntu arm64 | macOS arm64/x64 | Windows x64 | Required scenarios |
 | --- | --- | --- | --- | --- | --- |
-| Config/status/doctor | Unit + fresh VM | Unit + Pi/VM | Real local + unit | Real local + unit | Precedence, redaction, unknown schema, corrupt file, permissions, JSON stability. |
-| Local setup/init | Fresh VM | Fresh VM | Fresh user account, desktop installed | Fresh user account, desktop installed | Clean install, missing dependency, already ready, second-run no-op, non-interactive, denied privilege, partial failure/rollback, paths with spaces. |
+| Config/status/doctor | Unit + fresh VM | Unit + Pi/VM | Real local + unit | Real local + unit | Precedence, redaction, unknown schema, corrupt file, permissions, JSON stability, daemon capability aggregation. |
+| Local setup/init | Fresh VM | Fresh VM | Fresh user account, desktop installed | Fresh user account, desktop installed | Clean install, missing user-facing prerequisite, already ready, second-run no-op, non-interactive, denied privilege, partial failure/rollback, paths with spaces. |
 | Local lifecycle | systemd | systemd | Desktop supervision; launchd only when supported | Desktop supervision | Start/stop ordering, stale run file, occupied port, crash/restart, no competing supervisor. |
 | Pair gateway | Fresh public VM + LAN | Pi-class or arm64 VM | Manual/experimental only | Not supported | First pair, pair show, rotate, service reboot, IP change, IPv4/IPv6 hints, wrong cert, wrong passcode/lockout, no control-plane traffic. |
 | Legacy adoption | Existing hosted and paired VM | Existing paired box | Existing desktop registry/pins | Existing desktop registry | Identity/credential preserved, old service works before and after, rollback restores old unit, old desktop/new host and new desktop/old host compatibility. |
@@ -418,23 +421,23 @@ Existing hosted/account machines are preserved throughout. Domain onboarding may
 | Domain/ACME (Phase 3) | Fresh public VM | Fresh public VM | Client only | Client only | DNS mismatch, private IP, closed 80/443, issuance, restart, renewal, expired cert, auth required, rollback. |
 | Release/update | Linux binaries/checksums | Linux binaries/checksums | Existing zip+dmg/feed policy | Existing installer/feed | Provenance/checksum failure, channel compatibility, no second desktop publisher, previous binary retained. |
 
-CI should cover parsers, planners, fixed argv, redaction, atomic writes, service rendering, route policy, and cross-version fixtures. Real-machine acceptance is mandatory for privilege, service manager, firewall/ports, package manager, reboot, TLS, and updater behavior; mocks cannot establish those properties.
+CI should cover parsers, planners, fixed argv, redaction, atomic writes, service rendering, route policy, cross-version fixtures, and the boundary that `hao` plans user-facing prerequisites rather than AO-internal runtime dependencies. Real-machine acceptance is mandatory for privilege, service manager, firewall/ports, package manager, reboot, TLS, and updater behavior; mocks cannot establish those properties.
 
 ## 12. Dependency-ordered follow-up batches
 
 Each batch is intended to be independently assignable to future AO workers and should land as small PRs against `develop`.
 
-1. **Contract baseline:** config JSON Schema/YAML examples; exit/error code definitions; component compatibility table; legacy installation fixtures; pairing vectors and gateway route-policy manifest.
+1. **Contract baseline:** config JSON Schema/YAML examples with no runtime-backend key; exit/error code definitions; component compatibility table; legacy installation fixtures; pairing vectors and gateway route-policy manifest.
 2. **Read-only CLI skeleton:** `hao version`, config path/show/validate, state-root library reuse, JSON framing, redaction tests, packaging without mutation.
 3. **Host inventory and doctor aggregation:** platform/init/package detection, daemon doctor client, service/gateway checks, stable remediation output, timeouts.
-4. **Install planner and privilege helper:** fixed targets/argv, artifact checksum/provenance verification, dry-run, target-user validation, atomic files, transaction journal, rollback unit tests.
+4. **Install planner and privilege helper:** fixed user-facing prerequisite targets/argv, artifact checksum/provenance verification, dry-run, target-user validation, atomic files, transaction journal, rollback unit tests.
 5. **Local setup/init:** daemon artifact install, local config, macOS/Windows desktop-supervision coexistence, Ubuntu optional service, idempotency acceptance.
 6. **Service lifecycle:** systemd renderer/manager, ordered start/stop/restart/logs, stale discovery and port-conflict diagnostics, real Ubuntu matrix.
 7. **Legacy discovery/adoption:** parse existing `machine.json`, pair stores, paths, and units; backup/import/rollback; cross-version fixtures. No command deprecation yet.
 8. **Pair UX migration:** `hao init --mode pair`, show/rotate/recovery; preserve cert/passcode; gateway health verification; Linux x64/arm64 e2e.
 9. **Desktop compatibility release:** old/new gateway matrix, account + pair origins, pin persistence, machine switching, explicit migration messaging.
 10. **Installer/release transition:** install `hao`, publish checksums/provenance, keep old installer URL and AO artifacts, document conductor ownership and rollback.
-11. **Daemon mutation-route migration:** replace desktop calls to `/api/v1/system/install/*` with `hao` boundary/manual remedy, retain read-only requirements; observe compatibility window before removing routes.
+11. **Daemon mutation-route migration:** replace desktop calls to `/api/v1/system/install/*` for user-facing prerequisites with the `hao` boundary/manual remedy, retain read-only requirements; observe the compatibility window before removing routes.
 12. **Legacy CLI deprecation/removal:** warnings, telemetry review, two-release gate, service entry-point conversion, then remove `ao setup-vm`/pair aliases only when gates pass.
 13. **Domain/ACME product decision and threat review:** settle credential/connection format, account requirement, DNS/port policy, renewal/operator notifications, then write an implementation spec.
 14. **Domain implementation:** only after batch 13 approval; reuse gateway, never daemon exposure.
@@ -454,4 +457,4 @@ These questions change product policy and are not silently decided here.
 
 ## 14. Definition of architectural success
 
-The boundary is successful when a maintainer can remove every machine-provisioning command from upstream `ao` without changing how AO creates or supervises a session; when a gateway can be replaced without migrating AO's database; when `hao` can prepare or repair a host without learning an agent session's contents; and when disabling every remote mode leaves an ordinary loopback-only AO installation fully functional.
+The boundary is successful when a maintainer can remove every machine-provisioning command from upstream `ao` without changing how AO creates or supervises a session; when `hao` can prepare or repair a host by managing user-facing prerequisites while AO owns its internal runtime implementation; when a gateway can be replaced without migrating AO's database; when `hao` can act without learning an agent session's contents; and when disabling every remote mode leaves an ordinary loopback-only AO installation fully functional.
