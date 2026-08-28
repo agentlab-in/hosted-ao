@@ -10,8 +10,6 @@ Scope: machine preparation and lifecycle only; this document does not authorize 
 
 Hosted AO will introduce `hao` as the command-line owner of machines controlled by the user: this computer and user-owned remote or cloud machines. `hao` prepares a machine, records declarative machine configuration, manages the services that host AO, and diagnoses that hosting stack. It does not orchestrate coding agents.
 
-Hosted AO is moving away from tmux. The destination contract is explicit: `hao` must not install, require, manage, configure, or define machine readiness in terms of tmux. Runtime implementation belongs behind AO's runtime and terminal capability ports. This is a future-directed product decision, not a claim about the current implementation: current `develop` still uses tmux on Linux, for persisted and fallback macOS sessions, and in several readiness, installer, setup, and desktop-packaging paths. Those dependencies require a compatibility migration before they can be removed.
-
 The product boundary is:
 
 ```text
@@ -67,7 +65,6 @@ A user should be able to take a supported machine from a known starting state to
 - No public bind, TLS, authentication, certificate lifecycle, or machine registry inside the AO daemon.
 - No domain/ACME implementation in the first delivery phase.
 - No DNS-01, private CA, bring-your-own certificate, reverse-proxy integration, tunnel provider, or mDNS requirement in v1.
-- No installation or management of tmux by `hao`, even during the compatibility period. Existing AO/desktop releases may continue to carry or use tmux until the runtime migration is complete.
 - No silent upgrades of harnesses, Git, `gh`, or package-manager-owned dependencies.
 - No removal of daemon capabilities required for correct local orchestration merely because Hosted AO once added or modified them.
 
@@ -75,7 +72,7 @@ A user should be able to take a supported machine from a known starting state to
 
 | Component | Owns | Must not own |
 | --- | --- | --- |
-| `hao` | Desired machine configuration; prerequisite planning and installation; privilege escalation handoff; service install/start/stop/restart/status/log discovery; local preparation; remote pair provisioning; config validation; migration of legacy Hosted AO host state; host-level diagnostics; version and AO runtime-capability compatibility reporting. | Sessions, agents, worktrees, projects, PRs, terminal traffic, daemon business logic, runtime implementation selection, tmux installation/configuration/lifecycle, public request authentication, desktop UI state, control-plane accounts. |
+| `hao` | Desired machine configuration; user-facing prerequisite planning and installation; privilege escalation handoff; service install/start/stop/restart/status/log discovery; local preparation; remote pair provisioning; config validation; migration of legacy Hosted AO host state; host-level diagnostics; version compatibility reporting. | Sessions, agents, worktrees, projects, PRs, terminal traffic, daemon business logic, runtime implementation selection or dependencies, public request authentication, desktop UI state, control-plane accounts. |
 | upstream `ao` CLI | Thin client commands for AO orchestration and daemon-local control; daemon launch/status where upstream requires it; user-visible orchestration errors. | Machine provisioning, public exposure, TLS/ACME, remote-machine registry, privileged dependency installation as a hosting workflow. |
 | AO daemon | AO domain services and durable facts; project/session/review lifecycle; local system capability reporting needed to run sessions; app API, SSE, mux; loopback health/readiness; shared local repair APIs when the desktop requires them. | General network exposure, gateway credentials, machine identity, certificate issuance/pinning, account selection, remote endpoint selection, system service definitions. |
 | Hosted AO gateway/pairing | The only remote ingress; TLS; passcode or machine-audience-token verification; lockout; CORS for the exposed endpoint; request limits; credential stripping; deny-by-default route policy; proxying to the currently discovered loopback daemon. | AO session semantics, SQLite access, dependency installation, desktop pin persistence, account UI, loopback-only control routes. |
@@ -83,7 +80,7 @@ A user should be able to take a supported machine from a known starting state to
 
 Two nuances are load-bearing:
 
-1. Capability detection belongs with the component that knows the capability. The daemon reports whether its selected runtime and terminal implementation can satisfy the capability contract because session correctness depends on those facts. It must not expose a concrete backend such as tmux as a permanent machine-level prerequisite. During migration it may separately report a legacy compatibility dependency for sessions whose persisted handles still require tmux. `hao doctor` aggregates that report with host/service/gateway checks; it neither probes tmux directly nor creates a divergent definition of AO readiness.
+1. Capability detection belongs with the component that knows the capability. The daemon reports whether Git, its internal runtime/terminal implementation, or an installed harness is usable because session correctness depends on those facts. `hao doctor` aggregates that report with host/service/gateway checks; it does not independently select, install, or manage AO's runtime implementation and must not create a divergent definition of AO readiness.
 2. The existing Connect Mobile listener is not the general remote-machine gateway. It is an explicit, authenticated secondary listener owned by the daemon for the mobile product. It remains until that product has a replacement, and it must not be widened or reused by `hao`.
 
 ## 4. Proposed v1 CLI
@@ -103,7 +100,7 @@ Semantics:
 
 - Detect the OS, architecture, init system, current user, package managers, and existing AO/`hao` installations.
 - Resolve a plan before mutation and print it in interactive mode.
-- Verify/install the `hao`-owned AO daemon/gateway artifact and hard host dependencies. A compatible AO artifact must carry or otherwise provide its own runtime implementation; `hao` never satisfies this step by installing tmux.
+- Verify/install the `hao`-owned AO daemon/gateway artifact and user-facing machine prerequisites such as Git, `gh` when the selected workflow requires it, and the selected harness. The AO artifact owns its internal terminal/runtime implementation.
 - Verify a selected harness and optionally invoke its documented installer. Authentication is not part of setup.
 - Create the state/config tree with least-privilege ownership.
 - Install service definitions, but do not expose a remote listener unless the config explicitly requests pair mode and initialization succeeds.
@@ -137,7 +134,7 @@ Read-only summary of desired and observed state:
 - loopback health/readiness and gateway reachability;
 - credential presence/validity without printing secrets;
 - selected harness binary/auth state and GitHub auth state;
-- AO-reported runtime/terminal capability state and any legacy-session compatibility warning, without turning a backend name into desired machine configuration;
+- AO-reported runtime/terminal capability state, without turning its internal implementation into desired machine configuration;
 - drift between config, files, and service definitions.
 
 An inactive intentionally-disabled service is not an error. Exit 0 means observations completed; `--strict` exits 1 when desired state is unhealthy or drifted.
@@ -147,7 +144,7 @@ An inactive intentionally-disabled service is not an error. Exit 0 means observa
 Run deeper diagnostics. It combines:
 
 - host checks owned by `hao` (platform, disk, permissions, package manager, init system, ports, service files, state ownership, gateway certificate/passcode stores);
-- AO readiness from the daemon/its shared doctor implementation, expressed as runtime/terminal capabilities rather than a direct tmux probe;
+- AO readiness from the daemon/its shared doctor implementation, including its runtime/terminal capability report;
 - harness and GitHub credential probes with explicit timeouts;
 - pair-mode end-to-end tests through the gateway while asserting blocked paths remain inaccessible.
 
@@ -201,7 +198,7 @@ pair:
 Rules:
 
 - Configuration describes desired state and contains no passcode, private key, OAuth token, harness credential, GitHub token, or pairing string.
-- Configuration has no runtime-backend or tmux key. Runtime selection and persisted-handle routing are AO daemon concerns, not machine-management policy.
+- Configuration has no runtime-backend key. Runtime selection is an AO daemon concern, not machine-management policy.
 - Environment/flag precedence is `flags > environment overrides > config file > defaults`; `hao config show --effective` reports each value's source.
 - A schema version is mandatory. New binaries may read older versions and migrate through an explicit backup; they refuse unknown future versions.
 - Config is user-readable only when it contains sensitive topology. Credential and private-key files are user-only regardless.
@@ -251,12 +248,10 @@ V1 should keep this root to avoid breaking installations. Proposed additions are
 | --- | --- | --- | --- |
 | Ubuntu LTS x64/arm64 | Supported | Supported | Primary service target: systemd; package manager apt; real-VM acceptance required. |
 | macOS current + previous, arm64/x64 | Supported | Manual/experimental | Desktop owns its local daemon; Homebrew may be offered but never assumed. Remote service needs launchd design before supported. |
-| Windows 11 x64 | Supported for local AO | Not supported initially | Current AO uses its detached ConPTY host; remote Windows service/gateway lifecycle is deferred. |
+| Windows 11 x64 | Supported for local AO | Not supported initially | AO owns its platform terminal/runtime implementation; remote Windows service/gateway lifecycle is deferred. |
 | Other Linux distributions | Inspect/manual | Unsupported | `hao doctor` may report compatible binaries but must not claim managed service support. |
 
-Hard host prerequisites are Git and at least one supported harness. The AO artifact must satisfy the daemon's runtime and terminal capability contract on the target platform, but its concrete backend is not a `hao` prerequisite. `gh` is advisory for AO readiness today: `systemcheck.checkGH` deliberately sets `Required: false` because sessions can run without GitHub CLI. `hao` must not turn `gh` into a universal blocker; it becomes required only for a config/profile whose workflows explicitly require GitHub.
-
-Current `develop` does not yet meet that destination on every platform. Linux selects the tmux adapter; macOS creates new sessions with the detached PTY host but routes legacy handles to tmux and falls back to tmux when direct creation fails; Windows uses the detached ConPTY host. Current doctor/system-requirement and installer surfaces also name tmux directly. `hao` must not copy or reuse those tmux-specific targets. It may reuse only backend-neutral planning properties such as fixed argv, bounded jobs, redaction, target allowlists, and privilege separation. Until AO publishes a tmux-free compatible runtime for a platform, `hao` reports that AO version/platform combination as not yet supported by the no-tmux hosting contract and points to an AO/desktop upgrade; it does not remediate by installing tmux.
+Hard user-facing prerequisites are Git and at least one supported harness, for example Claude Code. `gh` is advisory for general AO readiness because sessions can run without GitHub CLI; `hao` requires it only for a config/profile whose workflows explicitly require GitHub. AO owns the platform terminal/runtime implementation shipped with the selected AO artifact. `hao` verifies AO's reported runtime capability but does not independently install or manage a terminal multiplexer or other internal runtime dependency.
 
 ### Error contract
 
@@ -276,13 +271,12 @@ The inventory below is based on current `origin/develop`, existing ADRs/specs, a
 | --- | --- | --- |
 | Loopback-only bind: `config.LoopbackHost`, `Config.Load`, and absence of an `AO_HOST` override in `backend/internal/config/config.go`; primary server wiring in `backend/internal/httpd/server.go`. | **Keep in AO daemon** | Core security invariant. `hao` configures discovery paths/ports but cannot widen the bind. |
 | Shared local health runner `doctor.Run` and `doctor.Deps` in `backend/internal/doctor/doctor.go`, used by `ao doctor` in `backend/internal/cli/doctor.go` and `GET /api/v1/doctor` in `backend/internal/httpd/controllers/doctor.go`. | **Keep in AO daemon/upstream `ao`** | Remote and local clients need one truthful AO-readiness definition. `hao doctor` aggregates it rather than forks it. |
-| Runtime/terminal ports: `ports.Runtime`, `RuntimeHandle`, `RuntimeRestarter`, runtime observation interfaces, `ports.Attacher`/`Stream`, and `backend/internal/terminal`. | **Keep and evolve in AO daemon** | This is the emerging backend-neutral contract. Readiness must describe whether these capabilities are usable, not whether a named multiplexer is installed. Opaque, versioned handles are the compatibility seam for routing old and new sessions. |
-| Runtime selection in `backend/internal/adapters/runtime/runtimeselect`: `Runtime`, `New`, `darwinRuntime`, and `darwinDirectHandlePrefix`; detached host in `backend/internal/adapters/runtime/conpty`; tmux adapter in `backend/internal/adapters/runtime/tmux`. | **AO runtime migration; no `hao` ownership** | Current Linux is tmux-bound. Windows is detached-host based. macOS creates `ptyhost-v1:` handles but retains tmux for unprefixed legacy handles and creation fallback. AO must provide a detached, durable, provider-neutral Unix implementation and keep explicit legacy routing until old handles are drained or migrated. |
-| Startup requirements `systemcheck.Service.CheckStartup`/`Check`, `checkTmux`, and `Requirement` in `backend/internal/service/systemcheck/systemcheck.go`, exposed by `backend/internal/httpd/controllers/system.go`; `doctor.Deps.checkTmux` in `backend/internal/doctor/doctor.go`. | **Keep backend-neutral readiness in AO; remove tmux as readiness** | Git/runtime/harness availability affects whether AO can start sessions and must remain visible to desktop. Replace the `tmux` requirement/check with selected runtime and terminal capability health. A temporary legacy-session compatibility check may name tmux, but it is not general machine readiness and must disappear after legacy handles are retired. `gh` remains advisory. |
-| Host mutation API and jobs in `backend/internal/service/systeminstall/systeminstall.go`, including `TargetTmux`/`planTmux`; ports in `backend/internal/ports/system.go`; controller/routes under `/api/v1/system/install/{target}`. | **Remove the tmux target; move remaining privileged installation to `hao` after a compatibility window** | Desktop one-click repair currently offers tmux installation. `hao` must never inherit that target. New machine provisioning must not expose privileged mutation through the daemon. During migration the route remains loopback-only and blocked from LAN/gateway; desktop should stop offering tmux repair and eventually invoke a `hao` host-operation boundary or show manual remediation. |
+| Runtime/terminal ports: `ports.Runtime`, `RuntimeHandle`, `RuntimeRestarter`, runtime observation interfaces, `ports.Attacher`/`Stream`, and `backend/internal/terminal`. | **Keep in AO daemon** | AO owns runtime selection, process supervision, terminal attachment, and the implementation it ships for each platform. `hao` consumes only backend-neutral health/capability results. |
+| Startup requirements `systemcheck.Service.CheckStartup`/`Check` and `Requirement` in `backend/internal/service/systemcheck/systemcheck.go`, exposed by `backend/internal/httpd/controllers/system.go`; shared doctor checks in `backend/internal/doctor/doctor.go`. | **Keep in AO daemon** | Git/runtime/harness availability affects whether AO can start sessions and must remain visible to desktop. `hao` aggregates the daemon's report rather than duplicating internal runtime checks. `gh` remains advisory unless the selected workflow requires it. |
+| Host mutation API and jobs in `backend/internal/service/systeminstall/systeminstall.go`, ports in `backend/internal/ports/system.go`, controller in `backend/internal/httpd/controllers/systeminstall.go`, routes under `/api/v1/system/install/{target}`. | **Move user-facing prerequisite installation to `hao`; keep a compatibility/local-repair window, then reassess/remove daemon mutation routes** | Desktop one-click local repair currently depends on fixed allowlisted jobs. New machine provisioning must not expose privileged mutation through the daemon. During migration the route remains loopback-only and is already blocked from LAN/gateway; desktop should eventually invoke a `hao` host-operation boundary or show manual remediation. AO-internal runtime dependencies remain AO-owned. |
 | Connect Mobile bridge state in `backend/internal/mobilebridge`, `LANManager`/`NewMobileLAN` in `backend/internal/httpd/lan_listener.go`, auth/lockout in `backend/internal/httpd/auth.go`, control routes `/api/v1/mobile/*`, and restore wiring in `backend/internal/daemon/daemon.go`. | **Keep in AO daemon until a separate mobile migration** | It is active product behavior and shares the daemon API deliberately. It is not `hao` remote transport. Preserve explicit enablement, `0.0.0.0` only while enabled, bearer auth, lockout, plaintext/home-network warning, and blocked control/install routes. |
 | LAN blocklist in `backend/internal/httpd/lan_listener.go`: `/shutdown`, `/internal`, `/api/v1/mobile`, `/api/v1/dev`, `/api/v1/system/install`. | **Keep in AO daemon** | Required safety boundary for Connect Mobile; additions must be mirrored when sensitive loopback routes appear. |
-| `ao setup-vm` and plan/bind/systemd implementation in `backend/internal/cli/setupvm*.go`, including `setupVMPackages = {tmux, git, gh}` and tmux install/PATH guidance. | **Move machine management to `hao`, but do not carry the tmux plan forward** | It creates systemd units, chooses target user, writes `machine.json`, and binds account/device state: machine management, not orchestration. Preserve its preflight, absolute path, non-root service, port, rollback, and ownership lessons. `hao` installs Git and optional workflow tools only; a compatible AO artifact owns its runtime implementation. |
+| `ao setup-vm` and plan/bind/systemd implementation in `backend/internal/cli/setupvm*.go`. | **Move to `hao`; remove `ao setup-vm` after migration** | It installs user-facing host prerequisites, creates systemd units, chooses target user, writes `machine.json`, and binds account/device state: machine management, not orchestration. Preserve its preflight, absolute path, non-root service, port, rollback, and ownership lessons while leaving AO's internal runtime implementation with AO. |
 | `ao vm serve` and `ao vm setup-harness` in `backend/internal/cli/vm.go`. | **Move command ownership to `hao`/gateway package; retain a hidden/service compatibility entry point temporarily** | Gateway process lifecycle and harness preparation belong to machine management. Existing systemd `ExecStart` lines must keep working throughout the compatibility window. The reusable gateway code may remain in the repository. |
 | Pair provisioning and display in `backend/internal/cli/pair.go`; shared codec/vectors in `backend/internal/pairstring`; pair flags/plans in `setupvm_plan.go`. | **Move user-facing commands to `hao`; keep codec shared with desktop** | `hao init --mode pair` becomes the normal entry point. A `hao pair show`/`rotate` subcommand may expose recovery. The grammar must remain golden-vector compatible with `frontend/src/shared/pair-string.ts`. Keep `ao pair` as a compatibility alias before removal. |
 | Hosted gateway implementation in `backend/internal/vmgateway`: `Server`, `NewHandler`, `NewPairHandler`, `denyByDefault`, `requireToken`, `requirePasscode`, `PairCertificate`, `PasscodeStore`, machine/JWKS config. | **Move to gateway ownership, not daemon; keep implementation until packaging is deliberately split** | It already runs as a separate process and owns TLS/auth/proxy policy correctly. Command/binary packaging may move under `hao`, but never fold it into the daemon. |
@@ -294,8 +288,6 @@ The inventory below is based on current `origin/develop`, existing ADRs/specs, a
 | Desktop updater in `frontend/src/main/auto-updater.ts`, update settings/telemetry, `.github/workflows/frontend-release.yml`, guards/e2e, and `frontend/docs/desktop-release.md`. | **Keep in desktop/release pipeline** | Desktop updates itself. `hao` must not become a second desktop publisher. AgentLab builds remain unsigned per repository policy; macOS zip/feed remain required alongside dmg. |
 | CLI installer `install.sh` and landing copy/scripts under `frontend/src/landing/public/cli/install.sh`, plus release Linux `ao` artifacts. | **Move installer intent to `hao`, preserve old URL/flow during compatibility** | New installs should install `hao`, then let it obtain version-pinned AO/gateway artifacts and run pair setup. Existing `curl | sh` → `ao pair` users need an overlapping release and rollback path. |
 | Desktop local daemon supervisor and state-root/userData wiring under `frontend/src/main` and app entrypoint. | **Keep in desktop** | Local app lifecycle is a desktop concern. `hao` may diagnose/reconcile an optional service, but must not create two competing supervisors. |
-| Desktop tmux bundle/build/staging: `frontend/scripts/build-tmux.mjs`, `frontend/package.json` build/package hooks, `frontend/forge.config.ts` resource and version checks, `frontend/src/shared/bundled-tmux.ts`, and `ensureBundledTmuxStaged` plus `AO_TMUX_BINARY`/`AO_TMUX_SOCKET_NAME` wiring in `frontend/src/main.ts`. By default, staged copies live under `~/.ao/hosted/runtime/tmux/<identity>/tmux` (or the explicit `AO_DATA_DIR`); packaged copies live under Electron resources. | **Desktop/release migration; never transfer to `hao`** | These artifacts currently keep Unix desktop sessions working and cannot be deleted before runtime compatibility is proven. Stop staging/configuring tmux only after supported desktop builds create new sessions on the replacement and can still route or explicitly retire legacy handles. A later release removes the build resource and stale managed copies with a recoverable, scoped cleanup. |
-| tmux resolution/configuration in `backend/internal/tmuxbin` and `AO_TMUX_BINARY`, `AO_TMUX_SOCKET_NAME`, private socket/default-socket compatibility in `backend/internal/adapters/runtime/tmux`. | **Compatibility-only, then remove** | These are concrete backend details, not host configuration. Preserve them only for releases that must operate existing tmux handles; never surface them in `hao` config or services. Remove after the legacy support floor passes. |
 
 ### What Hosted AO added adjacent to the daemon
 
@@ -361,9 +353,8 @@ Domain/ACME mode later still requires application authentication. A public CA pr
 
 Dependencies: none.
 
-- Freeze config v1 schema, exit/error codes, component compatibility rules (including whether an AO build satisfies the no-tmux runtime/terminal capability contract), shared state-root resolution, gateway route-policy fixtures, and pairing-string golden vectors.
+- Freeze config v1 schema, exit/error codes, component compatibility rules, shared state-root resolution, gateway route-policy fixtures, and pairing-string golden vectors.
 - Record current service unit names, paths, and CLI entry points installed by `ao setup-vm`/`ao pair`.
-- Record the tmux-bound symbols, environment variables, staged/packaged artifacts, readiness IDs, install targets, and persisted handle forms in section 10 as compatibility fixtures.
 - Add deprecation telemetry/counters that reveal command use without recording secrets.
 
 Acceptance: old services and pairing strings are represented in fixtures; no runtime behavior changes; a migration can identify every installed legacy shape.
@@ -373,12 +364,12 @@ Acceptance: old services and pairing strings are represented in fixtures; no run
 Dependencies: Phase 0; released `hao` artifact channel and checksum metadata.
 
 - Implement config/status/doctor/setup/init-local and lifecycle commands.
-- Reuse daemon capability readiness semantics; do not duplicate orchestration checks or probe/install tmux.
+- Reuse daemon readiness semantics; do not duplicate orchestration or internal runtime checks.
 - Support Ubuntu, macOS local desktop, and Windows local desktop per the matrix.
 - Make installation plans deterministic and dry-runnable; privilege boundary is separately testable.
 - Keep desktop local supervision authoritative unless the user explicitly selects a system service model.
 
-Acceptance: a clean supported local host becomes AO-ready without `hao` installing, locating, configuring, starting, or stopping tmux; a second identical run is a no-op; non-interactive setup is reproducible; rollback restores pre-run files/services; the daemon still binds only loopback; existing desktop startup continues to work. One-click repair reports a runtime-capability upgrade/remediation instead of offering tmux installation once the corresponding desktop/API compatibility release lands.
+Acceptance: a clean supported local host becomes AO-ready; a second identical run is a no-op; non-interactive setup is reproducible; rollback restores pre-run files/services; the daemon still binds only loopback; existing desktop startup and one-click repair continue to work; `hao` manages user-facing prerequisites while treating AO's runtime implementation as part of the AO artifact.
 
 ### Phase 2: pair-mode remote machines
 
@@ -404,28 +395,6 @@ Acceptance: issuance and renewal succeed on a fresh supported VM; DNS mismatch/p
 
 ## 10. Migration and rollback
 
-### Runtime/terminal migration to the no-tmux destination
-
-This migration is owned by AO runtime, daemon, desktop, and release components. It is a prerequisite for advertising no-tmux readiness on currently tmux-bound platforms, but it is not implementation work for `hao`.
-
-| Current tmux-bound surface | Required change | Compatibility sequence for existing sessions/installations | Owner |
-| --- | --- | --- | --- |
-| `backend/internal/adapters/runtime/tmux`: `Runtime`, tmux commands, attach/capture/input/restart/liveness/process inspection, private/default socket routing, `tmuxSessionName` | Provide equivalent behavior through a durable detached runtime implementing `ports.Runtime`, `Attacher`, input/message/interrupt, output, and required observation interfaces; then retire the tmux adapter. | Keep the adapter available only to route persisted tmux handles. Never reinterpret an old opaque handle as a new backend. Remove after the supported session-retention/upgrade window or an explicit safe migration/termination flow. | AO runtime maintainers |
-| `backend/internal/adapters/runtime/runtimeselect`: `New`, `darwinRuntime`, `darwinDirectHandlePrefix`, tmux fallback and legacy routing | Select a detached native runtime for all new Unix sessions; retain explicit versioned-handle routing for legacy sessions; remove fallback only after the new runtime meets startup/recovery acceptance. | Release replacement creation first; observe it; then disable tmux fallback for new sessions; keep legacy routing; finally remove legacy routing at the declared compatibility floor. Linux needs a versioned handle from its first replacement release. | AO daemon/runtime maintainers |
-| `backend/internal/adapters/runtime/conpty` detached host and `ptyexec`; `ports.Runtime`, optional runtime observation interfaces, `ports.Attacher`/`Stream`; `backend/internal/terminal` | Generalize/rename platform-specific implementation details as needed and make durable-host recovery, attach, resize, output, input, liveness, and restart semantics portable. Keep the ports backend-neutral. | Protocol/handle versions must be explicit. New daemon versions must either adopt compatible detached hosts or report a safe incompatibility without declaring sessions dead. | AO runtime and terminal maintainers |
-| Persisted session `RuntimeHandle.ID` values in SQLite, including unprefixed tmux names and `ptyhost-v1:` macOS handles | Document and test handle classification; add a new prefix/version for the replacement where ambiguity exists. | Existing handles continue to route to their original backend. No bulk rewrite without positive proof and rollback. Dirty/live sessions are never force-terminated merely to complete the migration. | AO daemon + storage/lifecycle maintainers |
-| `backend/internal/service/systemcheck`: `checkTmux`, requirement ID/schema value `tmux`; `backend/internal/doctor`: `checkTmux`; HTTP/OpenAPI/frontend requirement consumers | Replace concrete tmux readiness with runtime/terminal capability health. If necessary, add a separate, clearly compatibility-scoped legacy-session warning. | Update DTO/spec/client/UI together. During mixed-version support, clients tolerate both the old `tmux` requirement and the new capability IDs; only the daemon decides whether its selected backend is usable. | AO daemon/API + desktop maintainers |
-| `backend/internal/service/systeminstall`: `TargetTmux`, `planTmux`, job/schema enum; `/api/v1/system/install/tmux`; desktop requirement/install UI | Stop offering tmux installation and remove the target after old desktop compatibility permits. Do not add it to `hao`. | First ship desktop handling for backend-neutral readiness with no tmux repair action; then remove the route/enum in a coordinated API release. Old daemons may still expose it, but new UI and `hao` ignore it. | AO daemon/API + desktop maintainers |
-| `backend/internal/cli/setupvm_plan.go`: `setupVMPackages`, printed install steps, PATH/environment validation | Remove tmux from legacy setup plans and retire the command in favor of `hao`; require an AO version whose runtime contract is self-contained. | Existing installed units keep running. New `hao` adoption validates AO version/capabilities and never removes a system tmux package. Legacy setup command changes/removal follow the separate two-release machine-management window. | `hao`/Hosted machine-management maintainers, with AO CLI compatibility owners |
-| `backend/internal/tmuxbin`; `AO_TMUX_BINARY`; `AO_TMUX_SOCKET_NAME`; private/default socket artifacts | Confine to legacy backend startup, then remove resolution and environment wiring. | Preserve values for releases that can restore old handles. `hao` neither reads nor writes them. Do not delete user/system tmux sockets or packages. | AO runtime + desktop supervisor maintainers |
-| `frontend/scripts/build-tmux.mjs`, `frontend/package.json` package hooks, `frontend/forge.config.ts` tmux resource/version checks | Stop building and embedding tmux after the bundled daemon no longer needs it for new or supported legacy sessions. | Publish at least one observed desktop train with the replacement runtime before removing the bundle. Keep rollback artifacts compatible with the sessions they may reopen. | Desktop/release maintainers |
-| `frontend/src/shared/bundled-tmux.ts`; `ensureBundledTmuxStaged`; daemon env injection in `frontend/src/main.ts`; staged `~/.ao/hosted/runtime/tmux/<identity>/tmux` (or `AO_DATA_DIR/runtime/tmux/...`) | Stop staging and injecting tmux configuration. Add narrowly scoped, recoverable cleanup only after no supported daemon consumes the staged binary. | Upgrades leave the staged binary in place while rollback/legacy support may need it. Cleanup removes only app-owned, positively identified versions; it never uninstalls system tmux or touches unrelated sockets/config. | Desktop supervisor/release maintainers |
-| tmux-specific tests, fixtures, docs, install copy, and terminal wording across backend/frontend/docs | Convert contract tests to the replacement runtime; retain legacy fixtures/tests only for the declared compatibility window; update user-facing support claims last. | Documentation may say “moving away from tmux” immediately. It may say “tmux-free” for a platform only after release and upgrade/legacy acceptance pass. | Owning component maintainers + documentation/release owners |
-
-Required sequencing is: establish and test the backend-neutral capability contract; ship the replacement runtime for new sessions; update readiness and desktop repair UX; preserve explicit routing for old handles and rollback; stop bundling/staging tmux; then remove compatibility code and app-owned artifacts. At no point does `hao` install tmux, edit tmux configuration, remove a user's tmux package, or mark a machine unhealthy merely because tmux is absent.
-
-### Machine-management command and service migration
-
 The migration must span at least two desktop/CLI stable release trains.
 
 1. **Introduce without ownership transfer.** Ship `hao` able to detect/read existing `ao setup-vm`, `ao pair`, `machine.json`, pair cert/passcode, and systemd state. Existing commands and services remain unchanged.
@@ -443,8 +412,8 @@ Existing hosted/account machines are preserved throughout. Domain onboarding may
 
 | Mode | Ubuntu x64 | Ubuntu arm64 | macOS arm64/x64 | Windows x64 | Required scenarios |
 | --- | --- | --- | --- | --- | --- |
-| Config/status/doctor | Unit + fresh VM | Unit + Pi/VM | Real local + unit | Real local + unit | Precedence, redaction, unknown schema, corrupt file, permissions, JSON stability; no direct tmux probe/config key; backend-neutral runtime health and legacy warnings. |
-| Local setup/init | Fresh VM | Fresh VM | Fresh user account, desktop installed | Fresh user account, desktop installed | Clean install with tmux absent, no tmux install/manage action, incompatible AO-runtime remediation, already ready, second-run no-op, non-interactive, denied privilege, partial failure/rollback, paths with spaces. |
+| Config/status/doctor | Unit + fresh VM | Unit + Pi/VM | Real local + unit | Real local + unit | Precedence, redaction, unknown schema, corrupt file, permissions, JSON stability, daemon capability aggregation. |
+| Local setup/init | Fresh VM | Fresh VM | Fresh user account, desktop installed | Fresh user account, desktop installed | Clean install, missing user-facing prerequisite, already ready, second-run no-op, non-interactive, denied privilege, partial failure/rollback, paths with spaces. |
 | Local lifecycle | systemd | systemd | Desktop supervision; launchd only when supported | Desktop supervision | Start/stop ordering, stale run file, occupied port, crash/restart, no competing supervisor. |
 | Pair gateway | Fresh public VM + LAN | Pi-class or arm64 VM | Manual/experimental only | Not supported | First pair, pair show, rotate, service reboot, IP change, IPv4/IPv6 hints, wrong cert, wrong passcode/lockout, no control-plane traffic. |
 | Legacy adoption | Existing hosted and paired VM | Existing paired box | Existing desktop registry/pins | Existing desktop registry | Identity/credential preserved, old service works before and after, rollback restores old unit, old desktop/new host and new desktop/old host compatibility. |
@@ -452,24 +421,23 @@ Existing hosted/account machines are preserved throughout. Domain onboarding may
 | Domain/ACME (Phase 3) | Fresh public VM | Fresh public VM | Client only | Client only | DNS mismatch, private IP, closed 80/443, issuance, restart, renewal, expired cert, auth required, rollback. |
 | Release/update | Linux binaries/checksums | Linux binaries/checksums | Existing zip+dmg/feed policy | Existing installer/feed | Provenance/checksum failure, channel compatibility, no second desktop publisher, previous binary retained. |
 
-CI should cover parsers, planners, fixed argv, redaction, atomic writes, service rendering, route policy, cross-version fixtures, and a negative assertion that no `hao` plan/config/service definition contains a tmux install, probe, environment variable, socket, or lifecycle action. Runtime CI must cover new-handle creation plus legacy-handle routing independently. Real-machine acceptance is mandatory for privilege, service manager, runtime recovery/reattachment, firewall/ports, package manager, reboot, TLS, and updater behavior; mocks cannot establish those properties.
+CI should cover parsers, planners, fixed argv, redaction, atomic writes, service rendering, route policy, cross-version fixtures, and the boundary that `hao` plans user-facing prerequisites rather than AO-internal runtime dependencies. Real-machine acceptance is mandatory for privilege, service manager, firewall/ports, package manager, reboot, TLS, and updater behavior; mocks cannot establish those properties.
 
 ## 12. Dependency-ordered follow-up batches
 
 Each batch is intended to be independently assignable to future AO workers and should land as small PRs against `develop`.
 
-0. **AO runtime prerequisite (separate ownership, not a `hao` implementation batch):** land and release the backend-neutral detached Unix runtime, versioned handle routing, capability readiness, legacy tmux compatibility, and desktop packaging transition described in section 10. `hao` work may develop against fixtures before this is released, but must report tmux-bound AO builds as incompatible rather than install tmux.
-1. **Contract baseline:** config JSON Schema/YAML examples with no runtime-backend key; exit/error code definitions; component compatibility table; legacy installation/runtime-handle fixtures; pairing vectors and gateway route-policy manifest.
+1. **Contract baseline:** config JSON Schema/YAML examples with no runtime-backend key; exit/error code definitions; component compatibility table; legacy installation fixtures; pairing vectors and gateway route-policy manifest.
 2. **Read-only CLI skeleton:** `hao version`, config path/show/validate, state-root library reuse, JSON framing, redaction tests, packaging without mutation.
-3. **Host inventory and doctor aggregation:** platform/init/package detection, daemon capability-health client, service/gateway checks, legacy-session warning passthrough, stable remediation output, timeouts; no tmux probe.
-4. **Install planner and privilege helper:** fixed targets/argv excluding tmux, artifact checksum/provenance verification, dry-run, target-user validation, atomic files, transaction journal, rollback unit tests.
+3. **Host inventory and doctor aggregation:** platform/init/package detection, daemon doctor client, service/gateway checks, stable remediation output, timeouts.
+4. **Install planner and privilege helper:** fixed user-facing prerequisite targets/argv, artifact checksum/provenance verification, dry-run, target-user validation, atomic files, transaction journal, rollback unit tests.
 5. **Local setup/init:** daemon artifact install, local config, macOS/Windows desktop-supervision coexistence, Ubuntu optional service, idempotency acceptance.
 6. **Service lifecycle:** systemd renderer/manager, ordered start/stop/restart/logs, stale discovery and port-conflict diagnostics, real Ubuntu matrix.
 7. **Legacy discovery/adoption:** parse existing `machine.json`, pair stores, paths, and units; backup/import/rollback; cross-version fixtures. No command deprecation yet.
 8. **Pair UX migration:** `hao init --mode pair`, show/rotate/recovery; preserve cert/passcode; gateway health verification; Linux x64/arm64 e2e.
 9. **Desktop compatibility release:** old/new gateway matrix, account + pair origins, pin persistence, machine switching, explicit migration messaging.
 10. **Installer/release transition:** install `hao`, publish checksums/provenance, keep old installer URL and AO artifacts, document conductor ownership and rollback.
-11. **Daemon mutation-route migration:** first remove desktop use of `/api/v1/system/install/tmux` in favor of runtime-capability remediation; replace remaining install calls with the `hao` boundary/manual remedy; retain backend-neutral read-only requirements; observe the compatibility window before removing routes.
+11. **Daemon mutation-route migration:** replace desktop calls to `/api/v1/system/install/*` for user-facing prerequisites with the `hao` boundary/manual remedy, retain read-only requirements; observe the compatibility window before removing routes.
 12. **Legacy CLI deprecation/removal:** warnings, telemetry review, two-release gate, service entry-point conversion, then remove `ao setup-vm`/pair aliases only when gates pass.
 13. **Domain/ACME product decision and threat review:** settle credential/connection format, account requirement, DNS/port policy, renewal/operator notifications, then write an implementation spec.
 14. **Domain implementation:** only after batch 13 approval; reuse gateway, never daemon exposure.
@@ -489,4 +457,4 @@ These questions change product policy and are not silently decided here.
 
 ## 14. Definition of architectural success
 
-The boundary is successful when a maintainer can remove every machine-provisioning command from upstream `ao` without changing how AO creates or supervises a session; when `hao` can prepare or repair a supported host with tmux absent and without installing, probing, configuring, managing, or removing tmux; when AO reports runtime and terminal capabilities without making a concrete backend part of the machine contract; when a gateway can be replaced without migrating AO's database; when `hao` can act without learning an agent session's contents; and when disabling every remote mode leaves an ordinary loopback-only AO installation fully functional.
+The boundary is successful when a maintainer can remove every machine-provisioning command from upstream `ao` without changing how AO creates or supervises a session; when `hao` can prepare or repair a host by managing user-facing prerequisites while AO owns its internal runtime implementation; when a gateway can be replaced without migrating AO's database; when `hao` can act without learning an agent session's contents; and when disabling every remote mode leaves an ordinary loopback-only AO installation fully functional.
