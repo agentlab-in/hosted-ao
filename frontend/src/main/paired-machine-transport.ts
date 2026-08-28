@@ -6,7 +6,10 @@ import {
 	machineConnectingStatus,
 	machineDaemonStatus,
 } from "../shared/remote-daemon";
-import type { GatewayCookieStore } from "./machine-transport";
+export type GatewayCookieStore = {
+	set: (details: Electron.CookiesSetDetails) => Promise<void>;
+	remove: (url: string, name: string) => Promise<void>;
+};
 
 /**
  * The desktop's transport to a paired machine's gateway

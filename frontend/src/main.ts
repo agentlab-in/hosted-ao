@@ -169,7 +169,6 @@ import {
 } from "./main/app-state";
 import { createPeerWorkspacesController } from "./main/peer-workspaces";
 import { createPairedMachinesController } from "./main/paired-machines";
-import type { AoMachine } from "./shared/ao-machines";
 import {
   isAllowedAppExternalURL,
   openAllowedAppExternalURL,
@@ -2455,7 +2454,7 @@ ipcMain.handle("aoMachines:select", (_event, machineId: string) =>
 // itself 401/403s a request, so a revoked/rotated token is not repeated
 // verbatim. Ignored on the paired path: there is nothing to refresh.
 ipcMain.handle("aoMachines:gatewayToken", (_event, forceRefresh?: boolean) =>
-  machineSelection().gatewayToken(forceRefresh),
+  machineSelection().gatewayToken(),
 );
 ipcMain.handle("aoMachines:peerWorkspaces", () => peerWorkspaces().get());
 
@@ -2879,16 +2878,6 @@ app.whenReady().then(async () => {
     : { ...DEFAULT_UI_SETTINGS };
   soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 
-  // Before the first startDaemon(): a machine chosen in a previous run must be
-  // active by the time anything can start a daemon, or the app would spawn a
-  // local one on behalf of a remote machine. restore() reads the remembered
-  // machine off disk, so it needs no network and cannot be beaten by one.
-  try {
-    await aoMachines().restore();
-  } catch (err) {
-    console.error("failed to restore the active machine:", err);
-  }
-
   // The paired-machine pin cache must be populated, and the verify proc
   // installed, before the window opens and the renderer can make its first
   // request: any request that lands first would race the pin (see
@@ -2914,7 +2903,7 @@ app.whenReady().then(async () => {
   // Fills in the real list and each machine's reachability once the window is
   // up. Failure here leaves the remembered machine in place; it never falls
   // back to the local daemon.
-  if (activeMachineStatus) void aoMachines().refresh();
+  if (activeMachineStatus) void machineSelection().refresh();
   initAutoUpdates();
 
   // Windows/Linux: on first launch, the deep-link URL may arrive as a

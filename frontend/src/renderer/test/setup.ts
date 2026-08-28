@@ -1,14 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
 import { expect } from "vitest";
-import type { AoAccountState } from "../../shared/ao-account";
 import { LOCAL_MACHINE_ID, localMachine, type AoMachinesState } from "../../shared/ao-machines";
-import { DEFAULT_CONTROL_PLANE_URL } from "../../shared/control-plane";
 import type { PeerWorkspacesResult } from "../../shared/peer-workspaces";
 import "../i18n";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
-
-const signedOutAoAccount: AoAccountState = { status: "signed-out", controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL };
 
 // Default peer result for tests that don't care about the Cloud toggle: no
 // peer machine registered, same as a fresh install.
@@ -17,7 +13,7 @@ const noPeerRegistered: PeerWorkspacesResult = { state: "unavailable", reason: "
 // Signed out is the default everywhere in tests, and this computer is still the
 // active machine: local use never requires an account.
 const signedOutAoMachines: AoMachinesState = {
-	status: "signed-out",
+	status: "ready",
 	machines: [localMachine("This Mac")],
 	activeMachineId: LOCAL_MACHINE_ID,
 };
@@ -300,11 +296,6 @@ if (typeof window !== "undefined") {
 		featureBuilds: {
 			list: async () => [],
 			getActive: async () => null,
-		},
-		account: {
-			getState: async () => signedOutAoAccount,
-			signIn: async () => signedOutAoAccount,
-			signOut: async () => signedOutAoAccount,
 		},
 		machines: {
 			getState: async () => signedOutAoMachines,

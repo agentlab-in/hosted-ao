@@ -190,19 +190,6 @@ describe("preload application shortcut bridges", () => {
 	});
 });
 
-describe("preload AO account bridge", () => {
-	it.each([
-		["aoAccount:getState", () => exposedBridge().account.getState()],
-		["aoAccount:signIn", () => exposedBridge().account.signIn()],
-		["aoAccount:signOut", () => exposedBridge().account.signOut()],
-	] as const)("invokes %s", async (channel, call) => {
-		// The main-process handler names are the contract here; a typo on either side
-		// would only ever surface at runtime.
-		await call();
-		expect(electronMocks.invoke).toHaveBeenCalledWith(channel);
-	});
-});
-
 describe("preload keybinding recording bridge", () => {
 	it("tells the main process when shortcut capture starts and stops", async () => {
 		await exposedBridge().keybindings.setRecording(true);

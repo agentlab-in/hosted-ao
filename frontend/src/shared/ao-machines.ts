@@ -8,7 +8,10 @@
  * I/O, so the main process owns the fetch and the renderer owns the rendering.
  */
 
-import { isLoopbackHost } from "./control-plane";
+const isLoopbackHost = (hostname: string): boolean => {
+	const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+};
 
 /** Machine zero. Never comes from the control plane and never needs an account. */
 export const LOCAL_MACHINE_ID = "local";
@@ -40,8 +43,6 @@ export type AoMachine = {
 };
 
 export type AoMachinesStatus =
-	// No account, so there is nothing to list. The local machine is still offered.
-	| "signed-out"
 	| "loading"
 	| "ready"
 	// The list could not be fetched. `error` says why; the local machine still works.
