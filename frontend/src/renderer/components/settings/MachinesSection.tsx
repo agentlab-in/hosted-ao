@@ -44,7 +44,10 @@ export function MachinesSection() {
 		retry: 1,
 	});
 	const apply = (next: AoMachinesState) => queryClient.setQueryData(aoMachinesQueryKey, next);
-	const invalidatePaired = () => queryClient.invalidateQueries({ queryKey: aoPairedMachinesQueryKey });
+	const invalidatePaired = () => {
+		void queryClient.invalidateQueries({ queryKey: aoPairedMachinesQueryKey });
+		void queryClient.invalidateQueries({ queryKey: aoMachinesQueryKey });
+	};
 
 	const select = useMutation({
 		mutationFn: (machineId: string) => aoBridge.machines.select(machineId),

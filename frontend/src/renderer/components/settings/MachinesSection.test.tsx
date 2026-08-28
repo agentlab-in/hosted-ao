@@ -119,7 +119,7 @@ test("this computer is machine zero, listed first and active by default", async 
 
 test("signed out still lists this computer and says an account is only for remote machines", async () => {
 	refresh.mockResolvedValue({
-		status: "signed-out",
+		status: "ready",
 		machines: [localMachine("This Mac")],
 		activeMachineId: LOCAL_MACHINE_ID,
 	} satisfies AoMachinesState);

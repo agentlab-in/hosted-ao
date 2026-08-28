@@ -253,15 +253,14 @@ test("renderer: global settings page renders all sections @T0 @SET", async ({
   // "All sections" here means walking the tabs rather than one flat scroll.
   await page.goto("/#/settings");
   await expect(page.getByTestId("settings-page")).toBeVisible();
-  // General is the default tab, and it carries the AO account section (#25).
-  // Local use never requires an account, so the fresh state is signed out and
-  // nothing here blocks the rest of the app.
+  // General is the default tab. Hosted AO account UI has been removed; direct
+  // pairing remains available in the machine section.
   await expect(
     page.locator('[data-testid="settings-section"][data-section="account"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-testid="settings-section"][data-section="machines"]'),
   ).toBeVisible();
-  await expect(page.getByTestId("ao-account-identity")).toHaveText(
-    "Not signed in",
-  );
 
   await page.getByRole("button", { name: "Updates" }).click();
   await expect(

@@ -336,8 +336,8 @@ export async function installFakeBridge(
           getActive: async () => null,
         },
         machines: {
-          getState: async () => signedOutAoMachines,
-          refresh: async () => signedOutAoMachines,
+          getState: async () => ({ ...signedOutAoMachines, machines: [...signedOutAoMachines.machines, ...pairedList] }),
+          refresh: async () => ({ ...signedOutAoMachines, machines: [...signedOutAoMachines.machines, ...pairedList] }),
           select: async () => signedOutAoMachines,
           // api-client's runtimeFetch answers a local 503 for any remote-base
           // request when this is null, before the request ever reaches the
