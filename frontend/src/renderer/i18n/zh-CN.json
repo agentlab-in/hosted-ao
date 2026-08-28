@@ -626,6 +626,7 @@
   "settings.connectMobile": "连接手机",
   "settings.developerMode": "开发者模式",
   "settings.general": "通用",
+  "settings.selfHosting": "自托管",
   "settings.appearance": "外观",
   "settings.sessions": "会话",
   "settings.shortcuts": "快捷键",

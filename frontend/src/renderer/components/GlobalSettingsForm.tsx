@@ -11,10 +11,9 @@ import { MobileDevicesSection } from "./settings/MobileDevicesSection";
 import { ReportProblemContent } from "./settings/ReportProblemContent";
 import { SettingsSection } from "./settings/SettingsSection";
 
-// ponytail: AO account/machines/cloud settings are hosted-only and not yet
-// wired into react-i18next (their copy is hardcoded English below, matching
-// the section components themselves). Localize together if/when the rest of
-// the hosted settings UI gets translated.
+// ponytail: Machine and cloud settings are not yet wired into react-i18next
+// (their copy is hardcoded English below, matching the section components
+// themselves). Localize together with the rest of the hosted settings UI.
 const UpdatesSection = lazy(async () => {
   const module = await import("./settings/UpdatesSection");
   return { default: module.UpdatesSection };
@@ -52,10 +51,11 @@ export function GlobalSettingsForm({
       {(all || section === "general") && (
         <>
           <GeneralSettingsSection titleHidden={titleHidden} />
-          <MachinesSection />
           <CloudSection />
         </>
       )}
+
+      {(all || section === "self-hosting") && <MachinesSection />}
 
       {(all || section === "mobile") && (
         <SettingsSection title={t("settings.mobile")} titleHidden={titleHidden}>

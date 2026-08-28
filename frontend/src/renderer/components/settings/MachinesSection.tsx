@@ -18,19 +18,9 @@ export const aoPairedMachinesQueryKey = ["ao-paired-machines"] as const;
  * The machine picker. One machine is active at a time, and switching re-points
  * the app at that machine's base URL.
  *
- * This computer is machine zero: it is always in the list, it is always
- * selectable, and it never needs an account. Everything below it is either a
- * machine registered with `ao setup-vm`, or a machine paired by address, port,
- * and passcode (docs/adr/0003-pair-mode-gateway.md). No URL and no token is
- * ever typed into this app for a registered machine; a paired machine is the
- * one exception, and its own fingerprint comparison step is what stands in for
- * a certificate authority.
- *
- * Paired machines are selectable exactly like registered ones: `select`
- * resolves a paired id and drives the passcode-credentialed transport instead
- * of the control-plane one (docs/plans/2026-08-16-pair-by-ip-headless-boxes.md
- * task 9), and `activeMachineId` on the shared state reflects a paired id the
- * same way it reflects a registered machine's.
+ * This computer is machine zero: it is always in the list and selectable.
+ * Every remote entry is paired directly by address, port, passcode, and pinned
+ * certificate fingerprint (docs/adr/0003-pair-mode-gateway.md).
  */
 export function MachinesSection() {
 	const { t } = useTranslation();
@@ -67,13 +57,22 @@ export function MachinesSection() {
 	const mutationError = select.error instanceof Error ? select.error.message : null;
 	// A rejected refresh carries its reason on the query, not in `state`, which
 	// is undefined in that case. Without this the pane rendered nothing at all
-	// for a failed refresh, which is how a stalled control plane read as a
-	// permanent "Looking for machines..." spinner.
+	// for a failed refresh, which would otherwise leave a permanent spinner.
 	const refreshError = query.error instanceof Error ? query.error.message : null;
 	const error = state?.error ?? refreshError ?? mutationError;
+	const hasOnlyLocalMachine = state?.status === "ready" && machines.length === 1 && machines[0]?.local;
 
 	return (
 		<SettingsSection title="Machines" sectionId="machines">
+			{hasOnlyLocalMachine ? (
+				<div className="rounded-md bg-raised px-3 py-3" data-testid="self-hosting-empty-state">
+					<p className="text-sm font-medium text-settings-label">This computer is ready for local work</p>
+					<p className="mt-1 text-xs leading-row text-settings-muted">
+						AO runs sessions on this computer by default. Pair another machine to run sessions on a remote box you control.
+					</p>
+				</div>
+			) : null}
+
 			{machines.map((machine) =>
 				machine.local ? (
 					<MachineRow key={machine.id} machine={machine} active={machine.id === activeMachineId}
@@ -87,17 +86,16 @@ export function MachinesSection() {
 
 			{query.isLoading ? (
 				<p className="flex items-center gap-2 px-1 text-xs leading-row text-settings-muted">
-					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
-					Checking paired machines…
+					Checking machine connectivity…
 				</p>
 			) : null}
 
 			<p className="px-1 text-xs leading-row text-settings-muted">
-				One machine is active at a time. Add a machine with its account-free pairing string.
+				One machine is active at a time. This computer is always available; paired machines connect directly to remote boxes you control.
 			</p>
 
 			{/* `ao doctor` is a local command with no HTTP route yet, so nothing
-			    carries a registered machine's readiness here. Saying so once beats
+			    carries a paired machine's readiness here. Saying so once beats
 			    a badge on every machine that would only mean "not asked". */}
 			{machines.some((machine) => !machine.local && machine.harness === "unknown") ? (
 				<p className="px-1 text-xs leading-row text-settings-muted" data-testid="ao-machines-harness-unknown">
@@ -194,14 +192,9 @@ function MachineRow({
 }
 
 /**
- * A paired box (docs/adr/0003-pair-mode-gateway.md), listed alongside local
- * and hosted machines and selectable exactly like a `MachineRow`: `onSelect`
- * carries the same machine id through `machines.select`, which resolves a
- * paired id and drives the passcode-credentialed transport instead of the
- * control-plane one (docs/plans/2026-08-16-pair-by-ip-headless-boxes.md task
- * 9). An unreachable paired box still renders here, with its last-seen time,
- * exactly like an offline registered machine does; removal stays a separate
- * action so a click on the row never both selects and deletes it.
+ * A paired box is selectable through the same machine-selection bridge as the
+ * local machine. An unreachable box remains listed with its last-seen time;
+ * removal stays separate so selecting a row can never delete it.
  */
 function PairedMachineRow({
 	machine,
@@ -259,7 +252,7 @@ function PairedMachineRow({
 }
 
 /**
- * A registered machine with no agent harness cannot run an agent, so it says
+ * A paired machine with no agent harness cannot run an agent, so it says
  * exactly which command to run on it rather than failing later with nothing to
  * act on. The command runs on that machine, over SSH, not here.
  */
