@@ -228,6 +228,35 @@ func TestGateway_BlockedRoutes_NeverReachDaemon(t *testing.T) {
 	}
 }
 
+func TestGateway_SystemInstallRouteFamily_NeverReachesDaemon(t *testing.T) {
+	tg := newTestGateway(t)
+	token := tg.validToken(t)
+
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/system/install"},
+		{http.MethodPost, "/api/v1/system/install/gh"},
+		{http.MethodDelete, "/api/v1/system/install/gh/history"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+
+			tg.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404 (even with a valid token)", rec.Code)
+			}
+		})
+	}
+	if len(tg.daemonCalls) != 0 {
+		t.Errorf("system install route reached daemon %d times, want 0", len(tg.daemonCalls))
+	}
+}
+
 func TestGateway_AllowsSiblingOfBlockedPrefix(t *testing.T) {
 	tg := newTestGateway(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)

@@ -288,6 +288,28 @@ func TestPairGateway_ControlRoutesStayBlocked_EvenWithValidPasscode(t *testing.T
 	}
 }
 
+func TestPairGateway_SystemInstallRouteFamily_NeverReachesDaemon(t *testing.T) {
+	tg := newTestPairGateway(t)
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/system/install"},
+		{http.MethodPost, "/api/v1/system/install/gh"},
+		{http.MethodDelete, "/api/v1/system/install/gh/history"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			rec := tg.request(tc.method, tc.path, tg.passcode, "203.0.113.5:1")
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404 (even with a valid passcode)", rec.Code)
+			}
+		})
+	}
+	if len(tg.daemonCalls) != 0 {
+		t.Errorf("system install route reached daemon %d times, want 0", len(tg.daemonCalls))
+	}
+}
+
 func TestPairGateway_RejectsAValidJWT_ThereIsNoJWKSToVerifyAgainst(t *testing.T) {
 	tg := newTestPairGateway(t)
 	_, priv, _ := ed25519.GenerateKey(nil)
