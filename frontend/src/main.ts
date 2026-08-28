@@ -88,7 +88,6 @@ import {
 } from "./shared/daemon-discovery";
 import { STATE_ROOT_SEGMENTS } from "./shared/state-root";
 import type { DaemonStatus } from "./shared/daemon-status";
-import { machineAuthFailedStatus } from "./shared/remote-daemon";
 import {
   refreshSlowDaemonStartupDetails,
   slowDaemonStartupStatus,
@@ -168,8 +167,6 @@ import {
   writeAppStateMarker,
   type MigrationState,
 } from "./main/app-state";
-import { createAoAccountController } from "./main/ao-account";
-import { createAoMachinesController } from "./main/ao-machines";
 import { createPeerWorkspacesController } from "./main/peer-workspaces";
 import { createPairedMachinesController } from "./main/paired-machines";
 import type { AoMachine } from "./shared/ao-machines";
@@ -188,10 +185,6 @@ import {
   buildWindowsAppMenuTemplate,
 } from "./main/menu";
 import { createRemoteDaemonLifecycle } from "./main/remote-daemon";
-import {
-  createMachineTransport,
-  type MachineTransport,
-} from "./main/machine-transport";
 import {
   createPairedMachineTransport,
   type PairedMachineTransport,
@@ -2299,59 +2292,9 @@ ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {
 ipcMain.handle("featureBuilds:list", () => listFeatureBuilds());
 ipcMain.handle("featureBuilds:getActive", () => getActiveFeatureBuild());
 
-// AO account sign-in. The stored refresh token lives beside the other ~/.ao state
-// files, encrypted with safeStorage. Local mode never consults this: it exists only
-// so a remote machine can be reached later (batches 4 and 5).
-let aoAccountController: ReturnType<typeof createAoAccountController> | null =
-  null;
-function aoAccount(): ReturnType<typeof createAoAccountController> {
-  if (aoAccountController) return aoAccountController;
-  const runFile = runFilePath();
-  aoAccountController = createAoAccountController({
-    stateDir: runFile ? path.dirname(runFile) : null,
-    env: process.env,
-    safeStorage,
-    // The system browser, never an embedded BrowserWindow: Google blocks OAuth in
-    // embedded webviews (RFC 8252 is the supported shape anyway).
-    openExternal: (url: string) => openAllowedAppExternalURL(url, shell),
-  });
-  return aoAccountController;
-}
-
-ipcMain.handle("aoAccount:getState", () => aoAccount().getState());
-ipcMain.handle("aoAccount:signIn", () => aoAccount().signIn());
-ipcMain.handle("aoAccount:signOut", async () => {
-  const state = await aoAccount().signOut();
-  // Signing out removes the only credential that can reach a registered
-  // machine, so the app falls back to this computer, which needs no account.
-  await aoMachines().reset();
-  return state;
-});
-
-// "This Mac" on macOS, per the spec. The other platforms get a label that is
-// not wrong for them. Shared by the machines controller and the peer
-// workspaces controller so the local machine's display name cannot drift
-// between the two.
+// Shared by machine selection and peer workspaces so the local label cannot drift.
 const LOCAL_MACHINE_NAME =
   process.platform === "darwin" ? "This Mac" : "This computer";
-
-// The machine list and which machine is active. This computer is machine zero
-// and is always offered; everything below is only about reaching a machine the
-// account has registered.
-let aoMachinesController: ReturnType<typeof createAoMachinesController> | null =
-  null;
-function aoMachines(): ReturnType<typeof createAoMachinesController> {
-  if (aoMachinesController) return aoMachinesController;
-  const runFile = runFilePath();
-  aoMachinesController = createAoMachinesController({
-    stateDir: runFile ? path.dirname(runFile) : null,
-    env: process.env,
-    safeStorage,
-    localMachineName: LOCAL_MACHINE_NAME,
-    onActiveChange: applyActiveMachine,
-  });
-  return aoMachinesController;
-}
 
 // Paired boxes (docs/adr/0003-pair-mode-gateway.md): the registry of machines
 // reached by address, port, and passcode instead of the control plane, and the
@@ -2460,13 +2403,13 @@ let machineSelectionInstance: MachineSelection | null = null;
 function machineSelection(): MachineSelection {
   if (machineSelectionInstance) return machineSelectionInstance;
   machineSelectionInstance = createMachineSelection({
-    aoMachines: aoMachines(),
+    localMachineName: LOCAL_MACHINE_NAME,
     pairedMachines: pairedMachines(),
     pairedTransport: pairedMachineTransport(),
-    // Read the singleton directly rather than calling machineTransport():
-    // parking it must never force a hosted transport into existence (and
-    // with it, a control-plane token attempt) just to immediately null it out.
-    getHostedTransport: () => machineTransportInstance,
+    onLocalSelected: () => {
+      activeMachineStatus = null;
+      void startDaemon();
+    },
   });
   return machineSelectionInstance;
 }
@@ -2482,8 +2425,8 @@ let peerWorkspacesController: ReturnType<
 function peerWorkspaces(): ReturnType<typeof createPeerWorkspacesController> {
   if (peerWorkspacesController) return peerWorkspacesController;
   peerWorkspacesController = createPeerWorkspacesController({
-    getMachinesState: () => aoMachines().getState(),
-    credential: () => aoMachines().credential(),
+    getMachinesState: () => machineSelection().getState(),
+    getPasscode: (machineId) => pairedMachines().getPasscode(machineId),
     localMachineName: LOCAL_MACHINE_NAME,
     readLocalRunFile: async () => {
       const rfp = runFilePath();
@@ -2496,70 +2439,6 @@ function peerWorkspaces(): ReturnType<typeof createPeerWorkspacesController> {
     },
   });
   return peerWorkspacesController;
-}
-
-// The authenticated transport to the active machine's gateway: the Bearer token
-// the renderer attaches to REST calls, the ao_gw_token cookie /mux and the SSE
-// stream authenticate with, and the silent refresh that keeps both current.
-let machineTransportInstance: MachineTransport | null = null;
-function machineTransport(): MachineTransport | null {
-  if (machineTransportInstance) return machineTransportInstance;
-  // Null when no control-plane credential can exist in this install: no ~/.ao
-  // state dir, or an AO_CONTROL_URL that does not parse. The machines controller
-  // already reports that as its own error, so there is nothing to add here.
-  const credential = aoMachines().credential();
-  if (!credential) return null;
-  machineTransportInstance = createMachineTransport({
-    cookies: session.defaultSession.cookies,
-    controlPlaneUrl: credential.controlPlaneUrl,
-    controlToken: credential.token,
-    onStatus: (status) => {
-      // A paired machine currently owns activeMachineStatus (see
-      // machineSelection().isPairedActive() and pairedMachineTransport()'s own
-      // onStatus above): this transport is parked, and its background token
-      // refresh or a reachability flip on the machine it used to point at must
-      // not clobber the paired machine's status.
-      if (machineSelection().isPairedActive()) return;
-      activeMachineStatus = status;
-      void startDaemon();
-    },
-    // The control plane will not mint a token for the active machine, and it
-    // answers revoked, someone else's, and never-existed identically. The list
-    // is where that resolves: refresh() drops a machine that is gone from the
-    // list and falls back to this computer, which needs no account.
-    onMachineGone: () => {
-      void aoMachines().refresh();
-    },
-  });
-  return machineTransportInstance;
-}
-
-/**
- * Re-point the app at the machine that just became active.
- *
- * A remote machine sets activeMachineStatus, which is what makes the remote
- * lifecycle own the app's daemon state: from here on startDaemon() returns that
- * status and the local start function is never called, whether the machine is
- * up or down. Selecting this computer clears it, and startDaemon() attaches to
- * or spawns the local daemon exactly as it always has.
- *
- * The transport, not this function, publishes the ready status that carries the
- * machine's base URL, and only once it holds a token and has installed the
- * gateway cookie.
- */
-function applyActiveMachine(machine: AoMachine | null): void {
-  const transport = machineTransport();
-  if (transport) {
-    transport.setMachine(machine);
-    return;
-  }
-  activeMachineStatus = machine
-    ? machineAuthFailedStatus(
-        machine,
-        "This computer cannot store an AO sign-in, so it has no credential to send.",
-      )
-    : null;
-  void startDaemon();
 }
 
 // Routed through machineSelection() rather than aoMachines() directly, so a

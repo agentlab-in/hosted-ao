@@ -43,12 +43,6 @@ export function MachinesSection() {
 		queryFn: () => aoBridge.machines.refresh(),
 		retry: 1,
 	});
-	// refresh(), not list(): reachability and last-seen for a paired box come
-	// from an authenticated GET /api/v1/doctor probe, not the registry alone.
-	const pairedQuery = useQuery({
-		queryKey: aoPairedMachinesQueryKey,
-		queryFn: () => aoBridge.pairedMachines.refresh(),
-	});
 	const apply = (next: AoMachinesState) => queryClient.setQueryData(aoMachinesQueryKey, next);
 	const invalidatePaired = () => queryClient.invalidateQueries({ queryKey: aoPairedMachinesQueryKey });
 
@@ -66,7 +60,6 @@ export function MachinesSection() {
 
 	const state = query.data;
 	const machines = state?.machines ?? [];
-	const pairedMachines = pairedQuery.data ?? [];
 	const activeMachineId = state?.activeMachineId ?? "";
 	const mutationError = select.error instanceof Error ? select.error.message : null;
 	// A rejected refresh carries its reason on the query, not in `state`, which
@@ -75,42 +68,29 @@ export function MachinesSection() {
 	// permanent "Looking for machines..." spinner.
 	const refreshError = query.error instanceof Error ? query.error.message : null;
 	const error = state?.error ?? refreshError ?? mutationError;
-	const pairedError = pairedQuery.error instanceof Error ? pairedQuery.error.message : null;
 
 	return (
 		<SettingsSection title="Machines" sectionId="machines">
-			{machines.map((machine) => (
-				<MachineRow
-					key={machine.id}
-					machine={machine}
-					active={machine.id === activeMachineId}
-					busy={select.isPending}
-					onSelect={() => select.mutate(machine.id)}
-				/>
-			))}
-
-			{pairedMachines.map((machine) => (
-				<PairedMachineRow
-					key={machine.id}
-					machine={machine}
-					active={machine.id === activeMachineId}
-					busy={select.isPending}
-					onSelect={() => select.mutate(machine.id)}
-					onRemove={() => setRemoveTarget(machine)}
-				/>
-			))}
+			{machines.map((machine) =>
+				machine.local ? (
+					<MachineRow key={machine.id} machine={machine} active={machine.id === activeMachineId}
+						busy={select.isPending} onSelect={() => select.mutate(machine.id)} />
+				) : (
+					<PairedMachineRow key={machine.id} machine={machine} active={machine.id === activeMachineId}
+						busy={select.isPending} onSelect={() => select.mutate(machine.id)}
+						onRemove={() => setRemoveTarget(machine)} />
+				),
+			)}
 
 			{query.isLoading ? (
 				<p className="flex items-center gap-2 px-1 text-xs leading-row text-settings-muted">
 					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
-					Looking for machines registered to your account…
+					Checking paired machines…
 				</p>
 			) : null}
 
 			<p className="px-1 text-xs leading-row text-settings-muted">
-				{state?.status === "signed-out"
-					? "Sign in to reach a machine you registered with `ao setup-vm`. This computer works without an account."
-					: "One machine is active at a time. Switching points this app at that machine."}
+				One machine is active at a time. Add a machine with its account-free pairing string.
 			</p>
 
 			{/* `ao doctor` is a local command with no HTTP route yet, so nothing
@@ -130,15 +110,6 @@ export function MachinesSection() {
 				</p>
 			) : null}
 
-			{pairedError ? (
-				<p
-					className="flex items-start gap-2 px-1 text-xs leading-row text-error"
-					data-testid="ao-paired-machines-error"
-				>
-					<AlertTriangle className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
-					<span>{pairedError}</span>
-				</p>
-			) : null}
 
 			<SettingsLinkRow icon={Plus} label={t("pairing.addMachine")} onClick={() => setAddOpen(true)} />
 

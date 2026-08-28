@@ -1,6 +1,5 @@
 import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { AccountSection } from "./settings/AccountSection";
 import { CloudSection } from "./settings/CloudSection";
 import { MachinesSection } from "./settings/MachinesSection";
 import type { GlobalSettingsSection as GlobalSettingsPage } from "../stores/ui-store";
@@ -53,7 +52,6 @@ export function GlobalSettingsForm({
       {(all || section === "general") && (
         <>
           <GeneralSettingsSection titleHidden={titleHidden} />
-          <AccountSection />
           <MachinesSection />
           <CloudSection />
         </>
