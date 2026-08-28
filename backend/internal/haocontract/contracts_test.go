@@ -73,7 +73,7 @@ func TestJSONContractsAreWellFormedAndComplete(t *testing.T) {
 	dir := contractDir(t)
 	for _, name := range []string{
 		"config.schema.json", "errors.json", "compatibility.json",
-		"gateway-route-policy.json", "legacy/manifest.json",
+		"prerequisites.json", "gateway-route-policy.json", "legacy/manifest.json",
 		"legacy/machine.json", "legacy/service-shapes.json",
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
@@ -120,6 +120,55 @@ func TestJSONContractsAreWellFormedAndComplete(t *testing.T) {
 	if strings.Join(errors.ErrorEnvelope.Required, ",") != strings.Join(wantFields, ",") {
 		t.Fatalf("error envelope required fields = %v, want %v", errors.ErrorEnvelope.Required, wantFields)
 	}
+	envelopeCodes := map[string]bool{}
+	var rawErrors struct {
+		ErrorEnvelope struct {
+			Properties struct {
+				Code struct {
+					Enum []string `json:"enum"`
+				} `json:"code"`
+			} `json:"properties"`
+		} `json:"errorEnvelope"`
+	}
+	decodeJSON(t, filepath.Join(dir, "errors.json"), &rawErrors)
+	for _, code := range rawErrors.ErrorEnvelope.Properties.Code.Enum {
+		envelopeCodes[code] = true
+	}
+	if !reflect.DeepEqual(envelopeCodes, seenCodes) {
+		t.Fatalf("envelope code enum = %v, taxonomy = %v", envelopeCodes, seenCodes)
+	}
+}
+
+func TestErrorEnvelopeExamplesMatchPublishedSchema(t *testing.T) {
+	dir := contractDir(t)
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("errors.json", mustOpen(t, filepath.Join(dir, "errors.json"))); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("errors.json#/errorEnvelope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{"valid.json", true},
+		{"invalid-code.json", false},
+		{"invalid-empty-framing.json", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value any
+			decodeJSON(t, filepath.Join(dir, "examples", "errors", tc.name), &value)
+			err := schema.Validate(value)
+			if tc.valid && err != nil {
+				t.Fatalf("valid envelope rejected: %v", err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatal("invalid envelope accepted")
+			}
+		})
+	}
 }
 
 func TestLegacyMachineFixtureMatchesGatewayShape(t *testing.T) {
@@ -138,8 +187,13 @@ func TestCompatibilityContractNamesEveryBoundaryComponent(t *testing.T) {
 		UnknownInterfaceVersion string   `json:"unknownInterfaceVersion"`
 		Components              []string `json:"components"`
 		Interfaces              []struct {
-			ID       string `json:"id"`
-			Versions []int  `json:"versions"`
+			ID           string   `json:"id"`
+			Consumer     string   `json:"consumer"`
+			Provider     string   `json:"provider"`
+			Negotiation  string   `json:"negotiation"`
+			Versions     []int    `json:"versions"`
+			Endpoint     string   `json:"endpoint"`
+			Capabilities []string `json:"requiredCapabilities"`
 		} `json:"interfaces"`
 	}
 	decodeJSON(t, filepath.Join(contractDir(t), "compatibility.json"), &compatibility)
@@ -151,15 +205,100 @@ func TestCompatibilityContractNamesEveryBoundaryComponent(t *testing.T) {
 		t.Fatalf("unknown interface policy = %q, want unsupported", compatibility.UnknownInterfaceVersion)
 	}
 	seen := map[string]bool{}
+	byInterface := map[string]struct {
+		Endpoint     string
+		Capabilities []string
+	}{}
 	for _, iface := range compatibility.Interfaces {
-		if iface.ID == "" || seen[iface.ID] || !reflect.DeepEqual(iface.Versions, []int{1}) {
+		if iface.ID == "" || iface.Consumer == "" || iface.Provider == "" || iface.Negotiation == "" || seen[iface.ID] || !reflect.DeepEqual(iface.Versions, []int{1}) {
 			t.Fatalf("invalid compatibility interface: %+v", iface)
 		}
 		seen[iface.ID] = true
+		byInterface[iface.ID] = struct {
+			Endpoint     string
+			Capabilities []string
+		}{iface.Endpoint, iface.Capabilities}
 	}
-	for _, required := range []string{"hao-config", "ao-pair", "gateway-route-policy", "legacy-installation-shape"} {
+	for _, required := range []string{"hao-config", "ao-daemon-api", "daemon-gateway-api", "gateway-desktop-transport", "ao-pair", "gateway-route-policy", "legacy-installation-shape"} {
 		if !seen[required] {
 			t.Errorf("missing compatibility interface %q", required)
+		}
+	}
+	daemon := byInterface["ao-daemon-api"]
+	if daemon.Endpoint != "/api/v1/doctor" || !reflect.DeepEqual(daemon.Capabilities, []string{"runtime", "terminal", "git", "harness"}) {
+		t.Fatalf("daemon negotiation contract is incomplete: %+v", daemon)
+	}
+	readme, err := os.ReadFile(filepath.Join(contractDir(t), "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := range seen {
+		if !strings.Contains(string(readme), "`"+id+"`") {
+			t.Errorf("compatibility table is missing interface %q", id)
+		}
+	}
+}
+
+func TestPrerequisiteOwnershipAndProfiles(t *testing.T) {
+	var contract struct {
+		DefaultWorkflowProfile string `json:"defaultWorkflowProfile"`
+		WorkflowProfiles       map[string]struct {
+			Requires []string `json:"requires"`
+		} `json:"workflowProfiles"`
+		Prerequisites []struct {
+			ID        string `json:"id"`
+			Owner     string `json:"owner"`
+			Condition string `json:"condition"`
+		} `json:"prerequisites"`
+		ForbiddenMachinePolicyKeys []string `json:"forbiddenMachinePolicyKeys"`
+	}
+	decodeJSON(t, filepath.Join(contractDir(t), "prerequisites.json"), &contract)
+	if contract.DefaultWorkflowProfile != "general" {
+		t.Fatalf("default workflow profile = %q", contract.DefaultWorkflowProfile)
+	}
+	if !reflect.DeepEqual(contract.WorkflowProfiles["general"].Requires, []string{"git", "harness"}) ||
+		!reflect.DeepEqual(contract.WorkflowProfiles["github"].Requires, []string{"git", "harness", "gh"}) {
+		t.Fatalf("workflow prerequisite profiles = %+v", contract.WorkflowProfiles)
+	}
+	byID := map[string]struct{ Owner, Condition string }{}
+	for _, prerequisite := range contract.Prerequisites {
+		byID[prerequisite.ID] = struct{ Owner, Condition string }{prerequisite.Owner, prerequisite.Condition}
+	}
+	if byID["ao-runtime"].Owner != "ao-artifact" || byID["gh"].Condition != "workflow-profile:github" {
+		t.Fatalf("prerequisite ownership/conditions = %+v", byID)
+	}
+	if !reflect.DeepEqual(contract.ForbiddenMachinePolicyKeys, []string{"runtimeBackend", "tmux"}) {
+		t.Fatalf("forbidden machine policy keys = %v", contract.ForbiddenMachinePolicyKeys)
+	}
+	var schema struct {
+		Properties struct {
+			Workflow struct {
+				Properties struct {
+					Profile struct {
+						Enum []string `json:"enum"`
+					} `json:"profile"`
+				} `json:"properties"`
+			} `json:"workflow"`
+		} `json:"properties"`
+	}
+	schemaPath := filepath.Join(contractDir(t), "config.schema.json")
+	decodeJSON(t, schemaPath, &schema)
+	profiles := make([]string, 0, len(contract.WorkflowProfiles))
+	for profile := range contract.WorkflowProfiles {
+		profiles = append(profiles, profile)
+	}
+	sort.Strings(profiles)
+	sort.Strings(schema.Properties.Workflow.Properties.Profile.Enum)
+	if !reflect.DeepEqual(profiles, schema.Properties.Workflow.Properties.Profile.Enum) {
+		t.Fatalf("schema workflow profiles = %v, prerequisite profiles = %v", schema.Properties.Workflow.Properties.Profile.Enum, profiles)
+	}
+	schemaBytes, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range contract.ForbiddenMachinePolicyKeys {
+		if strings.Contains(string(schemaBytes), `"`+forbidden+`"`) {
+			t.Errorf("config schema contains forbidden machine policy key %q", forbidden)
 		}
 	}
 }

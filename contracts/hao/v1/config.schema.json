@@ -48,6 +48,14 @@
         "enabled": { "type": "boolean" }
       }
     },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": { "enum": ["general", "github"] }
+      }
+    },
     "pair": {
       "type": "object",
       "additionalProperties": false,

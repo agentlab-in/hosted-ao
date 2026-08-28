@@ -3,10 +3,13 @@
   "policy": "interface-versioned",
   "unknownInterfaceVersion": "unsupported",
   "interfaces": [
-    { "id": "hao-config", "consumer": "hao", "provider": "config", "versions": [1] },
-    { "id": "ao-pair", "consumer": "desktop,hao", "provider": "gateway", "versions": [1] },
-    { "id": "gateway-route-policy", "consumer": "desktop,hao", "provider": "gateway", "versions": [1] },
-    { "id": "legacy-installation-shape", "consumer": "hao", "provider": "legacy-ao", "versions": [1] }
+    { "id": "hao-config", "consumer": "hao", "provider": "config-schema", "versions": [1], "negotiation": "declared-version" },
+    { "id": "ao-daemon-api", "consumer": "hao", "provider": "ao-daemon", "versions": [1], "negotiation": "api-prefix-and-doctor-capabilities", "endpoint": "/api/v1/doctor", "requiredCapabilities": ["runtime", "terminal", "git", "harness"] },
+    { "id": "daemon-gateway-api", "consumer": "gateway", "provider": "ao-daemon", "versions": [1], "negotiation": "compatibility-pinned-release-bundle", "routePolicy": 1 },
+    { "id": "gateway-desktop-transport", "consumer": "desktop", "provider": "gateway", "versions": [1], "negotiation": "rest-sse-mux-and-auth-mode", "routePolicy": 1 },
+    { "id": "ao-pair", "consumer": "desktop,hao", "provider": "gateway", "versions": [1], "negotiation": "uri-version" },
+    { "id": "gateway-route-policy", "consumer": "desktop,hao", "provider": "gateway", "versions": [1], "negotiation": "manifest-version" },
+    { "id": "legacy-installation-shape", "consumer": "hao", "provider": "legacy-service", "versions": [1], "negotiation": "fixture-shape" }
   ],
   "components": ["hao", "ao-daemon", "gateway", "desktop", "config-schema", "legacy-service"]
 }

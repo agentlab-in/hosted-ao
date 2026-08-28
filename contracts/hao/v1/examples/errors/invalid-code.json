@@ -1,0 +1,8 @@
+{
+  "code": "made_up_error",
+  "message": "an unpublished code",
+  "component": "hao",
+  "operation": "init",
+  "remediation": "do something",
+  "details": {}
+}

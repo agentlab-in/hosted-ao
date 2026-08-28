@@ -25,11 +25,11 @@
     "additionalProperties": false,
     "required": ["code", "message", "component", "operation", "remediation", "details"],
     "properties": {
-      "code": { "type": "string" },
-      "message": { "type": "string" },
-      "component": { "type": "string" },
-      "operation": { "type": "string" },
-      "remediation": { "type": "string" },
+      "code": { "enum": ["operation_failed", "desired_state_unhealthy", "authentication_failed", "rollback_required", "invalid_usage", "invalid_config", "unsupported_config_version", "missing_non_interactive_input", "privilege_required", "unsupported_platform", "feature_deferred"] },
+      "message": { "type": "string", "minLength": 1 },
+      "component": { "type": "string", "minLength": 1 },
+      "operation": { "type": "string", "minLength": 1 },
+      "remediation": { "type": "string", "minLength": 1 },
       "details": { "type": "object" }
     }
   }

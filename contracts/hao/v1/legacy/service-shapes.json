@@ -13,6 +13,8 @@
   "hostedGateway": {
     "unitName": "ao-gateway.service",
     "after": ["ao-daemon.service"],
+    "user": "ubuntu",
+    "workingDirectory": "/home/ubuntu/.ao/hosted/data",
     "environment": {
       "AO_MACHINE_FILE": "/home/ubuntu/.ao/hosted/machine.json",
       "AO_VM_DOMAIN": "vm.example.com",
@@ -23,6 +25,8 @@
   "pairGateway": {
     "unitName": "ao-gateway.service",
     "after": ["ao-daemon.service"],
+    "user": "ubuntu",
+    "workingDirectory": "/home/ubuntu/.ao/hosted/data",
     "environment": {
       "AO_VM_PAIR": "on",
       "AO_VM_CERT_DIR": "/home/ubuntu/.ao/hosted/vm-gateway/pair-cert",

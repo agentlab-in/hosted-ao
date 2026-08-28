@@ -10,5 +10,7 @@ install:
   dependencies: missing
 service:
   enabled: true
+workflow:
+  profile: github
 pair:
   listenPort: 443
