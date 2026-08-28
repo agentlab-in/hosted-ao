@@ -86,6 +86,7 @@ export function MachinesSection() {
 
 			{query.isLoading ? (
 				<p className="flex items-center gap-2 px-1 text-xs leading-row text-settings-muted">
+					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
 					Checking machine connectivity…
 				</p>
 			) : null}

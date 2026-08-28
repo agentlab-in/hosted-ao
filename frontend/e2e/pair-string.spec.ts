@@ -48,6 +48,7 @@ test("renderer: pasting a pairing string races the address and pins the machine 
 
 	await page.goto("/#/settings");
 	await expect(page.getByTestId("settings-page")).toBeVisible();
+	await page.getByRole("button", { name: "Self-hosting" }).click();
 	// Not paired yet: the machine picker has nothing at this id.
 	await expect(page.locator(`[data-testid="ao-machine"][data-machine-id="${MACHINE_ID}"]`)).toHaveCount(0);
 
