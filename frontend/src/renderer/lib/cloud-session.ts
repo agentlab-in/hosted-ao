@@ -15,8 +15,13 @@ export interface UseCloudSessionResult {
   signOut: () => Promise<void>;
 }
 
+// The WorkOS AuthKit client id is public configuration (it appears in every
+// sign-in URL), so a baked default keeps sign-in working without build-time
+// setup; VITE_WORKOS_CLIENT_ID overrides it per build when needed.
+const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
+
 export function isCloudSignInConfigured(
-  clientId = import.meta.env.VITE_WORKOS_CLIENT_ID,
+  clientId = import.meta.env.VITE_WORKOS_CLIENT_ID ?? DEFAULT_WORKOS_CLIENT_ID,
 ): boolean {
   return CLOUD_SIGN_IN_ENABLED && Boolean(clientId?.trim());
 }
