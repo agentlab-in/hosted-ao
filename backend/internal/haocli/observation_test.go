@@ -29,6 +29,7 @@ type fakeObserver struct {
 	responses      map[string][]byte
 	getErr         map[string]error
 	urls           []string
+	runFiles       []string
 	disk           uint64
 	diskErr        error
 	portAvailable  bool
@@ -64,8 +65,11 @@ func (f *fakeObserver) Run(ctx context.Context, name string, args ...string) (st
 	}
 	return "version 1.0.0", nil
 }
-func (f *fakeObserver) ReadRunFile(string) (*runfile.Info, error) { return f.runFile, f.runFileErr }
-func (f *fakeObserver) ProcessAlive(int) bool                     { return f.alive }
+func (f *fakeObserver) ReadRunFile(path string) (*runfile.Info, error) {
+	f.runFiles = append(f.runFiles, path)
+	return f.runFile, f.runFileErr
+}
+func (f *fakeObserver) ProcessAlive(int) bool { return f.alive }
 func (f *fakeObserver) GET(_ context.Context, url string) ([]byte, error) {
 	f.urls = append(f.urls, url)
 	if err := f.getErr[url]; err != nil {
@@ -131,6 +135,26 @@ func TestStatusLocalPairJSONAndStrict(t *testing.T) {
 	_, stderr, code := runCLI(t, observationDeps(t, "pair", obs), "--config", fixturePath("valid", "pair.yaml"), "--json", "status", "--strict")
 	if code != 1 || stderr != "" {
 		t.Fatalf("strict code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestStatusAndDoctorUseExactRunFilePath(t *testing.T) {
+	for _, command := range []string{"status", "doctor"} {
+		t.Run(command, func(t *testing.T) {
+			obs := healthyObserver()
+			deps := observationDeps(t, "local", obs)
+			custom := filepath.Join(t.TempDir(), "custom-daemon.json")
+			t.Setenv("AO_RUN_FILE", custom)
+			deps.RunFile = DefaultDeps().RunFile
+
+			_, stderr, code := runCLI(t, deps, "--config", fixturePath("valid", "local.yaml"), command)
+			if code != 0 || stderr != "" {
+				t.Fatalf("code=%d stderr=%q", code, stderr)
+			}
+			if len(obs.runFiles) != 1 || obs.runFiles[0] != custom {
+				t.Fatalf("discovery paths=%q, want exact override %q", obs.runFiles, custom)
+			}
+		})
 	}
 }
 
