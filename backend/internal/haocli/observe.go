@@ -21,7 +21,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
-const maxHTTPBody = 1 << 20
+const (
+	maxHTTPBody      = 1 << 20
+	maxCommandOutput = 4096
+)
 
 // Observer is the complete read-only machine boundary used by status and doctor.
 // Tests inject it so no probe depends on the developer's machine or network.
@@ -73,7 +76,7 @@ func (systemObserver) ProcessAlive(pid int) bool                      { return p
 func (systemObserver) Run(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = nil
-	out := boundedBuffer{remaining: 4096}
+	out := boundedBuffer{remaining: maxCommandOutput}
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	text := strings.TrimSpace(out.String())

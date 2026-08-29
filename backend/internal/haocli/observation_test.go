@@ -238,3 +238,25 @@ func TestProbeTimeoutIsUnknown(t *testing.T) {
 		t.Fatalf("observation=%+v", o)
 	}
 }
+
+func TestSystemObserverRunBoundsNoisyChild(t *testing.T) {
+	if os.Getenv("HAO_TEST_NOISY_CHILD") == "1" {
+		payload := []byte(strings.Repeat("x", maxCommandOutput*8))
+		_, _ = os.Stdout.Write(payload)
+		_, _ = os.Stderr.Write(payload)
+		os.Exit(0)
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HAO_TEST_NOISY_CHILD", "1")
+	out, err := (systemObserver{}).Run(context.Background(), executable, "-test.run=^TestSystemObserverRunBoundsNoisyChild$")
+	if err != nil {
+		t.Fatalf("run noisy child: %v", err)
+	}
+	if len(out) != 256 || out != strings.Repeat("x", 256) {
+		t.Fatalf("captured output length=%d, want bounded 256-byte prefix", len(out))
+	}
+}
