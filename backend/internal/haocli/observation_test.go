@@ -156,8 +156,8 @@ func TestDoctorPartialFailuresStableIDsAndZeroMutation(t *testing.T) {
 	if !strings.Contains(out, `"id":"ao.doctor.terminal-capability"`) || !strings.Contains(out, `"id":"host.disk"`) || !strings.Contains(out, `"status":"error"`) || !strings.Contains(out, `"id":"tool.gh"`) {
 		t.Fatalf("out=%s", out)
 	}
-	if obs.runCalls != 2 {
-		t.Fatalf("run calls=%d; wanted only git and selected harness version probes", obs.runCalls)
+	if obs.runCalls != 3 {
+		t.Fatalf("run calls=%d; wanted only available version and exit-only auth probes", obs.runCalls)
 	}
 }
 

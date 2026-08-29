@@ -34,8 +34,20 @@ surface (`npm run sqlc`, `npm run api`).
   commands resolve configuration under the shared Hosted AO state root, parse
   YAML v1 configuration, fail closed against the published contract, redact
   secret-looking values, and use the published v1 exit/error envelope.
-- Configuration mutation, setup, initialization, service lifecycle, pairing,
-  gateway changes, and host mutation are not part of this foundation.
+- Read-only `hao status` reports the validated desired machine state alongside
+  bounded observations of the loopback AO daemon, AO-reported readiness, Git,
+  profile-conditional GitHub CLI, the selected harness, and gateway support.
+  Its versioned JSON output distinguishes unknown or unsupported facts from
+  proven unhealthy state; `--strict` fails only for proven unhealthy or drifted
+  desired state.
+- Read-only `hao doctor` checks the host, state/config permissions, disk,
+  package/service manager availability, relevant local ports, and safe
+  time-bounded tool authentication probes. When the daemon is reachable it
+  aggregates the daemon's shared doctor report instead of redefining AO runtime
+  or terminal readiness.
+- Configuration mutation, setup, initialization, service lifecycle changes,
+  pairing, gateway changes, authentication flows, and other host mutation are
+  not performed by these observation commands.
 
 ### Backend (Go daemon)
 

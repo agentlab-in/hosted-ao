@@ -3,6 +3,7 @@ package haocli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -115,7 +116,7 @@ func toolObservation(ctx context.Context, deps Deps, id, binary string, desired 
 	defer cancel()
 	out, err := deps.Observer.Run(probeCtx, path, args...)
 	if err != nil {
-		if probeCtx.Err() != nil {
+		if probeCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
 			return Observation{ID: id, Status: "unknown", Desired: true, Evidence: "version probe timed out"}
 		}
 		return Observation{ID: id, Status: "unhealthy", Desired: true, Evidence: "version probe failed"}

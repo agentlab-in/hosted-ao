@@ -113,8 +113,18 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "tool.git", "git", true, "--version")))
 	github := configString(object, "workflow", "profile") == "github"
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "tool.gh", "gh", github, "--version")))
+	if github {
+		add(exitOnlyProbe(ctx, deps, "tool.gh.auth", "gh", []string{"auth", "status"}, "run gh auth login directly as the target user"))
+	} else {
+		add(DiagnosticCheck{ID: "tool.gh.auth", Severity: "info", Status: "disabled", Evidence: "GitHub workflow profile is not selected"})
+	}
 	harness := configString(object, "harness", "id")
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "harness."+harness, harnessBinary(harness), true, "--version")))
+	if harness == "claude-code" {
+		add(exitOnlyProbe(ctx, deps, "harness.claude-code.auth", "claude", []string{"auth", "status", "--json"}, "run claude login directly as the target user"))
+	} else {
+		add(DiagnosticCheck{ID: "harness." + stableID(harness) + ".auth", Severity: "warning", Status: "unsupported", Evidence: "no safe authentication probe is defined for the selected harness"})
+	}
 
 	d := observeDaemon(ctx, deps.Observer, discoveryPath(stateRoot), deps.Timeout)
 	if d.State == "healthy" {
@@ -173,6 +183,22 @@ func anyToolCheck(deps Deps, id string, names []string, remediation string) Diag
 		}
 	}
 	return DiagnosticCheck{ID: id, Severity: "warning", Status: "unsupported", Evidence: "no supported implementation found", Remediation: remediation}
+}
+func exitOnlyProbe(ctx context.Context, deps Deps, id, binary string, args []string, remediation string) DiagnosticCheck {
+	path, err := deps.Observer.LookPath(binary)
+	if err != nil {
+		return DiagnosticCheck{ID: id, Severity: "error", Status: "fail", Evidence: binary + " is unavailable", Remediation: remediation}
+	}
+	probeCtx, cancel := boundedContext(ctx, deps.Timeout)
+	defer cancel()
+	_, err = deps.Observer.Run(probeCtx, path, args...)
+	if err == nil {
+		return passCheck(id, "authentication probe succeeded")
+	}
+	if probeCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+		return DiagnosticCheck{ID: id, Severity: "warning", Status: "unknown", Evidence: "authentication probe timed out", Remediation: remediation}
+	}
+	return DiagnosticCheck{ID: id, Severity: "error", Status: "fail", Evidence: "authentication probe reported not authenticated", Remediation: remediation}
 }
 func diagnosticFromObservation(o Observation) DiagnosticCheck {
 	status, severity := mapObservationStatus(o.Status), "info"

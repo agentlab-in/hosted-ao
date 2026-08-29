@@ -154,6 +154,9 @@ func observeDaemon(ctx context.Context, obs Observer, runFile string, timeout ti
 		if getErr != nil {
 			return getErr
 		}
+		if len(body) > maxHTTPBody {
+			return errors.New("response exceeds size limit")
+		}
 		if err := json.Unmarshal(body, target); err != nil {
 			return fmt.Errorf("malformed response")
 		}
