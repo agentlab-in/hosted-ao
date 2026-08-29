@@ -2,7 +2,6 @@
 package haocontract
 
 import (
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"

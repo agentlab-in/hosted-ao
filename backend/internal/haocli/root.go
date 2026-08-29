@@ -34,6 +34,7 @@ type Deps struct {
 	StateDir func() (string, error)
 }
 
+// DefaultDeps returns the production read-only CLI dependencies.
 func DefaultDeps() Deps {
 	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir}
 }
@@ -72,7 +73,7 @@ func ExecuteArgs(deps Deps, args []string) int {
 	}
 	cliErr := classifyError(err, rootJSON(root), operationFromArgs(args))
 	if emitErr := emitError(deps.Err, cliErr, rootJSON(root)); emitErr != nil {
-		fmt.Fprintln(deps.Err, "hao: could not render error")
+		_, _ = fmt.Fprintln(deps.Err, "hao: could not render error")
 	}
 	return cliErr.ExitStatus
 }
