@@ -2331,25 +2331,23 @@ const LOCAL_MACHINE_NAME =
  * distinct box ever probed, which is what actually needs isolating from
  * `session.defaultSession`.
  *
- * The cost: a probe of an unpinned host is always denied, by design (same as
- * above), so reusing that host's session for a second probe can hit its own
- * cached rejection and fail to capture anything -- not only when the box's
- * certificate has actually changed between the two attempts. The realistic
- * trigger is a retry after an abandoned or failed pairing attempt (compare
- * the fingerprint, close the dialog without pinning, try again), which can
- * come back with a misleading "no certificate could be retrieved" until the
- * app restarts. Re-pairing an already-registered box is unaffected: a pinned
- * host verifies and accepts on `session.defaultSession`, which this probe
- * session never touches. Tracked as a follow-up: #121.
  */
+const pairProbeSessionGenerations = new Map<string, number>();
+
 function pairProbeNetFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
   const hostname = new URL(String(input)).hostname;
-  const probeSession = session.fromPartition(`pair-probe-${hostname}`);
+  const generation = pairProbeSessionGenerations.get(hostname) ?? 0;
+  const probeSession = session.fromPartition(`pair-probe-${hostname}-${generation}`);
   probeSession.setCertificateVerifyProc(pairedMachines().verifyCertificate);
   return probeSession.fetch(String(input), init);
+}
+
+function resetPairProbeSession(address: string): void {
+  const current = pairProbeSessionGenerations.get(address) ?? 0;
+  pairProbeSessionGenerations.set(address, current + 1);
 }
 
 let pairedMachinesController: ReturnType<
@@ -2366,6 +2364,7 @@ function pairedMachines(): ReturnType<typeof createPairedMachinesController> {
     // fetch would bypass the session (and the pin) entirely.
     netFetch: (input, init) => net.fetch(String(input), init),
     probeNetFetch: pairProbeNetFetch,
+    onProbeMiss: resetPairProbeSession,
   });
   return pairedMachinesController;
 }

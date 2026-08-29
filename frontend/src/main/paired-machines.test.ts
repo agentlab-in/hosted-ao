@@ -127,6 +127,29 @@ test("probing an unreachable address reports an error, not a fingerprint", async
 	expect(result).toEqual({ error: expect.stringContaining("No certificate could be retrieved") });
 });
 
+test("probe misses notify the caller so the next attempt can use a fresh session", async () => {
+	const onProbeMiss = vi.fn();
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: unreachableFetch, onProbeMiss, probeTimeoutMs: 200 });
+	await machines.load();
+
+	await machines.probeFingerprint("192.168.1.9", 8443);
+
+	expect(onProbeMiss).toHaveBeenCalledExactlyOnceWith("192.168.1.9");
+});
+
+test("successful fingerprint probes do not rotate the probe session", async () => {
+	let verify: PairCertificateVerifyProc | undefined;
+	const onProbeMiss = vi.fn();
+	const netFetch = netFetchPresenting(CERT_PEM, (request, callback) => verify?.(request, callback));
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, onProbeMiss, probeTimeoutMs: 200 });
+	verify = machines.verifyCertificate;
+	await machines.load();
+
+	await machines.probeFingerprint("192.168.1.5", 8443);
+
+	expect(onProbeMiss).not.toHaveBeenCalled();
+});
+
 /**
  * Regression coverage for #114: a paired machine reading as unreachable
  * until the app restarts, even though the pin and the box are both fine.
