@@ -7,6 +7,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/haocontract"
 )
 
 type commandError struct {
@@ -41,7 +43,7 @@ func operationalError(operation string, err error) commandError {
 	return commandError{Code: "operation_failed", Message: operation + " failed", Remediation: "check the path and permissions, then retry", Details: map[string]any{}, ExitStatus: 1, Cause: err}
 }
 
-func classifyError(err error, _ bool, operation string) commandError {
+func classifyError(err error, operation string) commandError {
 	var typed commandError
 	if errors.As(err, &typed) {
 		if typed.Details == nil {
@@ -61,7 +63,11 @@ func classifyError(err error, _ bool, operation string) commandError {
 
 func emitError(w io.Writer, err commandError, jsonOutput bool) error {
 	if jsonOutput {
-		return json.NewEncoder(w).Encode(errorEnvelope{Code: err.Code, Message: err.Message, Component: "hao", Operation: err.Operation, Remediation: err.Remediation, Details: err.Details})
+		envelope := map[string]any{
+			"code": err.Code, "message": err.Message, "component": "hao",
+			"operation": err.Operation, "remediation": err.Remediation, "details": err.Details,
+		}
+		return json.NewEncoder(w).Encode(haocontract.Redact(envelope))
 	}
 	_, writeErr := fmt.Fprintf(w, "hao: %s\nremediation: %s\n", err.Error(), err.Remediation)
 	return writeErr

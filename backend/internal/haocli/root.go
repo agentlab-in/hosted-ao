@@ -65,17 +65,27 @@ func Execute() int { return ExecuteArgs(DefaultDeps(), os.Args[1:]) }
 // ExecuteArgs runs a testable hao invocation and returns its stable exit code.
 func ExecuteArgs(deps Deps, args []string) int {
 	deps = deps.withDefaults()
+	jsonOutput := wantsJSON(args)
 	root := NewRootCommand(deps)
 	root.SetArgs(args)
 	err := root.Execute()
 	if err == nil {
 		return 0
 	}
-	cliErr := classifyError(err, rootJSON(root), operationFromArgs(args))
-	if emitErr := emitError(deps.Err, cliErr, rootJSON(root)); emitErr != nil {
+	cliErr := classifyError(err, operationFromArgs(args))
+	if emitErr := emitError(deps.Err, cliErr, jsonOutput); emitErr != nil {
 		_, _ = fmt.Fprintln(deps.Err, "hao: could not render error")
 	}
 	return cliErr.ExitStatus
+}
+
+func wantsJSON(args []string) bool {
+	for _, arg := range args {
+		if arg == "--json" || arg == "--json=true" {
+			return true
+		}
+	}
+	return false
 }
 
 type options struct {
@@ -105,11 +115,6 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newVersionCommand(opts))
 	root.AddCommand(newConfigCommand(deps, opts))
 	return root
-}
-
-func rootJSON(root *cobra.Command) bool {
-	flag := root.PersistentFlags().Lookup("json")
-	return flag != nil && flag.Value.String() == "true"
 }
 
 func versionString() string {
@@ -223,11 +228,7 @@ func resolveConfigPath(deps Deps, explicit string) (string, error) {
 }
 
 func stateDir() (string, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Dir(cfg.RunFilePath), nil
+	return config.ResolveStateRoot()
 }
 
 func loadConfig(deps Deps, explicit string) (string, map[string]any, error) {

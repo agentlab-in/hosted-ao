@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -47,7 +48,10 @@ func ParseConfig(data []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("forbidden secret-looking key %q", key)
 	}
 	version, exists := object["version"]
-	if !exists || !isVersionOne(version) {
+	if !exists {
+		return nil, errors.New("configuration version is required")
+	}
+	if !isVersionOne(version) {
 		return nil, UnsupportedVersionError{Version: version}
 	}
 
@@ -85,6 +89,8 @@ func isVersionOne(value any) bool {
 var secretKeyParts = []string{
 	"apikey", "credential", "oauth", "passcode", "password", "privatekey", "secret", "token", "pairingstring",
 }
+
+var secretAssignmentPattern = regexp.MustCompile(`(?i)(pass(code|word)?|token|secret|credential|api[_-]?key|private[_-]?key)\s*[:=]\s*[^/\\\s,;]+`)
 
 // IsSecretLookingKey reports whether a key may name credential material.
 func IsSecretLookingKey(key string) bool {
@@ -140,6 +146,9 @@ func Redact(value any) any {
 		}
 		return out
 	default:
+		if text, ok := value.(string); ok {
+			return secretAssignmentPattern.ReplaceAllString(text, "$1=[REDACTED]")
+		}
 		return value
 	}
 }

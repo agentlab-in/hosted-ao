@@ -69,6 +69,21 @@ func TestConfigPathDefaultExplicitAndRunFileOverride(t *testing.T) {
 	}
 }
 
+func TestConfigPathHonorsDataDirWithoutLoadingDaemonSettings(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AO_RUN_FILE", "")
+	t.Setenv("AO_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("AO_PORT", "not-a-port")
+	t.Setenv("AO_GITLAB_HOST_TOKENS", "example.invalid=example-value=padding")
+	out, stderr, code := runCLI(t, Deps{}, "config", "path")
+	if code != 0 || stderr != "" || strings.TrimSpace(out) != filepath.Join(root, "hao", "config.yaml") {
+		t.Fatalf("data-dir-derived path: code=%d out=%q err=%q", code, out, stderr)
+	}
+	if strings.Contains(out+stderr, "example-value") {
+		t.Fatalf("unrelated daemon setting leaked: out=%q err=%q", out, stderr)
+	}
+}
+
 func TestConfigValidateExamplesAndExplicitFilePrecedence(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -120,8 +135,44 @@ func TestConfigFailuresUseStableExitAndEnvelope(t *testing.T) {
 		assertEnvelope(t, stderr, code, 2, "invalid_config", "config validate")
 	})
 	t.Run("bad flag is usage", func(t *testing.T) {
-		_, stderr, code := runCLI(t, Deps{}, "--json", "config", "show", "--wat")
-		assertEnvelope(t, stderr, code, 2, "invalid_usage", "config show")
+		for _, args := range [][]string{
+			{"--json", "config", "show", "--wat"},
+			{"config", "show", "--wat", "--json"},
+			{"unknown", "--json"},
+			{"--json", "--config"},
+		} {
+			_, stderr, code := runCLI(t, Deps{}, args...)
+			if code != 2 {
+				t.Fatalf("args=%v code=%d err=%q", args, code, stderr)
+			}
+			var envelope errorEnvelope
+			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+				t.Fatalf("args=%v did not preserve JSON framing: %q: %v", args, stderr, err)
+			}
+			if envelope.Code != "invalid_usage" {
+				t.Fatalf("args=%v envelope=%+v", args, envelope)
+			}
+		}
+	})
+	t.Run("error details redact secret-looking path fragments", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "token=example-value", "missing.yaml")
+		_, stderr, code := runCLI(t, Deps{}, "--json", "--config", path, "config", "show")
+		assertEnvelope(t, stderr, code, 1, "operation_failed", "config show")
+		if strings.Contains(stderr, "example-value") || !strings.Contains(stderr, "[REDACTED]") {
+			t.Fatalf("error envelope was not defensively redacted: %s", stderr)
+		}
+	})
+	t.Run("missing version is invalid config", func(t *testing.T) {
+		data, err := os.ReadFile(fixturePath("valid", "local.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "versionless.yaml")
+		if err := os.WriteFile(path, []byte(strings.TrimPrefix(string(data), "version: 1\n")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, stderr, code := runCLI(t, Deps{}, "--json", "config", "validate", "--file", path)
+		assertEnvelope(t, stderr, code, 2, "invalid_config", "config validate")
 	})
 	t.Run("state root failure is operational", func(t *testing.T) {
 		_, stderr, code := runCLI(t, Deps{StateDir: func() (string, error) { return "", errors.New("no home") }}, "--json", "config", "path")
