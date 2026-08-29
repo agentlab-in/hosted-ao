@@ -111,7 +111,7 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 	}
 
 	add(anyToolCheck(deps, "host.package-manager", []string{"apt-get", "dnf", "yum", "brew", "apk"}, "install a supported package manager or manage dependencies manually"))
-	add(anyToolCheck(deps, "host.service-manager", []string{"systemctl", "launchctl"}, "manage services manually on this platform"))
+	add(serviceManagerCheck(deps, goos))
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "tool.git", "git", true, "--version")))
 	github := configString(object, "workflow", "profile") == "github"
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "tool.gh", "gh", github, "--version")))
@@ -182,6 +182,21 @@ func anyToolCheck(deps Deps, id string, names []string, remediation string) Diag
 		}
 	}
 	return DiagnosticCheck{ID: id, Severity: "warning", Status: "unsupported", Evidence: "no supported implementation found", Remediation: remediation}
+}
+func serviceManagerCheck(deps Deps, goos string) DiagnosticCheck {
+	var manager string
+	switch goos {
+	case "linux":
+		manager = "systemctl"
+	case "darwin":
+		manager = "launchctl"
+	default:
+		return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unsupported", Evidence: "no supported service manager is defined for " + goos, Remediation: "manage services manually on this platform"}
+	}
+	if path, err := deps.Observer.LookPath(manager); err == nil {
+		return passCheck("host.service-manager", filepath.Base(path)+" is available")
+	}
+	return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unsupported", Evidence: manager + " is unavailable", Remediation: "manage services manually on this platform"}
 }
 func diagnosticFromObservation(o Observation) DiagnosticCheck {
 	status, severity := mapObservationStatus(o.Status), "info"

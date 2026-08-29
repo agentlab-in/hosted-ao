@@ -236,6 +236,18 @@ func TestDoctorPartialFailuresStableIDsAndZeroMutation(t *testing.T) {
 	}
 }
 
+func TestDoctorRequiresPlatformCorrectServiceManager(t *testing.T) {
+	obs := healthyObserver()
+	obs.platform, obs.arch = "darwin", "arm64"
+	delete(obs.paths, "systemctl")
+	obs.paths["systemctl"] = "/usr/local/bin/systemctl"
+	delete(obs.paths, "launchctl")
+	out, _, code := runCLI(t, observationDeps(t, "local", obs), "--json", "--config", fixturePath("valid", "local.yaml"), "doctor")
+	if code != 0 || !strings.Contains(out, `"id":"host.service-manager"`) || !strings.Contains(out, `"status":"unsupported"`) || !strings.Contains(out, "launchctl is unavailable") {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+}
+
 func TestDaemonDoctorWireDTOCompatibilityAndCollisionSafety(t *testing.T) {
 	wire := controllers.DoctorReportResponse{OK: true, Checks: []controllers.DoctorCheckResponse{{Level: "PASS", Name: "a b", Message: "ok"}, {Level: "MAYBE", Name: "a-b", Message: "Bearer topsecret"}}}
 	body, err := json.Marshal(wire)
