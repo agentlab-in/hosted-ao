@@ -2,6 +2,8 @@ package haocli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -111,7 +113,7 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 	}
 
 	add(anyToolCheck(deps, "host.package-manager", []string{"apt-get", "dnf", "yum", "brew", "apk"}, "install a supported package manager or manage dependencies manually"))
-	add(serviceManagerCheck(deps, goos))
+	add(serviceManagerCheck(ctx, deps, goos))
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "tool.git", "git", true, "--version")))
 	github := configString(object, "workflow", "profile") == "github"
 	add(diagnosticFromObservation(toolObservation(ctx, deps, "tool.gh", "gh", github, "--version")))
@@ -133,7 +135,26 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 	if d.Doctor == nil {
 		add(DiagnosticCheck{ID: "ao.doctor", Severity: "warning", Status: "unknown", Evidence: "AO doctor endpoint is unavailable", Remediation: "restore daemon reachability and rerun hao doctor"})
 	} else {
-		for i, check := range d.Doctor.Checks {
+		normalizedNames := make(map[string]map[string]struct{}, len(d.Doctor.Checks))
+		for _, check := range d.Doctor.Checks {
+			normalized := stableID(check.Name)
+			if normalizedNames[normalized] == nil {
+				normalizedNames[normalized] = map[string]struct{}{}
+			}
+			normalizedNames[normalized][check.Name] = struct{}{}
+		}
+		seenNames := make(map[string]bool, len(d.Doctor.Checks))
+		for _, check := range d.Doctor.Checks {
+			normalized := stableID(check.Name)
+			id := "ao.doctor." + normalized
+			if len(normalizedNames[normalized]) > 1 {
+				id += "-" + shortHash(check.Name)
+			}
+			if seenNames[check.Name] {
+				add(DiagnosticCheck{ID: "ao.doctor.invalid-duplicate-" + shortHash(check.Name), Severity: "error", Status: "error", Evidence: "AO doctor returned a duplicate check name"})
+				continue
+			}
+			seenNames[check.Name] = true
 			status, severity := "unknown", "warning"
 			if check.Level == "WARN" {
 				status, severity = "warn", "warning"
@@ -144,7 +165,10 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 			if check.Level == "PASS" {
 				status, severity = "pass", "info"
 			}
-			add(DiagnosticCheck{ID: fmt.Sprintf("ao.doctor.%03d.%s", i+1, stableID(check.Name)), Severity: severity, Status: status, Evidence: check.Message, Remediation: check.Remediation})
+			if check.Level != "PASS" && check.Level != "WARN" && check.Level != "FAIL" {
+				status, severity = "error", "error"
+			}
+			add(DiagnosticCheck{ID: id, Severity: severity, Status: status, Evidence: check.Message, Remediation: check.Remediation})
 		}
 	}
 	if report.Mode == "pair" {
@@ -183,20 +207,32 @@ func anyToolCheck(deps Deps, id string, names []string, remediation string) Diag
 	}
 	return DiagnosticCheck{ID: id, Severity: "warning", Status: "unsupported", Evidence: "no supported implementation found", Remediation: remediation}
 }
-func serviceManagerCheck(deps Deps, goos string) DiagnosticCheck {
+func serviceManagerCheck(ctx context.Context, deps Deps, goos string) DiagnosticCheck {
 	var manager string
+	var args []string
 	switch goos {
 	case "linux":
 		manager = "systemctl"
+		args = []string{"show-environment"}
 	case "darwin":
 		manager = "launchctl"
+		args = []string{"print", "system"}
 	default:
 		return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unsupported", Evidence: "no supported service manager is defined for " + goos, Remediation: "manage services manually on this platform"}
 	}
-	if path, err := deps.Observer.LookPath(manager); err == nil {
-		return passCheck("host.service-manager", filepath.Base(path)+" is available")
+	path, err := deps.Observer.LookPath(manager)
+	if err != nil {
+		return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unsupported", Evidence: manager + " is unavailable", Remediation: "manage services manually on this platform"}
 	}
-	return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unsupported", Evidence: manager + " is unavailable", Remediation: "manage services manually on this platform"}
+	probeCtx, cancel := boundedContext(ctx, deps.Timeout)
+	defer cancel()
+	if _, err := deps.Observer.Run(probeCtx, path, args...); err != nil {
+		if probeCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
+			return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unknown", Evidence: manager + " usability probe timed out", Remediation: "inspect the service manager manually"}
+		}
+		return DiagnosticCheck{ID: "host.service-manager", Severity: "warning", Status: "unsupported", Evidence: manager + " is installed but not usable", Remediation: "manage services manually on this platform"}
+	}
+	return passCheck("host.service-manager", filepath.Base(path)+" is available and usable")
 }
 func diagnosticFromObservation(o Observation) DiagnosticCheck {
 	status, severity := mapObservationStatus(o.Status), "info"
@@ -241,6 +277,11 @@ func stableID(value string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:4])
 }
 
 func writeDoctorReport(cmd *cobra.Command, report DoctorReport) error {

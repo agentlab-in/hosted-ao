@@ -228,11 +228,11 @@ func TestDoctorPartialFailuresStableIDsAndZeroMutation(t *testing.T) {
 	if code != 1 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(out, `"id":"ao.doctor.001.terminal-capability"`) || !strings.Contains(out, `"id":"host.disk"`) || !strings.Contains(out, `"status":"error"`) || !strings.Contains(out, `"id":"tool.gh"`) {
+	if !strings.Contains(out, `"id":"ao.doctor.terminal-capability"`) || !strings.Contains(out, `"id":"host.disk"`) || !strings.Contains(out, `"status":"error"`) || !strings.Contains(out, `"id":"tool.gh"`) {
 		t.Fatalf("out=%s", out)
 	}
-	if obs.runCalls != 2 {
-		t.Fatalf("run calls=%d; wanted only available version probes", obs.runCalls)
+	if obs.runCalls != 3 {
+		t.Fatalf("run calls=%d; wanted only service-manager and available version probes", obs.runCalls)
 	}
 }
 
@@ -248,6 +248,15 @@ func TestDoctorRequiresPlatformCorrectServiceManager(t *testing.T) {
 	}
 }
 
+func TestDoctorRejectsInstalledButUnusableServiceManager(t *testing.T) {
+	obs := healthyObserver()
+	obs.runErr["/usr/bin/systemctl show-environment"] = errors.New("not booted with systemd")
+	out, _, code := runCLI(t, observationDeps(t, "local", obs), "--json", "--config", fixturePath("valid", "local.yaml"), "doctor")
+	if code != 0 || !strings.Contains(out, `"id":"host.service-manager"`) || !strings.Contains(out, `"status":"unsupported"`) || !strings.Contains(out, "installed but not usable") {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+}
+
 func TestDaemonDoctorWireDTOCompatibilityAndCollisionSafety(t *testing.T) {
 	wire := controllers.DoctorReportResponse{OK: true, Checks: []controllers.DoctorCheckResponse{{Level: "PASS", Name: "a b", Message: "ok"}, {Level: "MAYBE", Name: "a-b", Message: "Bearer topsecret"}}}
 	body, err := json.Marshal(wire)
@@ -257,10 +266,12 @@ func TestDaemonDoctorWireDTOCompatibilityAndCollisionSafety(t *testing.T) {
 	obs := healthyObserver()
 	obs.responses["http://127.0.0.1:4321/api/v1/doctor"] = body
 	out, _, code := runCLI(t, observationDeps(t, "local", obs), "--config", fixturePath("valid", "local.yaml"), "--json", "doctor")
-	if code != 0 {
+	if code != 1 {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
-	if !strings.Contains(out, `"id":"ao.doctor.001.a-b"`) || !strings.Contains(out, `"id":"ao.doctor.002.a-b"`) || !strings.Contains(out, `"status":"unknown"`) || strings.Contains(out, "topsecret") {
+	wantA := `"id":"ao.doctor.a-b-` + shortHash("a b") + `"`
+	wantB := `"id":"ao.doctor.a-b-` + shortHash("a-b") + `"`
+	if !strings.Contains(out, wantA) || !strings.Contains(out, wantB) || !strings.Contains(out, `"status":"error"`) || strings.Contains(out, "topsecret") {
 		t.Fatalf("out=%s", out)
 	}
 }
