@@ -8,12 +8,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/haocontract"
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/haocontract"
 )
 
 const observationSchemaVersion = 1
 
+// Observation is one stable desired-versus-observed status fact.
 type Observation struct {
 	ID          string `json:"id"`
 	Status      string `json:"status"`
@@ -24,6 +26,7 @@ type Observation struct {
 	Drift       bool   `json:"drift"`
 }
 
+// StatusReport is the versioned machine-readable status document.
 type StatusReport struct {
 	SchemaVersion    int           `json:"schemaVersion"`
 	Machine          string        `json:"machine"`

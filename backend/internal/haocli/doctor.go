@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// DiagnosticCheck is one stable, independently executable doctor result.
 type DiagnosticCheck struct {
 	ID          string `json:"id"`
 	Severity    string `json:"severity"`
@@ -20,6 +21,7 @@ type DiagnosticCheck struct {
 	Remediation string `json:"remediation,omitempty"`
 }
 
+// DoctorReport is the versioned machine-readable diagnostic document.
 type DoctorReport struct {
 	SchemaVersion     int               `json:"schemaVersion"`
 	Machine           string            `json:"machine"`

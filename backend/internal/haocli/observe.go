@@ -38,6 +38,7 @@ type Observer interface {
 	PortAvailable(ctx context.Context, host string, port int) (bool, error)
 }
 
+// FileObservation contains only ownership and permission facts needed by doctor.
 type FileObservation struct {
 	Mode  os.FileMode
 	UID   int
@@ -95,6 +96,7 @@ func (systemObserver) PortAvailable(ctx context.Context, host string, port int) 
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
+		//nolint:nilerr // A bind failure proves unavailability; OS socket text is not useful evidence.
 		return false, nil
 	}
 	return true, ln.Close()
