@@ -24,5 +24,10 @@ func diskAvailable(path string) (uint64, error) {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0, err
 	}
+	if stat.Bsize <= 0 {
+		return 0, nil
+	}
+	// Bsize is non-negative after the guard above. Its signedness differs by OS.
+	//nolint:gosec,unconvert // Linux uses int64 while Darwin uses uint32.
 	return stat.Bavail * uint64(stat.Bsize), nil
 }
