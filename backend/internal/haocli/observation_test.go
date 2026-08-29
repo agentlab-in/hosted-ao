@@ -269,10 +269,27 @@ func TestDaemonDoctorWireDTOCompatibilityAndCollisionSafety(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
-	wantA := `"id":"ao.doctor.a-b-` + shortHash("a b") + `"`
-	wantB := `"id":"ao.doctor.a-b-` + shortHash("a-b") + `"`
+	wantA := `"id":"ao.doctor.a-b-` + losslessID("a b") + `"`
+	wantB := `"id":"ao.doctor.a-b-` + losslessID("a-b") + `"`
 	if !strings.Contains(out, wantA) || !strings.Contains(out, wantB) || !strings.Contains(out, `"status":"error"`) || strings.Contains(out, "topsecret") {
 		t.Fatalf("out=%s", out)
+	}
+}
+
+func TestDaemonDoctorIDsAreCollisionFreeForHashCollisionAndDuplicates(t *testing.T) {
+	obs := healthyObserver()
+	obs.responses["http://127.0.0.1:4321/api/v1/doctor"] = []byte(`{"ok":true,"checks":[{"level":"PASS","name":"ab","message":"one"},{"level":"PASS","name":"a𒝭b","message":"two"},{"level":"PASS","name":"same","message":"a"},{"level":"PASS","name":"same","message":"b"},{"level":"PASS","name":"same","message":"c"}]}`)
+	out, _, code := runCLI(t, observationDeps(t, "local", obs), "--json", "--config", fixturePath("valid", "local.yaml"), "doctor")
+	if code != 1 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	for _, name := range []string{"ab", "a𒝭b"} {
+		if !strings.Contains(out, `"id":"ao.doctor.a-b-`+losslessID(name)+`"`) {
+			t.Fatalf("missing lossless id for %q: %s", name, out)
+		}
+	}
+	if strings.Count(out, `"id":"ao.projection.duplicate-doctor-names"`) != 1 || strings.Contains(out, `"id":"ao.doctor.same"`) {
+		t.Fatalf("duplicate projection not aggregated: %s", out)
 	}
 }
 

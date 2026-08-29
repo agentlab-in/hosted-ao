@@ -2,8 +2,7 @@ package haocli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -136,25 +135,29 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 		add(DiagnosticCheck{ID: "ao.doctor", Severity: "warning", Status: "unknown", Evidence: "AO doctor endpoint is unavailable", Remediation: "restore daemon reachability and rerun hao doctor"})
 	} else {
 		normalizedNames := make(map[string]map[string]struct{}, len(d.Doctor.Checks))
+		rawNameCounts := make(map[string]int, len(d.Doctor.Checks))
 		for _, check := range d.Doctor.Checks {
 			normalized := stableID(check.Name)
 			if normalizedNames[normalized] == nil {
 				normalizedNames[normalized] = map[string]struct{}{}
 			}
 			normalizedNames[normalized][check.Name] = struct{}{}
+			rawNameCounts[check.Name]++
 		}
-		seenNames := make(map[string]bool, len(d.Doctor.Checks))
+		duplicateReported := false
 		for _, check := range d.Doctor.Checks {
-			normalized := stableID(check.Name)
-			id := "ao.doctor." + normalized
-			if len(normalizedNames[normalized]) > 1 {
-				id += "-" + shortHash(check.Name)
-			}
-			if seenNames[check.Name] {
-				add(DiagnosticCheck{ID: "ao.doctor.invalid-duplicate-" + shortHash(check.Name), Severity: "error", Status: "error", Evidence: "AO doctor returned a duplicate check name"})
+			if rawNameCounts[check.Name] > 1 {
+				if !duplicateReported {
+					add(DiagnosticCheck{ID: "ao.projection.duplicate-doctor-names", Severity: "error", Status: "error", Evidence: "AO doctor returned duplicate check names"})
+					duplicateReported = true
+				}
 				continue
 			}
-			seenNames[check.Name] = true
+			normalized := stableID(check.Name)
+			id := "ao.doctor." + normalized
+			if len(normalizedNames[normalized]) > 1 || normalized == "" {
+				id += "-" + losslessID(check.Name)
+			}
 			status, severity := "unknown", "warning"
 			if check.Level == "WARN" {
 				status, severity = "warn", "warning"
@@ -279,9 +282,12 @@ func stableID(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func shortHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:4])
+func losslessID(value string) string {
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(value))
+	if encoded == "" {
+		return "empty"
+	}
+	return encoded
 }
 
 func writeDoctorReport(cmd *cobra.Command, report DoctorReport) error {
