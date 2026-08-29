@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/buildinfo"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/haocontract"
 )
@@ -111,14 +112,7 @@ func rootJSON(root *cobra.Command) bool {
 }
 
 func versionString() string {
-	parts := []string{Version}
-	if Commit != "" {
-		parts = append(parts, "commit "+Commit)
-	}
-	if Date != "" {
-		parts = append(parts, "built "+Date)
-	}
-	return strings.Join(parts, " ")
+	return buildinfo.String(Version, Commit, Date)
 }
 
 func newVersionCommand(opts *options) *cobra.Command {

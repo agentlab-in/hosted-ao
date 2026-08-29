@@ -1,9 +1,9 @@
 # .github/workflows/linux-cli-binaries.yml
 name: Linux CLI binaries
 
-# Cross-compiles the standalone `ao` binary (backend/cmd/ao) for linux/amd64 and
-# linux/arm64 and uploads each as a run artifact. This is the only way to get a
-# bare `ao` onto a Linux box: frontend/scripts/build-daemon.mjs compiles for the
+# Cross-compiles the standalone `ao` and `hao` binaries for linux/amd64 and
+# linux/arm64 and uploads each pair as a run artifact. This is the only way to
+# get the bare CLIs onto a Linux box: frontend/scripts/build-daemon.mjs compiles for the
 # host platform only and its output ships bundled inside the Electron app, and
 # `ao setup-vm` installs the daemon by copying the running binary, so the box
 # must already have one (a Raspberry Pi is arm64).
@@ -74,8 +74,8 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-      # cli.Version/Commit/Date default to "dev"/""/"" and nothing overrides
-      # them today, which would make `ao --version` on a box useless and
+      # Build metadata defaults to "dev"/""/"" and nothing overrides it in a
+      # local build, which would make `ao --version` / `hao version` useless and
       # setup-vm's version-skew note unable to name what the daemon is behind
       # by. Stamp them here. The date is the checked-out commit's date, not the
       # build time, so rebuilding the same ref produces the same string.
@@ -100,11 +100,15 @@ jobs:
           DATE: ${{ steps.stamp.outputs.date }}
         working-directory: backend
         run: |
-          pkg="github.com/aoagents/agent-orchestrator/backend/internal/cli"
+          ao_pkg="github.com/aoagents/agent-orchestrator/backend/internal/cli"
+          hao_pkg="github.com/aoagents/agent-orchestrator/backend/internal/haocli"
           mkdir -p ../dist
           CGO_ENABLED=0 GOOS=linux go build -trimpath \
-            -ldflags "-X ${pkg}.Version=${VERSION} -X ${pkg}.Commit=${COMMIT} -X ${pkg}.Date=${DATE}" \
+            -ldflags "-X ${ao_pkg}.Version=${VERSION} -X ${ao_pkg}.Commit=${COMMIT} -X ${ao_pkg}.Date=${DATE}" \
             -o ../dist/ao ./cmd/ao
+          CGO_ENABLED=0 GOOS=linux go build -trimpath \
+            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE}" \
+            -o ../dist/hao ./cmd/hao
       # A green build is not proof: `go build` with a bad GOARCH would still
       # exit 0 having produced a host binary. Assert the ELF machine, and on
       # amd64 (the runner's own architecture) also run the thing and check the
@@ -116,12 +120,14 @@ jobs:
           EXPECTED_ELF: ${{ matrix.elf }}
           VERSION: ${{ steps.stamp.outputs.version }}
         run: |
-          described="$(file -b dist/ao)"
-          echo "$described"
-          case "$described" in
-            *"$EXPECTED_ELF"*) ;;
-            *) echo "::error::$TARGET is not a $EXPECTED_ELF ELF executable: $described"; exit 1 ;;
-          esac
+          for binary in ao hao; do
+            described="$(file -b "dist/$binary")"
+            echo "$binary: $described"
+            case "$described" in
+              *"$EXPECTED_ELF"*) ;;
+              *) echo "::error::$TARGET $binary is not a $EXPECTED_ELF ELF executable: $described"; exit 1 ;;
+            esac
+          done
           if [ "$TARGET" = "linux-x64" ]; then
             reported="$(dist/ao version)"
             echo "ao version -> $reported"
@@ -129,14 +135,22 @@ jobs:
               "$VERSION "*) ;;
               *) echo "::error::version stamp missing: got '$reported', expected it to start with '$VERSION '"; exit 1 ;;
             esac
+            hao_reported="$(dist/hao version)"
+            echo "hao version -> $hao_reported"
+            case "$hao_reported" in
+              "$VERSION "*) ;;
+              *) echo "::error::hao version stamp missing: got '$hao_reported', expected it to start with '$VERSION '"; exit 1 ;;
+            esac
           fi
-          hash="$(sha256sum dist/ao | awk '{print $1}')"
-          echo "$hash  ao" > dist/ao.sha256
+          ao_hash="$(sha256sum dist/ao | awk '{print $1}')"
+          hao_hash="$(sha256sum dist/hao | awk '{print $1}')"
+          echo "$ao_hash  ao" > dist/ao.sha256
+          echo "$hao_hash  hao" > dist/hao.sha256
           {
             echo "### $TARGET"
             echo '```'
-            echo "file: $described"
-            echo "sha256: $hash"
+            echo "ao sha256: $ao_hash"
+            echo "hao sha256: $hao_hash"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload artifact
@@ -146,5 +160,7 @@ jobs:
           path: |
             dist/ao
             dist/ao.sha256
+            dist/hao
+            dist/hao.sha256
           retention-days: 7
           if-no-files-found: error

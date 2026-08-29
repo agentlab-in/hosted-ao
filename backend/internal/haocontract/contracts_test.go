@@ -13,6 +13,7 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v5"
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/haocontract"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
@@ -66,6 +67,16 @@ func TestConfigExamplesMatchSchema(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestEmbeddedConfigSchemaMatchesPublishedContract(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(contractDir(t), "config.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != haocontract.ConfigSchemaJSON {
+		t.Fatal("embedded hao config schema is stale; run go generate ./internal/haocontract")
 	}
 }
 

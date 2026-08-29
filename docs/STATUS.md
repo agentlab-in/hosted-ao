@@ -24,6 +24,19 @@ surface (`npm run sqlc`, `npm run api`).
 
 ## Shipped
 
+### Hosted AO machine CLI (`hao`)
+
+- A standalone machine-management-only `hao` executable ships alongside the
+  Linux CLI artifacts. Its command surface is intentionally isolated from AO
+  orchestration commands.
+- `hao version` provides stable human and JSON build information.
+- Read-only `hao config path`, `hao config show`, and `hao config validate`
+  commands resolve configuration under the shared Hosted AO state root, parse
+  YAML v1 configuration, fail closed against the published contract, redact
+  secret-looking values, and use the published v1 exit/error envelope.
+- Configuration mutation, setup, initialization, service lifecycle, pairing,
+  gateway changes, and host mutation are not part of this foundation.
+
 ### Backend (Go daemon)
 
 - Loopback-only HTTP daemon (chi router, CORS, per-request timeout,
