@@ -2,6 +2,7 @@
 package haocli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -32,11 +34,14 @@ type Deps struct {
 	Err      io.Writer
 	ReadFile func(string) ([]byte, error)
 	StateDir func() (string, error)
+	Observer Observer
+	Timeout  time.Duration
+	Now      func() time.Time
 }
 
 // DefaultDeps returns the production read-only CLI dependencies.
 func DefaultDeps() Deps {
-	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir}
+	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, Observer: systemObserver{}, Timeout: 2 * time.Second, Now: time.Now}
 }
 
 func (d Deps) withDefaults() Deps {
@@ -56,6 +61,15 @@ func (d Deps) withDefaults() Deps {
 	if d.StateDir == nil {
 		d.StateDir = defaults.StateDir
 	}
+	if d.Observer == nil {
+		d.Observer = defaults.Observer
+	}
+	if d.Timeout <= 0 {
+		d.Timeout = defaults.Timeout
+	}
+	if d.Now == nil {
+		d.Now = defaults.Now
+	}
 	return d
 }
 
@@ -73,6 +87,9 @@ func ExecuteArgs(deps Deps, args []string) int {
 		return 0
 	}
 	cliErr := classifyError(err, operationFromArgs(args))
+	if cliErr.Silent {
+		return cliErr.ExitStatus
+	}
 	if emitErr := emitError(deps.Err, cliErr, jsonOutput); emitErr != nil {
 		_, _ = fmt.Fprintln(deps.Err, "hao: could not render error")
 	}
@@ -114,7 +131,13 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	})
 	root.AddCommand(newVersionCommand(opts))
 	root.AddCommand(newConfigCommand(deps, opts))
+	root.AddCommand(newStatusCommand(deps, opts))
+	root.AddCommand(newDoctorCommand(deps, opts))
 	return root
+}
+
+func boundedContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, timeout)
 }
 
 func versionString() string {

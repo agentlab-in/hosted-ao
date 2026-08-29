@@ -220,7 +220,7 @@ func TestCommandSurfaceContainsNoAOOrchestration(t *testing.T) {
 	for _, cmd := range root.Commands() {
 		got = append(got, cmd.Name())
 	}
-	if want := []string{"config", "version"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"config", "doctor", "status", "version"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("hao commands = %v, want %v", got, want)
 	}
 	for _, forbidden := range []string{"spawn", "session", "send", "project", "review", "terminal", "daemon", "vm"} {
