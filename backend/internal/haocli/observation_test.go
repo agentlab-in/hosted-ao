@@ -158,6 +158,55 @@ func TestStatusAndDoctorUseExactRunFilePath(t *testing.T) {
 	}
 }
 
+func TestDisabledServiceAndAbsentDaemonAgree(t *testing.T) {
+	obs := healthyObserver()
+	obs.runFile = nil
+	deps := observationDeps(t, "local", obs)
+	configPath := fixturePath("valid", "local.yaml")
+
+	statusOut, statusErr, statusCode := runCLI(t, deps, "--json", "--config", configPath, "status", "--strict")
+	if statusCode != 0 || statusErr != "" {
+		t.Fatalf("status code=%d stderr=%q", statusCode, statusErr)
+	}
+	var status StatusReport
+	if err := json.Unmarshal([]byte(statusOut), &status); err != nil {
+		t.Fatal(err)
+	}
+	statusFound := false
+	for _, observation := range status.Observations {
+		if observation.ID == "ao.daemon" {
+			statusFound = true
+			if observation.Status != "disabled" || observation.Desired {
+				t.Fatalf("status daemon observation=%+v, want disabled and undesired", observation)
+			}
+		}
+	}
+	if !statusFound {
+		t.Fatal("status report missing ao.daemon observation")
+	}
+
+	doctorOut, doctorErr, doctorCode := runCLI(t, deps, "--json", "--config", configPath, "doctor")
+	if doctorCode != 0 || doctorErr != "" {
+		t.Fatalf("doctor code=%d stderr=%q", doctorCode, doctorErr)
+	}
+	var doctor DoctorReport
+	if err := json.Unmarshal([]byte(doctorOut), &doctor); err != nil {
+		t.Fatal(err)
+	}
+	doctorFound := false
+	for _, check := range doctor.Checks {
+		if check.ID == "ao.daemon" {
+			doctorFound = true
+			if check.Status != "disabled" {
+				t.Fatalf("doctor daemon status=%q, want disabled", check.Status)
+			}
+		}
+	}
+	if !doctorFound {
+		t.Fatal("doctor report missing ao.daemon check")
+	}
+}
+
 func TestStatusUnknownAndConditionalTools(t *testing.T) {
 	obs := healthyObserver()
 	delete(obs.paths, "gh")
