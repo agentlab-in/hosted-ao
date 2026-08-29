@@ -556,6 +556,28 @@ func DefaultStateDir() (string, error) {
 	return filepath.Join(append([]string{homeDir}, StateRootSegments()...)...), nil
 }
 
+// ResolveStateRoot returns the canonical state root without loading unrelated
+// daemon settings. AO_RUN_FILE identifies the root directly. When only
+// AO_DATA_DIR is overridden, its parent is the corresponding state root because
+// the default data directory is <state-root>/data.
+func ResolveStateRoot() (string, error) {
+	if runFile := strings.TrimSpace(os.Getenv("AO_RUN_FILE")); runFile != "" {
+		absolute, err := absOverride("AO_RUN_FILE", runFile)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Dir(absolute), nil
+	}
+	if dataDir := strings.TrimSpace(os.Getenv("AO_DATA_DIR")); dataDir != "" {
+		absolute, err := absOverride("AO_DATA_DIR", dataDir)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Dir(absolute), nil
+	}
+	return DefaultStateDir()
+}
+
 // absOverride resolves an explicit AO_DATA_DIR/AO_RUN_FILE override to an
 // absolute path against the process's launch cwd. The daemon chdir's into its
 // data dir at startup (see stabilizeWorkingDirectory), so a relative override

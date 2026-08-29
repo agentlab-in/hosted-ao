@@ -240,14 +240,21 @@ jobs:
           COMMIT: ${{ steps.cli-stamp.outputs.commit }}
           DATE: ${{ steps.cli-stamp.outputs.date }}
         run: |
-          pkg="github.com/aoagents/agent-orchestrator/backend/internal/cli"
+          ao_pkg="github.com/aoagents/agent-orchestrator/backend/internal/cli"
+          hao_pkg="github.com/aoagents/agent-orchestrator/backend/internal/haocli"
           mkdir -p "$GITHUB_WORKSPACE/dist-cli"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-            -ldflags "-X ${pkg}.Version=${VERSION} -X ${pkg}.Commit=${COMMIT} -X ${pkg}.Date=${DATE}" \
+            -ldflags "-X ${ao_pkg}.Version=${VERSION} -X ${ao_pkg}.Commit=${COMMIT} -X ${ao_pkg}.Date=${DATE}" \
             -o "$GITHUB_WORKSPACE/dist-cli/ao-linux-x64" ./cmd/ao
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
-            -ldflags "-X ${pkg}.Version=${VERSION} -X ${pkg}.Commit=${COMMIT} -X ${pkg}.Date=${DATE}" \
+            -ldflags "-X ${ao_pkg}.Version=${VERSION} -X ${ao_pkg}.Commit=${COMMIT} -X ${ao_pkg}.Date=${DATE}" \
             -o "$GITHUB_WORKSPACE/dist-cli/ao-linux-arm64" ./cmd/ao
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE}" \
+            -o "$GITHUB_WORKSPACE/dist-cli/hao-linux-x64" ./cmd/hao
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
+            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE}" \
+            -o "$GITHUB_WORKSPACE/dist-cli/hao-linux-arm64" ./cmd/hao
 
       # A green build is not proof: a bad GOARCH would still exit 0 having
       # produced a host binary. Assert the ELF machine per arch, and on
@@ -272,11 +279,19 @@ jobs:
           }
           check ao-linux-x64 "x86-64"
           check ao-linux-arm64 "ARM aarch64"
+          check hao-linux-x64 "x86-64"
+          check hao-linux-arm64 "ARM aarch64"
           reported="$(./ao-linux-x64 version)"
           echo "ao-linux-x64 version -> $reported"
           case "$reported" in
             "$VERSION "*) ;;
             *) echo "::error::version stamp missing: got '$reported', expected it to start with '$VERSION '"; exit 1 ;;
+          esac
+          hao_reported="$(./hao-linux-x64 version)"
+          echo "hao-linux-x64 version -> $hao_reported"
+          case "$hao_reported" in
+            "$VERSION "*) ;;
+            *) echo "::error::hao version stamp missing: got '$hao_reported', expected it to start with '$VERSION '"; exit 1 ;;
           esac
 
       - name: Upload Linux CLI binaries
@@ -288,7 +303,9 @@ jobs:
           cd "$GITHUB_WORKSPACE/dist-cli"
           sha256sum ao-linux-x64 > ao-linux-x64.sha256
           sha256sum ao-linux-arm64 > ao-linux-arm64.sha256
-          gh release upload "$tag" ao-linux-x64 ao-linux-x64.sha256 ao-linux-arm64 ao-linux-arm64.sha256 --clobber
+          sha256sum hao-linux-x64 > hao-linux-x64.sha256
+          sha256sum hao-linux-arm64 > hao-linux-arm64.sha256
+          gh release upload "$tag" ao-linux-x64 ao-linux-x64.sha256 ao-linux-arm64 ao-linux-arm64.sha256 hao-linux-x64 hao-linux-x64.sha256 hao-linux-arm64 hao-linux-arm64.sha256 --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

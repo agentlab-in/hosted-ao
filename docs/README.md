@@ -24,7 +24,7 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [telemetry.md](telemetry.md)                           | User-facing overview of product telemetry, privacy safeguards, and opt-out controls.                                    |
 | [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
 | [hosted-ao-v1-build-log.md](hosted-ao-v1-build-log.md) | Hosted AO v1: batch structure, PR per spec task, and the decisions that are not derivable from the diff.              |
-| [hao-machine-management-boundary.md](hao-machine-management-boundary.md) | Proposed `hao` machine-management CLI, strict AO daemon/gateway/desktop boundaries, migration, security, and phased delivery. |
+| [hao-machine-management-boundary.md](hao-machine-management-boundary.md) | `hao` machine-management CLI boundary, strict AO daemon/gateway/desktop responsibilities, migration, security, and phased delivery. The read-only CLI foundation is shipped. |
 | [`hao` v1 contract baseline](../contracts/hao/v1/README.md) | Versioned config, error, compatibility, legacy-installation, pairing, and gateway-route contracts for the staged `hao` build. |
 | [upstream-merge-playbook.md](upstream-merge-playbook.md) | Merging `Untrivial-ai/agent-orchestrator:main` into this repo: what must not change, what is safe to take, how to sequence and verify it. |
 | [reviews/](reviews/)                                   | Preserved code-review reports, each finding mapped to the PR that fixed it.                                            |

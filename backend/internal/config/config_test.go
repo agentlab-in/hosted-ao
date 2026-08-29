@@ -53,6 +53,32 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveStateRootPrecedence(t *testing.T) {
+	t.Setenv("AO_RUN_FILE", "")
+	t.Setenv("AO_DATA_DIR", "")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRoot, err := ResolveStateRoot()
+	if err != nil || defaultRoot != filepath.Join(homeDir, ".ao", "hosted") {
+		t.Fatalf("default root = %q, err=%v", defaultRoot, err)
+	}
+
+	base := t.TempDir()
+	t.Setenv("AO_DATA_DIR", filepath.Join(base, "data-root", "data"))
+	dataRoot, err := ResolveStateRoot()
+	if err != nil || dataRoot != filepath.Join(base, "data-root") {
+		t.Fatalf("data root = %q, err=%v", dataRoot, err)
+	}
+
+	t.Setenv("AO_RUN_FILE", filepath.Join(base, "run-root", "running.json"))
+	runRoot, err := ResolveStateRoot()
+	if err != nil || runRoot != filepath.Join(base, "run-root") {
+		t.Fatalf("run root = %q, err=%v", runRoot, err)
+	}
+}
+
 func TestLoadAbsolutizesRelativeOverrides(t *testing.T) {
 	// A relative override must be resolved to absolute at Load time. The daemon
 	// chdir's into its data dir at startup, so a relative path left as-is would
