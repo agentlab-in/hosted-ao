@@ -92,6 +92,8 @@ vi.mock("../lib/api-client", () => ({
 		GET: reviewGetMock,
 	},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() => {

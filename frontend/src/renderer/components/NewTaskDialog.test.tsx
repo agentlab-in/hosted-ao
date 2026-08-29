@@ -26,6 +26,8 @@ vi.mock("../lib/api-client", () => ({
 		typeof error === "object" && error !== null && "code" in error
 			? String((error as { code: unknown }).code)
 			: undefined,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 function renderDialog() {

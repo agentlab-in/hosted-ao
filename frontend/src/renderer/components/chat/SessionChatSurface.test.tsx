@@ -51,6 +51,8 @@ const { getMock, postMock, conversationState, agentSwitchState } = vi.hoisted(()
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("../../hooks/useConversation", () => ({

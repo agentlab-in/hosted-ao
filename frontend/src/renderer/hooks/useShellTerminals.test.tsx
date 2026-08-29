@@ -10,6 +10,8 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorCode: (error: unknown) =>
 		typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined,
 	hasTrustedApiBaseUrl: () => true,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import {

@@ -15,6 +15,8 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock, PATCH: vi.fn() },
 	apiErrorCode: apiErrorCodeMock,
 	apiErrorMessage: apiErrorMessageMock,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useConversation, useConversationCommands } from "./useConversation";

@@ -14,6 +14,8 @@ vi.mock("../lib/api-client", () => ({
 		if (error instanceof Error) return error.message;
 		return fallback;
 	},
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 function renderWithQuery(children: ReactNode) {

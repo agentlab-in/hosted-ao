@@ -9,6 +9,8 @@ vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: vi.fn(), PUT: putMock, DELETE: vi.fn() },
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useSessionInterfaceTransition } from "./useSessionInterfaceTransition";

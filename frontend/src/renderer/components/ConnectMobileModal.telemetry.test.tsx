@@ -28,6 +28,8 @@ vi.mock("../lib/api-client", () => ({
 		POST: post,
 	},
 	apiErrorMessage: () => "failed",
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { ConnectMobileContent } from "./settings/ConnectMobileContent";

@@ -49,6 +49,8 @@ vi.mock("../lib/api-client", () => ({
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: (error: { message?: string }, fallback = "err") => error?.message ?? fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: h.capture }));

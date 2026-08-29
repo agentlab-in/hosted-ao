@@ -9,6 +9,8 @@ const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: postMock },
 	apiErrorMessage: () => "request failed",
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useSwitchAgent } from "./useSwitchAgent";

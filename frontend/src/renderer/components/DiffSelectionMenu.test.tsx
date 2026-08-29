@@ -12,6 +12,8 @@ vi.mock("../lib/api-client", () => ({
 		typeof error === "object" && error !== null && "message" in error
 			? String((error as { message: unknown }).message)
 			: fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 const writeTextMock = vi.hoisted(() => vi.fn());

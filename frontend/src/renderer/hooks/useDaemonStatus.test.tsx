@@ -32,6 +32,8 @@ vi.mock("../lib/event-transport", () => ({
 vi.mock("../lib/api-client", () => ({
 	setApiBaseUrl: setApiBaseUrlMock,
 	setApiDaemonStatus: setApiDaemonStatusMock,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useDaemonStatus } from "./useDaemonStatus";

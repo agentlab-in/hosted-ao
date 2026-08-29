@@ -61,6 +61,8 @@ vi.mock("../lib/api-client", () => ({
 		}
 		return "Request failed";
 	},
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection } from "./ProjectSettingsForm";

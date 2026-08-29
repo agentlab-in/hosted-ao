@@ -122,7 +122,7 @@ vi.mock("../lib/api-client", () => ({
 	// desktop's folder picker. Loopback keeps this suite on the local-machine
 	// path, matching Sidebar.test.tsx's mock for the same reason.
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => () => {},
+	subscribeApiBaseUrl: () => (() => {}),
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error) {

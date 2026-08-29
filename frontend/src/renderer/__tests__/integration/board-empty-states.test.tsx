@@ -30,7 +30,7 @@ vi.mock("../../lib/api-client", () => ({
 	// folder picker. Loopback keeps these tests on the local-machine path, which
 	// is what the folder-picker assertions here already assume.
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => () => {},
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("../../lib/bridge", () => ({

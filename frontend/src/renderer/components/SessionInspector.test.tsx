@@ -59,7 +59,7 @@ vi.mock("../lib/api-client", () => ({
   },
   getApiBaseUrl: () => "http://127.0.0.1:3001",
   hasTrustedApiBaseUrl: () => false,
-  subscribeApiBaseUrl: () => () => {},
+  subscribeApiBaseUrl: () => (() => {}),
   apiErrorMessage: (error: unknown, fallback = "Request failed") => {
     if (error instanceof Error) return error.message;
     if (typeof error === "object" && error !== null && "message" in error) {

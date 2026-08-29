@@ -29,6 +29,8 @@ vi.mock("../lib/api-client", () => ({
 		}
 		return fallback;
 	},
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 const worker: WorkspaceSession = {

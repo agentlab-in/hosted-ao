@@ -36,6 +36,8 @@ vi.mock("../lib/api-client", () => ({
 		POST: vi.fn(async () => ({ data: {}, error: undefined })),
 	},
 	apiErrorMessage: () => "failed",
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { ConnectMobileContent, pairingPayload } from "./settings/ConnectMobileContent";

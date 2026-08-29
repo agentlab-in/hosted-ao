@@ -4,6 +4,8 @@ const getMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: (...args: unknown[]) => getMock(...args) },
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { sessionUsageDetailQueryKey } from "./useSessionUsage";
