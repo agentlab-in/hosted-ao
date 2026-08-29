@@ -51,15 +51,12 @@ var upstreamCORSHeaders = []string{
 // maintenance, and host-mutating installer routes are loopback-only. This
 // follows the same precedent as lanControlBlockedPrefixes in
 // internal/httpd/lan_listener.go (a second, non-loopback listener that must
-// never reach these routes), but it is a SUBSET of that list: it blocks
-// mobile, dev, and system/install, not /api/v1/browser. The LAN listener
-// blocks /api/v1/browser too; the gateway does not yet, and that gap is
-// deliberate for now, tracked as a follow-up hardening issue rather than
-// closed here.
+// never reach these routes).
 var blockedAPIPrefixes = []string{
 	"/api/v1/mobile",
 	"/api/v1/dev",
 	"/api/v1/system/install",
+	"/api/v1/browser",
 }
 
 // maxRequestBodyBytes bounds a proxied request body before httputil.ReverseProxy
