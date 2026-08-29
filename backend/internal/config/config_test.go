@@ -53,6 +53,18 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveRunFilePathPreservesExactOverride(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "custom-discovery-name.json")
+	t.Setenv("AO_RUN_FILE", want)
+	got, err := ResolveRunFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("ResolveRunFilePath() = %q, want %q", got, want)
+	}
+}
+
 func TestResolveStateRootPrecedence(t *testing.T) {
 	t.Setenv("AO_RUN_FILE", "")
 	t.Setenv("AO_DATA_DIR", "")

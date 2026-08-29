@@ -34,6 +34,7 @@ type Deps struct {
 	Err      io.Writer
 	ReadFile func(string) ([]byte, error)
 	StateDir func() (string, error)
+	RunFile  func() (string, error)
 	Observer Observer
 	Timeout  time.Duration
 	Now      func() time.Time
@@ -41,7 +42,7 @@ type Deps struct {
 
 // DefaultDeps returns the production read-only CLI dependencies.
 func DefaultDeps() Deps {
-	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, Observer: systemObserver{}, Timeout: 2 * time.Second, Now: time.Now}
+	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, Timeout: 2 * time.Second, Now: time.Now}
 }
 
 func (d Deps) withDefaults() Deps {
@@ -60,6 +61,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.StateDir == nil {
 		d.StateDir = defaults.StateDir
+	}
+	if d.RunFile == nil {
+		d.RunFile = defaults.RunFile
 	}
 	if d.Observer == nil {
 		d.Observer = defaults.Observer

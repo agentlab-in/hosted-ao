@@ -69,13 +69,16 @@ func buildStatus(ctx context.Context, deps Deps, explicit string) (StatusReport,
 	if err != nil {
 		return StatusReport{}, err
 	}
-	stateRoot, err := deps.StateDir()
+	runFile, err := deps.RunFile()
 	if err != nil {
-		return StatusReport{}, operationalError("resolve state root", err)
+		return StatusReport{}, operationalError("resolve daemon discovery path", err)
 	}
 	report := StatusReport{SchemaVersion: observationSchemaVersion, Machine: configString(object, "machine", "name"), Mode: configString(object, "mode"), ConfigPath: path, ConfigVersion: 1, HAOVersion: Version, DesiredAOVersion: configString(object, "components", "aoVersion")}
-	d := observeDaemon(ctx, deps.Observer, discoveryPath(stateRoot), deps.Timeout)
+	d := observeDaemon(ctx, deps.Observer, runFile, deps.Timeout)
 	desiredService := configBool(object, "service", "enabled")
+	if !desiredService && d.State == "unavailable" {
+		d.State, d.Evidence = "disabled", "daemon is absent and service is intentionally disabled"
+	}
 	report.Observations = append(report.Observations, Observation{ID: "ao.daemon", Status: d.State, Desired: desiredService, Evidence: d.Evidence})
 	if d.Doctor != nil {
 		failed := d.Doctor.Failures > 0 || !d.Doctor.OK
@@ -144,7 +147,7 @@ func safeVersion(value string) string {
 
 func writeStatusReport(cmd *cobra.Command, report StatusReport) error {
 	out := cmd.OutOrStdout()
-	if _, err := fmt.Fprintf(out, "Machine: %s (%s)\nConfig: v%d %s\nhao: %s\nDesired AO: %s\n", report.Machine, report.Mode, report.ConfigVersion, report.ConfigPath, report.HAOVersion, report.DesiredAOVersion); err != nil {
+	if _, err := fmt.Fprintf(out, "Machine: %s (%s)\nConfig: v%d %s\nhao: %s\nDesired AO: %s\n", redactedString(report.Machine), redactedString(report.Mode), report.ConfigVersion, redactedString(report.ConfigPath), redactedString(report.HAOVersion), redactedString(report.DesiredAOVersion)); err != nil {
 		return err
 	}
 	for _, observation := range report.Observations {
@@ -156,7 +159,7 @@ func writeStatusReport(cmd *cobra.Command, report StatusReport) error {
 			return err
 		}
 		if observation.Evidence != "" {
-			if _, err := fmt.Fprintf(out, " — %s", observation.Evidence); err != nil {
+			if _, err := fmt.Fprintf(out, " — %s", redactedString(observation.Evidence)); err != nil {
 				return err
 			}
 		}
@@ -177,4 +180,9 @@ func haocontractRedact(value any) any {
 		return map[string]any{"schemaVersion": observationSchemaVersion}
 	}
 	return haocontract.Redact(object)
+}
+
+func redactedString(value string) string {
+	redacted, _ := haocontract.Redact(value).(string)
+	return redacted
 }

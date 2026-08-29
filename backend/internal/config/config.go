@@ -504,6 +504,11 @@ func resolveRunFilePath() (string, error) {
 	return filepath.Join(stateDir, "running.json"), nil
 }
 
+// ResolveRunFilePath returns the daemon discovery path without loading
+// unrelated daemon settings or secrets. Read-only companion tools use this
+// narrow resolver instead of reconstructing running.json from the state root.
+func ResolveRunFilePath() (string, error) { return resolveRunFilePath() }
+
 // resolveDataDir picks where durable state (the SQLite DB) lives. An explicit
 // AO_DATA_DIR wins; otherwise it defaults under the same canonical AO home
 // directory as the run-file.

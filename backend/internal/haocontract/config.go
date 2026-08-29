@@ -91,6 +91,8 @@ var secretKeyParts = []string{
 }
 
 var secretAssignmentPattern = regexp.MustCompile(`(?i)(pass(code|word)?|token|secret|credential|api[_-]?key|private[_-]?key)\s*[:=]\s*[^/\\\s,;]+`)
+var bearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
+var jsonSecretPattern = regexp.MustCompile(`(?i)("(?:passcode|password|token|secret|credential|api[_-]?key|private[_-]?key)"\s*:\s*")[^"]*(")`)
 
 // IsSecretLookingKey reports whether a key may name credential material.
 func IsSecretLookingKey(key string) bool {
@@ -147,6 +149,11 @@ func Redact(value any) any {
 		return out
 	default:
 		if text, ok := value.(string); ok {
+			if strings.Contains(strings.ToUpper(text), "PRIVATE KEY") || strings.Contains(strings.ToLower(text), "ao-pair://") {
+				return "[REDACTED]"
+			}
+			text = bearerPattern.ReplaceAllString(text, "Bearer [REDACTED]")
+			text = jsonSecretPattern.ReplaceAllString(text, `$1[REDACTED]$2`)
 			return secretAssignmentPattern.ReplaceAllString(text, "$1=[REDACTED]")
 		}
 		return value

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
@@ -87,12 +88,13 @@ func healthyObserver() *fakeObserver {
 func observationDeps(t *testing.T, fixture string, obs *fakeObserver) Deps {
 	t.Helper()
 	root := t.TempDir()
+	runPath := filepath.Join(root, "custom-discovery.json")
 	path := fixturePath("valid", fixture+".yaml")
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Deps{StateDir: func() (string, error) { return root, nil }, ReadFile: func(got string) ([]byte, error) {
+	return Deps{StateDir: func() (string, error) { return root, nil }, RunFile: func() (string, error) { return runPath, nil }, ReadFile: func(got string) ([]byte, error) {
 		if got != absPath {
 			t.Fatalf("config path=%q want %q", got, absPath)
 		}
@@ -153,11 +155,39 @@ func TestDoctorPartialFailuresStableIDsAndZeroMutation(t *testing.T) {
 	if code != 1 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(out, `"id":"ao.doctor.terminal-capability"`) || !strings.Contains(out, `"id":"host.disk"`) || !strings.Contains(out, `"status":"error"`) || !strings.Contains(out, `"id":"tool.gh"`) {
+	if !strings.Contains(out, `"id":"ao.doctor.001.terminal-capability"`) || !strings.Contains(out, `"id":"host.disk"`) || !strings.Contains(out, `"status":"error"`) || !strings.Contains(out, `"id":"tool.gh"`) {
 		t.Fatalf("out=%s", out)
 	}
-	if obs.runCalls != 3 {
-		t.Fatalf("run calls=%d; wanted only available version and exit-only auth probes", obs.runCalls)
+	if obs.runCalls != 2 {
+		t.Fatalf("run calls=%d; wanted only available version probes", obs.runCalls)
+	}
+}
+
+func TestDaemonDoctorWireDTOCompatibilityAndCollisionSafety(t *testing.T) {
+	wire := controllers.DoctorReportResponse{OK: true, Checks: []controllers.DoctorCheckResponse{{Level: "PASS", Name: "a b", Message: "ok"}, {Level: "MAYBE", Name: "a-b", Message: "Bearer topsecret"}}}
+	body, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := healthyObserver()
+	obs.responses["http://127.0.0.1:4321/api/v1/doctor"] = body
+	out, _, code := runCLI(t, observationDeps(t, "local", obs), "--config", fixturePath("valid", "local.yaml"), "--json", "doctor")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, `"id":"ao.doctor.001.a-b"`) || !strings.Contains(out, `"id":"ao.doctor.002.a-b"`) || !strings.Contains(out, `"status":"unknown"`) || strings.Contains(out, "topsecret") {
+		t.Fatalf("out=%s", out)
+	}
+}
+
+func TestHumanAndJSONEvidenceRedaction(t *testing.T) {
+	obs := healthyObserver()
+	obs.responses["http://127.0.0.1:4321/api/v1/doctor"] = []byte(`{"ok":true,"checks":[{"level":"WARN","name":"safe","message":"{\"token\":\"json-secret\"} Bearer bearer-secret","remediation":"ao-pair://private"}]}`)
+	for _, args := range [][]string{{"--config", fixturePath("valid", "local.yaml"), "doctor"}, {"--json", "--config", fixturePath("valid", "local.yaml"), "doctor"}} {
+		out, _, _ := runCLI(t, observationDeps(t, "local", obs), args...)
+		if strings.Contains(out, "json-secret") || strings.Contains(out, "bearer-secret") || strings.Contains(out, "ao-pair://") || !strings.Contains(out, "[REDACTED]") {
+			t.Fatalf("args=%v out=%s", args, out)
+		}
 	}
 }
 

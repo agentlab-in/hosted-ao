@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -47,6 +46,23 @@ type FileObservation struct {
 
 type systemObserver struct{}
 
+type boundedBuffer struct {
+	bytes.Buffer
+	remaining int
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	original := len(p)
+	if len(p) > b.remaining {
+		p = p[:b.remaining]
+	}
+	if len(p) > 0 {
+		_, _ = b.Buffer.Write(p)
+		b.remaining -= len(p)
+	}
+	return original, nil
+}
+
 func (systemObserver) Platform() (string, string)                     { return runtime.GOOS, runtime.GOARCH }
 func (systemObserver) Stat(path string) (FileObservation, error)      { return statFile(path) }
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
@@ -57,7 +73,7 @@ func (systemObserver) ProcessAlive(pid int) bool                      { return p
 func (systemObserver) Run(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = nil
-	var out bytes.Buffer
+	out := boundedBuffer{remaining: 4096}
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	text := strings.TrimSpace(out.String())
@@ -154,6 +170,9 @@ func observeDaemon(ctx context.Context, obs Observer, runFile string, timeout ti
 	read := func(path string, target any) error {
 		body, getErr := obs.GET(probeCtx, base+path)
 		if getErr != nil {
+			if probeCtx.Err() != nil || errors.Is(getErr, context.DeadlineExceeded) {
+				return fmt.Errorf("probe timed out: %w", context.DeadlineExceeded)
+			}
 			return getErr
 		}
 		if len(body) > maxHTTPBody {
@@ -166,6 +185,9 @@ func observeDaemon(ctx context.Context, obs Observer, runFile string, timeout ti
 	}
 	var health probePayload
 	if err := read("/healthz", &health); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.State = "unknown"
+		}
 		result.Evidence = "health probe failed: " + safeDiagnostic(err)
 		return result
 	}
@@ -180,7 +202,11 @@ func observeDaemon(ctx context.Context, obs Observer, runFile string, timeout ti
 	}
 	var ready probePayload
 	if err := read("/readyz", &ready); err != nil {
-		result.State = "unhealthy"
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.State = "unknown"
+		} else {
+			result.State = "unhealthy"
+		}
 		result.Evidence = "readiness probe failed: " + safeDiagnostic(err)
 		return result
 	}
@@ -245,5 +271,3 @@ func configInt(object map[string]any, keys ...string) int {
 	}
 	return 0
 }
-
-func discoveryPath(stateRoot string) string { return filepath.Join(stateRoot, "running.json") }
