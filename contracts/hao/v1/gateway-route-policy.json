@@ -8,7 +8,8 @@
   "blockedOverrides": [
     { "kind": "prefix", "path": "/api/v1/mobile" },
     { "kind": "prefix", "path": "/api/v1/dev" },
-    { "kind": "prefix", "path": "/api/v1/system/install" }
+    { "kind": "prefix", "path": "/api/v1/system/install" },
+    { "kind": "prefix", "path": "/api/v1/browser" }
   ],
   "fixtures": [
     { "path": "/mux", "allowed": true, "surface": "terminal_mux" },
@@ -23,6 +24,8 @@
     { "path": "/api/v1/mobileapp", "allowed": true, "surface": "prefix_boundary_sibling" },
     { "path": "/api/v1/dev/import-projects", "allowed": false, "surface": "development" },
     { "path": "/api/v1/system/install/git", "allowed": false, "surface": "host_mutation" },
+    { "path": "/api/v1/browser/status", "allowed": false, "surface": "browser_control" },
+    { "path": "/api/v1/browserapp", "allowed": true, "surface": "prefix_boundary_sibling" },
     { "path": "/healthz", "allowed": false, "surface": "unclassified_health" },
     { "path": "/unknown", "allowed": false, "surface": "unknown" }
   ]

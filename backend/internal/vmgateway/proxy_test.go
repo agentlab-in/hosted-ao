@@ -205,6 +205,7 @@ func TestGateway_BlockedRoutes_NeverReachDaemon(t *testing.T) {
 		"/api/v1/mobile/status",
 		"/api/v1/mobile/devices",
 		"/api/v1/mobile",
+		"/api/v1/browser/status",
 		"/api/v1/dev/import-projects",
 		"/api/v1/dev",
 		"/healthz",
@@ -225,6 +226,34 @@ func TestGateway_BlockedRoutes_NeverReachDaemon(t *testing.T) {
 	}
 	if len(tg.daemonCalls) != 0 {
 		t.Errorf("a blocked route must never reach the daemon, got %d calls", len(tg.daemonCalls))
+	}
+}
+
+func TestGateway_BlockedBrowserRoute_404BeforeAuthentication(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		authorization string
+	}{
+		{name: "missing token"},
+		{name: "invalid token", authorization: "Bearer invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tg := newTestGateway(t)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/browser/status", nil)
+			if tc.authorization != "" {
+				req.Header.Set("Authorization", tc.authorization)
+			}
+			rec := httptest.NewRecorder()
+
+			tg.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404 before authentication", rec.Code)
+			}
+			if len(tg.daemonCalls) != 0 {
+				t.Errorf("blocked browser route must never reach the daemon, got %d calls", len(tg.daemonCalls))
+			}
+		})
 	}
 }
 
@@ -754,6 +783,9 @@ func TestIsProxyablePath(t *testing.T) {
 		"/api/v1/mobileapp":           true,
 		"/api/v1/dev":                 false,
 		"/api/v1/dev/import-projects": false,
+		"/api/v1/browser":             false,
+		"/api/v1/browser/status":      false,
+		"/api/v1/browserapp":          true,
 		"/api/v1/devices":             true,
 		"/shutdown":                   false,
 		"/internal/telemetry":         false,

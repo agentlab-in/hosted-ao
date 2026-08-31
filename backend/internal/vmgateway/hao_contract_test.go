@@ -61,6 +61,9 @@ func TestHAORoutePolicyContractMatchesGateway(t *testing.T) {
 		"/api/v1/mobileapp":      true,
 		"/api/v1/devices":        true,
 		"/api/v1/system/install": false,
+		"/api/v1/browser":        false,
+		"/api/v1/browser/":       false,
+		"/api/v1/browserapp":     true,
 		"/mux":                   true,
 		"/mux/":                  false,
 	}
