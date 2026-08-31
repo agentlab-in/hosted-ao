@@ -128,26 +128,13 @@ test("probing an unreachable address reports an error, not a fingerprint", async
 });
 
 test("probe misses notify the caller so the next attempt can use a fresh session", async () => {
-	const onProbeMiss = vi.fn();
-	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: unreachableFetch, onProbeMiss, probeTimeoutMs: 200 });
+	const onProbeComplete = vi.fn();
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: unreachableFetch, onProbeComplete, probeTimeoutMs: 200 });
 	await machines.load();
 
 	await machines.probeFingerprint("192.168.1.9", 8443);
 
-	expect(onProbeMiss).toHaveBeenCalledExactlyOnceWith("192.168.1.9");
-});
-
-test("successful fingerprint probes do not rotate the probe session", async () => {
-	let verify: PairCertificateVerifyProc | undefined;
-	const onProbeMiss = vi.fn();
-	const netFetch = netFetchPresenting(CERT_PEM, (request, callback) => verify?.(request, callback));
-	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, onProbeMiss, probeTimeoutMs: 200 });
-	verify = machines.verifyCertificate;
-	await machines.load();
-
-	await machines.probeFingerprint("192.168.1.5", 8443);
-
-	expect(onProbeMiss).not.toHaveBeenCalled();
+	expect(onProbeComplete).toHaveBeenCalledExactlyOnceWith("192.168.1.9");
 });
 
 /**
@@ -177,6 +164,31 @@ function sessionLikeFetch(cache: Map<string, boolean>, verify: PairCertificateVe
 		throw new Error("certificate verification failed");
 	}) as unknown as typeof fetch;
 }
+
+test("a successful fingerprint probe rotates the poisoned session before retry", async () => {
+	let verify: PairCertificateVerifyProc | undefined;
+	let generation = 0;
+	const caches = [new Map<string, boolean>(), new Map<string, boolean>()];
+	const probeNetFetch = ((input: string | URL | Request, init?: RequestInit) => {
+		const fetchFromSession = sessionLikeFetch(caches[generation], (request, callback) => verify?.(request, callback), CERT_PEM);
+		return fetchFromSession(input, init);
+	}) as typeof fetch;
+	const machines = createPairedMachinesController({
+		stateDir,
+		safeStorage,
+		probeNetFetch,
+		onProbeComplete: () => {
+			generation += 1;
+		},
+		probeTimeoutMs: 200,
+	});
+	verify = machines.verifyCertificate;
+	await machines.load();
+
+	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ fingerprint: CERT_FINGERPRINT });
+	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ fingerprint: CERT_FINGERPRINT });
+	expect(generation).toBe(2);
+});
 
 test("without a dedicated probe session, the pairing probe's rejection wedges refresh() offline after add() (reproduces #114)", async () => {
 	// probeNetFetch omitted: probeFingerprint falls back to sharing netFetch's

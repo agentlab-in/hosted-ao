@@ -105,7 +105,7 @@ export type PairedMachinesControllerDeps = {
 	 * exercise this failure mode).
 	 */
 	probeNetFetch?: typeof fetch;
-	onProbeMiss?: (address: string) => void;
+	onProbeComplete?: (address: string) => void;
 	probeTimeoutMs?: number;
 };
 
@@ -585,7 +585,7 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 			}
 
 			const fingerprint = presented.get(address);
-			if (!fingerprint) deps.onProbeMiss?.(address);
+			deps.onProbeComplete?.(address);
 			return fingerprint
 				? { fingerprint }
 				: { error: "No certificate could be retrieved from that address. Check the address, port, and that the box is reachable." };

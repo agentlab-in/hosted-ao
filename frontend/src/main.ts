@@ -2364,7 +2364,7 @@ function pairedMachines(): ReturnType<typeof createPairedMachinesController> {
     // fetch would bypass the session (and the pin) entirely.
     netFetch: (input, init) => net.fetch(String(input), init),
     probeNetFetch: pairProbeNetFetch,
-    onProbeMiss: resetPairProbeSession,
+    onProbeComplete: resetPairProbeSession,
   });
   return pairedMachinesController;
 }
