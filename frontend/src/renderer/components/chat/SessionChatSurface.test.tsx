@@ -48,7 +48,8 @@ const { getMock, postMock, conversationState, agentSwitchState } = vi.hoisted(()
 	},
 }));
 
-vi.mock("../../lib/api-client", () => ({
+vi.mock("../../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));

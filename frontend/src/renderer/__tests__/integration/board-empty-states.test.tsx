@@ -21,7 +21,8 @@ vi.mock("../../lib/spawn-orchestrator", () => ({
 	spawnOrchestrator: spawnOrchestratorMock,
 }));
 
-vi.mock("../../lib/api-client", () => ({
+vi.mock("../../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: vi.fn() },
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
@@ -30,7 +31,7 @@ vi.mock("../../lib/api-client", () => ({
 	// folder picker. Loopback keeps these tests on the local-machine path, which
 	// is what the folder-picker assertions here already assume.
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => () => {},
+	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("../../lib/bridge", () => ({

@@ -40,7 +40,8 @@ vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
 	captureOrchestratorReplacementFailure: captureOrchestratorReplacementFailureMock,
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: getMock,
 		PUT: putMock,

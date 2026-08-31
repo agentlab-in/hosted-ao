@@ -3,7 +3,8 @@ import { isChatPreflightError, OrchestratorSpawnError, spawnOrchestrator } from 
 import { apiClient } from "./api-client";
 import { captureRendererEvent } from "./telemetry";
 
-vi.mock("./api-client", () => ({
+vi.mock("./api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./api-client")>()),
 	apiClient: { POST: vi.fn() },
 	apiErrorCode: (error: unknown) =>
 		typeof error === "object" && error !== null && "code" in error

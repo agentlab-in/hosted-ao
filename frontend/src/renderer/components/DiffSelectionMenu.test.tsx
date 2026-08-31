@@ -6,7 +6,8 @@ import type { DiffSelectionLine } from "../../shared/diff-selection";
 
 const postMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { POST: postMock },
 	apiErrorMessage: (error: unknown, fallback = "Request failed") =>
 		typeof error === "object" && error !== null && "message" in error

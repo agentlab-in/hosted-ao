@@ -11,7 +11,8 @@ const { getMock, postMock, getMigration, setMigration } = vi.hoisted(() => ({
 	setMigration: vi.fn(),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: (e: unknown, fb = "Request failed") =>
 		e instanceof Error ? e.message : ((e as { message?: string })?.message ?? fb),

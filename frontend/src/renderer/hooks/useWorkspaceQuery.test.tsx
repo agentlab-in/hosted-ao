@@ -13,7 +13,8 @@ const { captureRendererEventMock, cloudState, getMock, hasTrustedApiBaseUrlMock,
 	}),
 );
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: getMock },
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 }));

@@ -44,7 +44,8 @@ const {
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: (
 			path: string,

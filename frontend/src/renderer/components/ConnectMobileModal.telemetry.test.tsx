@@ -19,7 +19,8 @@ const { captureRendererEvent, mobileStatus, post } = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent }));
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: async (path: string) =>
 			path === "/api/v1/mobile/devices"

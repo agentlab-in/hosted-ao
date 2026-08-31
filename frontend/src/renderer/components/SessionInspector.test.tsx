@@ -50,16 +50,15 @@ vi.mock("../lib/preview-mode", () => ({
   usesPreviewWorkspaceData: false,
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
   apiClient: {
     GET: getMock,
     PATCH: patchMock,
     POST: postMock,
     PUT: putMock,
   },
-  getApiBaseUrl: () => "http://127.0.0.1:3001",
   hasTrustedApiBaseUrl: () => false,
-  subscribeApiBaseUrl: () => () => {},
   apiErrorMessage: (error: unknown, fallback = "Request failed") => {
     if (error instanceof Error) return error.message;
     if (typeof error === "object" && error !== null && "message" in error) {

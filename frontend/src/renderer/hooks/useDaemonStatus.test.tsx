@@ -29,7 +29,8 @@ vi.mock("../lib/event-transport", () => ({
 	createEventTransport: vi.fn(() => ({ connect: connectMock })),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	setApiBaseUrl: setApiBaseUrlMock,
 	setApiDaemonStatus: setApiDaemonStatusMock,
 }));
