@@ -8,12 +8,11 @@ import type { ReactNode } from "react";
 // on the session list flow through the shared workspace cache into the board.
 const { getMock, navigateMock } = vi.hoisted(() => ({ getMock: vi.fn(), navigateMock: vi.fn() }));
 
-vi.mock("../../lib/api-client", () => ({
+vi.mock("../../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: vi.fn() },
 	apiErrorMessage: (e: unknown) => (e instanceof Error ? e.message : "error"),
 	hasTrustedApiBaseUrl: () => true,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {

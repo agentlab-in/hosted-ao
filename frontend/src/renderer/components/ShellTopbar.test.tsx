@@ -31,7 +31,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		POST: postMock,
 	},
@@ -42,8 +43,6 @@ vi.mock("../lib/api-client", () => ({
 		}
 		return fallback;
 	},
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("../lib/spawn-orchestrator", () => ({ spawnOrchestrator: spawnMock }));

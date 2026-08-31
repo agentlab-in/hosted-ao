@@ -44,7 +44,8 @@ const {
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: (
 			path: string,
@@ -53,8 +54,6 @@ vi.mock("../lib/api-client", () => ({
 		POST: (...args: unknown[]) => postMock(...args),
 	},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("./XtermTerminal", () => ({

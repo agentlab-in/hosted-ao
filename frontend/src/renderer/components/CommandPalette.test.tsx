@@ -112,7 +112,8 @@ vi.mock("../lib/shell-context", () => ({
 
 vi.mock("../lib/spawn-orchestrator", () => ({ spawnOrchestrator: spawnMock }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: getMock,
 		POST: postMock,

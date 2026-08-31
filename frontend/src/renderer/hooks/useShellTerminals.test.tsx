@@ -5,13 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { deleteMock, postMock } = vi.hoisted(() => ({ deleteMock: vi.fn(), postMock: vi.fn() }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { DELETE: deleteMock, POST: postMock },
 	apiErrorCode: (error: unknown) =>
 		typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined,
 	hasTrustedApiBaseUrl: () => true,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import {

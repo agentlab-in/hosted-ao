@@ -40,7 +40,8 @@ vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
 	captureOrchestratorReplacementFailure: captureOrchestratorReplacementFailureMock,
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: getMock,
 		PUT: putMock,
@@ -61,8 +62,6 @@ vi.mock("../lib/api-client", () => ({
 		}
 		return "Request failed";
 	},
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection } from "./ProjectSettingsForm";

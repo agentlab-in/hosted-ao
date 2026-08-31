@@ -6,14 +6,13 @@ import type { DiffSelectionLine } from "../../shared/diff-selection";
 
 const postMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { POST: postMock },
 	apiErrorMessage: (error: unknown, fallback = "Request failed") =>
 		typeof error === "object" && error !== null && "message" in error
 			? String((error as { message: unknown }).message)
 			: fallback,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 const writeTextMock = vi.hoisted(() => vi.fn());

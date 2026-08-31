@@ -11,12 +11,11 @@ const { getMock, postMock, apiErrorCodeMock, apiErrorMessageMock } = vi.hoisted(
 	apiErrorMessageMock: vi.fn(),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: postMock, PATCH: vi.fn() },
 	apiErrorCode: apiErrorCodeMock,
 	apiErrorMessage: apiErrorMessageMock,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useConversation, useConversationCommands } from "./useConversation";

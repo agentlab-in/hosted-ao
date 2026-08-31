@@ -17,7 +17,8 @@ const { getMock, postMock } = vi.hoisted(() => ({
 	postMock: vi.fn(),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: getMock,
 		POST: postMock,
@@ -29,8 +30,6 @@ vi.mock("../lib/api-client", () => ({
 		}
 		return fallback;
 	},
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 const worker: WorkspaceSession = {

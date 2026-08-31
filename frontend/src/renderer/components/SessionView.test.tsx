@@ -87,13 +87,12 @@ vi.mock("../hooks/useSessionInterfaceTransition", () => ({
 	}),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: reviewGetMock,
 	},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() => {

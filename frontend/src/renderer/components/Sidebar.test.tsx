@@ -127,7 +127,8 @@ vi.mock("../lib/bridge", async (importOriginal) => {
 	};
 });
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: getMock },
 	// The sidebar mounts CreateProjectFlow, which subscribes to the active
 	// machine's base URL to decide whether a clone can use this desktop's folder

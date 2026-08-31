@@ -11,12 +11,11 @@ const { getMock, postMock, getMigration, setMigration } = vi.hoisted(() => ({
 	setMigration: vi.fn(),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: postMock },
 	apiErrorMessage: (e: unknown, fb = "Request failed") =>
 		e instanceof Error ? e.message : ((e as { message?: string })?.message ?? fb),
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { appState: { getMigration, setMigration } } }));
 

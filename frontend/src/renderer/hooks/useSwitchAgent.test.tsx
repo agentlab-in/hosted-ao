@@ -6,11 +6,10 @@ import type { WorkspaceSession } from "../types/workspace";
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { POST: postMock },
 	apiErrorMessage: () => "request failed",
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useSwitchAgent } from "./useSwitchAgent";

@@ -9,7 +9,8 @@ const { getMock, postMock } = vi.hoisted(() => ({
 	postMock: vi.fn(),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: (...args: unknown[]) => getMock(...args),
 		POST: (...args: unknown[]) => postMock(...args),
@@ -26,8 +27,6 @@ vi.mock("../lib/api-client", () => ({
 		typeof error === "object" && error !== null && "code" in error
 			? String((error as { code: unknown }).code)
 			: undefined,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 function renderDialog() {

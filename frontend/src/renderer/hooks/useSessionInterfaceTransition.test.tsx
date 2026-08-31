@@ -5,12 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: { GET: getMock, POST: vi.fn(), PUT: putMock, DELETE: vi.fn() },
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 import { useSessionInterfaceTransition } from "./useSessionInterfaceTransition";

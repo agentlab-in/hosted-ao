@@ -42,15 +42,14 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 	},
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/api-client")>()),
 	apiClient: {
 		GET: h.get,
 		POST: h.post,
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: (error: { message?: string }, fallback = "err") => error?.message ?? fallback,
-	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	subscribeApiBaseUrl: () => (() => {}),
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: h.capture }));
