@@ -70,6 +70,9 @@ func assert0118Schema(t *testing.T, db *sql.DB, cancelled bool) {
 	if rows.Next() {
 		t.Fatal("migration left a foreign key violation")
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read foreign key check: %v", err)
+	}
 }
 
 func TestMigration0118FreshDatabase(t *testing.T) {
