@@ -5,6 +5,7 @@
 -- user explicitly withdrew it, and it must not reappear as "interrupted by you".
 -- Stop and handoff still settle the durable queue as interrupted.
 PRAGMA foreign_keys=OFF;
+BEGIN IMMEDIATE;
 
 DROP TRIGGER IF EXISTS conversation_turns_cdc_update;
 DROP TRIGGER IF EXISTS conversation_turns_branch_insert;
@@ -80,6 +81,7 @@ BEGIN
     WHERE s.id = NEW.handled_by_session_id;
 END;
 
+COMMIT;
 PRAGMA foreign_keys=ON;
 PRAGMA foreign_key_check;
 -- +goose StatementEnd

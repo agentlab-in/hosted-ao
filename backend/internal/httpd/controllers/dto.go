@@ -2030,6 +2030,12 @@ type UpdateCloudOfferingRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+// UpdateTerminalThemeRequest supplies the resolved terminal color scheme to
+// the daemon that will spawn the PTY.
+type UpdateTerminalThemeRequest struct {
+	Scheme string `json:"scheme" enum:"light,dark"`
+}
+
 // capabilityNames lists the abilities a provider has, sorted so a client sees a
 // stable list rather than Go's map order. Only true entries are named: a
 // capability the driver reports as false is one it cannot do, which is the same

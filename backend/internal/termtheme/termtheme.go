@@ -22,6 +22,32 @@ const (
 	EnvColorFgBg = "COLORFGBG"
 )
 
+// Write atomically persists the resolved scheme for the daemon that owns
+// dataDir. It is shared by the loopback and authenticated gateway API paths so
+// the desktop never has to write another machine's filesystem directly.
+func Write(dataDir string, scheme Scheme) error {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		return os.ErrInvalid
+	}
+	if scheme != SchemeLight && scheme != SchemeDark {
+		return os.ErrInvalid
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return err
+	}
+	target := filepath.Join(dataDir, FileName)
+	temporary := target + ".tmp"
+	if err := os.WriteFile(temporary, []byte(string(scheme)+"\n"), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	return nil
+}
+
 // Scheme is the resolved terminal appearance, never "system".
 type Scheme string
 

@@ -200,6 +200,8 @@ import {
   createMachineSelection,
   type MachineSelection,
 } from "./main/machine-selection";
+import { persistSelectedDaemonTerminalTheme } from "./main/terminal-theme";
+import { LOCAL_MACHINE_ID } from "./shared/ao-machines";
 import {
   ancestorRepositorySetupWarning,
   scanImportFolder,
@@ -383,7 +385,7 @@ function resolvedDaemonDataDir(): string {
 // Cursor Agent reads TERM_THEME at process start. The daemon applies it from
 // this file when spawning a PTY. The renderer writes the resolved light/dark
 // scheme here so it matches the xterm palette (not Electron nativeTheme alone).
-function persistTerminalThemeHint(scheme: "light" | "dark"): void {
+function persistLocalTerminalThemeHint(scheme: "light" | "dark"): void {
 	const dir = resolvedDaemonDataDir();
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o750 });
@@ -2070,9 +2072,21 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle("theme:persist-terminal", (_event, scheme: unknown) => {
+ipcMain.handle("theme:persist-terminal", async (_event, scheme: unknown) => {
 	if (scheme === "light" || scheme === "dark") {
-		persistTerminalThemeHint(scheme);
+		try {
+			await persistSelectedDaemonTerminalTheme(scheme, {
+				isRemoteSelected: () => machineSelection().getState().activeMachineId !== LOCAL_MACHINE_ID,
+				activeRemoteStatus: () => activeMachineStatus,
+				gatewayToken: () => machineSelection().gatewayToken(),
+				writeLocal: persistLocalTerminalThemeHint,
+				// Electron net.fetch uses session.defaultSession, preserving the
+				// installed certificate verifier for paired machines.
+				fetchRemote: (url, init) => net.fetch(url, init),
+			});
+		} catch (error) {
+			console.warn("AO: unable to persist terminal theme hint", error);
+		}
 	}
 });
 

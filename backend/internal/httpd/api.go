@@ -144,7 +144,7 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations},
-		settings:      &controllers.SettingsController{Svc: deps.Settings},
+		settings:      &controllers.SettingsController{Svc: deps.Settings, DataDir: cfg.DataDir},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		// The doctor route has no service behind it: it probes the machine
 		// this daemon runs on, so it is always available rather than 501 on a

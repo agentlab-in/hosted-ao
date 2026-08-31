@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
+	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
 )
 
 // SettingsService is the controller-facing preferences contract.
@@ -27,7 +28,8 @@ type SettingsService interface {
 // and the CLI all resolve the same value, so a preference held in one client would
 // disagree with the others.
 type SettingsController struct {
-	Svc SettingsService
+	Svc     SettingsService
+	DataDir string
 }
 
 // Register mounts the settings routes.
@@ -35,6 +37,25 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Get("/settings", c.get)
 	r.Patch("/settings/session-interface", c.setSessionInterface)
 	r.Patch("/settings/cloud-offering", c.setCloudOffering)
+	r.Patch("/settings/terminal-theme", c.setTerminalTheme)
+}
+
+func (c *SettingsController) setTerminalTheme(w http.ResponseWriter, r *http.Request) {
+	var req UpdateTerminalThemeRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	scheme := termtheme.Scheme(req.Scheme)
+	if scheme != termtheme.SchemeLight && scheme != termtheme.SchemeDark {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"TERMINAL_THEME_INVALID", `scheme must be "light" or "dark"`, nil)
+		return
+	}
+	if err := termtheme.Write(c.DataDir, scheme); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *SettingsController) get(w http.ResponseWriter, r *http.Request) {

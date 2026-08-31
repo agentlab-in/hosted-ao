@@ -623,7 +623,7 @@ function ShellLayout() {
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.
 	useEffect(() => {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
-	}, [resolvedTheme]);
+	}, [resolvedTheme, daemonStatus.baseUrl, daemonStatus.state]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.

@@ -65,10 +65,7 @@ describe("MakerNSIS", () => {
 	});
 });
 
-// envSigningOptions (#4502) is env-driven, so exercise it through make() with
-// buildForge mocked: every credential path, its precedence, and the guarantee
-// that credential-less builds stay unsigned and unforced.
-describe("MakerNSIS Windows code signing (#4502)", () => {
+describe("MakerNSIS unsigned-only policy", () => {
 	const signingEnvKeys = [
 		"WIN_CSC_LINK",
 		"WIN_CSC_KEY_PASSWORD",
@@ -126,49 +123,17 @@ describe("MakerNSIS Windows code signing (#4502)", () => {
 		expect(options.config.win).toBeUndefined();
 	});
 
-	it("signs from WIN_CSC_LINK and flips forceCodeSigning", async () => {
+	it("ignores every supported Windows signing credential path", async () => {
 		process.env.WIN_CSC_LINK = "C:\\certs\\windows-codesign.pfx";
 		process.env.WIN_CSC_KEY_PASSWORD = "win-secret";
-		const options = await makeWithNoConfig();
-		expect(options.config.win.signtoolOptions).toEqual({
-			certificateFile: "C:\\certs\\windows-codesign.pfx",
-			certificatePassword: "win-secret",
-		});
-		expect(options.config.win.forceCodeSigning).toBe(true);
-	});
-
-	it("trims whitespace around WIN_SIGNING_HASH_ALGORITHMS entries", async () => {
-		// "sha256, sha1" must yield ["sha256", "sha1"] — not a " sha1" element
-		// electron-builder would not recognize (PR review feedback).
-		process.env.WIN_CSC_LINK = "C:\\certs\\windows-codesign.pfx";
 		process.env.WIN_SIGNING_HASH_ALGORITHMS = "sha256, sha1";
-		const options = await makeWithNoConfig();
-		expect(options.config.win.signtoolOptions.signingHashAlgorithms).toEqual(["sha256", "sha1"]);
-	});
-
-	it("signs via the certificate-store subject name (non-exportable EV tokens)", async () => {
 		process.env.WIN_CERT_SUBJECT_NAME = "Contoso Code Signing EV";
-		const options = await makeWithNoConfig();
-		expect(options.config.win.signtoolOptions).toEqual({
-			certificateSubjectName: "Contoso Code Signing EV",
-		});
-		expect(options.config.win.forceCodeSigning).toBe(true);
-	});
-
-	it("maps Azure Trusted Signing env into azureSignOptions, omitting unset keys", async () => {
 		process.env.AZURE_PUBLISHER_NAME = "Contoso";
 		process.env.AZURE_TENANT_ID = "tenant-1";
 		process.env.AZURE_CLIENT_ID = "client-1";
 		process.env.AZURE_CLIENT_SECRET = "secret-1";
 		process.env.AZURE_ACCOUNT_NAME = "ao-signing";
 		const options = await makeWithNoConfig();
-		expect(options.config.win.azureSignOptions).toEqual({
-			publisherName: "Contoso",
-			tenantId: "tenant-1",
-			clientId: "client-1",
-			clientSecret: "secret-1",
-			accountName: "ao-signing",
-		});
-		expect(options.config.win.forceCodeSigning).toBe(true);
+		expect(options.config.win).toBeUndefined();
 	});
 });
