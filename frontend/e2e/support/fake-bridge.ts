@@ -188,7 +188,10 @@ export async function installFakeBridge(
           isFullScreen: async () => false,
           onFullScreen: () => () => undefined,
         },
-        theme: { set: async () => undefined },
+        theme: {
+          set: async () => undefined,
+          persistTerminal: async () => undefined,
+        },
         menu: {
           action: async () => undefined,
           notifyShellFocus: () => undefined,
@@ -291,6 +294,7 @@ export async function installFakeBridge(
           onTabsState: unsubscribe,
           onAgentActivity: unsubscribe,
           onDevToolsState: unsubscribe,
+					onPageFocus: unsubscribe,
         },
         notifications: {
           show: async () => undefined,
@@ -530,6 +534,28 @@ export async function installFakeAgent(
 
       const nowIso = new Date().toISOString();
       type Session = Record<string, unknown>;
+      const kanbanColumnFor = (status: string): string => {
+        switch (status) {
+          case "merged":
+          case "approved":
+          case "mergeable":
+            return "ready";
+          case "terminated":
+            return "archive";
+          case "review_pending":
+          case "pr_open":
+          case "draft":
+            return "validating";
+          case "needs_input":
+          case "exited":
+          case "no_signal":
+          case "ci_failed":
+          case "changes_requested":
+            return "needs_review";
+          default:
+            return "building";
+        }
+      };
       const makeWorker = (w: (typeof workers)[number]): Session => ({
         id: w.id,
         terminalHandleId:
@@ -542,6 +568,7 @@ export async function installFakeAgent(
         mode: w.mode ?? "tui",
         branch: w.branch ?? `session/${w.id}`,
         status: w.status ?? "working",
+        kanbanColumn: kanbanColumnFor(w.status ?? "working"),
         createdAt: nowIso,
         updatedAt: new Date().toISOString(),
         activity: {
@@ -571,6 +598,7 @@ export async function installFakeAgent(
             kind: "orchestrator",
             branch: "main",
             status: "working",
+						kanbanColumn: "building",
             createdAt: nowIso,
             updatedAt: nowIso,
             activity: { state: "active", lastActivityAt: nowIso },
@@ -680,6 +708,7 @@ export async function installFakeAgent(
           const s = findSession(id);
           if (!s) return;
           s.status = status;
+          s.kanbanColumn = kanbanColumnFor(status);
           s.displayStatus = undefined;
           if (activity)
             s.activity = {
@@ -792,7 +821,10 @@ export async function installFakeAgent(
           isFullScreen: async () => false,
           onFullScreen: () => () => undefined,
         },
-        theme: { set: async () => undefined },
+        theme: {
+          set: async () => undefined,
+          persistTerminal: async () => undefined,
+        },
         menu: {
           action: async () => undefined,
           notifyShellFocus: () => undefined,
@@ -896,6 +928,7 @@ export async function installFakeAgent(
           onTabsState: unsubscribe,
           onAgentActivity: unsubscribe,
           onDevToolsState: unsubscribe,
+					onPageFocus: unsubscribe,
         },
         notifications: {
           show: async () => undefined,

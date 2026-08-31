@@ -16,10 +16,10 @@ import {
   workerSessions,
 } from "../types/workspace";
 import {
-  boardAttentionZoneOrder,
+	boardKanbanColumnOrder,
   getAgentActivityView,
-  getAttentionZoneViewForZone,
-  type AttentionZoneView,
+	getKanbanColumnView,
+	type KanbanColumnView,
 } from "../lib/session-presentation";
 import {
   useSessionUsageSummaries,
@@ -47,6 +47,7 @@ import {
 } from "../lib/spawn-orchestrator";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
+import { demoBoardSessions } from "../lib/demo-board-sessions";
 import {
   isLinuxPlatform,
   isMacPlatform,
@@ -74,9 +75,14 @@ type UsageBySession = ReadonlyMap<string, SessionUsageSummary>;
 const emptyUsageBySession: UsageBySession = new Map();
 
 // Live merged sessions remain in-flow. A terminated runtime is archived even
-// when its SCM outcome remains `merged`.
+// when its SCM outcome remains `merged`, which is exactly what the daemon's
+// `archive` column means.
 function isArchivedSession(session: WorkspaceSession): boolean {
-  return session.isTerminated === true || session.status === "terminated";
+	return (
+		session.kanbanColumn === "archive" ||
+		session.isTerminated === true ||
+		session.status === "terminated"
+	);
 }
 
 const isMac = isMacPlatform();
@@ -91,12 +97,12 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const columns: AttentionZoneView[] = boardAttentionZoneOrder.map((zone) =>
-    getAttentionZoneViewForZone(zone, t),
+  const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) =>
+    getKanbanColumnView(column, t),
   );
   const workspaceQuery = useWorkspaceQuery();
   const shell = useShellMaybe();
-  const usageBySession =
+  const liveUsageBySession =
     useSessionUsageSummaries(projectId).data ?? emptyUsageBySession;
   // Evaluated at render so platform mocks in tests can flip the in-panel chrome.
   const boardActionsInPanel = usesBoardActionsInPanel();
@@ -109,9 +115,28 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
   const workspace = projectId ? workspaces[0] : undefined;
   // Board chrome stays route-oriented; project context remains in the sidebar.
   const boardLabel = t("shell.board");
-  const sessions = workspaces.flatMap((workspace) =>
+  const liveSessions = workspaces.flatMap((workspace) =>
     workerSessions(workspace.sessions),
   );
+  const demoWorkspaceId = projectId ?? workspaces[0]?.id;
+  const sessions =
+    usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
+      ? demoBoardSessions(demoWorkspaceId)
+      : liveSessions;
+  const usageBySession = usesPreviewWorkspaceData
+    ? new Map<string, SessionUsageSummary>(
+        sessions.map((session, index) => [
+          session.id,
+          liveUsageBySession.get(session.id) ?? {
+            estimatedCost: null,
+            sessionId: session.id,
+            processedTokens: [18_400, 46_700, 12_900, 81_200, 3_100][index % 5],
+            totalTokens: 100_000,
+            incomplete: false,
+          },
+        ]),
+      )
+    : liveUsageBySession;
   const orchestrator = projectId
     ? newestActiveOrchestrator(workspaces[0]?.sessions ?? [])
     : undefined;
@@ -413,7 +438,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 			    chooser was review feedback on #2432. */}
       {!showWelcome && boardActionsInPanel && (boardLabel || actions) ? (
         <div
-          className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-4"
+					className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-1"
           style={dragStyle}
         >
           {boardLabel ? (

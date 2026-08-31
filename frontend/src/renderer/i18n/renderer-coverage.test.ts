@@ -63,6 +63,7 @@ const deferredLocalizationFiles = new Set([
 	"components/chat/SessionChatSurface.tsx",
 	"components/chat/TurnPlan.tsx",
 	"components/chat/TurnSettingsBar.tsx",
+	"components/chat/QueuedMessageDock.tsx",
 	// The AO account, cloud toggle, machine list, and peer-sessions surfaces predate
 	// this coverage gate too (it arrived with the upstream merge, after these
 	// hosted-only features already shipped). Deferred the same way as the Chat
