@@ -19,6 +19,7 @@ type commandError struct {
 	Details     map[string]any
 	ExitStatus  int
 	Cause       error
+	Silent      bool
 }
 
 func (e commandError) Error() string {
