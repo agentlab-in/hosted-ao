@@ -54,7 +54,7 @@ CREATE UNIQUE INDEX idx_conversation_turns_provider
     WHERE provider_turn_id <> '';
 CREATE INDEX idx_conversation_turns_branch
     ON conversation_turns(branch_id, requested_at);
-CREATE INDEX idx_conversation_turns_retry_source
+CREATE UNIQUE INDEX idx_conversation_turns_retry_source
     ON conversation_turns(conversation_id, retry_of_turn_id)
     WHERE retry_of_turn_id IS NOT NULL;
 

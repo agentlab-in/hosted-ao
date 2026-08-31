@@ -9,6 +9,7 @@ package termtheme
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -37,13 +38,50 @@ func Write(dataDir string, scheme Scheme) error {
 		return err
 	}
 	target := filepath.Join(dataDir, FileName)
-	temporary := target + ".tmp"
-	if err := os.WriteFile(temporary, []byte(string(scheme)+"\n"), 0o600); err != nil {
+	temporary, err := os.CreateTemp(dataDir, "."+FileName+".*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, target); err != nil {
-		_ = os.Remove(temporary)
+	temporaryName := temporary.Name()
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = os.Remove(temporaryName)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
 		return err
+	}
+	if _, err := temporary.WriteString(string(scheme) + "\n"); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryName, target); err != nil {
+		return err
+	}
+	removeTemporary = false
+	// Persist the directory entry on platforms that support directory fsync.
+	// Windows does not permit syncing directory handles; Rename is still atomic.
+	if runtime.GOOS != "windows" {
+		directory, err := os.Open(dataDir)
+		if err != nil {
+			return err
+		}
+		if err := directory.Sync(); err != nil {
+			_ = directory.Close()
+			return err
+		}
+		if err := directory.Close(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

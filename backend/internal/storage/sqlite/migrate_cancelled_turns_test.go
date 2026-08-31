@@ -89,8 +89,31 @@ func TestMigration0118UpgradesLatestHostedSchema(t *testing.T) {
 	// The frozen downstream base ends at 0116.
 	upTo(t, db, 116)
 	mustExec(t, db, seed0118Turn)
+	mustExec(t, db, `INSERT INTO conversation_turns (
+		id, conversation_id, handled_by_session_id, provider_turn_id, state,
+		requested_at, completed_at, branch_id, retry_of_turn_id
+	) VALUES (
+		'retry-0118', 'c-0118', 's-0118', 'provider-retry-0118', 'completed',
+		CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'c-0118:root', 'turn-0118'
+	)`)
 	upTo(t, db, 118)
 	assert0118Schema(t, db, true)
+	var retrySource string
+	if err := db.QueryRow(`SELECT retry_of_turn_id FROM conversation_turns WHERE id='retry-0118'`).Scan(&retrySource); err != nil {
+		t.Fatalf("read preserved retry child: %v", err)
+	}
+	if retrySource != "turn-0118" {
+		t.Fatalf("preserved retry source = %q, want turn-0118", retrySource)
+	}
+	if _, err := db.Exec(`INSERT INTO conversation_turns (
+		id, conversation_id, handled_by_session_id, provider_turn_id, state,
+		requested_at, completed_at, branch_id, retry_of_turn_id
+	) VALUES (
+		'duplicate-retry-0118', 'c-0118', 's-0118', 'provider-duplicate-0118', 'completed',
+		CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'c-0118:root', 'turn-0118'
+	)`); err == nil {
+		t.Fatal("migration 0118 lost unique retry-child invariant")
+	}
 	var applied int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id=118 AND is_applied=1`).Scan(&applied); err != nil {
 		t.Fatalf("read migration ledger: %v", err)
