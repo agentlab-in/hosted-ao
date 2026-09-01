@@ -1628,7 +1628,7 @@ type CompactConversationResponse struct {
 // ConversationTurnResponse is one request and the work that followed it.
 type ConversationTurnResponse struct {
 	ID             string `json:"id"`
-	State          string `json:"state" enum:"queued,running,completed,recovered,interrupted,failed"`
+	State          string `json:"state" enum:"queued,running,completed,recovered,interrupted,failed,cancelled"`
 	ProviderTurnID string `json:"providerTurnId,omitempty"`
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
@@ -2028,6 +2028,12 @@ type UpdateSessionInterfaceRequest struct {
 type UpdateCloudOfferingRequest struct {
 	// Enabled turns the cloud offering on or off for this machine's user.
 	Enabled *bool `json:"enabled"`
+}
+
+// UpdateTerminalThemeRequest supplies the resolved terminal color scheme to
+// the daemon that will spawn the PTY.
+type UpdateTerminalThemeRequest struct {
+	Scheme string `json:"scheme" enum:"light,dark"`
 }
 
 // capabilityNames lists the abilities a provider has, sorted so a client sees a

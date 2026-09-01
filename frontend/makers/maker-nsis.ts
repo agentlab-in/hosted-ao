@@ -48,6 +48,9 @@ export default class MakerNSIS extends MakerBase<MakerNSISConfig> {
 		// "agent-orchestrator.exe" (packagerConfig.executableName), so we forward the
 		// same name here; otherwise the shortcut targets a nonexistent
 		// "Agent Orchestrator.exe" and the app never launches (#2414).
+		// AgentLab publishes unsigned artifacts only. Deliberately construct the
+		// complete Windows config from non-signing fields instead of forwarding an
+		// arbitrary object or inspecting signing environment variables.
 		const win: Record<string, unknown> = {};
 		if (cfg.icon) win.icon = cfg.icon;
 		if (cfg.executableName) win.executableName = cfg.executableName;

@@ -305,6 +305,13 @@ export const useUiStore = create<UiState>((set, get) => ({
   toggleSidebar: () =>
     set((state) => {
       const wasVisible = sidebarIsVisible(state);
+      // While Browser pressure owns the compact rail, expand/collapse is a
+      // temporary override cycle and must not mutate the durable preference.
+      if (state.isSidebarOpen && state.isSidebarAutoCollapsed) {
+        return {
+          sidebarAutoCollapseOverride: !state.sidebarAutoCollapseOverride,
+        };
+      }
       const isSidebarOpen = !wasVisible;
       getLocalStorage()?.setItem(sidebarStorageKey, String(isSidebarOpen));
       return {

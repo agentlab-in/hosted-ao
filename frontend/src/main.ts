@@ -63,7 +63,15 @@ import {
 } from "./main/ui-settings";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import {
   chmod,
   copyFile,
@@ -192,6 +200,8 @@ import {
   createMachineSelection,
   type MachineSelection,
 } from "./main/machine-selection";
+import { persistSelectedDaemonTerminalTheme } from "./main/terminal-theme";
+import { LOCAL_MACHINE_ID } from "./shared/ao-machines";
 import {
   ancestorRepositorySetupWarning,
   scanImportFolder,
@@ -363,6 +373,29 @@ function syncNativeWindowBackground(): void {
       ? NATIVE_WINDOW_BACKGROUND_DARK
       : NATIVE_WINDOW_BACKGROUND_LIGHT,
   );
+}
+
+function resolvedDaemonDataDir(): string {
+	const override = process.env.AO_DATA_DIR?.trim();
+	if (override) return override;
+	if (isDev) return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR, "data");
+	return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "data");
+}
+
+// Cursor Agent reads TERM_THEME at process start. The daemon applies it from
+// this file when spawning a PTY. The renderer writes the resolved light/dark
+// scheme here so it matches the xterm palette (not Electron nativeTheme alone).
+function persistLocalTerminalThemeHint(scheme: "light" | "dark"): void {
+	const dir = resolvedDaemonDataDir();
+	try {
+		mkdirSync(dir, { recursive: true, mode: 0o750 });
+		const target = path.join(dir, "terminal-theme");
+		const temporary = `${target}.${process.pid}.tmp`;
+		writeFileSync(temporary, `${scheme}\n`, { mode: 0o600 });
+		renameSync(temporary, target);
+	} catch (error) {
+		console.warn("AO: unable to persist terminal theme hint", error);
+	}
 }
 
 nativeTheme.on("updated", syncNativeWindowBackground);
@@ -2038,6 +2071,24 @@ ipcMain.handle(
     }
   },
 );
+
+ipcMain.handle("theme:persist-terminal", async (_event, scheme: unknown) => {
+	if (scheme === "light" || scheme === "dark") {
+		try {
+			await persistSelectedDaemonTerminalTheme(scheme, {
+				isRemoteSelected: () => machineSelection().getState().activeMachineId !== LOCAL_MACHINE_ID,
+				activeRemoteStatus: () => activeMachineStatus,
+				gatewayToken: () => machineSelection().gatewayToken(),
+				writeLocal: persistLocalTerminalThemeHint,
+				// Electron net.fetch uses session.defaultSession, preserving the
+				// installed certificate verifier for paired machines.
+				fetchRemote: (url, init) => net.fetch(url, init),
+			});
+		} catch (error) {
+			console.warn("AO: unable to persist terminal theme hint", error);
+		}
+	}
+});
 
 // Renderer calls this when focus lands on real shell UI (not the titlebar menu), so menu:action's panel fallback below doesn't go stale.
 ipcMain.on("shell:focus", () => browserViewHost?.forgetLastFocusedPanel());

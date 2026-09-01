@@ -177,6 +177,7 @@ export const aoBridge: AoBridge =
     },
     theme: {
       set: async () => undefined,
+			persistTerminal: async () => undefined,
     },
     menu: {
       action: async () => undefined,
@@ -295,6 +296,7 @@ export const aoBridge: AoBridge =
       destroy: () => undefined,
       setAnnotationMode: async () => undefined,
       onNavState: () => () => undefined,
+			onPageFocus: () => () => undefined,
       onTabsState: () => () => undefined,
       onAgentActivity: () => () => undefined,
       onDevToolsState: () => () => undefined,
