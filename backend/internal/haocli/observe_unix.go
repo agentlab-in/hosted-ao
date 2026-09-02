@@ -34,7 +34,7 @@ func distributionID() (string, error) {
 }
 
 func statFile(path string) (FileObservation, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return FileObservation{}, err
 	}
@@ -42,7 +42,7 @@ func statFile(path string) (FileObservation, error) {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		uid = int(stat.Uid)
 	}
-	return FileObservation{Mode: info.Mode(), UID: uid, Owner: uid < 0 || uid == os.Geteuid(), IsDir: info.IsDir()}, nil
+	return FileObservation{Mode: info.Mode(), UID: uid, Owner: uid < 0 || uid == os.Geteuid(), IsDir: info.IsDir(), Link: info.Mode()&os.ModeSymlink != 0}, nil
 }
 
 func diskAvailable(path string) (uint64, error) {

@@ -213,6 +213,7 @@ V1 should keep this root to avoid breaking installations. Proposed additions are
   hao/config.yaml
   hao/backups/
   bin/                         # only if using a per-user install
+    ao.hao-manifest.json       # hao-owned version/source/SHA-256 provenance
   data/                        # existing daemon durable data
   running.json                 # existing daemon discovery file
   machine.json                 # legacy hosted gateway config, compatibility only
@@ -222,6 +223,13 @@ V1 should keep this root to avoid breaking installations. Proposed additions are
 ```
 
 `hao` must use the shared state-root helper rather than respell `.ao/hosted`. A system service must receive absolute `AO_DATA_DIR` and `AO_RUN_FILE` paths and run as the target unprivileged user.
+
+Setup observation never executes a discovered binary. A `hao`-owned AO artifact
+is considered version-known only when `bin/ao.hao-manifest.json` names its
+version, release source, and SHA-256 and the digest matches the adjacent binary.
+Managed directories, artifacts, and service definitions are inspected without
+following symbolic links; links at those paths are conflicts rather than
+shortcuts to state outside the Hosted AO root.
 
 ## 6. Idempotency, privileges, installation, and errors
 

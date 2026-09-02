@@ -8,11 +8,11 @@ import (
 )
 
 func statFile(path string) (FileObservation, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return FileObservation{}, err
 	}
-	return FileObservation{Mode: info.Mode(), UID: -1, Owner: true, IsDir: info.IsDir()}, nil
+	return FileObservation{Mode: info.Mode(), UID: -1, Owner: true, IsDir: info.IsDir(), Link: info.Mode()&os.ModeSymlink != 0}, nil
 }
 
 func diskAvailable(string) (uint64, error) {

@@ -1,7 +1,6 @@
 package haocli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +25,10 @@ type SetupAction struct {
 	Argv       []string `json:"argv,omitempty"`
 	Path       string   `json:"path,omitempty"`
 	Mode       string   `json:"mode,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	Source     string   `json:"source,omitempty"`
+	VerifyWith string   `json:"verifyWith,omitempty"`
+	Content    string   `json:"content,omitempty"`
 }
 
 // SetupStep is one stable desired-versus-observed reconciliation decision.
@@ -68,6 +71,7 @@ type setupDesired struct {
 	ServiceEnabled                                      bool
 	PairPort                                            int
 	StateRoot, ConfigPath                               string
+	OS, Arch                                            string
 }
 
 type observedItem struct {
@@ -76,6 +80,7 @@ type observedItem struct {
 	UID                            int
 	Owner                          bool
 	IsDir                          bool
+	Link                           bool
 }
 
 type setupSnapshot struct {
@@ -85,6 +90,8 @@ type setupSnapshot struct {
 	Tools                                     map[string]observedItem
 	PackageManager, ServiceManager            observedItem
 	ServiceFiles                              map[string]observedItem
+	User                                      UserObservation
+	UserState                                 string
 }
 
 func newSetupCommand(deps Deps, opts *options) *cobra.Command {
@@ -106,7 +113,7 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		plan := planSetup(desired, observeSetup(cmd.Context(), deps, desired))
+		plan := planSetup(desired, observeSetup(deps, desired))
 		if opts.json {
 			err = writeJSON(cmd.OutOrStdout(), haocontractRedact(plan))
 		} else {
@@ -146,13 +153,18 @@ func resolveSetupDesired(deps Deps, path string, object map[string]any, install 
 	return d, nil
 }
 
-func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSnapshot {
+func observeSetup(deps Deps, desired setupDesired) setupSnapshot {
 	osName, arch := deps.Observer.Platform()
 	s := setupSnapshot{OS: osName, Arch: arch, Directories: map[string]observedItem{}, Tools: map[string]observedItem{}, ServiceFiles: map[string]observedItem{}}
 	if distro, err := deps.Observer.Distribution(); err != nil {
 		s.DistributionState = "unknown"
 	} else {
 		s.Distribution, s.DistributionState = distro, "known"
+	}
+	if currentUser, err := deps.Observer.CurrentUser(); err != nil {
+		s.UserState = "unknown"
+	} else {
+		s.User, s.UserState = currentUser, "known"
 	}
 	directories := map[string]string{"directory.state": desired.StateRoot, "directory.hao": filepath.Join(desired.StateRoot, "hao"), "directory.bin": filepath.Join(desired.StateRoot, "bin"), "directory.data": filepath.Join(desired.StateRoot, "data")}
 	if desired.Mode == "pair" {
@@ -163,8 +175,13 @@ func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSna
 	}
 	artifactPath := filepath.Join(desired.StateRoot, "bin", "ao")
 	s.Artifact = observeFile(deps.Observer, artifactPath)
-	if s.Artifact.State == "present" && s.Artifact.Owner && !s.Artifact.IsDir && s.Artifact.Mode.Perm()&0o022 == 0 && s.Artifact.Mode.Perm()&0o111 != 0 {
-		s.Artifact.Version, s.Artifact.State, s.Artifact.Evidence = probeVersion(ctx, deps, artifactPath)
+	if s.Artifact.State == "present" && s.Artifact.Owner && !s.Artifact.IsDir && !s.Artifact.Link && s.Artifact.Mode.Perm()&0o022 == 0 && s.Artifact.Mode.Perm()&0o111 != 0 {
+		metadata, err := deps.Observer.InspectArtifact(artifactPath)
+		if err != nil {
+			s.Artifact.State, s.Artifact.Evidence = "unknown", "artifact provenance probe failed: "+safeDiagnostic(err)
+		} else {
+			s.Artifact.Version, s.Artifact.Evidence = metadata.Version, "verified hao manifest from "+metadata.Source
+		}
 		s.Artifact.Path = artifactPath
 	}
 	tools := map[string]string{"git": "git", "harness": harnessBinary(desired.Harness)}
@@ -172,13 +189,13 @@ func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSna
 		tools["gh"] = "gh"
 	}
 	for id, binary := range tools {
-		s.Tools[id] = observeTool(ctx, deps, binary)
+		s.Tools[id] = observeTool(deps, binary)
 	}
-	s.PackageManager, s.ServiceManager = observePackageManager(ctx, deps, osName), observeServiceManager(ctx, deps, osName)
+	s.PackageManager, s.ServiceManager = observePackageManager(deps, osName), observeServiceManager(deps, osName)
 	if osName == "linux" {
-		s.ServiceFiles["service.daemon"] = observeFile(deps.Observer, "/etc/systemd/system/hosted-ao.service")
+		s.ServiceFiles["service.daemon"] = observeServiceFile(deps.Observer, "/etc/systemd/system/ao-daemon.service")
 		if desired.Mode == "pair" {
-			s.ServiceFiles["service.gateway"] = observeFile(deps.Observer, "/etc/systemd/system/hosted-ao-gateway.service")
+			s.ServiceFiles["service.gateway"] = observeServiceFile(deps.Observer, "/etc/systemd/system/ao-gateway.service")
 		}
 	}
 	return s
@@ -192,30 +209,34 @@ func observeFile(obs Observer, path string) observedItem {
 	if err != nil {
 		return observedItem{State: "unknown", Evidence: "path probe failed: " + safeDiagnostic(err), Path: path}
 	}
-	return observedItem{State: "present", Evidence: fmt.Sprintf("path exists with mode %04o and uid %d", info.Mode.Perm(), info.UID), Path: path, Mode: info.Mode, UID: info.UID, Owner: info.Owner, IsDir: info.IsDir}
+	return observedItem{State: "present", Evidence: fmt.Sprintf("path exists with mode %04o and uid %d", info.Mode.Perm(), info.UID), Path: path, Mode: info.Mode, UID: info.UID, Owner: info.Owner, IsDir: info.IsDir, Link: info.Link}
 }
 
-func observeTool(ctx context.Context, deps Deps, binary string) observedItem {
+func observeServiceFile(obs Observer, path string) observedItem {
+	item := observeFile(obs, path)
+	if item.State != "present" || item.Link || item.IsDir {
+		return item
+	}
+	data, err := obs.ReadFile(path)
+	if err != nil {
+		item.State, item.Evidence = "unknown", "service definition read failed: "+safeDiagnostic(err)
+		return item
+	}
+	item.Version = string(data)
+	return item
+}
+
+func observeTool(deps Deps, binary string) observedItem {
 	path, err := deps.Observer.LookPath(binary)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return observedItem{State: "unknown", Evidence: binary + " path lookup failed: " + safeDiagnostic(err)}
+		}
 		return observedItem{State: "absent", Evidence: binary + " was not found on PATH"}
 	}
-	version, state, evidence := probeVersion(ctx, deps, path)
-	return observedItem{State: state, Evidence: evidence, Version: version, Path: path, Owner: true}
+	return observedItem{State: "present", Evidence: "executable path is present (not executed)", Path: path, Owner: true}
 }
-func probeVersion(ctx context.Context, deps Deps, path string) (string, string, string) {
-	probeCtx, cancel := boundedContext(ctx, deps.Timeout)
-	defer cancel()
-	out, err := deps.Observer.Run(probeCtx, path, "--version")
-	if err != nil {
-		if probeCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return "", "unknown", "version probe timed out or was canceled"
-		}
-		return "", "unknown", "version probe failed"
-	}
-	return safeVersion(out), "present", "version probe succeeded"
-}
-func observePackageManager(ctx context.Context, deps Deps, goos string) observedItem {
+func observePackageManager(deps Deps, goos string) observedItem {
 	name := ""
 	if goos == "linux" {
 		name = "apt-get"
@@ -224,30 +245,29 @@ func observePackageManager(ctx context.Context, deps Deps, goos string) observed
 		name = "brew"
 	}
 	if name != "" {
-		item := observeTool(ctx, deps, name)
+		item := observeTool(deps, name)
 		if item.State != "absent" {
 			return item
 		}
 	}
 	return observedItem{State: "absent", Evidence: "no supported package manager was found"}
 }
-func observeServiceManager(ctx context.Context, deps Deps, goos string) observedItem {
+func observeServiceManager(deps Deps, goos string) observedItem {
 	if goos != "linux" {
 		return observedItem{State: "unsupported", Evidence: "managed service definitions are not supported on " + goos}
 	}
 	path, err := deps.Observer.LookPath("systemctl")
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return observedItem{State: "unknown", Evidence: "systemctl path lookup failed: " + safeDiagnostic(err)}
+		}
 		return observedItem{State: "absent", Evidence: "systemctl was not found"}
 	}
-	probeCtx, cancel := boundedContext(ctx, deps.Timeout)
-	defer cancel()
-	if _, err := deps.Observer.Run(probeCtx, path, "show-environment"); err != nil {
-		return observedItem{State: "unknown", Evidence: "systemd usability probe failed or timed out", Path: path}
-	}
-	return observedItem{State: "present", Evidence: "systemd is available and usable", Path: path}
+	return observedItem{State: "present", Evidence: "systemd executable is present (not executed)", Path: path}
 }
 
 func planSetup(d setupDesired, s setupSnapshot) SetupPlan {
+	d.OS, d.Arch = s.OS, s.Arch
 	p := SetupPlan{SchemaVersion: setupPlanSchemaVersion, DryRun: true, Machine: d.Machine, Mode: d.Mode, Platform: s.OS + "/" + s.Arch, InstallPolicy: d.Install}
 	add := func(step SetupStep) { p.Steps = append(p.Steps, step) }
 	platformBlocked := ""
@@ -348,6 +368,9 @@ func planDirectory(id string, item observedItem) SetupStep {
 	if !item.IsDir {
 		return blockedStep(id, component, "reconcile-directory", "required directory path is occupied by a non-directory", item.Evidence, "move the conflicting path outside hao, then retry")
 	}
+	if item.Link {
+		return blockedStep(id, component, "reconcile-directory", "managed directory path is a symbolic link", item.Evidence, "replace the link with a directory inside the HAO state root")
+	}
 	if !item.Owner {
 		return blockedStep(id, component, "reconcile-directory", "existing directory has unsafe ownership", item.Evidence, "correct ownership outside hao, then retry")
 	}
@@ -360,7 +383,7 @@ func planArtifact(d setupDesired, item observedItem) SetupStep {
 	if item.State == "unknown" {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "artifact state or version is unknown", item.Evidence, "inspect the hao-owned AO artifact manually")
 	}
-	action := &SetupAction{Kind: "artifact-install", Path: item.Path, Argv: []string{"ao", d.AOVersion}}
+	action := artifactReleaseAction(d, item.Path)
 	if item.State == "absent" {
 		if d.Install == "none" {
 			return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-install", "audit-only policy forbids planning artifact installation", item.Evidence, "install the requested hao-owned AO artifact manually, then rerun setup")
@@ -369,6 +392,9 @@ func planArtifact(d setupDesired, item observedItem) SetupStep {
 	}
 	if item.IsDir {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "artifact path is occupied by a directory", item.Evidence, "move the conflicting directory outside hao")
+	}
+	if item.Link {
+		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "managed artifact path is a symbolic link", item.Evidence, "replace the link with a regular hao-owned artifact")
 	}
 	if !item.Owner {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "existing artifact has unsafe ownership", item.Evidence, "correct or remove the conflicting artifact outside hao")
@@ -401,13 +427,17 @@ func planPrerequisite(d setupDesired, s setupSnapshot, id, component string, ite
 	if id == "harness" && d.Harness != "claude-code" {
 		return blockedStep(stepID, component, "manual-install", "selected harness has no allowlisted installer", item.Evidence, "install the selected harness using its vendor documentation")
 	}
+	if id == "harness" {
+		return SetupStep{ID: stepID, Component: component, Operation: "install-vendor-artifact", Disposition: "create", Reason: "required allowlisted harness is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "vendor-package", Source: "npm:@anthropic-ai/claude-code", Version: "latest"}}
+	}
 	if s.PackageManager.State != "present" {
 		return blockedStep(stepID, component, "install-prerequisite", "a supported package manager is not proven usable", s.PackageManager.Evidence, "install the prerequisite manually or restore the supported package manager")
 	}
-	if id == "harness" {
-		return SetupStep{ID: stepID, Component: component, Operation: "install-vendor-artifact", Disposition: "create", Reason: "required allowlisted harness is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "vendor-installer", Executable: "hao-installer", Argv: []string{"install", "harness", d.Harness}}}
+	privilege := SetupPrivilege{}
+	if filepath.Base(s.PackageManager.Path) == "apt-get" {
+		privilege = SetupPrivilege{Required: true, Scope: "package-install"}
 	}
-	return SetupStep{ID: stepID, Component: component, Operation: "install-package", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "package-install"}, Reason: "required prerequisite is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "package-manager", Executable: s.PackageManager.Path, Argv: []string{"install", id}}}
+	return SetupStep{ID: stepID, Component: component, Operation: "install-package", Disposition: "create", Privilege: privilege, Reason: "required prerequisite is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "package-manager", Executable: s.PackageManager.Path, Argv: []string{"install", id}}}
 }
 
 func planServices(d setupDesired, s setupSnapshot) []SetupStep {
@@ -432,6 +462,15 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 		}
 		return steps
 	}
+	if s.UserState != "known" || s.User.Name == "" || s.User.UID == 0 || s.User.Home == "" {
+		steps := []SetupStep{blockedStep("service.daemon", "ao-daemon-service", "reconcile-definition", "target unprivileged user could not be determined", "user observation is "+s.UserState, "rerun as the target non-root user")}
+		if d.Mode == "pair" {
+			step := blockedStep("service.gateway", "pair-gateway-service", "reconcile-definition", "target unprivileged user could not be determined", "user observation is "+s.UserState, "rerun as the target non-root user")
+			step.Dependencies = []string{"service.daemon"}
+			steps = append(steps, step)
+		}
+		return steps
+	}
 	ids := []string{"service.daemon"}
 	if d.Mode == "pair" {
 		ids = append(ids, "service.gateway")
@@ -443,12 +482,16 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 			component, deps = "pair-gateway-service", []string{"service.daemon", "directory.gateway", "artifact.ao"}
 		}
 		var step SetupStep
+		desiredContent := renderSystemdDefinition(id, d, s.User)
+		action := &SetupAction{Kind: "service-definition-v1", Path: item.Path, Mode: "0644", Content: desiredContent}
 		switch item.State {
 		case "absent":
-			step = SetupStep{ID: id, Component: component, Operation: "install-definition", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "supported service definition is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "service-definition", Path: item.Path}}
+			step = SetupStep{ID: id, Component: component, Operation: "install-definition", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "supported service definition is absent", Evidence: item.Evidence, Action: action}
 		case "present":
-			if item.IsDir || item.UID > 0 || item.Mode.Perm()&0o022 != 0 {
+			if item.Link || item.IsDir || item.UID > 0 || item.Mode.Perm()&0o022 != 0 {
 				step = blockedStep(id, component, "reconcile-definition", "existing service definition has unsafe ownership", item.Evidence, "inspect and reconcile the conflicting definition manually")
+			} else if item.Version != desiredContent {
+				step = SetupStep{ID: id, Component: component, Operation: "update-definition", Disposition: "update", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "service definition content differs from desired canonical v1 content", Evidence: "canonical content mismatch", Action: action}
 			} else {
 				step = noopStep(id, component, "verify-definition", "service definition is present; setup does not enable or start it", item.Evidence)
 			}
@@ -459,6 +502,25 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 		steps = append(steps, step)
 	}
 	return steps
+}
+
+func renderSystemdDefinition(id string, d setupDesired, user UserObservation) string {
+	dataDir, runFile, binary := filepath.Join(d.StateRoot, "data"), filepath.Join(d.StateRoot, "running.json"), filepath.Join(d.StateRoot, "bin", "ao")
+	var b strings.Builder
+	b.WriteString("[Unit]\nDescription=Hosted AO ")
+	if id == "service.gateway" {
+		b.WriteString("pair gateway\nAfter=network-online.target ao-daemon.service\nRequires=ao-daemon.service\n")
+	} else {
+		b.WriteString("daemon\nAfter=network-online.target\n")
+	}
+	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + dataDir + "\nEnvironment=\"HOME=" + user.Home + "\"\n")
+	if id == "service.gateway" {
+		b.WriteString("Environment=\"AO_VM_PAIR=on\"\nEnvironment=\"AO_VM_CERT_DIR=" + filepath.Join(d.StateRoot, "vm-gateway", "pair-cert") + "\"\nEnvironment=\"AO_VM_PASSCODE_DIR=" + filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode") + "\"\nExecStart=" + binary + " vm serve\n")
+	} else {
+		b.WriteString("Environment=\"AO_DATA_DIR=" + dataDir + "\"\nEnvironment=\"AO_RUN_FILE=" + runFile + "\"\nExecStart=" + binary + " daemon\n")
+	}
+	b.WriteString("Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
+	return b.String()
 }
 
 func propagateBlocked(steps []SetupStep) {
@@ -491,6 +553,13 @@ func versionMatches(observed, desired string) bool {
 		}
 	}
 	return false
+}
+
+func artifactReleaseAction(d setupDesired, path string) *SetupAction {
+	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[d.Arch]
+	asset := "ao-" + d.OS + "-" + arch
+	source := "https://github.com/agentlab-in/hosted-ao/releases/download/v" + d.AOVersion + "/" + asset
+	return &SetupAction{Kind: "verified-release-artifact", Path: path, Version: d.AOVersion, Source: source, VerifyWith: source + ".sha256"}
 }
 
 func writeSetupPlan(cmd *cobra.Command, plan SetupPlan, yes bool) error {

@@ -3,6 +3,7 @@ package haocli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -31,7 +34,10 @@ const (
 type Observer interface {
 	Platform() (string, string)
 	Distribution() (string, error)
+	CurrentUser() (UserObservation, error)
 	Stat(path string) (FileObservation, error)
+	ReadFile(path string) ([]byte, error)
+	InspectArtifact(path string) (ArtifactMetadata, error)
 	Disk(path string) (uint64, error)
 	LookPath(name string) (string, error)
 	Run(ctx context.Context, name string, args ...string) (string, error)
@@ -47,6 +53,21 @@ type FileObservation struct {
 	UID   int
 	Owner bool
 	IsDir bool
+	Link  bool
+}
+
+// UserObservation is the non-secret identity used by managed services.
+type UserObservation struct {
+	Name string
+	UID  int
+	Home string
+}
+
+// ArtifactMetadata is provenance from the adjacent hao-owned manifest.
+type ArtifactMetadata struct {
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+	Source  string `json:"source"`
 }
 
 type systemObserver struct{}
@@ -68,9 +89,45 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return original, nil
 }
 
-func (systemObserver) Platform() (string, string)                     { return runtime.GOOS, runtime.GOARCH }
-func (systemObserver) Distribution() (string, error)                  { return distributionID() }
-func (systemObserver) Stat(path string) (FileObservation, error)      { return statFile(path) }
+func (systemObserver) Platform() (string, string)    { return runtime.GOOS, runtime.GOARCH }
+func (systemObserver) Distribution() (string, error) { return distributionID() }
+func (systemObserver) CurrentUser() (UserObservation, error) {
+	u, err := user.Current()
+	if err != nil {
+		return UserObservation{}, err
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return UserObservation{}, err
+	}
+	return UserObservation{Name: u.Username, UID: uid, Home: u.HomeDir}, nil
+}
+func (systemObserver) Stat(path string) (FileObservation, error) { return statFile(path) }
+func (systemObserver) ReadFile(path string) ([]byte, error)      { return os.ReadFile(path) }
+func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
+	data, err := os.ReadFile(path + ".hao-manifest.json")
+	if err != nil {
+		return ArtifactMetadata{}, err
+	}
+	var metadata ArtifactMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return ArtifactMetadata{}, err
+	}
+	file, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return ArtifactMetadata{}, err
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return ArtifactMetadata{}, err
+	}
+	actual := fmt.Sprintf("%x", hash.Sum(nil))
+	if metadata.Version == "" || metadata.Source == "" || metadata.SHA256 == "" || !strings.EqualFold(actual, metadata.SHA256) {
+		return ArtifactMetadata{}, errors.New("artifact manifest is missing provenance or does not match the artifact")
+	}
+	return metadata, nil
+}
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
 func (systemObserver) LookPath(name string) (string, error)           { return exec.LookPath(name) }
 func (systemObserver) ReadRunFile(path string) (*runfile.Info, error) { return runfile.Read(path) }

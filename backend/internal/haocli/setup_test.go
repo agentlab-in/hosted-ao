@@ -2,8 +2,10 @@ package haocli
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,9 +23,12 @@ func setupDeps(t *testing.T, fixture string, obs *fakeObserver) (Deps, string) {
 		t.Fatal(err)
 	}
 	obs.files[filepath.Join(root, "bin", "ao")] = FileObservation{Mode: 0o755, Owner: true}
-	obs.files["/etc/systemd/system/hosted-ao.service"] = FileObservation{Mode: 0o644, UID: 0}
-	obs.files["/etc/systemd/system/hosted-ao-gateway.service"] = FileObservation{Mode: 0o644, UID: 0}
-	obs.runs[filepath.Join(root, "bin", "ao")+" --version"] = "ao 0.14.0"
+	obs.artifacts[filepath.Join(root, "bin", "ao")] = ArtifactMetadata{Version: "0.14.0", SHA256: strings.Repeat("a", 64), Source: "test-release"}
+	obs.files["/etc/systemd/system/ao-daemon.service"] = FileObservation{Mode: 0o644, UID: 0}
+	obs.files["/etc/systemd/system/ao-gateway.service"] = FileObservation{Mode: 0o644, UID: 0}
+	desired := setupDesired{StateRoot: root}
+	obs.readFiles["/etc/systemd/system/ao-daemon.service"] = []byte(renderSystemdDefinition("service.daemon", desired, obs.user))
+	obs.readFiles["/etc/systemd/system/ao-gateway.service"] = []byte(renderSystemdDefinition("service.gateway", desired, obs.user))
 	return deps, root
 }
 
@@ -117,8 +122,8 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 		}
 		deps, root := setupDeps(t, "pair", obs)
 		obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
-		obs.statErr["/etc/systemd/system/hosted-ao.service"] = os.ErrNotExist
-		obs.statErr["/etc/systemd/system/hosted-ao-gateway.service"] = os.ErrNotExist
+		obs.statErr["/etc/systemd/system/ao-daemon.service"] = os.ErrNotExist
+		obs.statErr["/etc/systemd/system/ao-gateway.service"] = os.ErrNotExist
 		out, stderr, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run", "--install", "missing")
 		if code != 0 || stderr != "" {
 			t.Fatalf("code=%d stderr=%q out=%s", code, stderr, out)
@@ -144,7 +149,7 @@ func TestSetupUnknownConflictAndBlockedPropagation(t *testing.T) {
 	obs := healthyObserver()
 	deps, root := setupDeps(t, "pair", obs)
 	artifact := filepath.Join(root, "bin", "ao")
-	obs.runErr[artifact+" --version"] = context.DeadlineExceeded
+	obs.artifactErr[artifact] = context.DeadlineExceeded
 	obs.files[root] = FileObservation{Mode: 0o700, Owner: false}
 	obs.runErr["/usr/bin/apt-get --version"] = errors.New("probe failure")
 	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
@@ -195,7 +200,7 @@ func TestSetupPlatformsAndServiceManagers(t *testing.T) {
 			if state == "absent" {
 				delete(obs.paths, "systemctl")
 			} else {
-				obs.runErr["/usr/bin/systemctl show-environment"] = context.DeadlineExceeded
+				obs.pathErr["systemctl"] = context.DeadlineExceeded
 			}
 			deps, _ := setupDeps(t, "pair", obs)
 			out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
@@ -210,7 +215,7 @@ func TestSetupWrongVersionsPermissionsAndManagerUnknown(t *testing.T) {
 	obs := healthyObserver()
 	deps, root := setupDeps(t, "pair", obs)
 	artifact := filepath.Join(root, "bin", "ao")
-	obs.runs[artifact+" --version"] = "ao 0.13.9"
+	obs.artifacts[artifact] = ArtifactMetadata{Version: "0.13.9", SHA256: strings.Repeat("b", 64), Source: "old-release"}
 	obs.files[filepath.Join(root, "data")] = FileObservation{Mode: 0o755, Owner: true, IsDir: true}
 	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
 	if code != 0 {
@@ -223,7 +228,7 @@ func TestSetupWrongVersionsPermissionsAndManagerUnknown(t *testing.T) {
 
 	obs = healthyObserver()
 	delete(obs.paths, "git")
-	obs.runErr["/usr/bin/apt-get --version"] = context.DeadlineExceeded
+	obs.pathErr["apt-get"] = context.DeadlineExceeded
 	deps, _ = setupDeps(t, "pair", obs)
 	out, _, code = runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
 	if code != 1 {
@@ -240,7 +245,6 @@ func TestSetupLocalNeverPlansGatewayAndUnsafeArtifactIsNotExecuted(t *testing.T)
 	deps, root := setupDeps(t, "local", obs)
 	artifact := filepath.Join(root, "bin", "ao")
 	obs.files[artifact] = FileObservation{Mode: 0o777, Owner: true}
-	before := obs.runCalls
 	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run")
 	if code != 1 {
 		t.Fatalf("code=%d out=%s", code, out)
@@ -249,14 +253,77 @@ func TestSetupLocalNeverPlansGatewayAndUnsafeArtifactIsNotExecuted(t *testing.T)
 	if stepByID(t, plan, "artifact.ao").Disposition != "blocked" {
 		t.Fatalf("plan=%+v", plan)
 	}
-	// git, harness, package manager, and systemd probes run; the unsafe artifact must not.
-	if obs.runCalls-before != 4 {
-		t.Fatalf("runCalls=%d want 4 safe probes", obs.runCalls-before)
+	if obs.runCalls != 0 {
+		t.Fatalf("setup executed %d subprocess probes", obs.runCalls)
 	}
 	for _, step := range plan.Steps {
 		if strings.Contains(step.ID, "gateway") || strings.HasPrefix(step.ID, "pair.") {
 			t.Fatalf("local plan contains gateway step: %+v", step)
 		}
+	}
+}
+
+func TestSetupHarnessDoesNotDependOnPackageManager(t *testing.T) {
+	obs := healthyObserver()
+	delete(obs.paths, "claude")
+	delete(obs.paths, "apt-get")
+	deps, _ := setupDeps(t, "pair", obs)
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	step := stepByID(t, decodeSetupPlan(t, out), "prerequisite.harness")
+	if step.Disposition != "create" || step.Action == nil || step.Action.Kind != "vendor-package" || len(step.Dependencies) != 1 {
+		t.Fatalf("step=%+v", step)
+	}
+}
+
+func TestSetupServiceDefinitionDriftCarriesCanonicalContent(t *testing.T) {
+	obs := healthyObserver()
+	deps, _ := setupDeps(t, "pair", obs)
+	obs.readFiles["/etc/systemd/system/ao-daemon.service"] = []byte("[Service]\nExecStart=/wrong\n")
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	step := stepByID(t, decodeSetupPlan(t, out), "service.daemon")
+	if step.Disposition != "update" || step.Action == nil || !strings.Contains(step.Action.Content, "ExecStart=") || !strings.Contains(step.Action.Content, "AO_DATA_DIR") {
+		t.Fatalf("step=%+v", step)
+	}
+}
+
+func TestSystemObserverBlocksManagedSymlinkAndVerifiesArtifactManifest(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	item := observeFile(systemObserver{}, link)
+	if !item.Link || planDirectory("directory.state", item).Disposition != "blocked" {
+		t.Fatalf("item=%+v", item)
+	}
+
+	artifact := filepath.Join(root, "ao")
+	payload := []byte("non-executable-test-artifact")
+	if err := os.WriteFile(artifact, payload, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	metadata := ArtifactMetadata{Version: "0.14.0", SHA256: fmt.Sprintf("%x", sum[:]), Source: "test-release"}
+	manifest, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact+".hao-manifest.json", manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (systemObserver{}).InspectArtifact(artifact)
+	if err != nil || !reflect.DeepEqual(got, metadata) {
+		t.Fatalf("got=%+v err=%v", got, err)
 	}
 }
 
@@ -297,11 +364,14 @@ func TestSetupWithoutDryRunFailsBeforeEveryBoundary(t *testing.T) {
 
 type panicObserver struct{}
 
-func (panicObserver) Platform() (string, string)           { panic("platform probe") }
-func (panicObserver) Distribution() (string, error)        { panic("distribution probe") }
-func (panicObserver) Stat(string) (FileObservation, error) { panic("filesystem probe") }
-func (panicObserver) Disk(string) (uint64, error)          { panic("disk probe") }
-func (panicObserver) LookPath(string) (string, error)      { panic("path probe") }
+func (panicObserver) Platform() (string, string)                       { panic("platform probe") }
+func (panicObserver) Distribution() (string, error)                    { panic("distribution probe") }
+func (panicObserver) CurrentUser() (UserObservation, error)            { panic("user probe") }
+func (panicObserver) Stat(string) (FileObservation, error)             { panic("filesystem probe") }
+func (panicObserver) ReadFile(string) ([]byte, error)                  { panic("file read") }
+func (panicObserver) InspectArtifact(string) (ArtifactMetadata, error) { panic("artifact probe") }
+func (panicObserver) Disk(string) (uint64, error)                      { panic("disk probe") }
+func (panicObserver) LookPath(string) (string, error)                  { panic("path probe") }
 func (panicObserver) Run(context.Context, string, ...string) (string, error) {
 	panic("subprocess probe")
 }
@@ -314,8 +384,8 @@ func (panicObserver) PortAvailable(context.Context, string, int) (bool, error) {
 
 func TestSetupHumanJSONRedactionAndYesSemantics(t *testing.T) {
 	obs := healthyObserver()
-	obs.runs["/usr/bin/git --version"] = `token=setup-secret`
 	deps, _ := setupDeps(t, "local", obs)
+	obs.paths["git"] = `/tmp/token=setup-secret/git`
 	for _, args := range [][]string{{"--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run", "--yes"}, {"--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run", "--yes"}} {
 		out, stderr, code := runCLI(t, deps, args...)
 		if code != 0 || stderr != "" || strings.Contains(out, "setup-secret") || !strings.Contains(out, "[REDACTED]") {

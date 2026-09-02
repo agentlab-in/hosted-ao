@@ -49,7 +49,10 @@ surface (`npm run sqlc`, `npm run api`).
   read-only host snapshot, and emits a deterministic ordered preparation plan.
   Steps are classified as create, update, no-op, or blocked with stable IDs,
   structured privilege/action metadata, dependencies, evidence, and safe
-  remediation. Dependency installation policy, Ubuntu systemd support, macOS
+  remediation. Managed paths are inspected without following links; installed
+  AO artifacts are verified through an adjacent provenance/checksum manifest;
+  canonical systemd definition content is compared byte-for-byte. Dependency
+  installation policy, Ubuntu systemd support, macOS
   desktop supervision, pair prerequisites, and profile-conditional `gh` are
   planned without executing anything. `--yes` is forward-compatible and has no
   mutation effect. Setup without `--dry-run` fails closed.
