@@ -103,9 +103,27 @@ func (systemObserver) CurrentUser() (UserObservation, error) {
 	return UserObservation{Name: u.Username, UID: uid, Home: u.HomeDir}, nil
 }
 func (systemObserver) Stat(path string) (FileObservation, error) { return statFile(path) }
-func (systemObserver) ReadFile(path string) ([]byte, error)      { return os.ReadFile(path) }
+func (systemObserver) ReadFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxHTTPBody {
+		return nil, errors.New("managed file is not a bounded regular file")
+	}
+	return os.ReadFile(path)
+}
 func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
-	data, err := os.ReadFile(path + ".hao-manifest.json")
+	artifactInfo, err := os.Lstat(path)
+	if err != nil || artifactInfo.Mode()&os.ModeSymlink != 0 || !artifactInfo.Mode().IsRegular() {
+		return ArtifactMetadata{}, errors.New("artifact is not a regular non-link file")
+	}
+	manifestPath := path + ".hao-manifest.json"
+	manifestInfo, err := os.Lstat(manifestPath)
+	if err != nil || manifestInfo.Mode()&os.ModeSymlink != 0 || !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > 16*1024 {
+		return ArtifactMetadata{}, errors.New("artifact manifest is not a bounded regular file")
+	}
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return ArtifactMetadata{}, err
 	}
