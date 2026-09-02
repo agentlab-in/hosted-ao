@@ -3,9 +3,35 @@
 package haocli
 
 import (
+	"bufio"
+	"errors"
 	"os"
+	"runtime"
+	"strings"
 	"syscall"
 )
+
+func distributionID() (string, error) {
+	if runtime.GOOS != "linux" {
+		return runtime.GOOS, nil
+	}
+	file, err := os.Open("/etc/os-release")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), "=")
+		if ok && key == "ID" {
+			return strings.Trim(strings.TrimSpace(value), `"`), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", errors.New("distribution ID is absent")
+}
 
 func statFile(path string) (FileObservation, error) {
 	info, err := os.Stat(path)
@@ -16,7 +42,7 @@ func statFile(path string) (FileObservation, error) {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		uid = int(stat.Uid)
 	}
-	return FileObservation{Mode: info.Mode(), UID: uid, Owner: uid < 0 || uid == os.Geteuid()}, nil
+	return FileObservation{Mode: info.Mode(), UID: uid, Owner: uid < 0 || uid == os.Geteuid(), IsDir: info.IsDir()}, nil
 }
 
 func diskAvailable(path string) (uint64, error) {

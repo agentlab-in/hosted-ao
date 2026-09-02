@@ -12,9 +12,11 @@ func statFile(path string) (FileObservation, error) {
 	if err != nil {
 		return FileObservation{}, err
 	}
-	return FileObservation{Mode: info.Mode(), UID: -1, Owner: true}, nil
+	return FileObservation{Mode: info.Mode(), UID: -1, Owner: true, IsDir: info.IsDir()}, nil
 }
 
 func diskAvailable(string) (uint64, error) {
 	return 0, errors.New("disk availability probe unsupported on windows")
 }
+
+func distributionID() (string, error) { return "windows", nil }

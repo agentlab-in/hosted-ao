@@ -78,7 +78,7 @@ func operationFromArgs(args []string) string {
 	parts := make([]string, 0, 2)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--config" {
+		if arg == "--config" || arg == "--install" {
 			i++
 			continue
 		}

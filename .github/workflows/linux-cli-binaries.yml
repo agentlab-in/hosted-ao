@@ -141,6 +141,7 @@ jobs:
               "$VERSION "*) ;;
               *) echo "::error::hao version stamp missing: got '$hao_reported', expected it to start with '$VERSION '"; exit 1 ;;
             esac
+            dist/hao setup --help | grep -Fq -- '--dry-run'
           fi
           ao_hash="$(sha256sum dist/ao | awk '{print $1}')"
           hao_hash="$(sha256sum dist/hao | awk '{print $1}')"

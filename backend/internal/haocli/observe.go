@@ -30,6 +30,7 @@ const (
 // Tests inject it so no probe depends on the developer's machine or network.
 type Observer interface {
 	Platform() (string, string)
+	Distribution() (string, error)
 	Stat(path string) (FileObservation, error)
 	Disk(path string) (uint64, error)
 	LookPath(name string) (string, error)
@@ -45,6 +46,7 @@ type FileObservation struct {
 	Mode  os.FileMode
 	UID   int
 	Owner bool
+	IsDir bool
 }
 
 type systemObserver struct{}
@@ -67,6 +69,7 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 }
 
 func (systemObserver) Platform() (string, string)                     { return runtime.GOOS, runtime.GOARCH }
+func (systemObserver) Distribution() (string, error)                  { return distributionID() }
 func (systemObserver) Stat(path string) (FileObservation, error)      { return statFile(path) }
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
 func (systemObserver) LookPath(name string) (string, error)           { return exec.LookPath(name) }

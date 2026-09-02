@@ -17,27 +17,30 @@ import (
 )
 
 type fakeObserver struct {
-	platform, arch string
-	files          map[string]FileObservation
-	statErr        map[string]error
-	paths          map[string]string
-	runs           map[string]string
-	runErr         map[string]error
-	runFile        *runfile.Info
-	runFileErr     error
-	alive          bool
-	responses      map[string][]byte
-	getErr         map[string]error
-	urls           []string
-	runFiles       []string
-	disk           uint64
-	diskErr        error
-	portAvailable  bool
-	portErr        error
-	runCalls       int
+	platform, arch  string
+	distribution    string
+	distributionErr error
+	files           map[string]FileObservation
+	statErr         map[string]error
+	paths           map[string]string
+	runs            map[string]string
+	runErr          map[string]error
+	runFile         *runfile.Info
+	runFileErr      error
+	alive           bool
+	responses       map[string][]byte
+	getErr          map[string]error
+	urls            []string
+	runFiles        []string
+	disk            uint64
+	diskErr         error
+	portAvailable   bool
+	portErr         error
+	runCalls        int
 }
 
-func (f *fakeObserver) Platform() (string, string) { return f.platform, f.arch }
+func (f *fakeObserver) Platform() (string, string)    { return f.platform, f.arch }
+func (f *fakeObserver) Distribution() (string, error) { return f.distribution, f.distributionErr }
 func (f *fakeObserver) Stat(path string) (FileObservation, error) {
 	if err := f.statErr[path]; err != nil {
 		return FileObservation{}, err
@@ -45,7 +48,7 @@ func (f *fakeObserver) Stat(path string) (FileObservation, error) {
 	if v, ok := f.files[path]; ok {
 		return v, nil
 	}
-	return FileObservation{Mode: 0o700, Owner: true}, nil
+	return FileObservation{Mode: 0o700, Owner: true, IsDir: true}, nil
 }
 func (f *fakeObserver) Disk(string) (uint64, error) { return f.disk, f.diskErr }
 func (f *fakeObserver) LookPath(name string) (string, error) {
@@ -82,7 +85,7 @@ func (f *fakeObserver) PortAvailable(context.Context, string, int) (bool, error)
 }
 
 func healthyObserver() *fakeObserver {
-	return &fakeObserver{platform: "linux", arch: "amd64", files: map[string]FileObservation{}, statErr: map[string]error{}, paths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "claude": "/usr/bin/claude", "apt-get": "/usr/bin/apt-get", "systemctl": "/usr/bin/systemctl"}, runs: map[string]string{}, runErr: map[string]error{}, runFile: &runfile.Info{PID: 42, Port: 4321}, alive: true, disk: 2 << 30, portAvailable: true, responses: map[string][]byte{
+	return &fakeObserver{platform: "linux", arch: "amd64", distribution: "ubuntu", files: map[string]FileObservation{}, statErr: map[string]error{}, paths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "claude": "/usr/bin/claude", "apt-get": "/usr/bin/apt-get", "systemctl": "/usr/bin/systemctl"}, runs: map[string]string{}, runErr: map[string]error{}, runFile: &runfile.Info{PID: 42, Port: 4321}, alive: true, disk: 2 << 30, portAvailable: true, responses: map[string][]byte{
 		"http://127.0.0.1:4321/healthz":       []byte(`{"status":"ok","service":"agent-orchestrator-daemon","pid":42}`),
 		"http://127.0.0.1:4321/readyz":        []byte(`{"status":"ready","service":"agent-orchestrator-daemon","pid":42}`),
 		"http://127.0.0.1:4321/api/v1/doctor": []byte(`{"ok":true,"failures":0,"checks":[{"level":"PASS","section":"Core","name":"runtime","message":"available"}]}`),
