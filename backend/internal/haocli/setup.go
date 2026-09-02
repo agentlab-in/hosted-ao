@@ -1,6 +1,7 @@
 package haocli
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -22,15 +23,17 @@ type SetupPrivilege struct {
 
 // SetupAction is a structured, shell-free future execution description.
 type SetupAction struct {
-	Kind       string   `json:"kind"`
-	Executable string   `json:"executable,omitempty"`
-	Argv       []string `json:"argv,omitempty"`
-	Path       string   `json:"path,omitempty"`
-	Mode       string   `json:"mode,omitempty"`
-	Version    string   `json:"version,omitempty"`
-	Source     string   `json:"source,omitempty"`
-	VerifyWith string   `json:"verifyWith,omitempty"`
-	Content    string   `json:"content,omitempty"`
+	SchemaVersion int      `json:"schemaVersion"`
+	Kind          string   `json:"kind"`
+	Executable    string   `json:"executable,omitempty"`
+	Argv          []string `json:"argv,omitempty"`
+	Path          string   `json:"path,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	VerifyWith    string   `json:"verifyWith,omitempty"`
+	Content       string   `json:"content,omitempty"`
+	SHA256        string   `json:"sha256,omitempty"`
 }
 
 // SetupStep is one stable desired-versus-observed reconciliation decision.
@@ -102,7 +105,7 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 	cmd := &cobra.Command{Use: "setup", Short: "Plan machine preparation", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		// This guard intentionally precedes config loading and every observation.
 		if !dryRun {
-			return commandError{Code: "feature_deferred", Message: "hao setup mutation is not yet supported", Remediation: "rerun with --dry-run to inspect the setup plan", ExitStatus: 2}
+			return commandError{Code: "feature_deferred", Message: "hao setup mutation is not yet supported", Remediation: "rerun with --dry-run to inspect the setup plan", ExitStatus: 4}
 		}
 		if install != "" && install != "missing" && install != "none" {
 			return commandError{Code: "invalid_usage", Message: "--install must be missing or none", Remediation: "pass --install missing or --install none", ExitStatus: 2}
@@ -116,6 +119,9 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 			return err
 		}
 		plan := planSetup(desired, observeSetup(deps, desired))
+		if err := validateSetupPlan(plan); err != nil {
+			return operationalError("validate setup plan", err)
+		}
 		if opts.json {
 			err = writeJSON(cmd.OutOrStdout(), haocontractRedact(plan))
 		} else {
@@ -177,6 +183,14 @@ func observeSetup(deps Deps, desired setupDesired) setupSnapshot {
 	}
 	artifactPath := filepath.Join(desired.StateRoot, "bin", "ao")
 	s.Artifact = observeFile(deps.Observer, artifactPath)
+	parentsSafe := true
+	for _, id := range []string{"directory.state", "directory.bin"} {
+		item := s.Directories[id]
+		parentsSafe = parentsSafe && item.State == "present" && item.IsDir && !item.Link && item.Owner
+	}
+	if !parentsSafe && s.Artifact.State == "present" {
+		s.Artifact.State, s.Artifact.Evidence = "unknown", "managed artifact ancestry is not a proven owned non-link directory chain"
+	}
 	if s.Artifact.State == "present" && s.Artifact.Owner && !s.Artifact.IsDir && !s.Artifact.Link && s.Artifact.Mode.Perm()&0o022 == 0 && s.Artifact.Mode.Perm()&0o111 != 0 {
 		metadata, err := deps.Observer.InspectArtifact(artifactPath)
 		if err != nil {
@@ -365,7 +379,7 @@ func planDirectory(id string, item observedItem) SetupStep {
 		return blockedStep(id, component, "reconcile-directory", "directory state is unknown", item.Evidence, "inspect the path and its parent permissions manually")
 	}
 	if item.State == "absent" {
-		return SetupStep{ID: id, Component: component, Operation: "create-directory", Disposition: "create", Reason: "required directory is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "directory", Path: item.Path, Mode: "0700"}}
+		return SetupStep{ID: id, Component: component, Operation: "create-directory", Disposition: "create", Reason: "required directory is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "directory", Path: item.Path, Mode: "0700"}}
 	}
 	if !item.IsDir {
 		return blockedStep(id, component, "reconcile-directory", "required directory path is occupied by a non-directory", item.Evidence, "move the conflicting path outside hao, then retry")
@@ -377,7 +391,7 @@ func planDirectory(id string, item observedItem) SetupStep {
 		return blockedStep(id, component, "reconcile-directory", "existing directory has unsafe ownership", item.Evidence, "correct ownership outside hao, then retry")
 	}
 	if item.Mode.Perm()&0o077 != 0 {
-		return SetupStep{ID: id, Component: component, Operation: "set-directory-mode", Disposition: "update", Reason: "directory permissions are broader than owner-only", Evidence: item.Evidence, Action: &SetupAction{Kind: "file-mode", Path: item.Path, Mode: "0700"}}
+		return SetupStep{ID: id, Component: component, Operation: "set-directory-mode", Disposition: "update", Reason: "directory permissions are broader than owner-only", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "file-mode", Path: item.Path, Mode: "0700"}}
 	}
 	return noopStep(id, component, "verify-directory", "directory ownership and permissions already match", item.Evidence)
 }
@@ -430,7 +444,7 @@ func planPrerequisite(d setupDesired, s setupSnapshot, id, component string, ite
 		return blockedStep(stepID, component, "manual-install", "selected harness has no allowlisted installer", item.Evidence, "install the selected harness using its vendor documentation")
 	}
 	if id == "harness" {
-		return SetupStep{ID: stepID, Component: component, Operation: "install-vendor-artifact", Disposition: "create", Reason: "required allowlisted harness is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "vendor-package", Source: "npm:@anthropic-ai/claude-code", Version: "latest"}}
+		return SetupStep{ID: stepID, Component: component, Operation: "install-vendor-artifact", Disposition: "create", Reason: "required allowlisted harness is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "vendor-package", Executable: "npm", Argv: []string{"install", "--global", "@anthropic-ai/claude-code@latest"}, Source: "https://registry.npmjs.org/@anthropic-ai/claude-code", Version: "latest"}}
 	}
 	if s.PackageManager.State != "present" {
 		return blockedStep(stepID, component, "install-prerequisite", "a supported package manager is not proven usable", s.PackageManager.Evidence, "install the prerequisite manually or restore the supported package manager")
@@ -439,7 +453,7 @@ func planPrerequisite(d setupDesired, s setupSnapshot, id, component string, ite
 	if filepath.Base(s.PackageManager.Path) == "apt-get" {
 		privilege = SetupPrivilege{Required: true, Scope: "package-install"}
 	}
-	return SetupStep{ID: stepID, Component: component, Operation: "install-package", Disposition: "create", Privilege: privilege, Reason: "required prerequisite is absent", Evidence: item.Evidence, Action: &SetupAction{Kind: "package-manager", Executable: s.PackageManager.Path, Argv: []string{"install", id}}}
+	return SetupStep{ID: stepID, Component: component, Operation: "install-package", Disposition: "create", Privilege: privilege, Reason: "required prerequisite is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "package-manager", Executable: s.PackageManager.Path, Argv: []string{"install", id}}}
 }
 
 func planServices(d setupDesired, s setupSnapshot) []SetupStep {
@@ -494,7 +508,8 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 		}
 		var step SetupStep
 		desiredContent := renderSystemdDefinition(id, d, s.User)
-		action := &SetupAction{Kind: "service-definition-v1", Path: item.Path, Mode: "0644", Content: desiredContent}
+		digest := sha256.Sum256([]byte(desiredContent))
+		action := &SetupAction{SchemaVersion: 1, Kind: "service-definition-v1", Path: item.Path, Mode: "0644", Version: "1", Content: desiredContent, SHA256: fmt.Sprintf("%x", digest[:])}
 		switch item.State {
 		case "absent":
 			step = SetupStep{ID: id, Component: component, Operation: "install-definition", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "supported service definition is absent", Evidence: item.Evidence, Action: action}
@@ -524,9 +539,14 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 	} else {
 		b.WriteString("daemon\nAfter=network-online.target\n")
 	}
-	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + systemdQuote(dataDir) + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\n")
+	path := filepath.Join(user.Home, ".local", "bin") + ":" + filepath.Join(user.Home, "bin") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + systemdQuote(dataDir) + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\nEnvironment=" + systemdQuote("PATH="+path) + "\n")
 	if id == "service.gateway" {
-		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-cert")) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode")) + "\nExecStart=" + systemdQuote(binary) + " vm serve\n")
+		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_HTTPS_ADDR=:"+strconv.Itoa(d.PairPort)) + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-cert")) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode")) + "\n")
+		if d.PairPort < 1024 {
+			b.WriteString("AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n")
+		}
+		b.WriteString("ExecStart=" + systemdQuote(binary) + " vm serve\n")
 	} else {
 		b.WriteString("Environment=" + systemdQuote("AO_DATA_DIR="+dataDir) + "\nEnvironment=" + systemdQuote("AO_RUN_FILE="+runFile) + "\nExecStart=" + systemdQuote(binary) + " daemon\n")
 	}
@@ -588,7 +608,44 @@ func artifactReleaseAction(d setupDesired, path string) *SetupAction {
 	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[d.Arch]
 	asset := "ao-" + d.OS + "-" + arch
 	source := "https://github.com/agentlab-in/hosted-ao/releases/download/v" + d.AOVersion + "/" + asset
-	return &SetupAction{Kind: "verified-release-artifact", Path: path, Version: d.AOVersion, Source: source, VerifyWith: source + ".sha256"}
+	return &SetupAction{SchemaVersion: 1, Kind: "verified-release-artifact", Path: path, Version: d.AOVersion, Source: source, VerifyWith: source + ".sha256"}
+}
+
+// validateSetupPlan is the non-mutating consumer boundary for the future executor.
+// It rejects ambiguous action variants without opening files, executing programs,
+// contacting networks, or changing machine state.
+func validateSetupPlan(plan SetupPlan) error {
+	for _, step := range plan.Steps {
+		a := step.Action
+		if a == nil {
+			continue
+		}
+		if a.SchemaVersion != 1 {
+			return fmt.Errorf("step %s has unsupported action schema", step.ID)
+		}
+		switch a.Kind {
+		case "directory", "file-mode":
+			if a.Path == "" || a.Mode == "" {
+				return fmt.Errorf("step %s has incomplete file action", step.ID)
+			}
+		case "package-manager", "vendor-package":
+			if a.Executable == "" || len(a.Argv) == 0 || a.Source == "" && a.Kind == "vendor-package" {
+				return fmt.Errorf("step %s has incomplete installer action", step.ID)
+			}
+		case "verified-release-artifact":
+			if a.Path == "" || a.Version == "" || a.Source == "" || a.VerifyWith == "" {
+				return fmt.Errorf("step %s has incomplete artifact provenance", step.ID)
+			}
+		case "service-definition-v1":
+			digest := sha256.Sum256([]byte(a.Content))
+			if a.Path == "" || a.Mode == "" || a.Version != "1" || a.Content == "" || a.SHA256 != fmt.Sprintf("%x", digest[:]) {
+				return fmt.Errorf("step %s has invalid service definition contract", step.ID)
+			}
+		default:
+			return fmt.Errorf("step %s has unsupported action kind %q", step.ID, a.Kind)
+		}
+	}
+	return nil
 }
 
 func writeSetupPlan(cmd *cobra.Command, plan SetupPlan, yes bool) error {

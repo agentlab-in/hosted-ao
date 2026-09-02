@@ -27,6 +27,7 @@ import (
 const (
 	maxHTTPBody      = 1 << 20
 	maxCommandOutput = 4096
+	maxArtifactSize  = 256 << 20
 )
 
 // Observer is the complete read-only machine boundary used by status and doctor.
@@ -104,40 +105,42 @@ func (systemObserver) CurrentUser() (UserObservation, error) {
 }
 func (systemObserver) Stat(path string) (FileObservation, error) { return statFile(path) }
 func (systemObserver) ReadFile(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
+	file, _, err := openManagedRegular(path, maxHTTPBody)
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxHTTPBody {
-		return nil, errors.New("managed file is not a bounded regular file")
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, maxHTTPBody+1))
+	if err != nil {
+		return nil, err
 	}
-	return os.ReadFile(path)
+	if len(data) > maxHTTPBody {
+		return nil, errors.New("managed file exceeds size limit")
+	}
+	return data, nil
 }
 func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
-	artifactInfo, err := os.Lstat(path)
-	if err != nil || artifactInfo.Mode()&os.ModeSymlink != 0 || !artifactInfo.Mode().IsRegular() {
-		return ArtifactMetadata{}, errors.New("artifact is not a regular non-link file")
-	}
 	manifestPath := path + ".hao-manifest.json"
-	manifestInfo, err := os.Lstat(manifestPath)
-	if err != nil || manifestInfo.Mode()&os.ModeSymlink != 0 || !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > 16*1024 {
-		return ArtifactMetadata{}, errors.New("artifact manifest is not a bounded regular file")
-	}
-	data, err := os.ReadFile(manifestPath)
+	manifest, _, err := openManagedRegular(manifestPath, 16*1024)
 	if err != nil {
 		return ArtifactMetadata{}, err
+	}
+	defer func() { _ = manifest.Close() }()
+	data, err := io.ReadAll(io.LimitReader(manifest, 16*1024+1))
+	if err != nil || len(data) > 16*1024 {
+		return ArtifactMetadata{}, errors.New("artifact manifest exceeds size limit")
 	}
 	var metadata ArtifactMetadata
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		return ArtifactMetadata{}, err
 	}
-	file, err := os.Open(filepath.Clean(path))
+	file, _, err := openManagedRegular(path, maxArtifactSize)
 	if err != nil {
 		return ArtifactMetadata{}, err
 	}
 	defer func() { _ = file.Close() }()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
+	if _, err := io.Copy(hash, io.LimitReader(file, maxArtifactSize+1)); err != nil {
 		return ArtifactMetadata{}, err
 	}
 	actual := fmt.Sprintf("%x", hash.Sum(nil))
@@ -145,6 +148,29 @@ func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
 		return ArtifactMetadata{}, errors.New("artifact manifest is missing provenance or does not match the artifact")
 	}
 	return metadata, nil
+}
+
+// openManagedRegular rejects links in the path and verifies the opened handle is
+// the same bounded regular object observed before opening. It never executes it.
+func openManagedRegular(path string, maxSize int64) (*os.File, os.FileInfo, error) {
+	clean := filepath.Clean(path)
+	before, err := os.Lstat(clean)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !before.Mode().IsRegular() || before.Size() > maxSize {
+		return nil, nil, errors.New("managed file is not a bounded regular file")
+	}
+	file, err := os.Open(clean)
+	if err != nil {
+		return nil, nil, err
+	}
+	after, err := file.Stat()
+	if err != nil || !after.Mode().IsRegular() || after.Size() > maxSize || !os.SameFile(before, after) {
+		_ = file.Close()
+		return nil, nil, errors.New("managed file changed while it was opened")
+	}
+	return file, after, nil
 }
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
 func (systemObserver) LookPath(name string) (string, error)           { return exec.LookPath(name) }

@@ -26,7 +26,7 @@ func setupDeps(t *testing.T, fixture string, obs *fakeObserver) (Deps, string) {
 	obs.artifacts[filepath.Join(root, "bin", "ao")] = ArtifactMetadata{Version: "0.14.0", SHA256: strings.Repeat("a", 64), Source: "test-release"}
 	obs.files["/etc/systemd/system/ao-daemon.service"] = FileObservation{Mode: 0o644, UID: 0}
 	obs.files["/etc/systemd/system/ao-gateway.service"] = FileObservation{Mode: 0o644, UID: 0}
-	desired := setupDesired{StateRoot: root}
+	desired := setupDesired{StateRoot: root, PairPort: 443}
 	obs.readFiles["/etc/systemd/system/ao-daemon.service"] = []byte(renderSystemdDefinition("service.daemon", desired, obs.user))
 	obs.readFiles["/etc/systemd/system/ao-gateway.service"] = []byte(renderSystemdDefinition("service.gateway", desired, obs.user))
 	return deps, root
@@ -327,6 +327,83 @@ func TestSystemObserverBlocksManagedSymlinkAndVerifiesArtifactManifest(t *testin
 	}
 }
 
+func TestSystemObserverRejectsLinkedAndOversizedManagedReads(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(root, "linked")
+	if err := os.Symlink(outside, linked); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (systemObserver{}).ReadFile(linked); err == nil {
+		t.Fatal("linked managed read unexpectedly succeeded")
+	}
+	oversized := filepath.Join(root, "oversized")
+	file, err := os.Create(oversized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxArtifactSize + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (systemObserver{}).InspectArtifact(oversized); err == nil {
+		t.Fatal("oversized artifact inspection unexpectedly succeeded")
+	}
+}
+
+func TestSetupBlocksArtifactInspectionThroughManagedAncestorLink(t *testing.T) {
+	obs := healthyObserver()
+	deps, root := setupDeps(t, "local", obs)
+	obs.files[root] = FileObservation{Mode: os.ModeSymlink | 0o777, Owner: true, Link: true}
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run")
+	if code != 1 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	if stepByID(t, decodeSetupPlan(t, out), "artifact.ao").Disposition != "blocked" {
+		t.Fatalf("artifact ancestry did not block: %s", out)
+	}
+}
+
+func TestSetupActionValidatorAndPairServiceConsumerContract(t *testing.T) {
+	obs := healthyObserver()
+	deps, _ := setupDeps(t, "pair", obs)
+	obs.statErr["/etc/systemd/system/ao-gateway.service"] = os.ErrNotExist
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	plan := decodeSetupPlan(t, out)
+	if err := validateSetupPlan(plan); err != nil {
+		t.Fatalf("validate action contract: %v", err)
+	}
+	action := stepByID(t, plan, "service.gateway").Action
+	if action == nil || action.SchemaVersion != 1 || action.Version != "1" || action.SHA256 == "" {
+		t.Fatalf("gateway action=%+v", action)
+	}
+	for _, fragment := range []string{"AO_VM_HTTPS_ADDR=:443", "PATH=/home/ubuntu/.local/bin", "AmbientCapabilities=CAP_NET_BIND_SERVICE", "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"} {
+		if !strings.Contains(action.Content, fragment) {
+			t.Fatalf("gateway content missing %q: %s", fragment, action.Content)
+		}
+	}
+	tampered := plan
+	for i := range tampered.Steps {
+		if tampered.Steps[i].Action != nil && tampered.Steps[i].Action.Kind == "service-definition-v1" {
+			copyAction := *tampered.Steps[i].Action
+			copyAction.Content += "# tampered\n"
+			tampered.Steps[i].Action = &copyAction
+			break
+		}
+	}
+	if err := validateSetupPlan(tampered); err == nil {
+		t.Fatal("tampered action contract unexpectedly validated")
+	}
+}
+
 func TestSetupPairOrderingAndSetupInitSeparation(t *testing.T) {
 	obs := healthyObserver()
 	deps, _ := setupDeps(t, "pair", obs)
@@ -356,10 +433,10 @@ func TestSetupWithoutDryRunFailsBeforeEveryBoundary(t *testing.T) {
 	panicRead := func(string) ([]byte, error) { panic("config read invoked") }
 	panicPath := func() (string, error) { panic("path resolution invoked") }
 	out, stderr, code := runCLI(t, Deps{ReadFile: panicRead, StateDir: panicPath, RunFile: panicPath, Observer: panicObserver{}}, "--json", "setup", "--non-interactive", "--install", "missing", "--yes")
-	if code != 2 || out != "" {
+	if code != 4 || out != "" {
 		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
 	}
-	assertEnvelope(t, stderr, code, 2, "feature_deferred", "setup")
+	assertEnvelope(t, stderr, code, 4, "feature_deferred", "setup")
 }
 
 type panicObserver struct{}
