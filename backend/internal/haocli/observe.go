@@ -105,7 +105,7 @@ func (systemObserver) CurrentUser() (UserObservation, error) {
 }
 func (systemObserver) Stat(path string) (FileObservation, error) { return statFile(path) }
 func (systemObserver) ReadFile(path string) ([]byte, error) {
-	file, _, err := openManagedRegular(path, maxHTTPBody)
+	file, err := openManagedRegular(path, maxHTTPBody)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (systemObserver) ReadFile(path string) ([]byte, error) {
 }
 func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
 	manifestPath := path + ".hao-manifest.json"
-	manifest, _, err := openManagedRegular(manifestPath, 16*1024)
+	manifest, err := openManagedRegular(manifestPath, 16*1024)
 	if err != nil {
 		return ArtifactMetadata{}, err
 	}
@@ -134,7 +134,7 @@ func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		return ArtifactMetadata{}, err
 	}
-	file, _, err := openManagedRegular(path, maxArtifactSize)
+	file, err := openManagedRegular(path, maxArtifactSize)
 	if err != nil {
 		return ArtifactMetadata{}, err
 	}
@@ -152,25 +152,25 @@ func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
 
 // openManagedRegular rejects links in the path and verifies the opened handle is
 // the same bounded regular object observed before opening. It never executes it.
-func openManagedRegular(path string, maxSize int64) (*os.File, os.FileInfo, error) {
+func openManagedRegular(path string, maxSize int64) (*os.File, error) {
 	clean := filepath.Clean(path)
 	before, err := os.Lstat(clean)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if !before.Mode().IsRegular() || before.Size() > maxSize {
-		return nil, nil, errors.New("managed file is not a bounded regular file")
+		return nil, errors.New("managed file is not a bounded regular file")
 	}
 	file, err := os.Open(clean)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	after, err := file.Stat()
 	if err != nil || !after.Mode().IsRegular() || after.Size() > maxSize || !os.SameFile(before, after) {
 		_ = file.Close()
-		return nil, nil, errors.New("managed file changed while it was opened")
+		return nil, errors.New("managed file changed while it was opened")
 	}
-	return file, after, nil
+	return file, nil
 }
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
 func (systemObserver) LookPath(name string) (string, error)           { return exec.LookPath(name) }
