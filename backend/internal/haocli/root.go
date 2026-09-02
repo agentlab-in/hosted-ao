@@ -137,6 +137,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newConfigCommand(deps, opts))
 	root.AddCommand(newStatusCommand(deps, opts))
 	root.AddCommand(newDoctorCommand(deps, opts))
+	root.AddCommand(newSetupCommand(deps, opts))
 	return root
 }
 
