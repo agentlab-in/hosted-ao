@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -471,6 +473,15 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 		}
 		return steps
 	}
+	if !systemdInputsSafe(d, s.User) {
+		steps := []SetupStep{blockedStep("service.daemon", "ao-daemon-service", "reconcile-definition", "service definition inputs contain unsupported control characters or user syntax", "canonical systemd rendering refused unsafe input", "use conventional target-user and state paths without control characters")}
+		if d.Mode == "pair" {
+			step := blockedStep("service.gateway", "pair-gateway-service", "reconcile-definition", "service definition inputs contain unsupported control characters or user syntax", "canonical systemd rendering refused unsafe input", "use conventional target-user and state paths without control characters")
+			step.Dependencies = []string{"service.daemon"}
+			steps = append(steps, step)
+		}
+		return steps
+	}
 	ids := []string{"service.daemon"}
 	if d.Mode == "pair" {
 		ids = append(ids, "service.gateway")
@@ -513,15 +524,33 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 	} else {
 		b.WriteString("daemon\nAfter=network-online.target\n")
 	}
-	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + dataDir + "\nEnvironment=\"HOME=" + user.Home + "\"\n")
+	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + systemdQuote(dataDir) + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\n")
 	if id == "service.gateway" {
-		b.WriteString("Environment=\"AO_VM_PAIR=on\"\nEnvironment=\"AO_VM_CERT_DIR=" + filepath.Join(d.StateRoot, "vm-gateway", "pair-cert") + "\"\nEnvironment=\"AO_VM_PASSCODE_DIR=" + filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode") + "\"\nExecStart=" + binary + " vm serve\n")
+		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-cert")) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode")) + "\nExecStart=" + systemdQuote(binary) + " vm serve\n")
 	} else {
-		b.WriteString("Environment=\"AO_DATA_DIR=" + dataDir + "\"\nEnvironment=\"AO_RUN_FILE=" + runFile + "\"\nExecStart=" + binary + " daemon\n")
+		b.WriteString("Environment=" + systemdQuote("AO_DATA_DIR="+dataDir) + "\nEnvironment=" + systemdQuote("AO_RUN_FILE="+runFile) + "\nExecStart=" + systemdQuote(binary) + " daemon\n")
 	}
 	b.WriteString("Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
 }
+
+var systemdUserPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+func systemdInputsSafe(d setupDesired, user UserObservation) bool {
+	if !systemdUserPattern.MatchString(user.Name) {
+		return false
+	}
+	for _, value := range []string{user.Home, d.StateRoot} {
+		for _, r := range value {
+			if r < 0x20 || r == 0x7f {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func systemdQuote(value string) string { return strconv.Quote(strings.ReplaceAll(value, "%", "%%")) }
 
 func propagateBlocked(steps []SetupStep) {
 	byID := make(map[string]int, len(steps))
