@@ -362,6 +362,9 @@ func planArtifact(d setupDesired, item observedItem) SetupStep {
 	}
 	action := &SetupAction{Kind: "artifact-install", Path: item.Path, Argv: []string{"ao", d.AOVersion}}
 	if item.State == "absent" {
+		if d.Install == "none" {
+			return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-install", "audit-only policy forbids planning artifact installation", item.Evidence, "install the requested hao-owned AO artifact manually, then rerun setup")
+		}
 		return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "install-artifact", Disposition: "create", Reason: "hao-owned AO/gateway artifact is absent", Evidence: item.Evidence, Action: action}
 	}
 	if item.IsDir {
@@ -377,6 +380,9 @@ func planArtifact(d setupDesired, item observedItem) SetupStep {
 		return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "replace-artifact", Disposition: "update", Reason: "existing artifact is not executable", Evidence: item.Evidence, Action: action}
 	}
 	if !versionMatches(item.Version, d.AOVersion) {
+		if d.Install == "none" {
+			return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-update", "audit-only policy forbids planning artifact replacement", "observed "+item.Version+"; desired "+d.AOVersion, "install the requested hao-owned AO artifact version manually, then rerun setup")
+		}
 		return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "replace-artifact", Disposition: "update", Reason: "installed artifact version differs from desired version", Evidence: "observed " + item.Version + "; desired " + d.AOVersion, Action: action}
 	}
 	return noopStep("artifact.ao", "ao-gateway-artifact", "verify-artifact", "hao-owned AO/gateway artifact version already matches", item.Version)

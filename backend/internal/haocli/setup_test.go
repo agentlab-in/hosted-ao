@@ -104,8 +104,9 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 				t.Fatalf("%s=%+v", id, step)
 			}
 		}
-		if stepByID(t, plan, "artifact.ao").Disposition != "create" {
-			t.Fatal("AO artifact ownership must remain independent from dependency install policy")
+		artifact := stepByID(t, plan, "artifact.ao")
+		if artifact.Disposition != "blocked" || artifact.Action != nil {
+			t.Fatalf("audit-only artifact=%+v", artifact)
 		}
 	})
 
