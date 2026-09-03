@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SafeStorageLike } from "./paired-machines";
-import type { PairCertificateVerifyProc } from "./paired-machine-cert";
 import { AO_PAIRED_MACHINES_FILE_NAME, createPairedMachinesController } from "./paired-machines";
 
 // Same fixture certificate and fingerprint as paired-machine-cert.test.ts.
@@ -36,25 +35,6 @@ const safeStorage: SafeStorageLike = {
 	encryptString: (plain) => Buffer.from(`enc:${plain}`, "utf8"),
 	decryptString: (cipher) => cipher.toString("utf8").replace(/^enc:/, ""),
 };
-
-/**
- * Stands in for Electron's net.fetch: runs the same certificate through the
- * controller's own verifyCertificate, exactly as Chromium's network service
- * would during a real TLS handshake, then resolves or rejects the way a real
- * fetch would given that verdict. This is what lets probeFingerprint and the
- * pin-enforcement paths be exercised without a real network stack.
- */
-function netFetchPresenting(pem: string, verify: PairCertificateVerifyProc): typeof fetch {
-	return (async (input: string | URL | Request) => {
-		const url = new URL(String(input));
-		let verdict: number | undefined;
-		verify({ hostname: url.hostname, certificate: { data: pem } }, (result) => {
-			verdict = result;
-		});
-		if (verdict === 0) return new Response("ok", { status: 200 });
-		throw new Error("certificate verification failed");
-	}) as unknown as typeof fetch;
-}
 
 /** A box that never answers at all: no TLS handshake, nothing presented. */
 const unreachableFetch: typeof fetch = (async () => {
@@ -102,106 +82,71 @@ test("starts empty", async () => {
 });
 
 test("probing a box with no pin yet captures the presented fingerprint without pairing it", async () => {
-	// netFetch must run the SAME controller's verifyCertificate that
-	// probeFingerprint marks the host pending on, exactly as Electron's
-	// network service and session.setCertificateVerifyProc share one session
-	// in the real app. The indirection here only exists because the
-	// controller and its netFetch dependency would otherwise be a
-	// construction cycle.
-	let verify: PairCertificateVerifyProc | undefined;
-	const netFetch = netFetchPresenting(CERT_PEM, (request, callback) => verify?.(request, callback));
-	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, probeTimeoutMs: 200 });
-	verify = machines.verifyCertificate;
+	const fingerprintProbe = vi.fn(async () => CERT_FINGERPRINT);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, fingerprintProbe, probeTimeoutMs: 200 });
 	await machines.load();
 
 	const result = await machines.probeFingerprint("192.168.1.5", 8443);
 	expect(result).toEqual({ fingerprint: CERT_FINGERPRINT });
+	expect(fingerprintProbe).toHaveBeenCalledExactlyOnceWith("192.168.1.5", 8443, { timeoutMs: 200 });
 	// Nothing was pinned by the probe alone.
 	expect(machines.list()).toEqual([]);
 });
 
 test("probing an unreachable address reports an error, not a fingerprint", async () => {
-	const machines = controller(unreachableFetch);
+	const fingerprintProbe = vi.fn(async () => Promise.reject(new Error("connect ECONNREFUSED")));
+	const machines = createPairedMachinesController({ stateDir, safeStorage, fingerprintProbe, probeTimeoutMs: 200 });
 	await machines.load();
 	const result = await machines.probeFingerprint("192.168.1.9", 8443);
 	expect(result).toEqual({ error: expect.stringContaining("No certificate could be retrieved") });
 });
 
-test("probe misses notify the caller so the next attempt can use a fresh session", async () => {
-	const onProbeComplete = vi.fn();
-	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch: unreachableFetch, onProbeComplete, probeTimeoutMs: 200 });
+test("a retry after either a miss or a successful capture runs a fresh stateless probe", async () => {
+	const fingerprintProbe = vi
+		.fn()
+		.mockRejectedValueOnce(new Error("connect ECONNREFUSED"))
+		.mockResolvedValueOnce(CERT_FINGERPRINT)
+		.mockResolvedValueOnce(CERT_FINGERPRINT);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, fingerprintProbe, probeTimeoutMs: 200 });
 	await machines.load();
 
-	await machines.probeFingerprint("192.168.1.9", 8443);
-
-	expect(onProbeComplete).toHaveBeenCalledExactlyOnceWith("192.168.1.9");
+	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ error: expect.any(String) });
+	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ fingerprint: CERT_FINGERPRINT });
+	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ fingerprint: CERT_FINGERPRINT });
+	expect(fingerprintProbe).toHaveBeenCalledTimes(3);
 });
 
-/**
- * Regression coverage for #114: a paired machine reading as unreachable
- * until the app restarts, even though the pin and the box are both fine.
- *
- * Stands in for Chromium's per-session certificate-error cache, the
- * mechanism the issue's root-cause analysis points at: once a session denies
- * a host's certificate, that session short-circuits every later connection
- * to the same host straight to a transport failure, without invoking
- * `session.setCertificateVerifyProc` again. `cache` is what makes two
- * `typeof fetch` stand-ins here behave like two different Electron sessions
- * (a shared `cache` Map = the same session; separate Maps = separate
- * sessions), the same distinction `netFetch` vs. `probeNetFetch` draws in
- * paired-machines.ts.
- */
-function sessionLikeFetch(cache: Map<string, boolean>, verify: PairCertificateVerifyProc, pem: string): typeof fetch {
-	return (async (input: string | URL | Request) => {
-		const url = new URL(String(input));
-		if (cache.get(url.hostname)) throw new Error("certificate verification failed (cached)");
-		let verdict: number | undefined;
-		verify({ hostname: url.hostname, certificate: { data: pem } }, (result) => {
-			verdict = result;
-		});
-		if (verdict === 0) return new Response(JSON.stringify({ ok: true, failures: 0, checks: [] }), { status: 200 });
-		cache.set(url.hostname, true);
-		throw new Error("certificate verification failed");
-	}) as unknown as typeof fetch;
-}
-
-test("a successful fingerprint probe rotates the poisoned session before retry", async () => {
-	let verify: PairCertificateVerifyProc | undefined;
-	let generation = 0;
-	const caches = [new Map<string, boolean>(), new Map<string, boolean>()];
-	const probeNetFetch = ((input: string | URL | Request, init?: RequestInit) => {
-		const fetchFromSession = sessionLikeFetch(caches[generation], (request, callback) => verify?.(request, callback), CERT_PEM);
-		return fetchFromSession(input, init);
-	}) as typeof fetch;
+test("concurrent probes return their own result without stale shared capture state", async () => {
+	const resolvers = new Map<string, (fingerprint: string) => void>();
+	const fingerprintProbe = vi.fn(
+		(address: string) => new Promise<string>((resolve) => resolvers.set(address, resolve)),
+	);
 	const machines = createPairedMachinesController({
 		stateDir,
 		safeStorage,
-		probeNetFetch,
-		onProbeComplete: () => {
-			generation += 1;
-		},
+		fingerprintProbe,
 		probeTimeoutMs: 200,
 	});
-	verify = machines.verifyCertificate;
 	await machines.load();
 
-	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ fingerprint: CERT_FINGERPRINT });
-	expect(await machines.probeFingerprint("192.168.1.5", 8443)).toEqual({ fingerprint: CERT_FINGERPRINT });
-	expect(generation).toBe(2);
+	const first = machines.probeFingerprint("192.168.1.5", 8443);
+	const second = machines.probeFingerprint("192.168.1.6", 8443);
+	resolvers.get("192.168.1.6")?.("second");
+	resolvers.get("192.168.1.5")?.("first");
+
+	await expect(first).resolves.toEqual({ fingerprint: "first" });
+	await expect(second).resolves.toEqual({ fingerprint: "second" });
 });
 
-test("without a dedicated probe session, the pairing probe's rejection wedges refresh() offline after add() (reproduces #114)", async () => {
-	// probeNetFetch omitted: probeFingerprint falls back to sharing netFetch's
-	// session, exactly the pre-fix wiring in main.ts (both bound to
-	// session.defaultSession).
-	let verify: PairCertificateVerifyProc | undefined;
-	const sharedCache = new Map<string, boolean>();
-	const netFetch = sessionLikeFetch(sharedCache, (request, callback) => verify?.(request, callback), CERT_PEM);
-	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, probeTimeoutMs: 200 });
-	verify = machines.verifyCertificate;
+test("fingerprint capture never touches the Electron fetch used by pinned traffic", async () => {
+	const { fetchImpl } = doctorFetch("abc123XY");
+	const netFetch = vi.fn(fetchImpl);
+	const fingerprintProbe = vi.fn(async () => CERT_FINGERPRINT);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, fingerprintProbe, probeTimeoutMs: 200 });
 	await machines.load();
 
 	await machines.probeFingerprint("192.168.1.5", 8443);
+	expect(netFetch).not.toHaveBeenCalled();
 	await machines.add({
 		id: "box_1",
 		name: "Pi",
@@ -211,39 +156,9 @@ test("without a dedicated probe session, the pairing probe's rejection wedges re
 		fingerprint: CERT_FINGERPRINT,
 	});
 
-	// The pin is correct and the box is healthy, but the shared session's
-	// cached rejection from the probe short-circuits every connection after
-	// it, so the doctor probe never even reaches verifyCertificate again.
-	const refreshed = await machines.refresh();
-	expect(refreshed[0]).toMatchObject({ reachability: "offline", lastSeen: null });
-});
-
-test("a dedicated probe session keeps the pairing probe's rejection from wedging refresh() after add() (the #114 fix)", async () => {
-	let verify: PairCertificateVerifyProc | undefined;
-	const netCache = new Map<string, boolean>();
-	const probeCache = new Map<string, boolean>();
-	const netFetch = sessionLikeFetch(netCache, (request, callback) => verify?.(request, callback), CERT_PEM);
-	const probeNetFetch = sessionLikeFetch(probeCache, (request, callback) => verify?.(request, callback), CERT_PEM);
-	const machines = createPairedMachinesController({ stateDir, safeStorage, netFetch, probeNetFetch, probeTimeoutMs: 200 });
-	verify = machines.verifyCertificate;
-	await machines.load();
-
-	await machines.probeFingerprint("192.168.1.5", 8443);
-	await machines.add({
-		id: "box_1",
-		name: "Pi",
-		address: "192.168.1.5",
-		port: 8443,
-		passcode: "abc123XY",
-		fingerprint: CERT_FINGERPRINT,
-	});
-
-	// The probe's rejection only poisoned probeCache. netFetch's session sees
-	// this host for the first time here, verifyCertificate is consulted, and
-	// the now-pinned fingerprint matches.
 	const refreshed = await machines.refresh();
 	expect(refreshed[0]).toMatchObject({ reachability: "online" });
-	expect(refreshed[0].lastSeen).not.toBeNull();
+	expect(netFetch).toHaveBeenCalledOnce();
 });
 
 test("add persists the pairing and round-trips through disk", async () => {
@@ -328,6 +243,23 @@ test("after pairing, the pin is enforced: the same certificate is accepted", asy
 
 	const callback = vi.fn();
 	machines.verifyCertificate({ hostname: "192.168.1.5", certificate: { data: CERT_PEM } }, callback);
+	expect(callback).toHaveBeenCalledExactlyOnceWith(0);
+});
+
+test("a bare IPv6 pairing address matches Electron's bracketed certificate hostname", async () => {
+	const machines = controller();
+	await machines.load();
+	await machines.add({
+		id: "box_ipv6",
+		name: "IPv6 box",
+		address: "2001:db8::1",
+		port: 8443,
+		passcode: "abc123XY",
+		fingerprint: CERT_FINGERPRINT,
+	});
+
+	const callback = vi.fn();
+	machines.verifyCertificate({ hostname: "[2001:0DB8:0:0:0:0:0:1]", certificate: { data: CERT_PEM } }, callback);
 	expect(callback).toHaveBeenCalledExactlyOnceWith(0);
 });
 
