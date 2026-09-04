@@ -146,10 +146,10 @@ func TestLANManagerStartStopIdempotent(t *testing.T) {
 }
 
 // End-to-end through the real LAN stack (lanControlBlock + authMiddleware +
-// router): the identity probe answers without a credential, and nothing else
-// does. The middleware unit tests cover the exemption in isolation; this covers
+// router): every route including identity requires authentication.
+// The middleware tests cover authentication in isolation; this covers
 // the composition, which is where a wiring mistake would actually live.
-func TestLANManagerServesIdentityProbeWithoutAPassword(t *testing.T) {
+func TestLANManagerRequiresPasswordForIdentityProbe(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok")
 	})
@@ -173,8 +173,8 @@ func TestLANManagerServesIdentityProbeWithoutAPassword(t *testing.T) {
 		return resp.StatusCode
 	}
 
-	if code := get("/api/v1/identity"); code != http.StatusOK {
-		t.Errorf("unauthenticated GET /api/v1/identity got %d, want 200", code)
+	if code := get("/api/v1/identity"); code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated GET /api/v1/identity got %d, want 401", code)
 	}
 	if code := get("/api/v1/sessions"); code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated GET /api/v1/sessions got %d, want 401", code)

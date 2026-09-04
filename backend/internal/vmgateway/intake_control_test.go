@@ -19,6 +19,12 @@ func TestIntakeControlRoutesNeverReachDaemon(t *testing.T) {
 		{"pair", pair.handler, pair.passcode, func() int { return len(pair.daemonCalls) }},
 	} {
 		for _, route := range []struct{ method, path string }{
+			{http.MethodGet, "/api/v1/system/install"},
+			{http.MethodPost, "/api/v1/system/install/cloudflared"},
+			{http.MethodPut, "/api/v1/system/install/gh"},
+			{http.MethodPatch, "/api/v1/system/install/gh"},
+			{http.MethodDelete, "/api/v1/system/install/gh/history"},
+			{http.MethodHead, "/api/v1/system/install/"},
 			{http.MethodGet, "/api/v1/agents/codex/accounts"},
 			{http.MethodGet, "/api/v1/agents/codex/accounts/events"},
 			{http.MethodPost, "/api/v1/agents/codex/accounts/ensure"},
