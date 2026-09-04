@@ -49,9 +49,12 @@ surface (`npm run sqlc`, `npm run api`).
   read-only host snapshot, and emits a deterministic ordered preparation plan.
   Steps are classified as create, update, no-op, or blocked with stable IDs,
   structured privilege/action metadata, dependencies, evidence, and safe
-  remediation. Managed paths are inspected without following links; installed
-  AO artifacts are verified through an adjacent provenance/checksum manifest;
-  canonical systemd definition content is compared byte-for-byte. Dependency
+  remediation. Managed paths are inspected through bounded no-follow handles.
+  Adjacent AO manifests are observed but are not trusted release authority, so
+  artifact or vendor install/no-op steps remain blocked unless immutable trusted
+  version/source/digest provenance is supplied by an injected resolver. The
+  release-metadata resolver and mutation executor are deferred. Canonical
+  systemd definition content is compared byte-for-byte. Dependency
   installation policy, Ubuntu systemd support, macOS
   desktop supervision, pair prerequisites, and profile-conditional `gh` are
   planned without executing anything. `--yes` is forward-compatible and has no

@@ -59,7 +59,7 @@ func (f *fakeObserver) ReadFile(path string) ([]byte, error) {
 	}
 	return append([]byte(nil), data...), nil
 }
-func (f *fakeObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
+func (f *fakeObserver) InspectArtifact(_ context.Context, path string) (ArtifactMetadata, error) {
 	if err := f.artifactErr[path]; err != nil {
 		return ArtifactMetadata{}, err
 	}

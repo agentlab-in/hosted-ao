@@ -1,9 +1,14 @@
 package haocli
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,17 +28,54 @@ type SetupPrivilege struct {
 
 // SetupAction is a structured, shell-free future execution description.
 type SetupAction struct {
-	SchemaVersion int      `json:"schemaVersion"`
-	Kind          string   `json:"kind"`
-	Executable    string   `json:"executable,omitempty"`
-	Argv          []string `json:"argv,omitempty"`
-	Path          string   `json:"path,omitempty"`
-	Mode          string   `json:"mode,omitempty"`
-	Version       string   `json:"version,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	VerifyWith    string   `json:"verifyWith,omitempty"`
-	Content       string   `json:"content,omitempty"`
-	SHA256        string   `json:"sha256,omitempty"`
+	SchemaVersion int                  `json:"schemaVersion"`
+	Kind          string               `json:"kind"`
+	File          *SetupFileAction     `json:"file,omitempty"`
+	Package       *SetupPackageAction  `json:"package,omitempty"`
+	Artifact      *SetupArtifactAction `json:"artifact,omitempty"`
+	Vendor        *SetupVendorAction   `json:"vendor,omitempty"`
+	Service       *SetupServiceAction  `json:"service,omitempty"`
+}
+
+// SetupFileAction is the payload for one managed file operation.
+type SetupFileAction struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+}
+
+// SetupPackageAction is the payload for an allowlisted system package operation.
+type SetupPackageAction struct {
+	Executable string   `json:"executable"`
+	Argv       []string `json:"argv"`
+	Version    string   `json:"version"`
+	Source     string   `json:"source"`
+	SHA256     string   `json:"sha256"`
+}
+
+// SetupArtifactAction identifies one immutable release artifact.
+type SetupArtifactAction struct {
+	Path    string `json:"path"`
+	Version string `json:"version"`
+	Source  string `json:"source"`
+	SHA256  string `json:"sha256"`
+}
+
+// SetupVendorAction identifies one immutable vendor package.
+type SetupVendorAction struct {
+	Executable string   `json:"executable"`
+	Argv       []string `json:"argv"`
+	Version    string   `json:"version"`
+	Source     string   `json:"source"`
+	SHA256     string   `json:"sha256"`
+}
+
+// SetupServiceAction contains a complete canonical service definition.
+type SetupServiceAction struct {
+	Path    string `json:"path"`
+	Mode    string `json:"mode"`
+	Version string `json:"version"`
+	Content string `json:"content"`
+	SHA256  string `json:"sha256"`
 }
 
 // SetupStep is one stable desired-versus-observed reconciliation decision.
@@ -80,12 +122,13 @@ type setupDesired struct {
 }
 
 type observedItem struct {
-	State, Evidence, Version, Path string
-	Mode                           os.FileMode
-	UID                            int
-	Owner                          bool
-	IsDir                          bool
-	Link                           bool
+	State, Evidence, Version, Path, Source, SHA256 string
+	Mode                                           os.FileMode
+	UID                                            int
+	Owner                                          bool
+	IsDir                                          bool
+	Link                                           bool
+	Trusted                                        bool
 }
 
 type setupSnapshot struct {
@@ -118,8 +161,12 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		plan := planSetup(desired, observeSetup(deps, desired))
-		if err := validateSetupPlan(plan); err != nil {
+		plan := planSetup(desired, observeSetup(cmd.Context(), deps, desired))
+		serializedPlan, err := json.Marshal(plan)
+		if err != nil {
+			return operationalError("serialize setup plan", err)
+		}
+		if _, err := consumeSetupPlanJSON(serializedPlan); err != nil {
 			return operationalError("validate setup plan", err)
 		}
 		if opts.json {
@@ -161,7 +208,7 @@ func resolveSetupDesired(deps Deps, path string, object map[string]any, install 
 	return d, nil
 }
 
-func observeSetup(deps Deps, desired setupDesired) setupSnapshot {
+func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSnapshot {
 	osName, arch := deps.Observer.Platform()
 	s := setupSnapshot{OS: osName, Arch: arch, Directories: map[string]observedItem{}, Tools: map[string]observedItem{}, ServiceFiles: map[string]observedItem{}}
 	if distro, err := deps.Observer.Distribution(); err != nil {
@@ -192,11 +239,16 @@ func observeSetup(deps Deps, desired setupDesired) setupSnapshot {
 		s.Artifact.State, s.Artifact.Evidence = "unknown", "managed artifact ancestry is not a proven owned non-link directory chain"
 	}
 	if s.Artifact.State == "present" && s.Artifact.Owner && !s.Artifact.IsDir && !s.Artifact.Link && s.Artifact.Mode.Perm()&0o022 == 0 && s.Artifact.Mode.Perm()&0o111 != 0 {
-		metadata, err := deps.Observer.InspectArtifact(artifactPath)
+		metadata, err := deps.Observer.InspectArtifact(ctx, artifactPath)
 		if err != nil {
 			s.Artifact.State, s.Artifact.Evidence = "unknown", "artifact provenance probe failed: "+safeDiagnostic(err)
 		} else {
-			s.Artifact.Version, s.Artifact.Evidence = metadata.Version, "verified hao manifest from "+metadata.Source
+			s.Artifact.Version, s.Artifact.Source, s.Artifact.SHA256 = metadata.Version, metadata.Source, metadata.SHA256
+			s.Artifact.Evidence = "observed hao artifact provenance from " + metadata.Source
+			if deps.TrustedArtifact != nil {
+				trusted, ok := deps.TrustedArtifact(osName, arch, desired.AOVersion)
+				s.Artifact.Trusted = ok && matchesTrustedArtifact(metadata, trusted)
+			}
 		}
 		s.Artifact.Path = artifactPath
 	}
@@ -215,6 +267,10 @@ func observeSetup(deps Deps, desired setupDesired) setupSnapshot {
 		}
 	}
 	return s
+}
+
+func matchesTrustedArtifact(observed, trusted ArtifactMetadata) bool {
+	return trusted.Version == observed.Version && trusted.Source == observed.Source && strings.EqualFold(trusted.SHA256, observed.SHA256) && validSHA256(strings.ToLower(trusted.SHA256)) && strings.Contains(trusted.Source, "/releases/download/v"+trusted.Version+"/")
 }
 
 func observeFile(obs Observer, path string) observedItem {
@@ -379,7 +435,7 @@ func planDirectory(id string, item observedItem) SetupStep {
 		return blockedStep(id, component, "reconcile-directory", "directory state is unknown", item.Evidence, "inspect the path and its parent permissions manually")
 	}
 	if item.State == "absent" {
-		return SetupStep{ID: id, Component: component, Operation: "create-directory", Disposition: "create", Reason: "required directory is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "directory", Path: item.Path, Mode: "0700"}}
+		return SetupStep{ID: id, Component: component, Operation: "create-directory", Disposition: "create", Reason: "required directory is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "directory", File: &SetupFileAction{Path: item.Path, Mode: "0700"}}}
 	}
 	if !item.IsDir {
 		return blockedStep(id, component, "reconcile-directory", "required directory path is occupied by a non-directory", item.Evidence, "move the conflicting path outside hao, then retry")
@@ -391,7 +447,7 @@ func planDirectory(id string, item observedItem) SetupStep {
 		return blockedStep(id, component, "reconcile-directory", "existing directory has unsafe ownership", item.Evidence, "correct ownership outside hao, then retry")
 	}
 	if item.Mode.Perm()&0o077 != 0 {
-		return SetupStep{ID: id, Component: component, Operation: "set-directory-mode", Disposition: "update", Reason: "directory permissions are broader than owner-only", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "file-mode", Path: item.Path, Mode: "0700"}}
+		return SetupStep{ID: id, Component: component, Operation: "set-directory-mode", Disposition: "update", Reason: "directory permissions are broader than owner-only", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "file-mode", File: &SetupFileAction{Path: item.Path, Mode: "0700"}}}
 	}
 	return noopStep(id, component, "verify-directory", "directory ownership and permissions already match", item.Evidence)
 }
@@ -399,12 +455,8 @@ func planArtifact(d setupDesired, item observedItem) SetupStep {
 	if item.State == "unknown" {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "artifact state or version is unknown", item.Evidence, "inspect the hao-owned AO artifact manually")
 	}
-	action := artifactReleaseAction(d, item.Path)
 	if item.State == "absent" {
-		if d.Install == "none" {
-			return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-install", "audit-only policy forbids planning artifact installation", item.Evidence, "install the requested hao-owned AO artifact manually, then rerun setup")
-		}
-		return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "install-artifact", Disposition: "create", Reason: "hao-owned AO/gateway artifact is absent", Evidence: item.Evidence, Action: action}
+		return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-install", "trusted immutable release metadata is unavailable", item.Evidence, "install the requested hao-owned AO artifact manually, then rerun setup")
 	}
 	if item.IsDir {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "artifact path is occupied by a directory", item.Evidence, "move the conflicting directory outside hao")
@@ -419,13 +471,13 @@ func planArtifact(d setupDesired, item observedItem) SetupStep {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "existing artifact is writable by group or other users", item.Evidence, "secure or remove the conflicting artifact outside hao")
 	}
 	if item.Mode.Perm()&0o111 == 0 {
-		return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "replace-artifact", Disposition: "update", Reason: "existing artifact is not executable", Evidence: item.Evidence, Action: action}
+		return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-update", "trusted immutable release metadata is unavailable for replacement", item.Evidence, "replace the artifact manually from a trusted release")
+	}
+	if !item.Trusted || !validSHA256(strings.ToLower(item.SHA256)) || !strings.Contains(item.Source, "/releases/download/v"+item.Version+"/") {
+		return blockedStep("artifact.ao", "ao-gateway-artifact", "verify-provenance", "trusted immutable release metadata is unavailable", item.Evidence, "verify the artifact against trusted immutable release metadata")
 	}
 	if !versionMatches(item.Version, d.AOVersion) {
-		if d.Install == "none" {
-			return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-update", "audit-only policy forbids planning artifact replacement", "observed "+item.Version+"; desired "+d.AOVersion, "install the requested hao-owned AO artifact version manually, then rerun setup")
-		}
-		return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "replace-artifact", Disposition: "update", Reason: "installed artifact version differs from desired version", Evidence: "observed " + item.Version + "; desired " + d.AOVersion, Action: action}
+		return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-update", "trusted immutable metadata for the desired artifact is unavailable", "observed "+item.Version+"; desired "+d.AOVersion, "install the requested artifact version manually from a trusted release")
 	}
 	return noopStep("artifact.ao", "ao-gateway-artifact", "verify-artifact", "hao-owned AO/gateway artifact version already matches", item.Version)
 }
@@ -444,16 +496,12 @@ func planPrerequisite(d setupDesired, s setupSnapshot, id, component string, ite
 		return blockedStep(stepID, component, "manual-install", "selected harness has no allowlisted installer", item.Evidence, "install the selected harness using its vendor documentation")
 	}
 	if id == "harness" {
-		return SetupStep{ID: stepID, Component: component, Operation: "install-vendor-artifact", Disposition: "create", Reason: "required allowlisted harness is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "vendor-package", Executable: "npm", Argv: []string{"install", "--global", "@anthropic-ai/claude-code@latest"}, Source: "https://registry.npmjs.org/@anthropic-ai/claude-code", Version: "latest"}}
+		return blockedStep(stepID, component, "manual-install", "trusted immutable vendor package metadata is unavailable", item.Evidence, "install the selected harness from pinned trusted vendor metadata")
 	}
 	if s.PackageManager.State != "present" {
 		return blockedStep(stepID, component, "install-prerequisite", "a supported package manager is not proven usable", s.PackageManager.Evidence, "install the prerequisite manually or restore the supported package manager")
 	}
-	privilege := SetupPrivilege{}
-	if filepath.Base(s.PackageManager.Path) == "apt-get" {
-		privilege = SetupPrivilege{Required: true, Scope: "package-install"}
-	}
-	return SetupStep{ID: stepID, Component: component, Operation: "install-package", Disposition: "create", Privilege: privilege, Reason: "required prerequisite is absent", Evidence: item.Evidence, Action: &SetupAction{SchemaVersion: 1, Kind: "package-manager", Executable: s.PackageManager.Path, Argv: []string{"install", id}}}
+	return blockedStep(stepID, component, "manual-install", "trusted immutable package metadata is unavailable", item.Evidence, "install "+component+" manually from pinned trusted package metadata")
 }
 
 func planServices(d setupDesired, s setupSnapshot) []SetupStep {
@@ -509,7 +557,7 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 		var step SetupStep
 		desiredContent := renderSystemdDefinition(id, d, s.User)
 		digest := sha256.Sum256([]byte(desiredContent))
-		action := &SetupAction{SchemaVersion: 1, Kind: "service-definition-v1", Path: item.Path, Mode: "0644", Version: "1", Content: desiredContent, SHA256: fmt.Sprintf("%x", digest[:])}
+		action := &SetupAction{SchemaVersion: 1, Kind: "service-definition-v1", Service: &SetupServiceAction{Path: item.Path, Mode: "0644", Version: "1", Content: desiredContent, SHA256: fmt.Sprintf("%x", digest[:])}}
 		switch item.State {
 		case "absent":
 			step = SetupStep{ID: id, Component: component, Operation: "install-definition", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "supported service definition is absent", Evidence: item.Evidence, Action: action}
@@ -552,6 +600,86 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 	}
 	b.WriteString("Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
+}
+
+type systemdDefinitionConsumer struct {
+	Environment          map[string]string
+	HasNetBindCapability bool
+	ExecStart            string
+}
+
+// consumeSystemdDefinition parses the exact subset emitted by the planner and
+// verifies the gateway/daemon values a later service-file writer would use.
+func consumeSystemdDefinition(content string) (systemdDefinitionConsumer, error) {
+	parsed := systemdDefinitionConsumer{Environment: map[string]string{}}
+	ambient, bounding := false, false
+	for _, line := range strings.Split(content, "\n") {
+		switch {
+		case strings.HasPrefix(line, "Environment="):
+			value, err := strconv.Unquote(strings.TrimPrefix(line, "Environment="))
+			if err != nil {
+				return parsed, fmt.Errorf("parse systemd environment: %w", err)
+			}
+			key, value, ok := strings.Cut(value, "=")
+			if !ok || key == "" {
+				return parsed, errors.New("invalid systemd environment entry")
+			}
+			parsed.Environment[key] = value
+		case strings.HasPrefix(line, "ExecStart="):
+			parsed.ExecStart = strings.TrimPrefix(line, "ExecStart=")
+		case line == "AmbientCapabilities=CAP_NET_BIND_SERVICE":
+			ambient = true
+		case line == "CapabilityBoundingSet=CAP_NET_BIND_SERVICE":
+			bounding = true
+		}
+	}
+	if parsed.ExecStart == "" {
+		return parsed, errors.New("systemd definition has no ExecStart")
+	}
+	pathValue := parsed.Environment["PATH"]
+	if pathValue == "" {
+		return parsed, errors.New("systemd definition has no controlled PATH")
+	}
+	for _, entry := range filepath.SplitList(pathValue) {
+		if !filepath.IsAbs(entry) {
+			return parsed, errors.New("systemd PATH contains a non-absolute entry")
+		}
+	}
+	parsed.HasNetBindCapability = ambient && bounding
+	if ambient != bounding {
+		return parsed, errors.New("systemd network bind capability is incomplete")
+	}
+	if addr := parsed.Environment["AO_VM_HTTPS_ADDR"]; addr != "" {
+		_, rawPort, err := net.SplitHostPort(addr)
+		if err != nil {
+			return parsed, fmt.Errorf("parse gateway HTTPS address: %w", err)
+		}
+		port, err := strconv.Atoi(rawPort)
+		if err != nil || port < 1 || port > 65535 {
+			return parsed, errors.New("gateway HTTPS port is invalid")
+		}
+		if (port < 1024) != parsed.HasNetBindCapability {
+			return parsed, errors.New("gateway capability does not match HTTPS port privilege")
+		}
+		if !strings.HasSuffix(parsed.ExecStart, " vm serve") {
+			return parsed, errors.New("gateway ExecStart does not invoke vm serve")
+		}
+	}
+	return parsed, nil
+}
+
+func lookPathInService(name, pathValue string) (string, error) {
+	if name == "" || filepath.Base(name) != name {
+		return "", errors.New("service executable name must be a base name")
+	}
+	for _, directory := range filepath.SplitList(pathValue) {
+		candidate := filepath.Join(directory, name)
+		info, err := os.Stat(candidate)
+		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", os.ErrNotExist
 }
 
 var systemdUserPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -604,13 +732,6 @@ func versionMatches(observed, desired string) bool {
 	return false
 }
 
-func artifactReleaseAction(d setupDesired, path string) *SetupAction {
-	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[d.Arch]
-	asset := "ao-" + d.OS + "-" + arch
-	source := "https://github.com/agentlab-in/hosted-ao/releases/download/v" + d.AOVersion + "/" + asset
-	return &SetupAction{SchemaVersion: 1, Kind: "verified-release-artifact", Path: path, Version: d.AOVersion, Source: source, VerifyWith: source + ".sha256"}
-}
-
 // validateSetupPlan is the non-mutating consumer boundary for the future executor.
 // It rejects ambiguous action variants without opening files, executing programs,
 // contacting networks, or changing machine state.
@@ -618,34 +739,112 @@ func validateSetupPlan(plan SetupPlan) error {
 	for _, step := range plan.Steps {
 		a := step.Action
 		if a == nil {
+			if step.Disposition == "create" || step.Disposition == "update" {
+				return fmt.Errorf("step %s is executable but has no action", step.ID)
+			}
 			continue
+		}
+		if step.Disposition != "create" && step.Disposition != "update" {
+			return fmt.Errorf("step %s has an action for non-executable disposition %q", step.ID, step.Disposition)
 		}
 		if a.SchemaVersion != 1 {
 			return fmt.Errorf("step %s has unsupported action schema", step.ID)
 		}
+		variants := 0
+		for _, present := range []bool{a.File != nil, a.Package != nil, a.Artifact != nil, a.Vendor != nil, a.Service != nil} {
+			if present {
+				variants++
+			}
+		}
+		if variants != 1 {
+			return fmt.Errorf("step %s action must contain exactly one variant", step.ID)
+		}
 		switch a.Kind {
 		case "directory", "file-mode":
-			if a.Path == "" || a.Mode == "" {
+			if a.File == nil || !filepath.IsAbs(a.File.Path) || (a.File.Mode != "0700" && a.File.Mode != "0644") {
 				return fmt.Errorf("step %s has incomplete file action", step.ID)
 			}
-		case "package-manager", "vendor-package":
-			if a.Executable == "" || len(a.Argv) == 0 || a.Source == "" && a.Kind == "vendor-package" {
-				return fmt.Errorf("step %s has incomplete installer action", step.ID)
+		case "package-manager":
+			if a.Package == nil || !filepath.IsAbs(a.Package.Executable) || len(a.Package.Argv) == 0 || a.Package.Version == "" || a.Package.Version == "latest" || a.Package.Source == "" || !validSHA256(a.Package.SHA256) || !strings.Contains(a.Package.Source, a.Package.Version) || !strings.Contains(strings.Join(a.Package.Argv, "\x00"), a.Package.Version) {
+				return fmt.Errorf("step %s has mutable package provenance", step.ID)
+			}
+		case "vendor-package":
+			if a.Vendor == nil || !filepath.IsAbs(a.Vendor.Executable) || len(a.Vendor.Argv) == 0 || a.Vendor.Source == "" || a.Vendor.Version == "" || a.Vendor.Version == "latest" || !validSHA256(a.Vendor.SHA256) || !strings.Contains(a.Vendor.Source, a.Vendor.Version) || !strings.Contains(strings.Join(a.Vendor.Argv, "\x00"), "@"+a.Vendor.Version) {
+				return fmt.Errorf("step %s has mutable vendor provenance", step.ID)
 			}
 		case "verified-release-artifact":
-			if a.Path == "" || a.Version == "" || a.Source == "" || a.VerifyWith == "" {
+			if a.Artifact == nil || !filepath.IsAbs(a.Artifact.Path) || a.Artifact.Version == "" || a.Artifact.Source == "" || !validSHA256(a.Artifact.SHA256) || !strings.Contains(a.Artifact.Source, a.Artifact.Version) || strings.Contains(a.Artifact.Source, "/latest/") {
 				return fmt.Errorf("step %s has incomplete artifact provenance", step.ID)
 			}
 		case "service-definition-v1":
-			digest := sha256.Sum256([]byte(a.Content))
-			if a.Path == "" || a.Mode == "" || a.Version != "1" || a.Content == "" || a.SHA256 != fmt.Sprintf("%x", digest[:]) {
+			if a.Service == nil {
+				return fmt.Errorf("step %s has no service definition variant", step.ID)
+			}
+			digest := sha256.Sum256([]byte(a.Service.Content))
+			if !filepath.IsAbs(a.Service.Path) || a.Service.Mode != "0644" || a.Service.Version != "1" || a.Service.Content == "" || a.Service.SHA256 != fmt.Sprintf("%x", digest[:]) {
 				return fmt.Errorf("step %s has invalid service definition contract", step.ID)
+			}
+			if _, err := consumeSystemdDefinition(a.Service.Content); err != nil {
+				return fmt.Errorf("step %s has unusable service definition: %w", step.ID, err)
 			}
 		default:
 			return fmt.Errorf("step %s has unsupported action kind %q", step.ID, a.Kind)
 		}
 	}
 	return nil
+}
+
+// consumeSetupPlanJSON is the planning-only consumer boundary. It strictly
+// decodes, validates, and renders every action variant without performing it.
+func consumeSetupPlanJSON(data []byte) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var plan SetupPlan
+	if err := decoder.Decode(&plan); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("setup plan contains trailing JSON")
+	}
+	if plan.SchemaVersion != setupPlanSchemaVersion || !plan.DryRun {
+		return nil, errors.New("unsupported or executable setup plan")
+	}
+	if err := validateSetupPlan(plan); err != nil {
+		return nil, err
+	}
+	operations := make([]string, 0)
+	for _, step := range plan.Steps {
+		if step.Action == nil {
+			continue
+		}
+		a := step.Action
+		switch a.Kind {
+		case "verified-release-artifact":
+			operations = append(operations, fmt.Sprintf("artifact source=%s version=%s sha256=%s path=%s", a.Artifact.Source, a.Artifact.Version, a.Artifact.SHA256, a.Artifact.Path))
+		case "vendor-package":
+			operations = append(operations, fmt.Sprintf("vendor source=%s version=%s sha256=%s", a.Vendor.Source, a.Vendor.Version, a.Vendor.SHA256))
+		case "service-definition-v1":
+			operations = append(operations, fmt.Sprintf("service path=%s mode=%s version=%s sha256=%s", a.Service.Path, a.Service.Mode, a.Service.Version, a.Service.SHA256))
+		case "directory", "file-mode":
+			operations = append(operations, fmt.Sprintf("file kind=%s path=%s mode=%s", a.Kind, a.File.Path, a.File.Mode))
+		case "package-manager":
+			operations = append(operations, fmt.Sprintf("package executable=%s source=%s version=%s sha256=%s argv=%q", a.Package.Executable, a.Package.Source, a.Package.Version, a.Package.SHA256, a.Package.Argv))
+		}
+	}
+	return operations, nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func writeSetupPlan(cmd *cobra.Command, plan SetupPlan, yes bool) error {

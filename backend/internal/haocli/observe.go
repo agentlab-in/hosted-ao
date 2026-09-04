@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -38,7 +37,7 @@ type Observer interface {
 	CurrentUser() (UserObservation, error)
 	Stat(path string) (FileObservation, error)
 	ReadFile(path string) ([]byte, error)
-	InspectArtifact(path string) (ArtifactMetadata, error)
+	InspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error)
 	Disk(path string) (uint64, error)
 	LookPath(name string) (string, error)
 	Run(ctx context.Context, name string, args ...string) (string, error)
@@ -119,7 +118,14 @@ func (systemObserver) ReadFile(path string) ([]byte, error) {
 	}
 	return data, nil
 }
-func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
+func (systemObserver) InspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error) {
+	return inspectArtifact(ctx, path)
+}
+
+func inspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return ArtifactMetadata{}, err
+	}
 	manifestPath := path + ".hao-manifest.json"
 	manifest, err := openManagedRegular(manifestPath, 16*1024)
 	if err != nil {
@@ -140,7 +146,7 @@ func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
 	}
 	defer func() { _ = file.Close() }()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, io.LimitReader(file, maxArtifactSize+1)); err != nil {
+	if _, err := io.Copy(hash, io.LimitReader(contextReader{ctx: ctx, reader: file}, maxArtifactSize+1)); err != nil {
 		return ArtifactMetadata{}, err
 	}
 	actual := fmt.Sprintf("%x", hash.Sum(nil))
@@ -150,28 +156,18 @@ func (systemObserver) InspectArtifact(path string) (ArtifactMetadata, error) {
 	return metadata, nil
 }
 
-// openManagedRegular rejects links in the path and verifies the opened handle is
-// the same bounded regular object observed before opening. It never executes it.
-func openManagedRegular(path string, maxSize int64) (*os.File, error) {
-	clean := filepath.Clean(path)
-	before, err := os.Lstat(clean)
-	if err != nil {
-		return nil, err
-	}
-	if !before.Mode().IsRegular() || before.Size() > maxSize {
-		return nil, errors.New("managed file is not a bounded regular file")
-	}
-	file, err := os.Open(clean)
-	if err != nil {
-		return nil, err
-	}
-	after, err := file.Stat()
-	if err != nil || !after.Mode().IsRegular() || after.Size() > maxSize || !os.SameFile(before, after) {
-		_ = file.Close()
-		return nil, errors.New("managed file changed while it was opened")
-	}
-	return file, nil
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
 }
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
 func (systemObserver) LookPath(name string) (string, error)           { return exec.LookPath(name) }
 func (systemObserver) ReadRunFile(path string) (*runfile.Info, error) { return runfile.Read(path) }
