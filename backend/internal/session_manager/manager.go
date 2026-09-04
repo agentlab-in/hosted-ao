@@ -721,7 +721,7 @@ func New(d Deps) *Manager {
 		m.backgroundContext = context.Background()
 	}
 	if m.lookPath == nil {
-		m.lookPath = exec.LookPath
+		m.lookPath = func(name string) (string, error) { return agentlaunch.LookPath(name, os.Getenv("PATH")) }
 	}
 	if m.executable == nil {
 		m.executable = os.Executable

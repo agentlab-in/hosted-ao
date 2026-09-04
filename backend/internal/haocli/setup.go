@@ -668,20 +668,6 @@ func consumeSystemdDefinition(content string) (systemdDefinitionConsumer, error)
 	return parsed, nil
 }
 
-func lookPathInService(name, pathValue string) (string, error) {
-	if name == "" || filepath.Base(name) != name {
-		return "", errors.New("service executable name must be a base name")
-	}
-	for _, directory := range filepath.SplitList(pathValue) {
-		candidate := filepath.Join(directory, name)
-		info, err := os.Stat(candidate)
-		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
-			return candidate, nil
-		}
-	}
-	return "", os.ErrNotExist
-}
-
 var systemdUserPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func systemdInputsSafe(d setupDesired, user UserObservation) bool {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
@@ -653,7 +654,7 @@ func TestControlledServicePathFindsUserHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := lookPathInService("claude", parsed.Environment["PATH"])
+	got, err := agentlaunch.LookPath("claude", parsed.Environment["PATH"])
 	if err != nil || got != harness {
 		t.Fatalf("harness path=%q err=%v want=%q", got, err, harness)
 	}

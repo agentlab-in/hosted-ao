@@ -6,41 +6,39 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 func openManagedRegular(path string, maxSize int64) (*os.File, error) {
-	clean := filepath.Clean(path)
-	for current := clean; ; current = filepath.Dir(current) {
-		pointer, err := windows.UTF16PtrFromString(current)
-		if err != nil {
-			return nil, err
-		}
-		attrs, err := windows.GetFileAttributes(pointer)
-		if err != nil {
-			return nil, err
-		}
-		if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			return nil, errors.New("managed path contains a reparse point")
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-	}
-	before, err := os.Lstat(clean)
-	if err != nil || !before.Mode().IsRegular() || before.Size() > maxSize {
-		return nil, errors.New("managed file is not a bounded regular file")
-	}
-	file, err := os.Open(clean)
+	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
-	after, err := file.Stat()
-	if err != nil || !os.SameFile(before, after) || !after.Mode().IsRegular() || after.Size() > maxSize {
+	ntPath := `\??\` + abs
+	if strings.HasPrefix(abs, `\\`) {
+		ntPath = `\??\UNC\` + strings.TrimPrefix(abs, `\\`)
+	}
+	name, err := windows.NewNTUnicodeString(ntPath)
+	if err != nil {
+		return nil, err
+	}
+	attributes := &windows.OBJECT_ATTRIBUTES{ObjectName: name, Attributes: windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE}
+	attributes.Length = uint32(unsafe.Sizeof(*attributes))
+	var handle windows.Handle
+	var status windows.IO_STATUS_BLOCK
+	if err := windows.NtCreateFile(&handle, windows.FILE_GENERIC_READ|windows.SYNCHRONIZE, attributes, &status, nil, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_OPEN,
+		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0); err != nil {
+		return nil, errors.New("managed file could not be opened without traversing a reparse point")
+	}
+	file := os.NewFile(uintptr(handle), abs)
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSize {
 		_ = file.Close()
-		return nil, errors.New("managed file changed while it was opened")
+		return nil, errors.New("managed file is not a bounded regular file")
 	}
 	return file, nil
 }
