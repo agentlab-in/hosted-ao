@@ -105,7 +105,7 @@ async function submitClone(page: Page, url: string): Promise<void> {
 	await page.getByRole("button", { name: "Clone from Git" }).click();
 	await page.getByRole("dialog", { name: "Clone a Git repository" }).getByLabel("Repository URL").fill(url);
 	await page.getByRole("button", { name: "Continue" }).click();
-	await page.getByRole("button", { name: "Clone and start" }).click();
+	await page.getByRole("button", { name: "Clone", exact: true }).click();
 }
 
 test("renderer: clone by URL sends only a clone URL and surfaces the daemon's remediation @P0 @CLONE", async ({
@@ -129,11 +129,11 @@ test("renderer: clone by URL sends only a clone URL and surfaces the daemon's re
 	await cloneDialog.getByRole("button", { name: "Continue" }).click();
 	await expect(cloneDialog.getByRole("alert")).toContainText("Enter a valid HTTPS, SSH, Git, or file URL.");
 	await expect(cloneDialog.getByLabel("Repository URL")).toHaveValue("github.com/agentlab-in");
-	await expect(page.getByRole("button", { name: "Clone and start" })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "Clone", exact: true })).toHaveCount(0);
 
 	await cloneDialog.getByLabel("Repository URL").fill("https://github.com/agentlab-in/hosted-ao.git");
 	await cloneDialog.getByRole("button", { name: "Continue" }).click();
-	await page.getByRole("button", { name: "Clone and start" }).click();
+	await page.getByRole("button", { name: "Clone", exact: true }).click();
 
 	// The daemon's CLONE_AUTH_FAILED envelope surfaces on the agent sheet
 	// (projectSheetError falls through to the generic clone-failed title,
