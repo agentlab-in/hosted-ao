@@ -592,9 +592,8 @@ func endpointsOperations() []operation {
 	}
 }
 
-// identityOperations declares the upstream host-identity GET probe. The LAN
-// listener permits this exact probe without a credential. Gateway authentication
-// remains unchanged.
+// identityOperations declares the host-identity probe. HAO requires the
+// connection password on the LAN listener; loopback remains unauthenticated.
 func identityOperations() []operation {
 	return []operation{
 		{

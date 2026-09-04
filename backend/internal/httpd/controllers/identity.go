@@ -13,12 +13,8 @@ import (
 // it when a change to the mobile-facing surface is not backward compatible.
 const MobileAPIVersion = 1
 
-// IdentityController serves the unauthenticated host-identity probe.
-//
-// The phone races several endpoints, and a private address is not an identity:
-// 192.168.1.42 exists on most networks. The probe lets the phone confirm which
-// machine answered before it presents a credential. Everything it returns is
-// therefore non-secret by construction — an opaque host id and a version.
+// IdentityController returns an opaque host ID and API version. HAO serves it
+// behind the LAN password and gateway authentication; loopback remains open.
 type IdentityController struct {
 	HostID string
 }

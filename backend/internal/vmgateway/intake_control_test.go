@@ -40,6 +40,7 @@ func TestIntakeControlRoutesNeverReachDaemon(t *testing.T) {
 			{http.MethodPost, "/api/v1/agents/claude-code/install"},
 			{http.MethodPost, "/api/v1/agents/claude-code/install/"},
 			{http.MethodPost, "/api/v1/agents/claude-code/verify"},
+			{http.MethodPost, "/api/v1/agents/claude-code/auth"},
 			{http.MethodGet, "/api/v1/desktop/sessions/session/workspace"},
 		} {
 			for _, credential := range []string{"", "invalid", gateway.credential} {

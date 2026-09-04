@@ -352,7 +352,7 @@ func denyByDefault(next http.Handler) http.Handler {
 // isAgentControlRequest keeps harness installation and verification on loopback.
 func isAgentControlRequest(method, path string) bool {
 	path = strings.TrimSuffix(path, "/")
-	return method == http.MethodPost && strings.HasPrefix(path, "/api/v1/agents/") && (strings.HasSuffix(path, "/install") || strings.HasSuffix(path, "/verify"))
+	return method == http.MethodPost && strings.HasPrefix(path, "/api/v1/agents/") && (strings.HasSuffix(path, "/install") || strings.HasSuffix(path, "/verify") || strings.HasSuffix(path, "/auth"))
 }
 
 func isProxyablePath(path string) bool {

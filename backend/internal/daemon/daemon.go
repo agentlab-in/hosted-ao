@@ -697,10 +697,9 @@ func Run() error {
 
 	// HAO Connect Mobile remains LAN-only. Remote machines use the TLS gateway.
 
-	// Stable, machine-bound host identity, served by the unauthenticated
+	// Stable, machine-bound host identity, served by the authenticated
 	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
-	// answers 501 and the phone falls back to pairing without identity
-	// verification, which is how it behaved before the probe existed.
+	// answers 501. Listener authentication applies even when identity is unavailable.
 	hostIdentity, identityErr := mobilebridge.EnsureLocalIdentity(cfg.DataDir)
 	if identityErr != nil {
 		log.Warn("could not establish host identity; /api/v1/identity will report unimplemented", "error", identityErr)

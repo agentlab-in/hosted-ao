@@ -1598,10 +1598,9 @@ type EndpointsResponse struct {
 	Endpoints []mobilebridge.Endpoint `json:"endpoints"`
 }
 
-// IdentityResponse is the body of the unauthenticated GET /api/v1/identity
-// probe. It is deliberately minimal: the route is reachable without the
-// connection password, so it must carry nothing but an opaque host id and the
-// mobile contract version.
+// IdentityResponse is the body of GET /api/v1/identity
+// probe. It carries only an opaque host ID and the mobile contract version.
+// The LAN listener and gateway apply their normal authentication.
 type IdentityResponse struct {
 	HostID     string `json:"hostId"`
 	APIVersion int    `json:"apiVersion"`

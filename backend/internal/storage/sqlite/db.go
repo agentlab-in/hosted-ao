@@ -445,32 +445,44 @@ SELECT COALESCE((
 // the existing column on the next startup.
 func prepareSessionReviewerAgentConfigMigration(db *sql.DB) error {
 	var gooseTable int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
-	).Scan(&gooseTable); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil {
 		return err
 	}
 	if gooseTable == 0 {
 		return nil
 	}
-
-	var applied, reviewerConfigColumn int
+	var applied, reviewerConfigColumn, missingCancelledShape int
 	if err := db.QueryRow(`
 SELECT
-    COALESCE((
-        SELECT is_applied FROM goose_db_version
-        WHERE version_id = 121 ORDER BY id DESC LIMIT 1
-    ), 0),
-    (SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'reviewer_agent_config')
-`).Scan(&applied, &reviewerConfigColumn); err != nil {
+ COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 121 ORDER BY id DESC LIMIT 1), 0),
+ (SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'reviewer_agent_config'),
+ (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'conversation_turns'
+  AND instr(COALESCE(sql, ''), '''cancelled''') = 0)
+`).Scan(&applied, &reviewerConfigColumn, &missingCancelledShape); err != nil {
 		return err
 	}
-	if applied != 0 || reviewerConfigColumn == 0 {
+	if reviewerConfigColumn == 0 {
 		return nil
 	}
-
-	_, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (121, 1)`)
-	return err
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// A released helper mistakenly claimed 118 for the reviewer column. Only
+	// release that ledger entry when 118's actual cancelled-turn effect is absent.
+	// Databases with canonical 118 keep their history and data untouched.
+	if missingCancelledShape != 0 {
+		if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = 118`); err != nil {
+			return err
+		}
+	}
+	if applied == 0 {
+		if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (121, 1)`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func prepareQueuedTurnPromotionMigration(db *sql.DB) error {

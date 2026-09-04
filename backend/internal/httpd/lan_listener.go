@@ -82,7 +82,7 @@ func isLANControlBlockedRequest(method, path string) bool {
 	trimmed := strings.TrimSuffix(path, "/")
 	return method == http.MethodPost &&
 		strings.HasPrefix(trimmed, "/api/v1/agents/") &&
-		(strings.HasSuffix(trimmed, "/install") || strings.HasSuffix(trimmed, "/verify"))
+		(strings.HasSuffix(trimmed, "/install") || strings.HasSuffix(trimmed, "/verify") || strings.HasSuffix(trimmed, "/auth"))
 }
 
 // isLANControlBlockedPath reports whether path matches a blocked prefix on an
