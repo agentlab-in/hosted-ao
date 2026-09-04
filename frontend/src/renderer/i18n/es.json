@@ -1,4 +1,5 @@
 {
+  "mobile.hostedNetworkOnly": "Hosted AO solo admite acceso móvil en tu red doméstica.",
   "activity.active": "Trabajando",
   "activity.blocked": "Esperando decisión",
   "activity.exited": "Finalizado",
