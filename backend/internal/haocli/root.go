@@ -36,8 +36,11 @@ type Deps struct {
 	StateDir func() (string, error)
 	RunFile  func() (string, error)
 	Observer Observer
-	Timeout  time.Duration
-	Now      func() time.Time
+	// TrustedArtifact supplies immutable release metadata from an injected
+	// authority. Production leaves it nil until the Batch 5 resolver exists.
+	TrustedArtifact func(goos, arch, version string) (ArtifactMetadata, bool)
+	Timeout         time.Duration
+	Now             func() time.Time
 }
 
 // DefaultDeps returns the production read-only CLI dependencies.
@@ -137,6 +140,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newConfigCommand(deps, opts))
 	root.AddCommand(newStatusCommand(deps, opts))
 	root.AddCommand(newDoctorCommand(deps, opts))
+	root.AddCommand(newSetupCommand(deps, opts))
 	return root
 }
 

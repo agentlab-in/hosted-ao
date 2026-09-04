@@ -2,6 +2,7 @@ package agentlaunch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,58 @@ import (
 	"strconv"
 	"strings"
 )
+
+// LookPath resolves an executable using an explicit PATH value. The session
+// manager uses it with its process PATH, while service verification can feed
+// it the exact PATH parsed from a rendered unit.
+func LookPath(name, pathValue string) (string, error) {
+	if filepath.IsAbs(name) {
+		for _, candidate := range executableCandidates(name) {
+			if executableFile(candidate) {
+				return candidate, nil
+			}
+		}
+		return "", os.ErrNotExist
+	}
+	if name == "" || filepath.Base(name) != name {
+		return "", errors.New("executable name must be a base name")
+	}
+	for _, directory := range filepath.SplitList(pathValue) {
+		if !filepath.IsAbs(directory) {
+			continue
+		}
+		for _, candidate := range executableCandidates(filepath.Join(directory, name)) {
+			if executableFile(candidate) {
+				return candidate, nil
+			}
+		}
+	}
+	return "", os.ErrNotExist
+}
+
+func executableCandidates(path string) []string {
+	if runtime.GOOS != "windows" || filepath.Ext(path) != "" {
+		return []string{path}
+	}
+	exts := filepath.SplitList(os.Getenv("PATHEXT"))
+	if len(exts) == 0 {
+		exts = []string{".com", ".exe", ".bat", ".cmd"}
+	}
+	result := make([]string, 0, len(exts)+1)
+	result = append(result, path)
+	for _, ext := range exts {
+		result = append(result, path+strings.ToLower(ext))
+	}
+	return result
+}
+
+func executableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
+}
 
 // AugmentRuntimePATHForLaunchBinary prepends the resolved launch binary
 // directory to the child PATH. For Node-backed CLI shims, it also prepends a

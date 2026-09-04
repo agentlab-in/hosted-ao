@@ -3,6 +3,7 @@ package haocli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"strconv"
 	"strings"
@@ -24,13 +26,18 @@ import (
 const (
 	maxHTTPBody      = 1 << 20
 	maxCommandOutput = 4096
+	maxArtifactSize  = 256 << 20
 )
 
 // Observer is the complete read-only machine boundary used by status and doctor.
 // Tests inject it so no probe depends on the developer's machine or network.
 type Observer interface {
 	Platform() (string, string)
+	Distribution() (string, error)
+	CurrentUser() (UserObservation, error)
 	Stat(path string) (FileObservation, error)
+	ReadFile(path string) ([]byte, error)
+	InspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error)
 	Disk(path string) (uint64, error)
 	LookPath(name string) (string, error)
 	Run(ctx context.Context, name string, args ...string) (string, error)
@@ -45,6 +52,22 @@ type FileObservation struct {
 	Mode  os.FileMode
 	UID   int
 	Owner bool
+	IsDir bool
+	Link  bool
+}
+
+// UserObservation is the non-secret identity used by managed services.
+type UserObservation struct {
+	Name string
+	UID  int
+	Home string
+}
+
+// ArtifactMetadata is provenance from the adjacent hao-owned manifest.
+type ArtifactMetadata struct {
+	Version string `json:"version"`
+	SHA256  string `json:"sha256"`
+	Source  string `json:"source"`
 }
 
 type systemObserver struct{}
@@ -66,8 +89,85 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return original, nil
 }
 
-func (systemObserver) Platform() (string, string)                     { return runtime.GOOS, runtime.GOARCH }
-func (systemObserver) Stat(path string) (FileObservation, error)      { return statFile(path) }
+func (systemObserver) Platform() (string, string)    { return runtime.GOOS, runtime.GOARCH }
+func (systemObserver) Distribution() (string, error) { return distributionID() }
+func (systemObserver) CurrentUser() (UserObservation, error) {
+	u, err := user.Current()
+	if err != nil {
+		return UserObservation{}, err
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return UserObservation{}, err
+	}
+	return UserObservation{Name: u.Username, UID: uid, Home: u.HomeDir}, nil
+}
+func (systemObserver) Stat(path string) (FileObservation, error) { return statFile(path) }
+func (systemObserver) ReadFile(path string) ([]byte, error) {
+	file, err := openManagedRegular(path, maxHTTPBody)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, maxHTTPBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxHTTPBody {
+		return nil, errors.New("managed file exceeds size limit")
+	}
+	return data, nil
+}
+func (systemObserver) InspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error) {
+	return inspectArtifact(ctx, path)
+}
+
+func inspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return ArtifactMetadata{}, err
+	}
+	manifestPath := path + ".hao-manifest.json"
+	manifest, err := openManagedRegular(manifestPath, 16*1024)
+	if err != nil {
+		return ArtifactMetadata{}, err
+	}
+	defer func() { _ = manifest.Close() }()
+	data, err := io.ReadAll(io.LimitReader(manifest, 16*1024+1))
+	if err != nil || len(data) > 16*1024 {
+		return ArtifactMetadata{}, errors.New("artifact manifest exceeds size limit")
+	}
+	var metadata ArtifactMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return ArtifactMetadata{}, err
+	}
+	file, err := openManagedRegular(path, maxArtifactSize)
+	if err != nil {
+		return ArtifactMetadata{}, err
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(contextReader{ctx: ctx, reader: file}, maxArtifactSize+1)); err != nil {
+		return ArtifactMetadata{}, err
+	}
+	actual := fmt.Sprintf("%x", hash.Sum(nil))
+	if metadata.Version == "" || metadata.Source == "" || metadata.SHA256 == "" || !strings.EqualFold(actual, metadata.SHA256) {
+		return ArtifactMetadata{}, errors.New("artifact manifest is missing provenance or does not match the artifact")
+	}
+	return metadata, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
 func (systemObserver) Disk(path string) (uint64, error)               { return diskAvailable(path) }
 func (systemObserver) LookPath(name string) (string, error)           { return exec.LookPath(name) }
 func (systemObserver) ReadRunFile(path string) (*runfile.Info, error) { return runfile.Read(path) }

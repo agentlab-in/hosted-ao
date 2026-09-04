@@ -17,27 +17,58 @@ import (
 )
 
 type fakeObserver struct {
-	platform, arch string
-	files          map[string]FileObservation
-	statErr        map[string]error
-	paths          map[string]string
-	runs           map[string]string
-	runErr         map[string]error
-	runFile        *runfile.Info
-	runFileErr     error
-	alive          bool
-	responses      map[string][]byte
-	getErr         map[string]error
-	urls           []string
-	runFiles       []string
-	disk           uint64
-	diskErr        error
-	portAvailable  bool
-	portErr        error
-	runCalls       int
+	platform, arch  string
+	distribution    string
+	distributionErr error
+	files           map[string]FileObservation
+	statErr         map[string]error
+	paths           map[string]string
+	pathErr         map[string]error
+	runs            map[string]string
+	runErr          map[string]error
+	runFile         *runfile.Info
+	runFileErr      error
+	alive           bool
+	responses       map[string][]byte
+	getErr          map[string]error
+	urls            []string
+	runFiles        []string
+	disk            uint64
+	diskErr         error
+	portAvailable   bool
+	portErr         error
+	runCalls        int
+	user            UserObservation
+	userErr         error
+	readFiles       map[string][]byte
+	readErr         map[string]error
+	artifacts       map[string]ArtifactMetadata
+	artifactErr     map[string]error
 }
 
-func (f *fakeObserver) Platform() (string, string) { return f.platform, f.arch }
+func (f *fakeObserver) Platform() (string, string)            { return f.platform, f.arch }
+func (f *fakeObserver) Distribution() (string, error)         { return f.distribution, f.distributionErr }
+func (f *fakeObserver) CurrentUser() (UserObservation, error) { return f.user, f.userErr }
+func (f *fakeObserver) ReadFile(path string) ([]byte, error) {
+	if err := f.readErr[path]; err != nil {
+		return nil, err
+	}
+	data, ok := f.readFiles[path]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return append([]byte(nil), data...), nil
+}
+func (f *fakeObserver) InspectArtifact(_ context.Context, path string) (ArtifactMetadata, error) {
+	if err := f.artifactErr[path]; err != nil {
+		return ArtifactMetadata{}, err
+	}
+	metadata, ok := f.artifacts[path]
+	if !ok {
+		return ArtifactMetadata{}, os.ErrNotExist
+	}
+	return metadata, nil
+}
 func (f *fakeObserver) Stat(path string) (FileObservation, error) {
 	if err := f.statErr[path]; err != nil {
 		return FileObservation{}, err
@@ -45,10 +76,13 @@ func (f *fakeObserver) Stat(path string) (FileObservation, error) {
 	if v, ok := f.files[path]; ok {
 		return v, nil
 	}
-	return FileObservation{Mode: 0o700, Owner: true}, nil
+	return FileObservation{Mode: 0o700, Owner: true, IsDir: true}, nil
 }
 func (f *fakeObserver) Disk(string) (uint64, error) { return f.disk, f.diskErr }
 func (f *fakeObserver) LookPath(name string) (string, error) {
+	if err := f.pathErr[name]; err != nil {
+		return "", err
+	}
 	if p, ok := f.paths[name]; ok {
 		return p, nil
 	}
@@ -82,7 +116,7 @@ func (f *fakeObserver) PortAvailable(context.Context, string, int) (bool, error)
 }
 
 func healthyObserver() *fakeObserver {
-	return &fakeObserver{platform: "linux", arch: "amd64", files: map[string]FileObservation{}, statErr: map[string]error{}, paths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "claude": "/usr/bin/claude", "apt-get": "/usr/bin/apt-get", "systemctl": "/usr/bin/systemctl"}, runs: map[string]string{}, runErr: map[string]error{}, runFile: &runfile.Info{PID: 42, Port: 4321}, alive: true, disk: 2 << 30, portAvailable: true, responses: map[string][]byte{
+	return &fakeObserver{platform: "linux", arch: "amd64", distribution: "ubuntu", user: UserObservation{Name: "ubuntu", UID: 1000, Home: "/home/ubuntu"}, files: map[string]FileObservation{}, statErr: map[string]error{}, readFiles: map[string][]byte{}, readErr: map[string]error{}, artifacts: map[string]ArtifactMetadata{}, artifactErr: map[string]error{}, paths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "claude": "/usr/bin/claude", "apt-get": "/usr/bin/apt-get", "systemctl": "/usr/bin/systemctl"}, pathErr: map[string]error{}, runs: map[string]string{}, runErr: map[string]error{}, runFile: &runfile.Info{PID: 42, Port: 4321}, alive: true, disk: 2 << 30, portAvailable: true, responses: map[string][]byte{
 		"http://127.0.0.1:4321/healthz":       []byte(`{"status":"ok","service":"agent-orchestrator-daemon","pid":42}`),
 		"http://127.0.0.1:4321/readyz":        []byte(`{"status":"ready","service":"agent-orchestrator-daemon","pid":42}`),
 		"http://127.0.0.1:4321/api/v1/doctor": []byte(`{"ok":true,"failures":0,"checks":[{"level":"PASS","section":"Core","name":"runtime","message":"available"}]}`),

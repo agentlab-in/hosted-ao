@@ -293,6 +293,7 @@ jobs:
             "$VERSION "*) ;;
             *) echo "::error::hao version stamp missing: got '$hao_reported', expected it to start with '$VERSION '"; exit 1 ;;
           esac
+          ./hao-linux-x64 setup --help | grep -Fq -- '--dry-run'
 
       - name: Upload Linux CLI binaries
         if: matrix.os == 'ubuntu-latest'

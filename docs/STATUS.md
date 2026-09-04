@@ -45,9 +45,23 @@ surface (`npm run sqlc`, `npm run api`).
   time-bounded tool authentication probes. When the daemon is reachable it
   aggregates the daemon's shared doctor report instead of redefining AO runtime
   or terminal readiness.
-- Configuration mutation, setup, initialization, service lifecycle changes,
-  pairing, gateway changes, authentication flows, and other host mutation are
-  not performed by these observation commands.
+- `hao setup --dry-run` loads the same validated v1 configuration, captures a
+  read-only host snapshot, and emits a deterministic ordered preparation plan.
+  Steps are classified as create, update, no-op, or blocked with stable IDs,
+  structured privilege/action metadata, dependencies, evidence, and safe
+  remediation. Managed paths are inspected through bounded no-follow handles.
+  Adjacent AO manifests are observed but are not trusted release authority, so
+  artifact or vendor install/no-op steps remain blocked unless immutable trusted
+  version/source/digest provenance is supplied by an injected resolver. The
+  release-metadata resolver and mutation executor are deferred. Canonical
+  systemd definition content is compared byte-for-byte. Dependency
+  installation policy, Ubuntu systemd support, macOS
+  desktop supervision, pair prerequisites, and profile-conditional `gh` are
+  planned without executing anything. `--yes` is forward-compatible and has no
+  mutation effect. Setup without `--dry-run` fails closed.
+- Configuration mutation, setup execution, initialization, service lifecycle
+  changes, pairing activation, gateway exposure, authentication flows, and
+  other host mutation are not performed by these commands.
 
 ### Backend (Go daemon)
 
