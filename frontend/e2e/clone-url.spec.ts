@@ -159,7 +159,7 @@ test("renderer: a clone in flight keeps reporting itself rather than freezing @P
 	// counter was dead code the upstream merge deleted outright: no callers,
 	// no elapsed counter anywhere in the new flow. The busy submit label is
 	// now the liveness signal, so a frozen dialog is what this has to catch.
-	const sheet = page.getByRole("dialog", { name: "Project agents" });
+	const sheet = page.getByRole("dialog", { name: "Set up project" });
 	const submit = page.getByRole("button", { name: "Cloning..." });
 	await expect(submit).toBeVisible();
 	await expect(submit).toBeDisabled();

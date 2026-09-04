@@ -58,6 +58,8 @@ INSERT INTO agent_switches (
 )
 ON CONFLICT DO NOTHING;
 
+-- Keep full-row switch projections in schema order so sqlc reuses AgentSwitch.
+-- Migration 0125 appends failure_point after final_handoff_hash.
 -- name: GetAgentSwitch :one
 SELECT id, session_id, idempotency_key, request_fingerprint,
     from_harness, target_harness,

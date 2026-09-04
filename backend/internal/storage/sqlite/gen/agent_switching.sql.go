@@ -377,6 +377,8 @@ FROM agent_switches
 WHERE id = ?
 `
 
+// Keep full-row switch projections in schema order so sqlc reuses AgentSwitch.
+// Migration 0125 appends failure_point after final_handoff_hash.
 func (q *Queries) GetAgentSwitch(ctx context.Context, id domain.AgentSwitchID) (AgentSwitch, error) {
 	row := q.db.QueryRowContext(ctx, getAgentSwitch, id)
 	var i AgentSwitch
