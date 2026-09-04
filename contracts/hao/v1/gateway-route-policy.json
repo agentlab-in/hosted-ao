@@ -11,9 +11,9 @@
     { "kind": "prefix", "path": "/api/v1/system/install" },
     { "kind": "prefix", "path": "/api/v1/browser" },
     { "kind": "prefix", "path": "/api/v1/agents/codex" },
-    { "kind": "prefix", "path": "/api/v1/desktop" },
     { "kind": "prefix", "path": "/api/v1/agents/installers" },
-    { "kind": "prefix", "path": "/api/v1/agents/install-jobs" }
+    { "kind": "prefix", "path": "/api/v1/agents/install-jobs" },
+    { "kind": "prefix", "path": "/api/v1/desktop" }
   ],
   "fixtures": [
     { "path": "/mux", "allowed": true, "surface": "terminal_mux" },
