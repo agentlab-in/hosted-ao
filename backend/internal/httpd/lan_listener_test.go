@@ -146,7 +146,7 @@ func TestLANManagerStartStopIdempotent(t *testing.T) {
 }
 
 // End-to-end through the real LAN stack (lanControlBlock + authMiddleware +
-// router): every route including identity requires authentication.
+// router): identity requires authentication like other routes.
 // The middleware tests cover authentication in isolation; this covers
 // the composition, which is where a wiring mistake would actually live.
 func TestLANManagerRequiresPasswordForIdentityProbe(t *testing.T) {

@@ -62,6 +62,8 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/desktop",
 	"/api/v1/system/install",
 	"/api/v1/agents/codex",
+	"/api/v1/agents/installers",
+	"/api/v1/agents/install-jobs",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested
@@ -79,10 +81,11 @@ func lanControlBlock(next http.Handler) http.Handler {
 }
 
 func isLANControlBlockedRequest(method, path string) bool {
-	trimmed := strings.TrimSuffix(path, "/")
-	return method == http.MethodPost &&
-		strings.HasPrefix(trimmed, "/api/v1/agents/") &&
-		(strings.HasSuffix(trimmed, "/install") || strings.HasSuffix(trimmed, "/verify") || strings.HasSuffix(trimmed, "/auth"))
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 5 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "agents" {
+		return false
+	}
+	return parts[4] == "install" || parts[4] == "verify" || (method == http.MethodPost && parts[4] == "auth")
 }
 
 // isLANControlBlockedPath reports whether path matches a blocked prefix on an

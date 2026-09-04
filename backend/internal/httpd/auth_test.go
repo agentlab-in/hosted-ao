@@ -268,22 +268,21 @@ func TestIdentityProbeRequiresLANAuthentication(t *testing.T) {
 	}
 }
 
-func TestIdentityProbeCannotBypassLANLockout(t *testing.T) {
+func TestIdentityProbeObeysLANLockout(t *testing.T) {
 	h, lock := newAuthUnderTest("secret12", time.Now)
-	for range 5 {
-		r := httptest.NewRequest(http.MethodGet, "/api/v1/identity", nil)
-		r.RemoteAddr = "192.168.1.50:5555"
-		h.ServeHTTP(httptest.NewRecorder(), r)
+	for i := 0; i < 5; i++ {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, reqPathCookie(http.MethodGet, "/api/v1/identity", "", ""))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status=%d, want 401", i, w.Code)
+		}
 	}
 	if !lock.blocked("192.168.1.50") {
-		t.Fatal("identity failures did not trigger lockout")
+		t.Fatal("anonymous identity probes bypass lockout")
 	}
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/identity", nil)
-	r.RemoteAddr = "192.168.1.50:5555"
-	r.Header.Set("Authorization", "Bearer secret12")
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
+	h.ServeHTTP(w, reqPathCookie(http.MethodGet, "/api/v1/identity", "Bearer secret12", ""))
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("status=%d, want lockout", w.Code)
+		t.Fatalf("locked identity request: status=%d, want 429", w.Code)
 	}
 }

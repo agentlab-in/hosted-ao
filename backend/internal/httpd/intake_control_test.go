@@ -17,9 +17,9 @@ func TestIntakeLANControlMethods(t *testing.T) {
 		{http.MethodPost, "/api/v1/agents/claude-code/install", true},
 		{http.MethodPost, "/api/v1/agents/claude-code/verify", true},
 		{http.MethodPost, "/api/v1/agents/claude-code/verify/", true},
-		{http.MethodGet, "/api/v1/agents/installers", false},
-		{http.MethodGet, "/api/v1/agents/install-jobs", false},
-		{http.MethodGet, "/api/v1/agents/claude-code/install", false},
+		{http.MethodGet, "/api/v1/agents/installers", true},
+		{http.MethodGet, "/api/v1/agents/install-jobs", true},
+		{http.MethodGet, "/api/v1/agents/claude-code/install", true},
 	} {
 		t.Run(tc.method+tc.path, func(t *testing.T) {
 			calls := 0
