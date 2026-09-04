@@ -407,7 +407,7 @@ describe("TerminalPane replay cover", () => {
 			expect(cover).toBeInTheDocument();
 			expect(cover).toHaveClass("bg-terminal-opaque", "pointer-events-none");
 			expect(cover).not.toHaveClass("terminal-surface");
-			// xterm keeps rendering underneath — covered, never unmounted, so the
+			// xterm keeps rendering underneath, covered, never unmounted, so the
 			// grid it measures stays correct.
 			expect(screen.getByTestId("xterm")).toBeInTheDocument();
 		} finally {
@@ -485,7 +485,7 @@ describe("TerminalPane replay cover", () => {
 			// An open timeout lifts the cover and the backoff reconnect would pull
 			// it straight back down; the banner explains this window better.
 			expect(screen.queryByTestId("terminal-replay-cover")).not.toBeInTheDocument();
-			expect(screen.getByText("Terminal disconnected — reattaching…")).toBeInTheDocument();
+			expect(screen.getByText("Terminal disconnected, reattaching…")).toBeInTheDocument();
 		} finally {
 			view.restore();
 		}

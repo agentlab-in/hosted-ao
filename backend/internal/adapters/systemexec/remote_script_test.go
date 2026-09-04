@@ -66,22 +66,42 @@ func TestRunInstallScriptCleansUpAfterExecutionFailure(t *testing.T) {
 
 func TestRunInstallScriptCancellationCleansUp(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\nsleep 5"))
+	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\nprintf started\nexec sleep 5"))
 	t.Cleanup(server.Close)
 	dataDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	output := cancelInstallerOnOutput{cancel: cancel, started: make(chan struct{}, 1)}
 
 	_, err := newAdapter(dataDir, server.Client()).RunInstallScript(ctx, ports.InstallScriptCommand{
 		URL: server.URL, Interpreter: []string{"sh"},
-	}, io.Discard, io.Discard)
+	}, output, io.Discard)
 	if err == nil {
 		t.Fatal("expected cancellation")
+	}
+	select {
+	case <-output.started:
+	default:
+		t.Fatal("installer did not start before cancellation")
 	}
 	entries, readErr := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
 	if readErr != nil || len(entries) != 0 {
 		t.Fatalf("temporary scripts remain after cancellation: %v, %v", entries, readErr)
 	}
+}
+
+type cancelInstallerOnOutput struct {
+	cancel  context.CancelFunc
+	started chan struct{}
+}
+
+func (w cancelInstallerOnOutput) Write(p []byte) (int, error) {
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	w.cancel()
+	return len(p), nil
 }
 
 func TestRunInstallScriptAllowsFiveHTTPSRedirects(t *testing.T) {

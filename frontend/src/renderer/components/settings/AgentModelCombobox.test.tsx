@@ -69,7 +69,7 @@ describe("AgentModelCombobox", () => {
 		// Agent default and 50 catalog models. The custom-model action appears
 		// only after the user types a value that does not match the catalog.
 		expect(screen.getAllByRole("menuitem")).toHaveLength(51);
-		expect(screen.getByText("Showing 50 of 1,397 matching models — type to narrow")).toBeInTheDocument();
+		expect(screen.getByText("Showing 50 of 1,397 matching models, type to narrow")).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Model 1000/ })).not.toBeInTheDocument();
 	});
 

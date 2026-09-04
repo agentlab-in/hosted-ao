@@ -199,7 +199,7 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByText("Updates")).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
-		// Report form is inline — no dialog, fields directly present.
+		// Report form is inline, no dialog, fields directly present.
 		expect(screen.getByLabelText("Title")).toBeInTheDocument();
 	});
 
@@ -535,7 +535,7 @@ describe("GlobalSettingsForm", () => {
 		updGetStatus.mockResolvedValue({ state: "not-available", staleCheckNudge: true });
 		renderForm();
 		const nudge = await screen.findByText(
-			"Updates haven't been able to check for a while — restarting the app usually fixes this.",
+			"Updates haven't been able to check for a while, restarting the app usually fixes this.",
 		);
 		expect(nudge).toBeInTheDocument();
 		// The nudge is a warning, not an error, and the normal status still shows.
@@ -546,7 +546,7 @@ describe("GlobalSettingsForm", () => {
 		updGetStatus.mockResolvedValue({ state: "error", message: "net::ERR_FAILED", netError: true });
 		renderForm();
 		const guidance = await screen.findByText(
-			"Couldn't reach the update server — the app's network connection appears stuck. Restarting the app usually fixes this.",
+			"Couldn't reach the update server, the app's network connection appears stuck. Restarting the app usually fixes this.",
 		);
 		expect(guidance).toBeInTheDocument();
 	});
