@@ -3,130 +3,117 @@
 
 # Hosted AO
 
-**Agent Orchestrator, with a cloud under it.**
+**Run AI coding agents across your machines from one desktop workspace.**
 
 [![Upstream](https://img.shields.io/badge/upstream-Untrivial--ai%2Fagent--orchestrator-blue)](https://github.com/Untrivial-ai/agent-orchestrator)
-[![Control plane](https://img.shields.io/badge/control%20plane-ao.agentlab.in-0b7285)](https://ao.agentlab.in)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-One desktop app that runs parallel AI coding agents on your machine and on your own cloud VMs, side by side, behind one account.
+Hosted AO combines the Agent Orchestrator desktop experience with direct, secure access to agent machines you control.
 
 <img src="docs/assets/readme/hero.png" alt="Hosted AO board showing parallel coding agent sessions" width="100%" />
 </div>
 
-## What this is
+## What Hosted AO does
 
-[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is a local desktop workspace for agent-driven development: give every coding task its own agent, branch, and worktree, plan larger outcomes with a project-aware orchestrator, and follow every worker, pull request, CI run, and review on one live Kanban.
+Hosted AO is a desktop supervisor for agent-driven development. Each task gets its own coding agent and isolated workspace, while the app keeps sessions, pull requests, CI, reviews, terminals, and previews together.
 
-Hosted AO keeps all of that and adds the part upstream deliberately does not have: **machines that are not yours to babysit**.
+Run agents on your local machine or pair another machine you can reach, including a home server, spare computer, or cloud VM. Remote traffic goes directly between the desktop and that machine.
 
-Sign in once, or pair a box in one command. Your board now shows local sessions and remote sessions together, and an agent running on a VM in another country attaches its terminal into your desktop as if it were local.
+## Capabilities
 
-## What you get from upstream
+- **Isolated workers.** Give each task its own agent, branch, and worktree. Scratch workers use AO-managed branchless directories when a Git workflow is unnecessary.
+- **Project orchestrators.** Keep a persistent planning agent for each project, then split larger outcomes into focused worker tasks.
+- **Live workflow state.** Follow sessions across Working, Needs you, In review, and Ready to merge using durable session, pull request, CI, and review facts.
+- **Chat and terminal interfaces.** Use structured native Chat where the selected harness supports it, or retain the agent's own terminal interface.
+- **Pull requests and reviews.** Inspect CI and mergeability, run interactive agent reviews, and return requested changes to the worker that owns the task.
+- **Agent-controlled previews.** Open a worker's app beside its session and let the agent inspect or interact with that isolated browser surface.
+- **Desktop and mobile access.** Supervise the same daemon-backed sessions through the Electron desktop app and the mobile client.
+- **Multiple coding harnesses.** Use installed agents such as Claude Code, Codex, Cursor, OpenCode, Pi, OMP, and other supported harnesses without moving provider authentication into AO.
 
-Everything upstream ships, this ships. The highlights:
+See [the current status](docs/STATUS.md) for the complete shipped capability list and explicit in-flight boundaries.
 
-- **Workers.** One task, one coding agent, one isolated workspace. Git-backed workers get their own branch and worktree; Scratch workers get AO-managed branchless directories.
-- **A project orchestrator.** A persistent planning agent that reasons about direction and sequence, then breaks a plan into focused tasks and spawns or redirects workers to carry them.
-- **A live Kanban.** Cards derive their position from session, pull request, CI, and review facts: Working, Needs you, In review, Ready to merge.
-- **Pull requests and agent reviews.** CI, mergeability, reviewer state, and interactive agent reviews beside the worker, with requested changes returned to the same owner.
-- **An agent-controllable browser.** Preview and inspect a worker's local app beside its interface, with browser profiles isolated per worker.
-- **26 coding agents**, including Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Amp, Droid, Cline, Goose, Kiro, Muse, and more, through one supervised workflow. [Browse agent setup guides](https://aoagents.dev/docs/plugins/agents).
-- **Native interfaces, one supervisor.** Structured Chat or the agent's own terminal UI, with task context, workspace state, and feedback kept in one place.
+## Local and remote machines
 
-## How the hosting layer fits together
+The desktop app starts and supervises a loopback-only AO daemon for local work. All Hosted AO state is isolated under `~/.ao/hosted`, so it can coexist with an upstream Agent Orchestrator installation.
 
-Three pieces, each with one job:
+For remote work, the machine runs the same loopback-only daemon behind the separate `ao vm serve` gateway. The gateway exposes only the authenticated API, event, and terminal routes the desktop needs.
 
-| Piece                                                                 | Job                                                                                                                                                                                                           |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hosted AO desktop** (this repo)                                     | The Electron app. Runs the local daemon, signs in to the control plane or holds a pinned pairing, and speaks an authenticated transport (REST, SSE, terminal WebSocket) to whichever machine you point it at. |
-| **VM gateway** (`ao vm serve`, this repo)                             | The only public-facing process on a machine. TLS, per-machine credential verification, and a deny-by-default reverse proxy in front of a loopback-only daemon.                                                |
-| **Control plane** (private, [ao.agentlab.in](https://ao.agentlab.in)) | Accounts, the machine registry, and short-lived token minting. Optional, and never in the data path: your code and your terminals flow desktop-to-machine directly.                                           |
+Pairing is the default way to add any machine. A single `ao-pair://` string carries address hints, a certificate fingerprint, and a passcode. The desktop races the addresses and pins the machine identity to its certificate.
 
-The daemon itself never grows a public listener. That is a hard rule inherited from upstream and enforced harder here: the gateway is a separate process, the loopback daemon stays unauthenticated on 127.0.0.1, and the gateway's path allowlist decides what the outside world may ever ask.
+Pair mode uses self-signed TLS, fingerprint pinning, passcode verification, and per-source lockout. It does not require an account, domain, or DNS, and it never exposes the daemon's loopback-only control routes.
 
-## What the hosting layer adds
+## HAO machine management
 
-- **Pairing, no account required.** Run `ao pair` on any machine you can reach, a homelab box or a cloud VM alike, and paste the one-line string it prints into **Add machine**. AO races every address the string lists and pins the box by its certificate fingerprint automatically. No DNS, no domain, no sign-up.
-- **One account, many machines.** Sign-in, a machine picker in the app, and unbindable machine registrations on the account page.
-- **One-command VM bootstrap.** `ao setup-vm` takes a fresh Ubuntu box to a registered, TLS-serving agent machine: dependency preflight, systemd units for daemon and gateway, device-flow binding, done.
-- **Real remote sessions.** Bearer-authenticated REST and SSE, cookie-authenticated terminal mux and event streams, silent token refresh. The board, the terminal, notifications, all of it works against a remote machine.
-- **Clone by URL, on the machine that runs the agents.** Add a project from a Git URL and the
-  active machine clones it into its own managed repos directory; nothing needs to pre-exist on it,
-  and no folder on your desktop is involved. Local machines keep the ordinary "choose where to
-  clone" flow.
-- **Remote health.** `GET /api/v1/doctor` serves the same checks `ao doctor` runs, through the gateway, so the app can tell you a machine's harness auth is broken before you waste a session on it.
-- **Perfect coexistence.** All state lives under `~/.ao/hosted`. Install Hosted AO next to a stock Agent Orchestrator and neither knows the other exists.
+`hao` is the standalone machine-management CLI for Hosted AO. Its boundary is deliberately separate from AO's session orchestration commands and daemon internals.
 
-## Getting started
+The current Linux release includes these read-only commands:
 
-Download the latest signed, notarized installer from the
-[releases page](https://github.com/agentlab-in/hosted-ao/releases): a macOS
-`.dmg` (Apple Silicon and Intel builds), a Windows `.exe`, and a Linux
-`.AppImage`, `.deb`, or `.rpm`. Grab the asset for your platform, install it,
-and open Hosted AO.
+- `hao version` for stable human-readable and JSON build information.
+- `hao config path`, `hao config show`, and `hao config validate` for the versioned Hosted AO machine configuration.
+- `hao status` for desired state, bounded host observations, component compatibility, and proven configuration drift.
+- `hao doctor` for host, permissions, disk, package and service manager, port, tool authentication, and daemon health checks.
 
-### Building from source
+HAO setup, host mutation, service lifecycle management, pairing migration, gateway changes, and artifact installation are still in flight. Current machine setup continues to use the released `ao` pairing flow below.
 
-Only needed if you are contributing to Hosted AO itself.
+Read [the HAO machine-management boundary](docs/hao-machine-management-boundary.md) and [the v1 contract baseline](contracts/hao/v1/README.md) for ownership, compatibility, migration, and security details.
 
-```bash
-npm install
-cd frontend && npm install && npm run make
-open "out/make/Hosted AO-"*.dmg
-```
+## Install the desktop app
 
-See [docs/development.md](docs/development.md) for prerequisites, the full
-build/test loop, and troubleshooting.
+Download Hosted AO from the [GitHub Releases page](https://github.com/agentlab-in/hosted-ao/releases). The desktop app is the canonical install path and owns its update flow.
 
-### Add a machine
+AgentLab publishes unsigned builds. Platform trust warnings are expected. macOS releases include both a `.dmg` for first installation and a `.zip` for the updater feed.
 
-This is a two-part flow: a command you run on the box, and a paste in the
-desktop app.
+The final npm release, `@aoagents/ao@0.10.0`, remains available only as a legacy on-ramp for existing CLI users. It is frozen and is not the recommended way to install Hosted AO.
 
-**Box side.** On the box you want to add, a homelab server, a spare laptop,
-a cloud VM, run:
+## Pair a machine
+
+On a 64-bit Debian-family Linux machine with systemd, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/agentlab-in/hosted-ao/develop/install.sh | sh
 ```
 
-The box needs to be a 64-bit Debian-family Linux with systemd (x86_64 or
-aarch64), and you need root or passwordless sudo on it.
+You need root access or passwordless `sudo`. The installer detects the architecture, verifies the released binary checksum, installs `ao`, provisions or reuses pair mode, and prints an `ao-pair://` string.
 
-This installs the `ao` binary and runs `ao pair`, which prints an
-`ao-pair://` string once. (This is the interim URL; `get.agentlab.in` will
-front the same script later, a hosting swap, not a script change.)
+Treat that string as a credential. Paste it into **Add machine** in the desktop app, then clear it from any clipboard or history where it may remain. Rotate the pairing credential if it is disclosed.
 
-**Desktop side.** Paste that string into **Add machine** in the desktop app:
-AO races every address the string lists and pins the box by its certificate
-fingerprint automatically, no compare-by-eye step needed.
+The machine can be reached by private address, public address, or domain. Its certificate fingerprint is the durable identity; addresses are connection hints rather than trust anchors.
 
-Prefer an account instead? `ao setup-vm` takes a fresh Ubuntu box with a DNS
-name pointed at it to a registered, TLS-serving agent machine in one command;
-sign in from the app and pick it from the machine list.
+## Build from source
+
+Source builds are for contributors:
+
+```bash
+npm install
+cd frontend && npm install && npm run make
+```
+
+See [the development guide](docs/development.md) for prerequisites, platform commands, tests, and troubleshooting.
 
 ## Documentation
 
-| Document                                                           | Start here when you need                                                                     |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| [docs/architecture.md](docs/architecture.md)                       | Backend mental model, lifecycle, persistence, CDC, status derivation, and daemon boundaries. |
-| [docs/backend-code-structure.md](docs/backend-code-structure.md)   | Package ownership and where each backend concern belongs.                                    |
-| [docs/cli/README.md](docs/cli/README.md)                           | CLI behavior and daemon route mapping.                                                       |
-| [docs/development.md](docs/development.md)                         | Prerequisites, build steps, running tests, and troubleshooting for local development.        |
-| [docs/STATUS.md](docs/STATUS.md)                                   | What currently ships and what remains in flight.                                             |
-| [docs/upstream-merge-playbook.md](docs/upstream-merge-playbook.md) | How to merge upstream into this repo without losing the hosting layer.                       |
-| [Upstream product docs](https://aoagents.dev/docs)                 | Installation, agent setup, and day-to-day product usage.                                     |
+| Document                                                                   | Purpose                                                                                           |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [Architecture](docs/architecture.md)                                       | Backend mental model, lifecycle, persistence, status derivation, and daemon boundaries.           |
+| [Backend code structure](docs/backend-code-structure.md)                   | Package ownership and the location of each backend concern.                                       |
+| [CLI reference](docs/cli/README.md)                                        | AO CLI behavior and daemon route mapping.                                                         |
+| [Current status](docs/STATUS.md)                                           | Shipped behavior and work that remains in flight.                                                 |
+| [HAO machine-management boundary](docs/hao-machine-management-boundary.md) | HAO responsibilities, migration phases, security rules, and delivery status.                      |
+| [HAO v1 contracts](contracts/hao/v1/README.md)                             | Versioned configuration, compatibility, errors, legacy installation, pairing, and gateway policy. |
+| [Development guide](docs/development.md)                                   | Prerequisites, build steps, tests, and local troubleshooting.                                     |
+| [Upstream merge playbook](docs/upstream-merge-playbook.md)                 | How this fork tracks upstream without losing the hosting layer.                                   |
+| [Upstream product docs](https://aoagents.dev/docs)                         | Agent setup and broader day-to-day Agent Orchestrator usage.                                      |
 
 ## Relationship to upstream
 
-This repo is a true fork of [Untrivial-ai/agent-orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) and tracks it continuously: upstream's product is merged wholesale, and the hosting layer stays deliberately thin around it. Everything upstream ships, this ships.
+Hosted AO tracks [Untrivial-ai/agent-orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) as a fork. Upstream product changes are integrated while remote-machine transport and HAO remain explicit fork-owned layers.
 
 ## Anonymous telemetry
 
-AO uses privacy-preserving product usage and reliability metrics designed to exclude PII and project content. These metrics help us understand adoption and improve the product. To understand which teams and developers get the most value from AO, we also record the GitHub organization or account that owns a project (the owner segment only, never the repository, path, or URL); for a personal repository this is the owner's own username, so that single field is not anonymous. We use it to prioritize improvements and reach out for feedback. [Learn more about telemetry and privacy](docs/telemetry.md).
+AO records privacy-preserving usage and reliability metrics designed to exclude project content and most PII. Project owner identity may be recorded to understand adoption, but repository names, paths, and URLs are not.
+
+Read [the telemetry documentation](docs/telemetry.md) for the exact data, safeguards, and opt-out controls.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE), same as upstream.
+Licensed under the [Apache License 2.0](LICENSE), the same license as upstream.
