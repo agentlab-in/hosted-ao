@@ -7,7 +7,7 @@ import {
 	type BrowserProfileMenuInput,
 	type BrowserProfileViewState,
 } from "../shared/browser-profiles";
-import type { BrowserImportRequest } from "../shared/browser-profile-import";
+import { HOSTED_BROWSER_IMPORT_UNAVAILABLE } from "../shared/browser-profile-import";
 import type { BrowserProfileImportService } from "./browser-profile-import";
 import { BrowserProfileStore, BrowserProfileStoreError as StoreError } from "./browser-profile-store";
 
@@ -170,15 +170,11 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 			await options.store.deleteProfile(profileId);
 		});
 	});
-	handle("browserProfiles:import:discover", async (event) => {
-		if (!trustedShellSender(event, options.shellWebContents)) return { sources: [] };
-		return options.importer.discover();
-	});
-	handle("browserProfiles:import:start", async (event, input: unknown) => {
+	// Hosted AO never invokes external-profile discovery or source SQLite reads.
+	handle("browserProfiles:import:discover", async () => ({ sources: [] }));
+	handle("browserProfiles:import:start", async (event) => {
 		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");
-		return options.importer.import(input as BrowserImportRequest, (progress) => {
-			options.shellWebContents.send("browserProfiles:import:progress", progress);
-		});
+		throw invalid(HOSTED_BROWSER_IMPORT_UNAVAILABLE);
 	});
 	handle("browser:profile:get", (event, rawViewId: unknown) => {
 		const viewId = viewIdFromInput(rawViewId);

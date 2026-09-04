@@ -173,7 +173,7 @@ describe("browser profile IPC", () => {
 		expect(store.getProfile(profile.id)).toBeUndefined();
 	});
 
-	it("allows import only from the trusted shell and forwards scoped progress", async () => {
+	it("never invokes external profile discovery or import, even for the trusted shell", async () => {
 		const { importer, invoke, renderer, shell } = await setup();
 		const request = {
 			requestId: "11111111-1111-4111-8111-111111111111",
@@ -190,17 +190,10 @@ describe("browser profile IPC", () => {
 		expect(importer.import).not.toHaveBeenCalled();
 
 		await expect(invoke("browserProfiles:import:discover", shell)).resolves.toEqual({ sources: [] });
-		await expect(invoke("browserProfiles:import:start", shell, request)).resolves.toEqual({
-			sourceName: "Chrome",
-			entries: [],
-		});
-		expect(importer.import).toHaveBeenCalledWith(request, expect.any(Function));
-		expect(shell.send).toHaveBeenCalledWith("browserProfiles:import:progress", {
-			requestId: request.requestId,
-			phase: "reading",
-			completed: 1,
-			total: 1,
-		});
+		await expect(invoke("browserProfiles:import:start", shell, request)).rejects.toThrow("unavailable in Hosted AO");
+		expect(importer.discover).not.toHaveBeenCalled();
+		expect(importer.import).not.toHaveBeenCalled();
+		expect(shell.send).not.toHaveBeenCalled();
 	});
 
 	it("disposes every registered handler", async () => {

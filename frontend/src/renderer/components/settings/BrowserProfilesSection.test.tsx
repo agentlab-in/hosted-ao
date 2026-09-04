@@ -35,6 +35,9 @@ describe("BrowserProfilesSection", () => {
 		render(<BrowserProfilesSection />);
 		expect(await screen.findByText("Work")).toBeInTheDocument();
 		expect(bridge.list).toHaveBeenCalledOnce();
+		expect(screen.getByTitle("External browser-profile import is unavailable in Hosted AO.")).toBeDisabled();
+		expect(bridge.discoverImportSources).not.toHaveBeenCalled();
+		expect(bridge.import).not.toHaveBeenCalled();
 
 		const createInput = screen.getByRole("textbox", { name: "Profile name" });
 		await userEvent.type(createInput, "Personal");

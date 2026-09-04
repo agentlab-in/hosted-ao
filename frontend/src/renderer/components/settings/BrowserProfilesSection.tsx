@@ -9,7 +9,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
-import { BrowserImportDialog } from "./BrowserImportDialog";
+import { HOSTED_BROWSER_IMPORT_UNAVAILABLE } from "../../../shared/browser-profile-import";
 
 type ProfileBridge = AoBridge["browserProfiles"];
 type Profile = Awaited<ReturnType<ProfileBridge["list"]>>["profiles"][number];
@@ -26,7 +26,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const [pendingAction, setPendingAction] = useState<DestructiveAction | null>(null);
 	const [actionBusy, setActionBusy] = useState(false);
 	const [actionError, setActionError] = useState("");
-	const [importOpen, setImportOpen] = useState(false);
 
 	const refresh = async () => {
 		if (!bridge) return;
@@ -119,10 +118,11 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				{t("settings.browserProfiles.description")}
 			</p>
 			<SettingsRow label={t("settings.browserImport.rowLabel")}>
-				<Button disabled={!bridge} onClick={() => setImportOpen(true)} size="sm" type="button" variant="outline">
+				<Button disabled title={HOSTED_BROWSER_IMPORT_UNAVAILABLE} size="sm" type="button" variant="outline">
 					<Import aria-hidden="true" className="size-icon-base" />
 					{t("settings.browserImport.action")}
 				</Button>
+				<span className="text-xs text-muted-foreground">{HOSTED_BROWSER_IMPORT_UNAVAILABLE}</span>
 			</SettingsRow>
 			<SettingsRow label={t("settings.browserProfiles.create")}>
 				<form
@@ -220,11 +220,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				busy={actionBusy}
 				error={actionError || null}
 				onConfirm={() => void confirmAction()}
-			/>
-			<BrowserImportDialog
-				onImported={() => void refresh()}
-				onOpenChange={setImportOpen}
-				open={importOpen}
 			/>
 		</>
 	);

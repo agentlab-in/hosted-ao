@@ -1,5 +1,7 @@
 import type { BrowserProfile } from "./browser-profiles";
 
+export const HOSTED_BROWSER_IMPORT_UNAVAILABLE = "External browser-profile import is unavailable in Hosted AO.";
+
 export const BROWSER_IMPORT_MAX_SOURCE_PROFILES = 16;
 export const BROWSER_IMPORT_MAX_HISTORY_ENTRIES = 5_000;
 export const BROWSER_IMPORT_MAX_COOKIES = 20_000;
