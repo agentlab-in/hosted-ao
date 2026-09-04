@@ -48,6 +48,7 @@ const SCHEMA_VERSION = 2;
 /** Bounds how long the app waits for the TLS handshake that presents the
  * candidate box's certificate. */
 const DEFAULT_PROBE_TIMEOUT_MS = 8000;
+const MAX_ACTIVE_FINGERPRINT_PROBES = 8;
 
 export type PairedMachineRecord = {
 	id: string;
@@ -165,7 +166,9 @@ export type PairedMachinesController = {
 	 * credentials. The result is not trusted until `add()` pins the value the
 	 * user accepted.
 	 */
-	probeFingerprint: (address: string, port: number) => Promise<PairFingerprintResult>;
+	probeFingerprint: (address: string, port: number, requestId?: string) => Promise<PairFingerprintResult>;
+	/** Cancel one in-flight probe by the renderer-generated request id. */
+	cancelFingerprintProbe: (requestId: string) => void;
 	/**
 	 * The fingerprint currently pinned for a registered machine id, or null if
 	 * that id is not registered or has no pin yet. Read-only, synchronous off
@@ -338,6 +341,7 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 	 * defaults to "unknown" for a machine that has never been probed. */
 	let reachabilityById = new Map<string, AoMachineReachability>();
 	let harnessById = new Map<string, HarnessReadiness>();
+	const activeFingerprintProbes = new Map<string, AbortController>();
 
 	function rebuildPinnedByHost(): void {
 		pinnedByHost = new Map(
@@ -547,16 +551,29 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 			}
 		},
 
-		async probeFingerprint(address: string, port: number): Promise<PairFingerprintResult> {
+		async probeFingerprint(address: string, port: number, requestId?: string): Promise<PairFingerprintResult> {
 			if (!validatePort(port)) return { error: `Not a valid port: ${port}` };
 			const baseUrl = baseUrlFor(address, port);
 			if (!baseUrl) return { error: `Not a usable address: ${address}` };
+			if (activeFingerprintProbes.size >= MAX_ACTIVE_FINGERPRINT_PROBES) {
+				return { error: "Too many pairing probes are already running. Cancel an attempt or wait for it to finish." };
+			}
+			const probeId = requestId || randomBytes(16).toString("hex");
+			if (activeFingerprintProbes.has(probeId)) return { error: "This pairing probe is already running." };
+			const controller = new AbortController();
+			activeFingerprintProbes.set(probeId, controller);
 
 			try {
-				return { fingerprint: await fingerprintProbe(address, port, { timeoutMs: probeTimeoutMs }) };
+				return { fingerprint: await fingerprintProbe(address, port, { timeoutMs: probeTimeoutMs, signal: controller.signal }) };
 			} catch {
 				return { error: "No certificate could be retrieved from that address. Check the address, port, and that the box is reachable." };
+			} finally {
+				if (activeFingerprintProbes.get(probeId) === controller) activeFingerprintProbes.delete(probeId);
 			}
+		},
+
+		cancelFingerprintProbe(requestId: string): void {
+			activeFingerprintProbes.get(requestId)?.abort();
 		},
 
 		getPinnedFingerprint(id: string): string | null {

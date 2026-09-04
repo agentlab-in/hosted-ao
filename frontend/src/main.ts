@@ -2414,8 +2414,11 @@ ipcMain.handle("pairedMachines:list", () => pairedMachines().list());
 ipcMain.handle("pairedMachines:refresh", () => pairedMachines().refresh());
 ipcMain.handle(
   "pairedMachines:probeFingerprint",
-  (_event, address: string, port: number) =>
-    pairedMachines().probeFingerprint(address, port),
+  (_event, address: string, port: number, requestId?: string) =>
+    pairedMachines().probeFingerprint(address, port, requestId),
+);
+ipcMain.on("pairedMachines:cancelFingerprintProbe", (_event, requestId: string) =>
+  pairedMachines().cancelFingerprintProbe(requestId),
 );
 ipcMain.handle("pairedMachines:getPinnedFingerprint", (_event, id: string) =>
   pairedMachines().getPinnedFingerprint(id),

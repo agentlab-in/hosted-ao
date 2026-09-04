@@ -11,7 +11,7 @@
 
 import type { PairAddr } from "./pair-string";
 
-export type ProbeFn = (host: string, port: number) => Promise<{ fingerprint: string } | { error: string }>;
+export type ProbeFn = (host: string, port: number, signal?: AbortSignal) => Promise<{ fingerprint: string } | { error: string }>;
 
 export type RaceAttempt = { host: string; port: number; outcome: "mismatch" | "unreachable" };
 
@@ -30,9 +30,8 @@ export type RaceOptions = {
 	isPrivate?: (host: string) => boolean;
 	/** Abort the whole race in flight -- the dialog that started it was
 	 * dismissed, or the caller switched to manual entry. The race settles to
-	 * `{ status: "cancelled" }` the instant this fires, not on the next probe
-	 * to answer; every in-flight probe's eventual result is discarded by the
-	 * same `settled` guard that protects a normal win from a late loser. */
+	 * `{ status: "cancelled" }` the instant this fires and aborts every started
+	 * probe. The same cleanup also runs after a win or timeout. */
 	signal?: AbortSignal;
 };
 
@@ -80,9 +79,9 @@ export function isPrivateHost(host: string): boolean {
  * traffic on a LAN is not an attack. Resolves the instant one candidate
  * wins, every candidate is exhausted, `opts.signal` aborts, or `timeoutMs`
  * elapses, whichever comes first; a probe that answers after the race has
- * already settled -- a win, an exhaustion, or a cancellation -- is ignored,
- * so a slow loser can never double-resolve, overwrite a win, or complete a
- * pairing the caller already abandoned. */
+	 * already settled -- a win, an exhaustion, or a cancellation -- is aborted;
+	 * a non-cooperative late result is still ignored, so it cannot double-resolve,
+	 * overwrite a win, or complete a pairing the caller already abandoned. */
 export function racePairAddresses(addrs: PairAddr[], wantFingerprint: string, probe: ProbeFn, opts: RaceOptions = {}): Promise<RaceOutcome> {
 	const headStartMs = opts.headStartMs ?? DEFAULT_HEAD_START_MS;
 	const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -94,12 +93,14 @@ export function racePairAddresses(addrs: PairAddr[], wantFingerprint: string, pr
 		let pending = addrs.length;
 		const timers: ReturnType<typeof setTimeout>[] = [];
 		const signal = opts.signal;
+		const probeController = new AbortController();
 
 		const finish = (outcome: RaceOutcome) => {
 			if (settled) return;
 			settled = true;
 			for (const timer of timers) clearTimeout(timer);
 			if (signal) signal.removeEventListener("abort", onAbort);
+			probeController.abort();
 			resolve(outcome);
 		};
 
@@ -138,7 +139,7 @@ export function racePairAddresses(addrs: PairAddr[], wantFingerprint: string, pr
 
 		for (const addr of addrs) {
 			const start = () => {
-				probe(addr.host, addr.port)
+					probe(addr.host, addr.port, probeController.signal)
 					.then((result) => {
 						if (settled) return;
 						if ("fingerprint" in result && result.fingerprint === wantFingerprint) {

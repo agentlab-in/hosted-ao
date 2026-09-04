@@ -2,7 +2,9 @@
 import net, { type Server as NetServer, type Socket } from "node:net";
 import tls, { type Server as TLSServer, type TLSSocket } from "node:tls";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { racePairAddresses } from "../shared/pair-race";
 import { canonicalPairHost, capturePairFingerprint } from "./paired-machine-probe";
+import { createPairedMachinesController } from "./paired-machines";
 
 // Public, test-only PKCS#12 fixture. Keeping the inert fixture as base64 avoids
 // making a PEM private-key marker look like a production credential to secret
@@ -86,17 +88,37 @@ test("timeout destroys a socket whose peer never starts TLS", async () => {
 	await vi.waitFor(() => expect(sockets.size).toBe(0));
 });
 
-test("abort destroys an in-flight socket", async () => {
+test("abandoning a user race propagates cancellation through the controller and destroys the socket", async () => {
 	const server = net.createServer((socket) => {
 		sockets.add(socket);
 		socket.once("close", () => sockets.delete(socket));
 		socket.resume();
 	});
 	const port = await listen(server);
+	const machines = createPairedMachinesController({
+		stateDir: null,
+		safeStorage: {
+			isEncryptionAvailable: () => false,
+			encryptString: () => Buffer.alloc(0),
+			decryptString: () => "",
+		},
+		probeTimeoutMs: 500,
+	});
 	const controller = new AbortController();
-	const capture = capturePairFingerprint("127.0.0.1", port, { timeoutMs: 500, signal: controller.signal });
+	let sequence = 0;
+	const race = racePairAddresses(
+		[{ host: "127.0.0.1", port }],
+		"not-presented",
+		(host, candidatePort, signal) => {
+			const requestId = `test-probe-${sequence++}`;
+			signal?.addEventListener("abort", () => machines.cancelFingerprintProbe(requestId), { once: true });
+			return machines.probeFingerprint(host, candidatePort, requestId);
+		},
+		{ signal: controller.signal },
+	);
+	await vi.waitFor(() => expect(sockets.size).toBe(1));
 	controller.abort();
 
-	await expect(capture).rejects.toThrow("cancelled");
+	await expect(race).resolves.toEqual({ status: "cancelled" });
 	await vi.waitFor(() => expect(sockets.size).toBe(0));
 });

@@ -161,6 +161,15 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		raceControllerRef.current?.abort();
 	};
 
+	const probePairAddress = (host: string, port: number, signal?: AbortSignal) => {
+		const requestId = crypto.randomUUID();
+		const cancel = () => aoBridge.pairedMachines.cancelFingerprintProbe(requestId);
+		signal?.addEventListener("abort", cancel, { once: true });
+		return aoBridge.pairedMachines
+			.probeFingerprint(host, port, requestId)
+			.finally(() => signal?.removeEventListener("abort", cancel));
+	};
+
 	useEffect(() => {
 		if (open) return;
 		cancelRace();
@@ -189,7 +198,7 @@ export function AddPairedMachineDialog({ open, onOpenChange, onPaired }: AddPair
 		mutationFn: async ({ parsed, signal }: { parsed: ParsedPairString; signal: AbortSignal }) => {
 			setStep("racing");
 			const wantFingerprint = toPinnedFingerprintFormat(parsed.fingerprintHex);
-			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, aoBridge.pairedMachines.probeFingerprint, { signal });
+			const outcome = await racePairAddresses(parsed.addrs, wantFingerprint, probePairAddress, { signal });
 			if (outcome.status !== "matched") return outcome;
 			// Belt-and-suspenders: racePairAddresses already treats a cancel as
 			// winning over a same-tick match internally, but re-checking this

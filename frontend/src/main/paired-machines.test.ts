@@ -88,7 +88,10 @@ test("probing a box with no pin yet captures the presented fingerprint without p
 
 	const result = await machines.probeFingerprint("192.168.1.5", 8443);
 	expect(result).toEqual({ fingerprint: CERT_FINGERPRINT });
-	expect(fingerprintProbe).toHaveBeenCalledExactlyOnceWith("192.168.1.5", 8443, { timeoutMs: 200 });
+	expect(fingerprintProbe).toHaveBeenCalledExactlyOnceWith("192.168.1.5", 8443, {
+		timeoutMs: 200,
+		signal: expect.any(AbortSignal),
+	});
 	// Nothing was pinned by the probe alone.
 	expect(machines.list()).toEqual([]);
 });
@@ -136,6 +139,47 @@ test("concurrent probes return their own result without stale shared capture sta
 
 	await expect(first).resolves.toEqual({ fingerprint: "first" });
 	await expect(second).resolves.toEqual({ fingerprint: "second" });
+});
+
+test("cancelling a probe aborts the in-flight TLS capture", async () => {
+	let observedSignal: AbortSignal | undefined;
+	const fingerprintProbe = vi.fn(
+		(_address: string, _port: number, options: { timeoutMs: number; signal?: AbortSignal }) =>
+			new Promise<string>((_resolve, reject) => {
+				observedSignal = options.signal;
+				options.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+			}),
+	);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, fingerprintProbe, probeTimeoutMs: 200 });
+	await machines.load();
+
+	const result = machines.probeFingerprint("192.168.1.5", 8443, "probe-1");
+	machines.cancelFingerprintProbe("probe-1");
+
+	expect(observedSignal?.aborted).toBe(true);
+	await expect(result).resolves.toEqual({ error: expect.stringContaining("No certificate") });
+});
+
+test("limits aggregate in-flight fingerprint probes", async () => {
+	const fingerprintProbe = vi.fn(
+		(_address: string, _port: number, options: { timeoutMs: number; signal?: AbortSignal }) =>
+			new Promise<string>((_resolve, reject) => {
+				options.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+			}),
+	);
+	const machines = createPairedMachinesController({ stateDir, safeStorage, fingerprintProbe, probeTimeoutMs: 200 });
+	await machines.load();
+
+	const active = Array.from({ length: 8 }, (_, index) =>
+		machines.probeFingerprint(`192.168.1.${index + 1}`, 8443, `probe-${index}`),
+	);
+	await expect(machines.probeFingerprint("192.168.1.99", 8443, "probe-overflow")).resolves.toEqual({
+		error: expect.stringContaining("Too many pairing probes"),
+	});
+	expect(fingerprintProbe).toHaveBeenCalledTimes(8);
+
+	for (let index = 0; index < 8; index++) machines.cancelFingerprintProbe(`probe-${index}`);
+	await Promise.all(active);
 });
 
 test("fingerprint capture never touches the Electron fetch used by pinned traffic", async () => {

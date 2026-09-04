@@ -5,8 +5,9 @@ import { useState } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { AddPairedMachineDialog } from "./AddPairedMachineDialog";
 
-const { probeFingerprint, getPinnedFingerprint, add, remove } = vi.hoisted(() => ({
+const { probeFingerprint, cancelFingerprintProbe, getPinnedFingerprint, add, remove } = vi.hoisted(() => ({
 	probeFingerprint: vi.fn(),
+	cancelFingerprintProbe: vi.fn(),
 	getPinnedFingerprint: vi.fn(),
 	add: vi.fn(),
 	remove: vi.fn(),
@@ -14,7 +15,7 @@ const { probeFingerprint, getPinnedFingerprint, add, remove } = vi.hoisted(() =>
 
 vi.mock("../../lib/bridge", () => ({
 	aoBridge: {
-		pairedMachines: { probeFingerprint, getPinnedFingerprint, add, list: vi.fn(), remove },
+		pairedMachines: { probeFingerprint, cancelFingerprintProbe, getPinnedFingerprint, add, list: vi.fn(), remove },
 	},
 }));
 
@@ -108,6 +109,7 @@ async function pasteString(pairString: string) {
 
 beforeEach(() => {
 	probeFingerprint.mockReset();
+	cancelFingerprintProbe.mockReset();
 	getPinnedFingerprint.mockReset().mockResolvedValue(null);
 	add.mockReset();
 	remove.mockReset().mockResolvedValue(undefined);
@@ -343,6 +345,7 @@ test("paste: dismissing the dialog mid-race cancels it, so a later winner is nev
 	// Cancel is no longer blocked while the race is in flight: dismissing here
 	// must cancel the race, not just hide the dialog around it.
 	await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+	expect(cancelFingerprintProbe).toHaveBeenCalledOnce();
 
 	// The probe that would have won only answers now, well after dismissal.
 	resolveWinner({ fingerprint: FINGERPRINT });
