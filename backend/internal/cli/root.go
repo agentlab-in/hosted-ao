@@ -76,7 +76,9 @@ type Deps struct {
 	// waits for it, rather than capturing its output. ao vm setup-harness needs
 	// it: the harness login prints a URL and waits for a code to be pasted
 	// back, which only works on a terminal a human is sitting at.
-	RunInteractive func(ctx context.Context, name string, args ...string) error
+	RunInteractive        func(ctx context.Context, name string, args ...string) error
+	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
+	ReadSecret            func(io.Reader) ([]byte, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -90,21 +92,23 @@ type Deps struct {
 // DefaultDeps returns production dependencies.
 func DefaultDeps() Deps {
 	return Deps{
-		In:                   os.Stdin,
-		Out:                  os.Stdout,
-		Err:                  os.Stderr,
-		HTTPClient:           &http.Client{Timeout: 2 * time.Second},
-		Executable:           os.Executable,
-		StartProcess:         startProcess,
-		ProcessAlive:         processalive.Alive,
-		LookPath:             exec.LookPath,
-		CommandOutput:        commandOutput,
-		CommandOutputInDir:   commandOutputInDir,
-		RunInteractive:       runInteractive,
-		DoctorGitHubRESTBase: doctor.DefaultGitHubRESTBase,
-		DoctorGitLabRESTBase: doctor.DefaultGitLabRESTBase,
-		Now:                  time.Now,
-		Sleep:                time.Sleep,
+		In:                    os.Stdin,
+		Out:                   os.Stdout,
+		Err:                   os.Stderr,
+		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
+		Executable:            os.Executable,
+		StartProcess:          startProcess,
+		ProcessAlive:          processalive.Alive,
+		LookPath:              exec.LookPath,
+		CommandOutput:         commandOutput,
+		CommandOutputInDir:    commandOutputInDir,
+		RunInteractive:        runInteractive,
+		DoctorGitHubRESTBase:  doctor.DefaultGitHubRESTBase,
+		DoctorGitLabRESTBase:  doctor.DefaultGitLabRESTBase,
+		Now:                   time.Now,
+		Sleep:                 time.Sleep,
+		RunInteractiveCommand: runInteractiveCommand,
+		ReadSecret:            readSecret,
 	}
 }
 
@@ -172,6 +176,12 @@ func (d Deps) withDefaults() Deps {
 	if d.RunInteractive == nil {
 		d.RunInteractive = def.RunInteractive
 	}
+	if d.RunInteractiveCommand == nil {
+		d.RunInteractiveCommand = def.RunInteractiveCommand
+	}
+	if d.ReadSecret == nil {
+		d.ReadSecret = def.ReadSecret
+	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
 	}
@@ -228,8 +238,10 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newBrowserCommand(ctx))
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
+	root.AddCommand(newChatHostCommand())
 	root.AddCommand(newLaunchCommand(ctx))
 	root.AddCommand(newPtyHostCommand())
+	root.AddCommand(newCodexLoginCommand(ctx))
 	root.AddCommand(newImportCommand(ctx))
 	root.AddCommand(newDevCommand(ctx))
 	root.AddCommand(newProjectCommand(ctx))
@@ -264,7 +276,7 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	// bootstrapping like "ao daemon", and it is also a long-running
 	// foreground process that must not depend on the loopback daemon it
 	// may be starting ahead of.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao agent-process", "ao agent-process supervise", "ao vm serve":
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao codex-login", "ao agent-process", "ao agent-process supervise", "ao vm serve":
 		return false
 	default:
 		return true

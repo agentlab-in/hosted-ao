@@ -3,18 +3,18 @@ import { installFakeAgent, installFakeBridge } from "./support/fake-bridge";
 
 // INS/DMN/BRD/SET RENDERER SMOKE (issue #2483, renderer slice).
 //
-// Scope — read this before trusting a green run. These run under `dev:web`
+// Scope, read this before trusting a green run. These run under `dev:web`
 // (VITE_NO_ELECTRON=1) with an injected `window.ao` (installFakeBridge /
 // installFakeAgent) plus a fake CDC/SSE stream and workspace snapshot. They
 // assert the renderer's rendering + interaction logic ONLY. They do NOT exercise
-// the real daemon, storage, API, preload, PTY, or filesystem — those boundaries
+// the real daemon, storage, API, preload, PTY, or filesystem, those boundaries
 // are faked, so a daemon/storage/API/preload/PTY/FS regression can still pass
 // here.
 //
 // Cases that inject state (a version string, a daemon status, board data) prove
 // the renderer RENDERS that state, not that the daemon PRODUCES it. The real
 // boundaries (daemon, storage, API, preload, PTY, FS) are exercised only in the
-// packaged-app pod gate (#2697) — which today runs a boot-level smoke (app
+// packaged-app pod gate (#2697), which today runs a boot-level smoke (app
 // launches + paints, daemon reaches ready), NOT these specific cases; per-case
 // runtime coverage in the pod is future work. Each test carries its #2483
 // catalog ID in a comment for traceability; this is renderer smoke, NOT the
@@ -33,7 +33,7 @@ test("renderer: packaged bundle launches and paints @T0 @INS", async ({
   // on-image install itself stays in the pod INS script.
   await installFakeBridge(page, { version: "9.9.9-test" });
   await page.goto("/");
-  await expect(page.getByTestId("board")).toBeVisible();
+  await expect(page.getByText("Jump back right in")).toBeVisible();
   await page.goto("/#/settings");
   await expect(page.getByTestId("settings-page")).toBeVisible();
   await page.getByRole("button", { name: "Updates" }).click();
@@ -45,7 +45,7 @@ test("renderer: update settings surface renders (feed/checksum checks are pod) @
   page,
 }) => {
   // INS-007 (updater feed ymls reference real uploaded assets with matching
-  // checksums) is a release-artifact check with no renderer surface — it belongs
+  // checksums) is a release-artifact check with no renderer surface, it belongs
   // to the pod/CI updater leg. The renderer slice we can lock is that the update
   // settings surface (channel + version) renders, i.e. the app is wired to a
   // feed at all. Checksum + asset-existence verification stays in the pod.
@@ -65,13 +65,13 @@ test("renderer: first-run home renders with the app launched @T0 @INS", async ({
 }) => {
   // "Empty data dir" is a pod-side precondition; under dev:web the mock
   // fixtures are always present, so the BoardWelcome empty state can't render
-  // and we assert the home board surface + a mounted daemon-status indicator
+  // and we assert the home surface + a mounted daemon-status indicator
   // (proof the shell booted). The empty-state testid (`board-welcome`) is wired
   // for the real empty-dir pod run.
   await page.goto("/");
-  await expect(page.getByTestId("board")).toBeVisible();
+  await expect(page.getByText("Jump back right in")).toBeVisible();
   await expect(page.getByTestId("daemon-status")).toBeAttached();
-  await expect(page.getByText("Projects")).toBeVisible();
+  await expect(page.getByText("Projects", { exact: true })).toBeVisible();
 });
 
 // #2483 INS-003.
@@ -81,7 +81,7 @@ test("renderer: reflects a ready daemon (data dir + config initialized) @T0 @INS
   // Renderer proxy: reaching "ready" with a REST port means the daemon
   // initialized its data dir + config skeleton (a not-ready daemon never
   // advertises a port). Asserting the on-disk ~/.ao layout itself belongs to
-  // the backend/daemon suite, not this renderer harness — see report.
+  // the backend/daemon suite, not this renderer harness, see report.
   await installFakeBridge(page, { daemonState: "ready", daemonPort: 8080 });
   await page.goto("/");
   await expect(page.getByTestId("daemon-status")).toHaveAttribute(
@@ -123,14 +123,14 @@ test("renderer: daemon health reflected with a hydrated board @T0 @DMN", async (
   //
   // Use installFakeAgent so the session card is served through the
   // window.__aoFakeAgent.snapshot() workspace seam (the daemon-backed source),
-  // not the static mockWorkspaces fallback — otherwise the card would render
+  // not the static mockWorkspaces fallback, otherwise the card would render
   // regardless of the daemon and the "daemon → has data" link would be a false
   // green.
   await installFakeAgent(page, {
     daemonPort: 8080,
     workers: [{ id: "dmn002", title: "Active worker", status: "working" }],
   });
-  await page.goto("/");
+  await page.goto("/#/projects/fake-proj");
   await expect(page.getByTestId("daemon-status")).toHaveAttribute(
     "data-state",
     "ready",
@@ -147,7 +147,7 @@ test("renderer: daemon stop surfaced cleanly with no renderer crash @T0 @DMN", a
   // is surfaced as a stopped status and the app stays alive (no crash/blank),
   // which is the visible half of a clean shutdown.
   await installFakeBridge(page, { daemonState: "stopped" });
-  await page.goto("/");
+  await page.goto("/#/projects/fake-proj");
   await expect(page.getByTestId("daemon-status")).toHaveAttribute(
     "data-state",
     "stopped",
@@ -165,15 +165,15 @@ test("renderer: board state rehydrates after a renderer relaunch @T0 @DMN", asyn
   // (reload), i.e. the app rebuilds from the daemon rather than in-memory state.
   //
   // Use installFakeAgent (not installFakeBridge): its board data is read through
-  // the `window.__aoFakeAgent.snapshot()` workspace seam — the same source the
-  // real daemon fills — so the reload genuinely re-reads from the daemon-backed
+  // the `window.__aoFakeAgent.snapshot()` workspace seam, the same source the
+  // real daemon fills, so the reload genuinely re-reads from the daemon-backed
   // source. installFakeBridge alone would fall back to the static mockWorkspaces
   // import, and the reload would pass by re-reading the same mock (false green).
   await installFakeAgent(page, {
     daemonPort: 8080,
     workers: [{ id: "dmn009", title: "Persisted worker", status: "working" }],
   });
-  await page.goto("/");
+  await page.goto("/#/projects/fake-proj");
   const firstCard = page.getByTestId("board-session-card").first();
   await expect(firstCard).toBeVisible();
   const before = await firstCard.textContent();
@@ -195,7 +195,7 @@ test("renderer: board state rehydrates after a renderer relaunch @T0 @DMN", asyn
 test("renderer: board renders all status columns @T0 @BRD", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/#/projects/ao-demo");
   const columns = page.getByTestId("board-column");
   await expect(columns).toHaveCount(4);
   // Left→right delivery flow: building → validating → in review → ready.
@@ -209,9 +209,9 @@ test("renderer: board renders all status columns @T0 @BRD", async ({
 test("renderer: route nav home to board to session detail and back @T0 @BRD", async ({
   page,
 }) => {
-  // home (global board)
+  // home
   await page.goto("/");
-  await expect(page.getByTestId("board")).toBeVisible();
+  await expect(page.getByText("Jump back right in")).toBeVisible();
 
   // → project board
   await page

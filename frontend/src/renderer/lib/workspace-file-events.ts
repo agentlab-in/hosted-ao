@@ -1,10 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
-const SSE_RETRY_MS = 5_000;
-const SSE_RETRY_JITTER_MS = 1_000;
 const EVENTSOURCE_CLOSED = 2;
 
 export type WorkspaceFileConnectionState = "connecting" | "connected" | "degraded";
@@ -16,6 +15,12 @@ type WorkspaceStream = {
 	phase: ConnectionPhase;
 	generation: number;
 	failures: number;
+	/**
+	 * Scheduled rebuilds since the last successful open. Distinct from
+	 * `failures`, which also counts the browser's own non-terminal retries and
+	 * so would inflate the backoff exponent past what we actually retried.
+	 */
+	retries: number;
 	source?: EventSource;
 	sourceBaseUrl?: string;
 	debounce?: ReturnType<typeof setTimeout>;
@@ -88,7 +93,8 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 	const scheduleRetry = (generation: number) => {
 		if (stream.disposed || stream.retry) return;
 		stream.phase = "waiting";
-		const delay = SSE_RETRY_MS + (Math.random() * 2 - 1) * SSE_RETRY_JITTER_MS;
+		stream.retries += 1;
+		const delay = computeSseRetryDelayMs(stream.retries);
 		stream.retry = setTimeout(() => {
 			stream.retry = undefined;
 			if (stream.disposed || generation !== stream.generation) return;
@@ -118,6 +124,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 	stream.phase = "idle";
 	stream.generation = 0;
 	stream.failures = 0;
+	stream.retries = 0;
 	setWorkspaceFileConnectionState(sessionId, "connecting");
 	stream.ensureConnected = () => {
 		if (stream.disposed) return;
@@ -134,6 +141,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 		if (stream.sourceBaseUrl && stream.sourceBaseUrl !== baseUrl) {
 			resetConnection();
 			stream.failures = 0;
+			stream.retries = 0;
 			setWorkspaceFileConnectionState(sessionId, "connecting");
 		}
 		if (stream.phase !== "idle") return;
@@ -153,6 +161,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 				if (stream.disposed || generation !== stream.generation || stream.source !== source) return;
 				stream.phase = "open";
 				stream.failures = 0;
+				stream.retries = 0;
 				setWorkspaceFileConnectionState(sessionId, "connected");
 				invalidate();
 			};

@@ -1,16 +1,15 @@
 import { createWorkOS, type User } from "@workos-inc/node";
 import { app, dialog, ipcMain, safeStorage, shell } from "electron";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import type { CloudAccount } from "../shared/cloud-account";
 import { CLOUD_SIGN_IN_ENABLED } from "../shared/cloud-pin";
+// Static import (not dynamic): the dynamic import created a static+dynamic
+// import cycle with cloud-auth-local that made the bundler split chunks
+// incorrectly and panic. Both modules only use each other's exports inside
+// functions, so the static ES cycle is safe at module-init time.
+import { revokeLocalSession } from "./cloud-auth-local";
 
 // The WorkOS AuthKit client id is public configuration (it appears in every
 // sign-in URL), so a baked default keeps sign-in working without build-time
@@ -39,18 +38,30 @@ let notifyRenderersFn: ((session: CloudAccount | null) => void) | null = null;
 // At most one loopback callback server is armed at a time.
 let loopbackServer: Server | null = null;
 
-interface StoredSession extends CloudAccount {
+export interface StoredSession extends CloudAccount {
   accessToken: string;
-  refreshToken: string;
+  // WorkOS sessions carry a rotating refresh token; local (opaque-token)
+  // sessions have none, so it is optional and absent for authProvider "local".
+  refreshToken?: string;
+  // Loopback control-plane base URL a local session was minted against, so
+  // sign-out can revoke the opaque token server-side. Local sessions only.
+  cpBaseUrl?: string;
 }
 
-interface AuthStore {
+export interface AuthStore {
   session: StoredSession | null;
   pkce: {
     codeVerifier: string;
     state: string;
     expiresAt: number;
   } | null;
+}
+
+/** A stored local (opaque-token) session, distinct from the WorkOS/JWT path. */
+export function isLocalSession(
+  session: StoredSession | null | undefined,
+): session is StoredSession & { authProvider: "local" } {
+  return session?.authProvider === "local";
 }
 
 const emptyStore = (): AuthStore => ({ session: null, pkce: null });
@@ -63,13 +74,13 @@ function authGeneration(dataDir: string): number {
   return authGenerations.get(dataDir) ?? 0;
 }
 
-function invalidateAuthOperations(dataDir: string): number {
+export function invalidateAuthOperations(dataDir: string): number {
   const generation = authGeneration(dataDir) + 1;
   authGenerations.set(dataDir, generation);
   return generation;
 }
 
-async function withAuthMutation<T>(
+export async function withAuthMutation<T>(
   dataDir: string,
   mutation: () => Promise<T>,
 ): Promise<T> {
@@ -108,7 +119,7 @@ function decodeStore(value: Buffer): AuthStore {
   return JSON.parse(safeStorage.decryptString(value)) as AuthStore;
 }
 
-async function readAuthStore(dataDir: string): Promise<AuthStore> {
+export async function readAuthStore(dataDir: string): Promise<AuthStore> {
   const memoryStore = memoryStores.get(dataDir);
   if (memoryStore) return memoryStore;
   if (!protectedStorageAvailable()) {
@@ -123,7 +134,7 @@ async function readAuthStore(dataDir: string): Promise<AuthStore> {
   }
 }
 
-async function writeAuthStore(
+export async function writeAuthStore(
   dataDir: string,
   store: AuthStore,
 ): Promise<void> {
@@ -142,7 +153,7 @@ async function writeAuthStore(
   await chmod(target, 0o600);
 }
 
-async function removeAuthStore(dataDir: string): Promise<void> {
+export async function removeAuthStore(dataDir: string): Promise<void> {
   memoryStores.delete(dataDir);
   await Promise.all([
     rm(storePath(dataDir), { force: true }),
@@ -176,10 +187,11 @@ function toStoredSession(
   };
 }
 
-function publicAccount(session: StoredSession): CloudAccount {
+export function publicAccount(session: StoredSession): CloudAccount {
   return {
     authProvider: session.authProvider,
     user: session.user,
+    ...(session.organizations ? { organizations: session.organizations } : {}),
     storedAt: session.storedAt,
   };
 }
@@ -189,7 +201,10 @@ function jwtPayload(token: string): Record<string, unknown> | null {
     const payload = token.split(".")[1];
     if (!payload) return null;
     return JSON.parse(
-      Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
+      Buffer.from(
+        payload.replace(/-/g, "+").replace(/_/g, "/"),
+        "base64",
+      ).toString("utf8"),
     ) as Record<string, unknown>;
   } catch {
     return null;
@@ -203,7 +218,9 @@ function tokenExpiresSoon(token: string): boolean {
 
 function isTerminalRefreshFailure(error: unknown): boolean {
   if (!error || typeof error !== "object") {
-    return String(error).toLowerCase().includes("refresh token already consumed");
+    return String(error)
+      .toLowerCase()
+      .includes("refresh token already consumed");
   }
   const candidate = error as {
     code?: unknown;
@@ -233,10 +250,13 @@ function isTerminalRefreshFailure(error: unknown): boolean {
 export async function getCloudSession(
   dataDir: string,
 ): Promise<CloudAccount | null> {
+  const store = await readAuthStore(dataDir);
+  // Local (opaque-token) sessions never refresh and do not require WorkOS to be
+  // configured; return the stored identity directly.
+  if (isLocalSession(store.session)) return publicAccount(store.session);
   if (!workos) return null;
   const activeRefresh = refreshes.get(dataDir);
   if (activeRefresh) return activeRefresh;
-  const store = await readAuthStore(dataDir);
   if (!store.session) return null;
   if (!tokenExpiresSoon(store.session.accessToken)) {
     return publicAccount(store.session);
@@ -271,8 +291,10 @@ export async function getCloudSession(
 export async function getCloudSessionCached(
   dataDir: string,
 ): Promise<CloudAccount | null> {
-  if (!workos) return null;
   const store = await readAuthStore(dataDir);
+  // Local sessions carry no rotating token, return the stored identity as-is.
+  if (isLocalSession(store.session)) return publicAccount(store.session);
+  if (!workos) return null;
   if (!store.session) return null;
   if (tokenExpiresSoon(store.session.accessToken)) {
     void getCloudSession(dataDir)
@@ -292,10 +314,13 @@ export async function getCloudSessionCached(
 export async function getCloudAccessToken(
   dataDir: string,
 ): Promise<string | null> {
+  const store = await readAuthStore(dataDir);
+  // The local opaque token is returned verbatim (no JWT refresh path).
+  if (isLocalSession(store.session)) return store.session.accessToken;
   const account = await getCloudSession(dataDir);
   if (account === null) return null;
-  const store = await readAuthStore(dataDir);
-  return store.session?.accessToken ?? null;
+  const refreshed = await readAuthStore(dataDir);
+  return refreshed.session?.accessToken ?? null;
 }
 
 async function refreshCloudSession(
@@ -303,11 +328,16 @@ async function refreshCloudSession(
   storedSession: StoredSession,
   generation: number,
 ): Promise<CloudAccount | null> {
+  // Only WorkOS sessions carry a refresh token and reach this path; a session
+  // without one cannot be rotated, so surface it unchanged.
+  if (!storedSession.refreshToken) return publicAccount(storedSession);
   try {
-    const refreshed = await workos!.userManagement.authenticateWithRefreshToken({
-      clientId: CLIENT_ID,
-      refreshToken: storedSession.refreshToken,
-    });
+    const refreshed = await workos!.userManagement.authenticateWithRefreshToken(
+      {
+        clientId: CLIENT_ID,
+        refreshToken: storedSession.refreshToken,
+      },
+    );
     const session = toStoredSession(
       refreshed.accessToken,
       refreshed.refreshToken,
@@ -316,9 +346,7 @@ async function refreshCloudSession(
     return withAuthMutation(dataDir, async () => {
       if (authGeneration(dataDir) !== generation) return null;
       const currentStore = await readAuthStore(dataDir);
-      if (
-        currentStore.session?.refreshToken !== storedSession.refreshToken
-      ) {
+      if (currentStore.session?.refreshToken !== storedSession.refreshToken) {
         return null;
       }
       await writeAuthStore(dataDir, { ...currentStore, session });
@@ -331,9 +359,7 @@ async function refreshCloudSession(
     await withAuthMutation(dataDir, async () => {
       if (authGeneration(dataDir) !== generation) return;
       const currentStore = await readAuthStore(dataDir);
-      if (
-        currentStore.session?.refreshToken === storedSession.refreshToken
-      ) {
+      if (currentStore.session?.refreshToken === storedSession.refreshToken) {
         await removeAuthStore(dataDir);
       }
     });
@@ -377,7 +403,8 @@ async function completeCloudSignIn(
   dataDir: string,
 ): Promise<CloudAccount> {
   if (!workos) throw new Error("WorkOS is not configured.");
-  if (!code || !callbackState) throw new Error("WorkOS callback is incomplete.");
+  if (!code || !callbackState)
+    throw new Error("WorkOS callback is incomplete.");
 
   const store = await readAuthStore(dataDir);
   if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
@@ -413,7 +440,8 @@ export async function handleCloudDeepLink(
   const error = url.searchParams.get("error");
   if (error) {
     throw new Error(
-      url.searchParams.get("error_description") || `WorkOS sign-in failed: ${error}`,
+      url.searchParams.get("error_description") ||
+        `WorkOS sign-in failed: ${error}`,
     );
   }
   return completeCloudSignIn(
@@ -567,7 +595,18 @@ export function installCloudIPC(
     await beginCloudSignIn(getDataDir());
   });
   ipcMain.handle("cloud:signOut", async () => {
-    await signOutCloud(getDataDir());
+    const dataDir = getDataDir();
+    // A local (opaque-token) session is revoked server-side first, best-effort;
+    // WorkOS sessions skip this. Store removal is uniform via signOutCloud.
+    try {
+      const store = await readAuthStore(dataDir);
+      if (isLocalSession(store.session)) {
+        await revokeLocalSession(store.session);
+      }
+    } catch {
+      // Sign-out must never fail on a revoke round-trip; clear the store anyway.
+    }
+    await signOutCloud(dataDir);
     notifyRenderers(null);
   });
 }

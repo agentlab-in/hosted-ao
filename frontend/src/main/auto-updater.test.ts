@@ -414,7 +414,88 @@ describe("startAutoUpdates", () => {
     }
   });
 
-  it("schedules only feature-pin retirement polling when automatic updates are disabled", async () => {
+  it("feature checks resolve the newest completed PR release without the Atom feed", async () => {
+    const platformManifest =
+      process.platform === "darwin"
+        ? "pr4473-mac.yml"
+        : process.platform === "linux"
+          ? "pr4473-linux.yml"
+          : "pr4473.yml";
+    const resourcesPath = mkdtempSync(
+      nodePath.join(os.tmpdir(), "ao-feature-feed-"),
+    );
+    writeFileSync(
+      nodePath.join(resourcesPath, "app-update.yml"),
+      "provider: github\nowner: Untrivial-ai\nrepo: agent-orchestrator\n",
+    );
+    const originalResourcesPath = Object.getOwnPropertyDescriptor(
+      process,
+      "resourcesPath",
+    );
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: resourcesPath,
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            tag_name: "v1.0.0-pr4473.202608271543",
+            draft: false,
+            prerelease: true,
+            assets: [{ name: "Agent.Orchestrator.dmg" }],
+          },
+          {
+            tag_name: "v1.0.0-pr4473.202608271542",
+            draft: false,
+            prerelease: true,
+            assets: [{ name: platformManifest }],
+          },
+          {
+            tag_name: "v1.0.0-pr9999.202608271544",
+            draft: false,
+            prerelease: true,
+            assets: [{ name: platformManifest }],
+          },
+        ]),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { module, autoUpdater } = await importAutoUpdater({
+        enabled: true,
+        channel: "nightly",
+        nightlyAck: true,
+        feature: { pr: 4473 },
+      });
+
+      await module.startAutoUpdates(stateDir);
+
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+        provider: "generic",
+        url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.0-pr4473.202608271542",
+        channel: "pr4473",
+        useMultipleRangeRequest: false,
+      });
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+        provider: "github",
+        owner: "Untrivial-ai",
+        repo: "agent-orchestrator",
+      });
+    } finally {
+      if (originalResourcesPath) {
+        Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+      } else {
+        Reflect.deleteProperty(process, "resourcesPath");
+      }
+      rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
+  it("checks stable on launch and hourly when automatic downloads are disabled", async () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const { module, autoUpdater } = await importAutoUpdater({
@@ -426,12 +507,31 @@ describe("startAutoUpdates", () => {
 
     await module.startAutoUpdates(stateDir);
 
-    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-    expect(setIntervalSpy).toHaveBeenCalledWith(
-      expect.any(Function),
-      30 * 60 * 1000,
-    );
+    expect(autoUpdater.autoDownload).toBe(false);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    const { delay } = latestInterval(setIntervalSpy);
+    expect(delay).toBe(60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(delay);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks nightly every 15 minutes when automatic downloads are disabled", async () => {
+    vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const { module, autoUpdater } = await importAutoUpdater({
+      enabled: false,
+      channel: "nightly",
+      nightlyAck: true,
+      feature: null,
+    });
+
+    await module.startAutoUpdates(stateDir);
+
+    expect(autoUpdater.channel).toBe("nightly");
+    expect(autoUpdater.allowPrerelease).toBe(true);
+    expect(autoUpdater.autoDownload).toBe(false);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(latestInterval(setIntervalSpy).delay).toBe(15 * 60 * 1000);
   });
 
   it("does not stack periodic automatic or retirement timers across repeated startAutoUpdates calls", async () => {
@@ -1644,7 +1744,7 @@ describe("startAutoUpdates", () => {
     );
 
     await module.startAutoUpdates(stateDir);
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy).toHaveBeenCalledTimes(2);
 
     await module.setUpdateSettings(stateDir, { ...current, enabled: true });
     expect(setIntervalSpy.mock.calls.map(([, delay]) => delay)).toContain(
@@ -1660,8 +1760,10 @@ describe("startAutoUpdates", () => {
 
     await module.setUpdateSettings(stateDir, { ...current, enabled: false });
     expect(clearIntervalSpy).toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(latestInterval(setIntervalSpy).delay).toBe(15 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+    expect(autoUpdater.autoDownload).toBe(false);
   });
 
   it("does not let a stale disabled check clear a concurrently enabled scheduler", async () => {
@@ -1699,7 +1801,7 @@ describe("startAutoUpdates", () => {
     await flushMicrotasks();
 
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
-    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(3);
   });
 
   it("coalesces hourly ticks while an automatic check is still running", async () => {

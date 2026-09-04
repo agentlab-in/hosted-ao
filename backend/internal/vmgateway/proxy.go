@@ -57,6 +57,8 @@ var blockedAPIPrefixes = []string{
 	"/api/v1/dev",
 	"/api/v1/system/install",
 	"/api/v1/browser",
+	"/api/v1/agents/codex",
+	"/api/v1/desktop",
 }
 
 // maxRequestBodyBytes bounds a proxied request body before httputil.ReverseProxy
@@ -339,12 +341,18 @@ func stripCredentials(r *http.Request) {
 // all (no 401/403 that would confirm a blocked route exists).
 func denyByDefault(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isProxyablePath(r.URL.Path) {
+		if !isProxyablePath(r.URL.Path) || isAgentControlRequest(r.Method, r.URL.Path) {
 			notFoundJSON(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isAgentControlRequest keeps harness installation and verification on loopback.
+func isAgentControlRequest(method, path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	return method == http.MethodPost && strings.HasPrefix(path, "/api/v1/agents/") && (strings.HasSuffix(path, "/install") || strings.HasSuffix(path, "/verify"))
 }
 
 func isProxyablePath(path string) bool {
