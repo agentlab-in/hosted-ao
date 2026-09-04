@@ -660,6 +660,32 @@ func TestControlledServicePathFindsUserHarness(t *testing.T) {
 	}
 }
 
+func TestSystemdInputsRejectPathsThatCannotRoundTripLiterally(t *testing.T) {
+	user := UserObservation{Name: "agent", UID: 1000, Home: "/home/agent"}
+	for _, stateRoot := range []string{
+		"relative/state",
+		"/srv/%n/state",
+		`/srv/hao\state`,
+		"/srv/hao state",
+		"/srv/hao\tstate",
+		"/srv/hao\nstate",
+	} {
+		if systemdInputsSafe(setupDesired{StateRoot: stateRoot}, user) {
+			t.Fatalf("unsafe systemd state root accepted: %q", stateRoot)
+		}
+	}
+	for _, home := range []string{"relative/home", "/home/%u", `/home/agent\escape`, "/home/agent name"} {
+		unsafeUser := user
+		unsafeUser.Home = home
+		if systemdInputsSafe(setupDesired{StateRoot: "/srv/hao"}, unsafeUser) {
+			t.Fatalf("unsafe systemd home accepted: %q", home)
+		}
+	}
+	if !systemdInputsSafe(setupDesired{StateRoot: "/srv/hao"}, user) {
+		t.Fatal("conventional absolute systemd paths were rejected")
+	}
+}
+
 func TestSetupPairOrderingAndSetupInitSeparation(t *testing.T) {
 	obs := healthyObserver()
 	deps, _ := setupDeps(t, "pair", obs)

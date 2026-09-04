@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -675,8 +676,11 @@ func systemdInputsSafe(d setupDesired, user UserObservation) bool {
 		return false
 	}
 	for _, value := range []string{user.Home, d.StateRoot} {
+		if !pathpkg.IsAbs(value) {
+			return false
+		}
 		for _, r := range value {
-			if r <= 0x20 || r == 0x7f {
+			if r <= 0x20 || r == 0x7f || r == '%' || r == '\\' {
 				return false
 			}
 		}
