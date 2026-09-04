@@ -15,6 +15,11 @@ export type SafeStorageLike = {
 	decryptString: (encrypted: Buffer) => string;
 };
 import { createPairCertificateVerifyProc, type PairCertificateVerifyProc } from "./paired-machine-cert";
+import {
+	canonicalPairHost,
+	capturePairFingerprint,
+	type PairFingerprintProbe,
+} from "./paired-machine-probe";
 import { fetchWithDeadline } from "./request-deadline";
 
 /**
@@ -40,10 +45,10 @@ export const AO_PAIRED_MACHINES_FILE_NAME = "ao-paired-machines.json";
 
 const SCHEMA_VERSION = 2;
 
-/** A probe attempt is denied by design (see paired-machine-cert.ts); this just
- * bounds how long the app waits for the TLS handshake that captures the
- * presented fingerprint before giving up. */
+/** Bounds how long the app waits for the TLS handshake that presents the
+ * candidate box's certificate. */
 const DEFAULT_PROBE_TIMEOUT_MS = 8000;
+const MAX_ACTIVE_FINGERPRINT_PROBES = 8;
 
 export type PairedMachineRecord = {
 	id: string;
@@ -87,24 +92,10 @@ export type PairedMachinesControllerDeps = {
 	 * (`refresh`'s doctor probe) against a host that is expected to already be
 	 * pinned. */
 	netFetch?: typeof fetch;
-	/**
-	 * Electron's `net.fetch` bound to a throwaway session, used only by
-	 * `probeFingerprint`. `probeFingerprint`'s whole point is a connection that
-	 * is *always* denied at the TLS layer (see paired-machine-cert.ts: an
-	 * unpinned host has no accept path), and Chromium caches that per-host
-	 * certificate-error verdict at the network-service level for the life of
-	 * the session -- below where `verifyCertificate` runs, so the verify proc
-	 * is not even re-consulted once the cache is warm. If the capture probe
-	 * shared `netFetch`'s session, pinning the host in `add()` would not undo
-	 * that cached rejection: the very next request against the pinned host
-	 * would still be short-circuited to a failure, reading as "unreachable"
-	 * until the app restarts and the cache is gone. Routing the capture probe
-	 * through a session that is discarded afterward, instead of the one real
-	 * traffic uses, means the poisoned verdict dies with it. Defaults to
-	 * `netFetch` when omitted (tests construct one shared fetch and do not
-	 * exercise this failure mode).
-	 */
-	probeNetFetch?: typeof fetch;
+	/** Raw TLS certificate capture, injectable so controller tests do not open
+	 * sockets. The production implementation never enters Chromium's network
+	 * stack, so probing cannot poison the session used by paired traffic. */
+	fingerprintProbe?: PairFingerprintProbe;
 	probeTimeoutMs?: number;
 };
 
@@ -170,14 +161,14 @@ export type PairedMachinesController = {
 	/**
 	 * Attempt a connection to an address:port that is not (yet) a registered
 	 * paired machine, so the pairing flow can show the presented fingerprint
-	 * for comparison against what the box printed. The connection is always
-	 * denied at the TLS layer (see paired-machine-cert.ts): this only ever
-	 * captures what was presented, it never trusts it. Runs over
-	 * `probeNetFetch`, not `netFetch`: see that dep's doc comment for why the
-	 * always-denied capture connection must not share a session with real
-	 * traffic to a pinned host.
+	 * for comparison against what the box printed. This opens a raw TLS socket,
+	 * reads the leaf certificate, and closes it without sending HTTP or
+	 * credentials. The result is not trusted until `add()` pins the value the
+	 * user accepted.
 	 */
-	probeFingerprint: (address: string, port: number) => Promise<PairFingerprintResult>;
+	probeFingerprint: (address: string, port: number, requestId?: string) => Promise<PairFingerprintResult>;
+	/** Cancel one in-flight probe by the renderer-generated request id. */
+	cancelFingerprintProbe: (requestId: string) => void;
 	/**
 	 * The fingerprint currently pinned for a registered machine id, or null if
 	 * that id is not registered or has no pin yet. Read-only, synchronous off
@@ -335,7 +326,7 @@ function toAoMachine(
 
 export function createPairedMachinesController(deps: PairedMachinesControllerDeps): PairedMachinesController {
 	const netFetch = deps.netFetch ?? fetch;
-	const probeNetFetch = deps.probeNetFetch ?? netFetch;
+	const fingerprintProbe = deps.fingerprintProbe ?? capturePairFingerprint;
 	const probeTimeoutMs = deps.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
 
 	/** In-memory mirror of disk, keyed by id. verifyCertificate reads only the
@@ -345,25 +336,19 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 	/** hostname -> pinned fingerprint, for every record that has one. Rebuilt
 	 * whenever `records` changes. */
 	let pinnedByHost = new Map<string, string>();
-	/** Hosts currently mid-probe for first-time pairing: not yet in `records`,
-	 * but connections to them must still be intercepted so the presented
-	 * fingerprint can be captured instead of falling through to default
-	 * verification (which would fail anyway, and would capture nothing). */
-	const pendingHosts = new Set<string>();
-	/** Latest fingerprint actually presented per hostname, for any host
-	 * `isPairHost` recognises. What `probeFingerprint` reads back. */
-	const presented = new Map<string, string>();
 	/** Reachability and harness readiness from the last `refresh()`, by machine
 	 * id. Ephemeral like ao-machines.ts's own reachability: never persisted,
 	 * defaults to "unknown" for a machine that has never been probed. */
 	let reachabilityById = new Map<string, AoMachineReachability>();
 	let harnessById = new Map<string, HarnessReadiness>();
+	const activeFingerprintProbes = new Map<string, AbortController>();
 
 	function rebuildPinnedByHost(): void {
 		pinnedByHost = new Map(
 			[...records.values()]
 				.filter((record) => record.pinnedFingerprint)
-				.map((record) => [record.address, record.pinnedFingerprint as string]),
+				.map((record) => [canonicalPairHost(record.address), record.pinnedFingerprint as string])
+				.filter((entry): entry is [string, string] => entry[0] !== null),
 		);
 	}
 
@@ -419,9 +404,10 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 	}
 
 	const verifyCertificate = createPairCertificateVerifyProc({
-		isPairHost: (hostname) => pendingHosts.has(hostname) || pinnedByHost.has(hostname),
-		getPinnedFingerprint: (hostname) => pinnedByHost.get(hostname) ?? null,
-		onPresented: (hostname, fingerprint) => presented.set(hostname, fingerprint),
+		getPinnedFingerprint: (hostname) => {
+			const canonical = canonicalPairHost(hostname);
+			return canonical ? (pinnedByHost.get(canonical) ?? null) : null;
+		},
 	});
 
 	function list(): AoMachine[] {
@@ -565,28 +551,29 @@ export function createPairedMachinesController(deps: PairedMachinesControllerDep
 			}
 		},
 
-		async probeFingerprint(address: string, port: number): Promise<PairFingerprintResult> {
+		async probeFingerprint(address: string, port: number, requestId?: string): Promise<PairFingerprintResult> {
 			if (!validatePort(port)) return { error: `Not a valid port: ${port}` };
 			const baseUrl = baseUrlFor(address, port);
 			if (!baseUrl) return { error: `Not a usable address: ${address}` };
-
-			presented.delete(address);
-			pendingHosts.add(address);
-			try {
-				await fetchWithDeadline(probeNetFetch, `${baseUrl}/`, { method: "GET", redirect: "manual" }, probeTimeoutMs, "Pairing probe");
-			} catch {
-				// Expected: an unpinned host is always denied at the TLS layer (see
-				// paired-machine-cert.ts), and a box that is simply unreachable denies
-				// nothing to capture at all. Either way, the fingerprint map below is
-				// the source of truth for whether anything was actually presented.
-			} finally {
-				pendingHosts.delete(address);
+			if (activeFingerprintProbes.size >= MAX_ACTIVE_FINGERPRINT_PROBES) {
+				return { error: "Too many pairing probes are already running. Cancel an attempt or wait for it to finish." };
 			}
+			const probeId = requestId || randomBytes(16).toString("hex");
+			if (activeFingerprintProbes.has(probeId)) return { error: "This pairing probe is already running." };
+			const controller = new AbortController();
+			activeFingerprintProbes.set(probeId, controller);
 
-			const fingerprint = presented.get(address);
-			return fingerprint
-				? { fingerprint }
-				: { error: "No certificate could be retrieved from that address. Check the address, port, and that the box is reachable." };
+			try {
+				return { fingerprint: await fingerprintProbe(address, port, { timeoutMs: probeTimeoutMs, signal: controller.signal }) };
+			} catch {
+				return { error: "No certificate could be retrieved from that address. Check the address, port, and that the box is reachable." };
+			} finally {
+				if (activeFingerprintProbes.get(probeId) === controller) activeFingerprintProbes.delete(probeId);
+			}
+		},
+
+		cancelFingerprintProbe(requestId: string): void {
+			activeFingerprintProbes.get(requestId)?.abort();
 		},
 
 		getPinnedFingerprint(id: string): string | null {

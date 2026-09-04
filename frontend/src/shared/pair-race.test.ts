@@ -179,4 +179,52 @@ describe("racePairAddresses", () => {
 		resolveWinner({ fingerprint: WANT });
 		await new Promise((r) => setTimeout(r, 10));
 	});
+
+	test("passes the race abort signal to every started probe", async () => {
+		const seenSignals: AbortSignal[] = [];
+		const probe: ProbeFn = (_host, _port, signal) =>
+			new Promise((_resolve, reject) => {
+				if (!signal) return reject(new Error("missing signal"));
+				seenSignals.push(signal);
+				signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+			});
+		const controller = new AbortController();
+		const race = racePairAddresses(
+			[
+				{ host: "10.0.0.1", port: 8443 },
+				{ host: "10.0.0.2", port: 8443 },
+			],
+			WANT,
+			probe,
+			{ signal: controller.signal },
+		);
+		controller.abort();
+
+		await expect(race).resolves.toEqual({ status: "cancelled" });
+		expect(seenSignals).toHaveLength(2);
+		expect(seenSignals.every((signal) => signal.aborted)).toBe(true);
+	});
+
+	test("aborts losing probes as soon as another candidate wins", async () => {
+		let loserSignal: AbortSignal | undefined;
+		const probe: ProbeFn = (host, _port, signal) => {
+			if (host === "10.0.0.2") return Promise.resolve({ fingerprint: WANT });
+			loserSignal = signal;
+			return new Promise((_resolve, reject) => {
+				signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+			});
+		};
+
+		await expect(
+			racePairAddresses(
+				[
+					{ host: "10.0.0.1", port: 8443 },
+					{ host: "10.0.0.2", port: 8443 },
+				],
+				WANT,
+				probe,
+			),
+		).resolves.toEqual({ status: "matched", host: "10.0.0.2", port: 8443 });
+		expect(loserSignal?.aborted).toBe(true);
+	});
 });

@@ -60,25 +60,19 @@ test("computePairFingerprint matches PairFingerprint's exact rendering: uppercas
 });
 
 test("a host that is not a paired machine gets default Chromium verification, untouched", () => {
-	const isPairHost = vi.fn(() => false);
 	const getPinnedFingerprint = vi.fn(() => null);
-	const onPresented = vi.fn();
-	const proc = createPairCertificateVerifyProc({ isPairHost, getPinnedFingerprint, onPresented });
+	const proc = createPairCertificateVerifyProc({ getPinnedFingerprint });
 
 	const callback = vi.fn();
 	proc(request("ao.agentlab.in", CERT_PEM), callback);
 
 	expect(callback).toHaveBeenCalledExactlyOnceWith(CERT_VERIFY_USE_DEFAULT);
-	// Nothing about the cert of an unrelated host is inspected at all.
-	expect(getPinnedFingerprint).not.toHaveBeenCalled();
-	expect(onPresented).not.toHaveBeenCalled();
+	expect(getPinnedFingerprint).toHaveBeenCalledExactlyOnceWith("ao.agentlab.in");
 });
 
 test("a pinned machine whose presented certificate matches the pin is accepted", () => {
 	const proc = createPairCertificateVerifyProc({
-		isPairHost: () => true,
 		getPinnedFingerprint: () => CERT_FINGERPRINT,
-		onPresented: () => undefined,
 	});
 
 	const callback = vi.fn();
@@ -89,9 +83,7 @@ test("a pinned machine whose presented certificate matches the pin is accepted",
 
 test("a pinned machine whose presented certificate does not match the pin is refused, with no fallback", () => {
 	const proc = createPairCertificateVerifyProc({
-		isPairHost: () => true,
 		getPinnedFingerprint: () => CERT_FINGERPRINT,
-		onPresented: () => undefined,
 	});
 
 	const callback = vi.fn();
@@ -107,21 +99,15 @@ test("a pinned machine whose presented certificate does not match the pin is ref
 	expect(callback).not.toHaveBeenCalledWith(CERT_VERIFY_USE_DEFAULT);
 });
 
-test("first connect: an unpinned pairing candidate is refused, but the presented fingerprint is still captured", () => {
-	const onPresented = vi.fn();
+test("first connect is left to Chromium because raw TLS capture has not pinned the host yet", () => {
 	const proc = createPairCertificateVerifyProc({
-		isPairHost: () => true,
 		getPinnedFingerprint: () => null,
-		onPresented,
 	});
 
 	const callback = vi.fn();
 	proc(request("192.168.1.5", CERT_PEM), callback);
 
-	// Trust-on-first-use never auto-accepts: there is nothing pinned yet, so
-	// the connection itself is refused...
-	expect(callback).toHaveBeenCalledExactlyOnceWith(CERT_VERIFY_REJECT);
-	// ...but the pairing flow still learns what was presented, so it can be
-	// shown to the user for comparison against what the box printed.
-	expect(onPresented).toHaveBeenCalledExactlyOnceWith("192.168.1.5", CERT_FINGERPRINT);
+	// Chromium still rejects the self-signed certificate by default; the
+	// verifier itself neither accepts nor creates trust before `add()` pins it.
+	expect(callback).toHaveBeenCalledExactlyOnceWith(CERT_VERIFY_USE_DEFAULT);
 });

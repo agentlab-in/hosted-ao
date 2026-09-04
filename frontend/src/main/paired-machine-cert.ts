@@ -14,9 +14,9 @@ import { X509Certificate } from "node:crypto";
  * `session.defaultSession` in main.ts rather than into a fetch wrapper.
  *
  * The corollary is the hard constraint this module exists to satisfy: it must
- * touch nothing about how any other host is verified. `isPairHost` is the
- * gate, and a request for a hostname it does not recognise is handed back to
- * Chromium's own verification untouched (CERT_VERIFY_USE_DEFAULT).
+ * touch nothing about how any other host is verified. A request with no pin is
+ * handed back to Chromium's own verification untouched
+ * (CERT_VERIFY_USE_DEFAULT).
  */
 
 /** callback(0): accept the certificate for this connection. */
@@ -48,18 +48,9 @@ export type PairCertificateVerifyProc = (
  * every call is synchronous: Electron calls this proc from the network
  * service and does not await it. */
 export type PairPinLookup = {
-	/** True for a registered paired machine, or a host currently being probed
-	 * for first-time pairing. False for every other host, including the
-	 * control plane and any hosted machine with a real certificate. */
-	isPairHost: (hostname: string) => boolean;
 	/** The pinned fingerprint for a registered paired machine, or null when
-	 * the host is only a pairing candidate with nothing pinned yet. */
+	 * the host is not paired. */
 	getPinnedFingerprint: (hostname: string) => string | null;
-	/** Called with the fingerprint of whatever certificate was actually
-	 * presented, for every pair-host connection, whether accepted or
-	 * rejected. This is the first-connect capture: the pairing flow reads it
-	 * back to show the user what to compare against the box's printout. */
-	onPresented: (hostname: string, fingerprint: string) => void;
 };
 
 /**
@@ -69,40 +60,33 @@ export type PairPinLookup = {
  *
  * `X509Certificate.fingerprint256` computes exactly that (SHA-256 over the
  * certificate's DER encoding, rendered as upper-case colon-separated hex) for
- * both PEM and DER input, so this is the whole implementation; hand-rolling a
- * PEM parse and hasher would only be a slower way to arrive at the same
- * bytes. `pem` is `Certificate.data` from Electron's verify-proc request,
- * which is PEM encoded.
+ * both Electron's PEM verifier input and the raw TLS probe's DER input, so this
+ * is the whole implementation; hand-rolling either parse and hasher would only
+ * be a slower way to arrive at the same bytes.
  */
-export function computePairFingerprint(pem: string): string {
-	return new X509Certificate(pem).fingerprint256;
+export function computePairFingerprint(certificate: string | Buffer): string {
+	return new X509Certificate(certificate).fingerprint256;
 }
 
 /**
  * Build the proc to hand to `session.setCertificateVerifyProc`.
  *
  * Decision table, in order:
- * 1. Not a pair host at all -> CERT_VERIFY_USE_DEFAULT. Every other host,
- *    including the control plane and hosted machines, is untouched.
- * 2. A pair host with a pinned fingerprint that matches what was presented ->
- *    CERT_VERIFY_ACCEPT.
- * 3. Anything else for a pair host -- a mismatch, or no pin yet -> REJECT.
- *    There is no accept path for an unpinned host: the presented fingerprint
- *    is still captured via `onPresented` so the pairing flow can show it, but
- *    the connection itself is refused rather than silently trusted. This is
- *    what makes trust-on-first-use a *user* accepting a fingerprint (task 8's
- *    UI, by calling the registry's add/pin step) rather than the transport
- *    accepting it on the user's behalf.
+ * 1. No pin for this host -> CERT_VERIFY_USE_DEFAULT. Every other host,
+ *    including the control plane and first-contact pairing candidates, is
+ *    untouched. First-contact capture uses paired-machine-probe.ts and never
+ *    enters Chromium's network stack.
+ * 2. A pinned fingerprint matching what was presented -> ACCEPT.
+ * 3. A pinned fingerprint that does not match -> REJECT with no fallback.
  */
 export function createPairCertificateVerifyProc(lookup: PairPinLookup): PairCertificateVerifyProc {
 	return (request, callback) => {
-		if (!lookup.isPairHost(request.hostname)) {
+		const pinned = lookup.getPinnedFingerprint(request.hostname);
+		if (!pinned) {
 			callback(CERT_VERIFY_USE_DEFAULT);
 			return;
 		}
 		const presented = computePairFingerprint(request.certificate.data);
-		lookup.onPresented(request.hostname, presented);
-		const pinned = lookup.getPinnedFingerprint(request.hostname);
-		callback(pinned && pinned === presented ? CERT_VERIFY_ACCEPT : CERT_VERIFY_REJECT);
+		callback(pinned === presented ? CERT_VERIFY_ACCEPT : CERT_VERIFY_REJECT);
 	};
 }

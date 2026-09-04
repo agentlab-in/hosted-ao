@@ -375,6 +375,7 @@ export async function installFakeBridge(
                       error:
                         "No certificate could be retrieved from that address.",
                     },
+              cancelFingerprintProbe: () => undefined,
               getPinnedFingerprint: async () => null,
               add: async () => {
                 pairedList = [...pairedList, pairing.machine];
@@ -390,6 +391,7 @@ export async function installFakeBridge(
               probeFingerprint: async () => ({
                 error: "No main process under the browser harness.",
               }),
+              cancelFingerprintProbe: () => undefined,
               getPinnedFingerprint: async () => null,
               add: async () => {
                 throw new Error(
@@ -1000,6 +1002,7 @@ export async function installFakeAgent(
           probeFingerprint: async () => ({
             error: "No main process under the browser harness.",
           }),
+          cancelFingerprintProbe: () => undefined,
           getPinnedFingerprint: async () => null,
           add: async () => {
             throw new Error(

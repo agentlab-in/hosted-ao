@@ -310,6 +310,7 @@ if (typeof window !== "undefined") {
 			list: async () => [],
 			refresh: async () => [],
 			probeFingerprint: async () => ({ error: "not available in tests" }),
+			cancelFingerprintProbe: () => undefined,
 			getPinnedFingerprint: async () => null,
 			add: async () => {
 				throw new Error("not available in tests");

@@ -456,8 +456,10 @@ const api = {
 		// for comparison against what the box printed. The connection itself is
 		// always denied (trust-on-first-use never auto-accepts); this only ever
 		// reports what was seen, or an error when nothing was.
-		probeFingerprint: (address: string, port: number) =>
-			ipcRenderer.invoke("pairedMachines:probeFingerprint", address, port) as Promise<PairFingerprintResult>,
+		probeFingerprint: (address: string, port: number, requestId?: string) =>
+			ipcRenderer.invoke("pairedMachines:probeFingerprint", address, port, requestId) as Promise<PairFingerprintResult>,
+		cancelFingerprintProbe: (requestId: string) =>
+			ipcRenderer.send("pairedMachines:cancelFingerprintProbe", requestId),
 		// The fingerprint already pinned for a machine id, or null. Read-only:
 		// what the add-machine flow compares a fresh probe against so it can tell
 		// a genuine re-pair from a fingerprint mismatch before offering anything
