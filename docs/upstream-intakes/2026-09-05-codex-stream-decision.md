@@ -1,6 +1,6 @@
 # Codex EventSource transport decision
 
-Companion to the frozen v3 backend handoff. Apply codex-stream-boundary.patch after v3, or after its update-from-v2 patch. It adds one gateway regression test file only. No runtime source, generated contract, migration, frontend, or tracked evidence document is changed. The v3 archive remains unchanged; this test is an explicit additional patch.
+Companion to the frozen v3 backend handoff. The owner integrated codex-stream-boundary.patch with the authoritative v3 source. It adds one gateway regression test file only. No runtime source, generated contract, migration, frontend, or tracked evidence document is changed. The v3 archive remains unchanged; this test is an explicit additional patch.
 
 ## Decision
 

@@ -8,7 +8,11 @@ Base: `ab6c1f2d2c3695f7023f85692b70d388fe63a018`.
 
 No refetch, rebase, merge, commit, push, PR action, generated-file regeneration, migration edit, or owner-worktree edit occurred. GitHub release/tag contents were read through gh without changing local refs.
 
-## Apply
+## Governing owner policy
+
+This is historical v3 support evidence, not an instruction to reapply an archive. The owner integrated compatible source while retaining stricter all-method denials for the entire system-install family and agent installer/install-job/install/verify aliases. All LAN routes, including identity, are authenticated. No Codex SSE/cookie exception or production cloudflared wiring is allowed. Any narrower POST-only or read-only-allowance statement below is superseded by this policy and the main intake record. The separate sqlc projection-order supplement has no authentication or gateway effect.
+
+## Historical v3 delivery
 
 The archive contains exactly 16 backend source/test files listed in manifest.json. Extract it over the named files in the existing true merge, regardless of conflict marker style. A separate handwritten contract patch keeps the existing HAO gateway prefix manifest in sync with the new Codex denial. This JSON is source policy, not generated output. No reserved AGENTS, workflow, forge config, or tracked evidence docs are included.
 
@@ -20,7 +24,6 @@ git apply --check "$support/gateway-contract.patch"
 git apply "$support/gateway-contract.patch"
 ```
 
-If v2 has already been applied and the nine v2 files have not been manually changed, `backend-update-from-v2.patch` is an alternative to extracting the archive. It expects those nine v2 files plus clean frozen auto-merge content for newly touched files. Do not both extract and apply the update patch. The gateway contract patch is required with either path; it expects the unchanged frozen downstream gateway manifest.
 
 Both patch applications and the archive were checked for byte equivalence against the tested fixture. Full clean-merge-to-source replacement is intentionally supplied as an archive rather than a patch dependent on conflict labels.
 
