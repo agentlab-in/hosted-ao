@@ -588,7 +588,7 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 		b.WriteString("daemon\nAfter=network-online.target\n")
 	}
 	path := filepath.Join(user.Home, ".local", "bin") + ":" + filepath.Join(user.Home, "bin") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + systemdQuote(dataDir) + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\nEnvironment=" + systemdQuote("PATH="+path) + "\n")
+	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + dataDir + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\nEnvironment=" + systemdQuote("PATH="+path) + "\n")
 	if id == "service.gateway" {
 		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_HTTPS_ADDR=:"+strconv.Itoa(d.PairPort)) + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-cert")) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode")) + "\n")
 		if d.PairPort < 1024 {
@@ -676,7 +676,7 @@ func systemdInputsSafe(d setupDesired, user UserObservation) bool {
 	}
 	for _, value := range []string{user.Home, d.StateRoot} {
 		for _, r := range value {
-			if r < 0x20 || r == 0x7f {
+			if r <= 0x20 || r == 0x7f {
 				return false
 			}
 		}

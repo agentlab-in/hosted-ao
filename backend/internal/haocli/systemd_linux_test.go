@@ -25,7 +25,7 @@ func TestRenderedPrivilegedGatewayPassesSystemdVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	desired := setupDesired{StateRoot: stateRoot, PairPort: 443}
-	user := UserObservation{Name: "nobody", UID: 65534, Home: root}
+	user := UserObservation{Name: "hao-test", UID: 65534, Home: root}
 	daemonPath := filepath.Join(root, "ao-daemon.service")
 	gatewayPath := filepath.Join(root, "ao-gateway.service")
 	if err := os.WriteFile(daemonPath, []byte(renderSystemdDefinition("service.daemon", desired, user)), 0o600); err != nil {
@@ -39,7 +39,7 @@ func TestRenderedPrivilegedGatewayPassesSystemdVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("systemd rejected rendered units: %v\n%s", err, output)
 	}
-	for _, directive := range []string{"AmbientCapabilities=CAP_NET_BIND_SERVICE", "CapabilityBoundingSet=CAP_NET_BIND_SERVICE", "User=nobody", "AO_VM_HTTPS_ADDR=:443"} {
+	for _, directive := range []string{"AmbientCapabilities=CAP_NET_BIND_SERVICE", "CapabilityBoundingSet=CAP_NET_BIND_SERVICE", "User=hao-test", "AO_VM_HTTPS_ADDR=:443"} {
 		if !strings.Contains(gateway, directive) {
 			t.Fatalf("verified gateway lacks effective privileged-port directive %q", directive)
 		}
