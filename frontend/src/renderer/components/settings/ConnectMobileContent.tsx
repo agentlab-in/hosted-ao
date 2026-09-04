@@ -57,18 +57,8 @@ export function pairingPayload(host: string, port: number, password: string, sec
 	return JSON.stringify(secure ? { v: 1, host, port, password, secure: true } : { v: 1, host, port, password });
 }
 
-/**
- * The value encoded into the pairing QR.
- *
- * Prefers the v2 deep link, which carries every endpoint the daemon advertises
- * so the phone can race them, and opens the app straight from the system
- * camera. The payload rides in the fragment, so the connection token never
- * reaches a server even when the link is opened in a browser.
- *
- * Falls back to the v1 payload when the daemon advertises no endpoints — an
- * older daemon, or one whose network is not up yet. Showing a dead v2 QR there
- * would be worse than the pairing that already works.
- */
+/** The v2 pairing link carries the daemon's endpoints and credential in its
+ * fragment, which is not sent to a web server. */
 export function qrValueFor(input: {
 	hostId: string;
 	host: string;
@@ -76,11 +66,7 @@ export function qrValueFor(input: {
 	password: string;
 	endpoints: readonly PairingEndpoint[];
 }): string {
-	// v2 only. The phone no longer accepts v1: those codes predate the identity
-	// probe the race uses to verify a machine before sending it a credential, so
-	// a daemon old enough to need one could never complete a race anyway. An
-	// empty endpoint list means there is nothing to advertise yet, and the panel
-	// shows the preparing state rather than a code — see qrIsReady.
+	// An empty endpoint list keeps the panel in its preparing state.
 	return pairingCodeUrl(
 		buildPairingOffer({
 			endpoints: input.endpoints,
@@ -93,42 +79,16 @@ export function qrValueFor(input: {
 	);
 }
 
-/**
- * How often to re-read mobile status, or false to stop.
- *
- * The connector takes roughly half a minute to become advertisable, and the
- * status query is otherwise fetched once on open and refetched only after a
- * mutation. Without this the modal would sit on "Preparing remote access…"
- * indefinitely while the daemon had long since finished.
- *
- * Polls only while there is a transient state to wait out, so an idle modal
- * does not keep hitting the daemon for the rest of the session.
- */
+/** Wait only for an enabled LAN listener to advertise its endpoints. */
 export function mobileStatusRefetchInterval(
-	status: { tunnel?: { running: boolean; ready: boolean } } | undefined,
+	status: { enabled?: boolean; endpoints?: readonly PairingEndpoint[]; tunnel?: { running: boolean; ready: boolean } } | undefined,
 ): number | false {
-	const tunnel = status?.tunnel;
-	return tunnel?.running && !tunnel.ready ? MOBILE_STATUS_POLL_MS : false;
+	return status?.enabled && !status.endpoints?.length ? MOBILE_STATUS_POLL_MS : false;
 }
 
 const MOBILE_STATUS_POLL_MS = 2_000;
 
-/**
- * Whether the pairing QR is safe to show.
- *
- * The connector takes roughly thirty seconds after the listener comes up
- * before its hostname resolves. A code scanned inside that window carries no
- * tunnel endpoint, so the pairing works on this network and fails everywhere
- * else — with nothing on either side to indicate why. Holding the code back is
- * the same discipline the daemon already applies to advertising the endpoint.
- *
- * A tunnel that is not running at all is not worth waiting for: LAN-only is a
- * legitimate setup, and blocking pairing forever would be worse than the wait.
- *
- * A daemon that does not report endpoints at all predates the endpoint race.
- * It has no tunnel to wait for, and its QR still works, so it is shown — the
- * absence of the field is not the same as an empty list.
- */
+/** Home-network pairing does not depend on a public tunnel. */
 export function qrIsReady(status: {
 	enabled: boolean;
 	endpoints?: readonly PairingEndpoint[];
@@ -137,9 +97,8 @@ export function qrIsReady(status: {
 	if (!status.enabled) return false;
 	// Nothing to encode: a v2 code carries the endpoint list, and there is no
 	// longer a v1 form to fall back to. An absent list is as unready as an empty
-	// one — it means the daemon has not told us where it can be reached.
+	// one , it means the daemon has not told us where it can be reached.
 	if (!status.endpoints || status.endpoints.length === 0) return false;
-	if (status.tunnel?.running && !status.tunnel.ready) return false;
 	return true;
 }
 
@@ -185,7 +144,7 @@ interface MobileStatus {
 	/** Managed remote-access connector state, for showing progress while the
 	 * tunnel comes up. */
 	tunnel?: {
-		/** False when this machine has no connector at all — cloudflared is
+		/** False when this machine has no connector at all , cloudflared is
 		 * absent. Distinct from "not started yet", which is running:false. */
 		supported?: boolean;
 		running: boolean;
@@ -242,8 +201,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		queryKey: mobileStatusQueryKey,
 		queryFn: fetchMobileStatus,
 		enabled: active,
-		// Only while the connector is coming up — see
-		// mobileStatusRefetchInterval.
+		// Wait for the enabled listener to report pairing endpoints.
 		refetchInterval: (q) => mobileStatusRefetchInterval(q.state.data),
 	});
 
@@ -310,7 +268,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
+	// TLS turns itself on wherever Tailscale exists , it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
 	// to a 100.x address, so a Tailscale pairing without it works on Android and
 	// fails on iPhone with nothing on either side to say why. Keying this to a
@@ -345,10 +303,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			? (status?.tailscaleHost ?? "")
 			: (status?.host ?? "");
 	const activePort = secureActive ? status!.securePairing.port : (status?.port ?? 0);
-	// No connector on this machine at all: cloudflared is absent and nothing
-	// installs it. Pairing still works on the local network, so this is a
-	// caveat to state rather than a failure to block on.
-	const remoteAccessUnavailable = status?.tunnel ? status.tunnel.supported === false : false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
 	const busy =
 		enable.isPending ||
@@ -440,7 +394,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				{/* Left: the walkthrough. */}
 				<div className="flex min-w-0 flex-1 flex-col">
 					{/* Connection picker commented out: one v2 code carries every
-					    advertised endpoint — LAN, Tailscale and tunnel — and the phone
+					    advertised endpoint , LAN, Tailscale and tunnel , and the phone
 					    races them, so the mode never changed what a scan produces. TLS
 					    is enabled off the tailnet address rather than this control (see
 					    the effect above), so hiding it does not disable secure pairing.
@@ -465,7 +419,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					    is generated. */}
 					<ol className="settings-mobile-steps mt-4 !text-[13px] !leading-6 !text-[color-mix(in_oklch,var(--color-settings-label)_75%,var(--color-text-settings-muted))]">
 						{/* Both stores are a public one-tap listing now, so the step names
-						    both rather than making people pick a platform first — the
+						    both rather than making people pick a platform first , the
 						    choice only ever selected which of these two links to show. */}
 						<li>
 							{t("mobile.getApp.step1")}{" "}
@@ -551,24 +505,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						</p>
 					)}
 
-					{remoteAccessUnavailable && (
-						// Stated rather than hidden: pairing still works on this network,
-						// so this is a limitation of what the code can reach, not an
-						// error. Without it the QR looks entirely normal and the user
-						// discovers the gap only by being away from home.
-						<div className="mt-3">
-							<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
-								{t(
-									"mobile.hostedNetworkOnly",
-									"Hosted AO supports mobile access on your home network only.",
-								)}
-							</p>
-						</div>
-					)}
+					<div className="mt-3">
+						<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
+							{t("mobile.hostedNetworkOnly")}
+						</p>
+					</div>
 					{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
 				</div>
 
-				{/* Right: dedicated pairing-QR panel — square, clipping, flush with
+				{/* Right: dedicated pairing-QR panel , square, clipping, flush with
 				    the content's right edge so bottom/right spacing match. */}
 				<div className="flex w-full shrink-0 flex-col gap-3 self-start sm:w-80">
 					<div className="relative">
@@ -582,7 +527,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 								<PairingQr
 									value={generatedQrValue}
 									size={QR_CODE_SIZE}
-									caption={t("mobile.tunnelStarting")}
+									caption={t("mobile.preparingLocalPairing")}
 								/>
 							)}
 						</div>

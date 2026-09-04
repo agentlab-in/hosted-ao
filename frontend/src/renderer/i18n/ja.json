@@ -1,4 +1,5 @@
 {
+  "mobile.preparingLocalPairing": "ホームネットワークのペアリングを準備しています",
   "mobile.hostedNetworkOnly": "Hosted AOのモバイルアクセスはホームネットワーク内でのみ利用できます。",
   "activity.active": "作業中",
   "activity.blocked": "判断待ち",

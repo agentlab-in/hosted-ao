@@ -408,19 +408,11 @@ test("emits only v2, never a raw JSON v1 payload", () => {
 	expect(decodeQr(value).v).toBe(2);
 });
 
-// The trap that produced a pairing which worked on Wi-Fi and failed on
-// cellular: the QR renders as soon as the LAN listener is up, but the tunnel
-// takes ~30s more to become advertisable. A code scanned in that window
-// carries no tunnel endpoint at all, so the phone has nothing to fall back to
-// once it leaves the network.
-test("holds the QR back while remote access is still starting", () => {
-	expect(
-		qrIsReady({
-			enabled: true,
-			endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
-			tunnel: { running: true, ready: false, hostname: "", location: "", lastError: "" },
-		}),
-	).toBe(false);
+test("shows LAN pairing even if a legacy tunnel status is still starting", () => {
+	expect(qrIsReady({ enabled: true,
+		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+		tunnel: { running: true, ready: false },
+	})).toBe(true);
 });
 
 test("shows the QR once the tunnel is advertisable", () => {
@@ -461,19 +453,17 @@ test("withholds the QR from a daemon that reports no endpoints", () => {
 	expect(qrIsReady({ enabled: true, endpoints: [], tunnel: undefined })).toBe(false);
 });
 
-// The QR gate introduced a state the renderer has to wait out. The status query
-// is fetched once on open and refetched only after a mutation, so without
-// polling the modal sits on "Preparing remote access…" forever even though the
-// daemon went advertisable seconds later.
-test("polls while the connector is starting", () => {
-	expect(
-		mobileStatusRefetchInterval({ tunnel: { running: true, ready: false } }),
-	).toBeGreaterThan(0);
+test("does not poll for a public connector", () => {
+	expect(mobileStatusRefetchInterval({ tunnel: { running: true, ready: false } })).toBe(false);
 });
 
-// Polling only while there is something to wait for: once the tunnel is up
-// there is no transient state left, and the modal should not keep hitting the
-// daemon for the rest of the session.
+test("polls only until an enabled listener advertises endpoints", () => {
+	expect(mobileStatusRefetchInterval({ enabled: true, endpoints: [] })).toBeGreaterThan(0);
+	expect(mobileStatusRefetchInterval({ enabled: true, endpoints: [
+		{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+	] })).toBe(false);
+});
+
 test("stops polling once the tunnel is advertisable", () => {
 	expect(mobileStatusRefetchInterval({ tunnel: { running: true, ready: true } })).toBe(false);
 });
@@ -499,15 +489,14 @@ test("says so when this machine cannot be reached from elsewhere", async () => {
 	);
 });
 
-// A machine that has a connector must not carry the caveat, whether or not the
-// tunnel happens to be up yet.
-test("does not claim unavailability while the connector is merely starting", async () => {
+// Legacy connector status does not change the Hosted network boundary.
+test("states the home-network boundary regardless of legacy connector status", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
 	};
 	renderMobileSettings();
 
-	await waitFor(() => expect(screen.queryByTestId("mobile-remote-unavailable")).toBeNull());
+	expect(await screen.findByTestId("mobile-remote-unavailable")).toHaveTextContent("home network only");
 });
 
 // Hosted AO retains authenticated LAN pairing without a production connector installer.
