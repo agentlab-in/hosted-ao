@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeBridge } from "./support/fake-bridge";
 
 // CLONE-* RENDERER SMOKE (renderer slice, issue #59).
@@ -46,6 +47,16 @@ async function shot(page: Page, name: string): Promise<void> {
 	await page.screenshot({ path: `${process.env.AO_CLONE_SHOTS}/${name}.png` });
 }
 
+async function stubReadiness(page: Page): Promise<void> {
+	await page.route(/\/api\/v1\/agents\/readiness(?:\/ensure)?$/, (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({ agents: [agentReadiness("claude-code", "Claude Code")] }),
+		}),
+	);
+}
+
 /**
  * Answers the calls the remote (cloneUrl) clone step makes against
  * REMOTE_BASE_URL, captures the POST /api/v1/projects body, and can hold
@@ -55,6 +66,7 @@ async function shot(page: Page, name: string): Promise<void> {
  * instead of racing an unstubbed DNS failure.
  */
 async function stubRemoteDaemon(page: Page, cloneMs = 0): Promise<{ body: () => unknown }> {
+	await stubReadiness(page);
 	let createBody: unknown = null;
 	await page.route(`${REMOTE_BASE_URL}/api/v1/agents`, (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AGENT_CATALOG) }),
@@ -75,6 +87,7 @@ async function stubRemoteDaemon(page: Page, cloneMs = 0): Promise<{ body: () => 
 
 /** Same shape as stubRemoteDaemon, but for the local daemon's clone wire. */
 async function stubLocalCloneDaemon(page: Page): Promise<{ body: () => unknown }> {
+	await stubReadiness(page);
 	let cloneBody: unknown = null;
 	await page.route("**/api/v1/agents", (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AGENT_CATALOG) }),

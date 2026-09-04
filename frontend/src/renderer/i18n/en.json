@@ -1078,6 +1078,7 @@
   "settings.theme.dark": "Dark",
   "settings.theme.light": "Light",
   "settings.theme.system": "System",
+  "settings.localControlsOnly": "Select This computer to manage credentials, installers, and mobile access.",
   "settings.title": "Settings",
   "settings.updates": "Updates",
   "settings.updates.automatic": "Automatic Updates",

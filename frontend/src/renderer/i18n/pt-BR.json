@@ -972,6 +972,7 @@
   "settings.theme.dark": "Escuro",
   "settings.theme.light": "Claro",
   "settings.theme.system": "Sistema",
+  "settings.localControlsOnly": "Selecione Este computador para gerenciar credenciais, instaladores e acesso móvel.",
   "settings.title": "Configurações",
   "settings.updates": "Atualizações",
   "settings.updates.automatic": "Atualizações automáticas",

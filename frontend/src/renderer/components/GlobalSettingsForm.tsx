@@ -46,7 +46,7 @@ export function GlobalSettingsForm({
   const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
   const localControls = !isRemoteDaemonBaseUrl(baseUrl);
   if (!localControls && ["harness", "agents", "mobile", "cloud"].includes(section)) {
-    return <p role="status">Select This computer to manage credentials, installers, and mobile access.</p>;
+    return <p role="status">{t("settings.localControlsOnly")}</p>;
   }
   // One section per page means the dialog header already names it, so a
   // leading in-page heading would just repeat that title.

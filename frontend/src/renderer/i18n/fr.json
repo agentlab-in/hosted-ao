@@ -972,6 +972,7 @@
   "settings.theme.dark": "Sombre",
   "settings.theme.light": "Clair",
   "settings.theme.system": "Système",
+  "settings.localControlsOnly": "Sélectionnez Cet ordinateur pour gérer les identifiants, les programmes d’installation et l’accès mobile.",
   "settings.title": "Paramètres",
   "settings.updates": "Mises à jour",
   "settings.updates.automatic": "Mises à jour automatiques",

@@ -957,6 +957,7 @@
   "settings.theme.dark": "ダーク",
   "settings.theme.light": "ライト",
   "settings.theme.system": "システム",
+  "settings.localControlsOnly": "認証情報、インストーラー、モバイルアクセスを管理するには、このコンピューターを選択してください。",
   "settings.title": "設定",
   "settings.updates": "アップデート",
   "settings.updates.automatic": "自動アップデート",

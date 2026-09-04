@@ -957,6 +957,7 @@
   "settings.theme.dark": "Dunkel",
   "settings.theme.light": "Hell",
   "settings.theme.system": "System",
+  "settings.localControlsOnly": "Wähle Diesen Computer, um Zugangsdaten, Installationsprogramme und mobilen Zugriff zu verwalten.",
   "settings.title": "Einstellungen",
   "settings.updates": "Updates",
   "settings.updates.automatic": "Automatische Updates",

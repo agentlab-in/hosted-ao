@@ -941,6 +941,7 @@
   "settings.theme.dark": "深色",
   "settings.theme.light": "浅色",
   "settings.theme.system": "跟随系统",
+  "settings.localControlsOnly": "请选择此电脑以管理凭据、安装程序和移动访问。",
   "settings.title": "设置",
   "settings.updates": "更新",
   "settings.updates.automatic": "自动更新",

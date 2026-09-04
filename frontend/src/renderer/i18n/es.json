@@ -972,6 +972,7 @@
   "settings.theme.dark": "Oscuro",
   "settings.theme.light": "Claro",
   "settings.theme.system": "Sistema",
+  "settings.localControlsOnly": "Selecciona Este equipo para gestionar credenciales, instaladores y acceso móvil.",
   "settings.title": "Ajustes",
   "settings.updates": "Actualizaciones",
   "settings.updates.automatic": "Actualizaciones automáticas",
