@@ -321,6 +321,20 @@ async function runtimeFetch(input: Request): Promise<Response> {
   // Asked for per request because the main process owns expiry and the silent
   // refresh. Null when no machine is selected (local daemon) or in browser preview.
   const remote = baseUrl ? isRemoteDaemonBaseUrl(baseUrl) : false;
+  // New credential/install surfaces have no remote gateway contract.
+  const controlPath = new URL(input.url).pathname;
+  const localControl =
+    /^\/api\/v1\/agents\/codex(?:\/|$)/.test(controlPath) ||
+    /^\/api\/v1\/agents\/(?:installers|install-jobs)(?:\/|$)/.test(controlPath) ||
+    /^\/api\/v1\/agents\/[^/]+\/(?:install|verify)(?:\/|$)/.test(controlPath) ||
+    /^\/api\/v1\/(?:system\/install|desktop)(?:\/|$)/.test(controlPath) ||
+    (input.method.toUpperCase() === "POST" && /^\/api\/v1\/agents\/[^/]+\/auth(?:\/|$)/.test(controlPath));
+  if (remote && localControl) {
+    return new Response(JSON.stringify({
+      code: "local_machine_required",
+      message: "Select This computer to manage credentials and installers.",
+    }), { status: 403, headers: { "Content-Type": "application/json" } });
+  }
   const gatewayToken = remote ? await aoBridge.machines.gatewayToken() : null;
   if (remote && !gatewayToken) {
     // No usable machine credential right now (the silent refresh is failing, or

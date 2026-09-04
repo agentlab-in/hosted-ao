@@ -204,7 +204,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
           return;
         }
         const baseUrl = getApiBaseUrl();
-        if (
+        if (isRemoteDaemonBaseUrl(baseUrl)) {
+          accountSource?.close();
+          accountSource = undefined;
+          accountSourceBaseUrl = undefined;
+        } else if (
           !accountSource ||
           accountSourceBaseUrl !== baseUrl ||
           accountSource.readyState === EVENTSOURCE_CLOSED

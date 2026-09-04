@@ -171,7 +171,7 @@ describe("createEventTransport", () => {
     onStatusHandler();
 
     expect(cdcSources()).toHaveLength(1);
-    expect(accountSources()).toHaveLength(1);
+    expect(accountSources()).toHaveLength(0);
     expect(stream.closed).toBe(false);
     expect(getEventsConnectionState()).toBe("connected");
   });
@@ -552,11 +552,11 @@ describe("createEventTransport", () => {
     }
   });
 
-  it("includes credentials on both selected remote machine streams", () => {
+  it("keeps remote CDC authenticated without exposing the local account stream", () => {
     getApiBaseUrlMock.mockReturnValue("https://192.168.1.2:443");
     const disconnect = createEventTransport(fakeQueryClient()).connect();
     expect(cdcSources()[0].options?.withCredentials).toBe(true);
-    expect(accountSources()[0].options?.withCredentials).toBe(true);
+    expect(accountSources()).toHaveLength(0);
     disconnect();
   });
 
@@ -590,4 +590,15 @@ describe("createEventTransport", () => {
     expect(getEventsConnectionState()).toBe("idle");
     expect(unsubscribeBaseUrlMock).toHaveBeenCalledTimes(1);
   });
+});
+
+it("closes the local account stream when switching to a remote machine", () => {
+  const disconnect = createEventTransport(fakeQueryClient()).connect();
+  const account = accountSources()[0];
+  getApiBaseUrlMock.mockReturnValue("https://192.168.1.2:443");
+  subscribeApiBaseUrlMock.mock.calls[0][0]();
+  expect(account.closed).toBe(true);
+  expect(accountSources()).toHaveLength(1);
+  expect(cdcSources().at(-1)?.options?.withCredentials).toBe(true);
+  disconnect();
 });

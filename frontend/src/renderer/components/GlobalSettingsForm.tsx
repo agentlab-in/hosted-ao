@@ -1,4 +1,6 @@
-import { lazy, Suspense } from "react";
+import { getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
+import { lazy, Suspense, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { CloudSection } from "./settings/CloudSection";
 import { MachinesSection } from "./settings/MachinesSection";
@@ -41,6 +43,11 @@ export function GlobalSettingsForm({
 }) {
   const { t } = useTranslation();
   const all = section === "all";
+  const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+  const localControls = !isRemoteDaemonBaseUrl(baseUrl);
+  if (!localControls && ["harness", "agents", "mobile", "cloud"].includes(section)) {
+    return <p role="status">Select This computer to manage credentials, installers, and mobile access.</p>;
+  }
   // One section per page means the dialog header already names it, so a
   // leading in-page heading would just repeat that title.
   const titleHidden = !all;
@@ -59,11 +66,11 @@ export function GlobalSettingsForm({
       )}
 
       {(all || section === "self-hosting") && <MachinesSection />}
-      {(all || section === "harness") && (
+      {localControls && (all || section === "harness") && (
         <HarnessSettingsSection titleHidden={titleHidden} />
       )}
 
-      {(all || section === "agents") && (
+      {localControls && (all || section === "agents") && (
         <CodexAccountsSection titleHidden={titleHidden} />
       )}
 
@@ -71,7 +78,7 @@ export function GlobalSettingsForm({
         <BrowserProfilesSection titleHidden={titleHidden} />
       )}
 
-      {(all || section === "mobile") && (
+      {localControls && (all || section === "mobile") && (
         <SettingsSection title={t("settings.mobile")} titleHidden={titleHidden}>
           <div className="rounded-md bg-[var(--color-bg-settings-row)] px-4 pb-4 pt-0">
             <ConnectMobileContent active />
@@ -80,7 +87,7 @@ export function GlobalSettingsForm({
         </SettingsSection>
       )}
 
-      {(all || section === "cloud") && (
+      {localControls && (all || section === "cloud") && (
         <CloudCredentialsSection titleHidden={titleHidden} />
       )}
 
