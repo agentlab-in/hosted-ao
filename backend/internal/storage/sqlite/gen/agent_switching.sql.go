@@ -298,44 +298,17 @@ SELECT id, session_id, idempotency_key, request_fingerprint,
     state, agent_handoff_status, source_transcript_status, semantic_handoff_included,
     agent_handoff_path, agent_handoff_hash,
     source_generation_id, target_generation_id, target_runtime_handle_id,
-    target_acknowledged_at, error_code, failure_point,
+    target_acknowledged_at, error_code,
     requested_at, updated_at,
-    final_handoff_path, final_handoff_hash
+    final_handoff_path, final_handoff_hash, failure_point
 FROM agent_switches
 WHERE session_id = ?
   AND state NOT IN ('completed', 'failed')
 `
 
-type GetActiveAgentSwitchRow struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
-	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
-	AgentHandoffPath        string
-	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
-	TargetRuntimeHandleID   string
-	TargetAcknowledgedAt    sql.NullTime
-	ErrorCode               string
-	FailurePoint            string
-	RequestedAt             time.Time
-	UpdatedAt               time.Time
-	FinalHandoffPath        string
-	FinalHandoffHash        string
-}
-
-func (q *Queries) GetActiveAgentSwitch(ctx context.Context, sessionID domain.SessionID) (GetActiveAgentSwitchRow, error) {
+func (q *Queries) GetActiveAgentSwitch(ctx context.Context, sessionID domain.SessionID) (AgentSwitch, error) {
 	row := q.db.QueryRowContext(ctx, getActiveAgentSwitch, sessionID)
-	var i GetActiveAgentSwitchRow
+	var i AgentSwitch
 	err := row.Scan(
 		&i.ID,
 		&i.SessionID,
@@ -356,11 +329,11 @@ func (q *Queries) GetActiveAgentSwitch(ctx context.Context, sessionID domain.Ses
 		&i.TargetRuntimeHandleID,
 		&i.TargetAcknowledgedAt,
 		&i.ErrorCode,
-		&i.FailurePoint,
 		&i.RequestedAt,
 		&i.UpdatedAt,
 		&i.FinalHandoffPath,
 		&i.FinalHandoffHash,
+		&i.FailurePoint,
 	)
 	return i, err
 }
@@ -397,43 +370,16 @@ SELECT id, session_id, idempotency_key, request_fingerprint,
     state, agent_handoff_status, source_transcript_status, semantic_handoff_included,
     agent_handoff_path, agent_handoff_hash,
     source_generation_id, target_generation_id, target_runtime_handle_id,
-    target_acknowledged_at, error_code, failure_point,
+    target_acknowledged_at, error_code,
     requested_at, updated_at,
-    final_handoff_path, final_handoff_hash
+    final_handoff_path, final_handoff_hash, failure_point
 FROM agent_switches
 WHERE id = ?
 `
 
-type GetAgentSwitchRow struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
-	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
-	AgentHandoffPath        string
-	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
-	TargetRuntimeHandleID   string
-	TargetAcknowledgedAt    sql.NullTime
-	ErrorCode               string
-	FailurePoint            string
-	RequestedAt             time.Time
-	UpdatedAt               time.Time
-	FinalHandoffPath        string
-	FinalHandoffHash        string
-}
-
-func (q *Queries) GetAgentSwitch(ctx context.Context, id domain.AgentSwitchID) (GetAgentSwitchRow, error) {
+func (q *Queries) GetAgentSwitch(ctx context.Context, id domain.AgentSwitchID) (AgentSwitch, error) {
 	row := q.db.QueryRowContext(ctx, getAgentSwitch, id)
-	var i GetAgentSwitchRow
+	var i AgentSwitch
 	err := row.Scan(
 		&i.ID,
 		&i.SessionID,
@@ -454,11 +400,11 @@ func (q *Queries) GetAgentSwitch(ctx context.Context, id domain.AgentSwitchID) (
 		&i.TargetRuntimeHandleID,
 		&i.TargetAcknowledgedAt,
 		&i.ErrorCode,
-		&i.FailurePoint,
 		&i.RequestedAt,
 		&i.UpdatedAt,
 		&i.FinalHandoffPath,
 		&i.FinalHandoffHash,
+		&i.FailurePoint,
 	)
 	return i, err
 }
@@ -470,9 +416,9 @@ SELECT id, session_id, idempotency_key, request_fingerprint,
     state, agent_handoff_status, source_transcript_status, semantic_handoff_included,
     agent_handoff_path, agent_handoff_hash,
     source_generation_id, target_generation_id, target_runtime_handle_id,
-    target_acknowledged_at, error_code, failure_point,
+    target_acknowledged_at, error_code,
     requested_at, updated_at,
-    final_handoff_path, final_handoff_hash
+    final_handoff_path, final_handoff_hash, failure_point
 FROM agent_switches
 WHERE session_id = ? AND idempotency_key = ?
 `
@@ -482,36 +428,9 @@ type GetAgentSwitchByIdempotencyKeyParams struct {
 	IdempotencyKey string
 }
 
-type GetAgentSwitchByIdempotencyKeyRow struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
-	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
-	AgentHandoffPath        string
-	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
-	TargetRuntimeHandleID   string
-	TargetAcknowledgedAt    sql.NullTime
-	ErrorCode               string
-	FailurePoint            string
-	RequestedAt             time.Time
-	UpdatedAt               time.Time
-	FinalHandoffPath        string
-	FinalHandoffHash        string
-}
-
-func (q *Queries) GetAgentSwitchByIdempotencyKey(ctx context.Context, arg GetAgentSwitchByIdempotencyKeyParams) (GetAgentSwitchByIdempotencyKeyRow, error) {
+func (q *Queries) GetAgentSwitchByIdempotencyKey(ctx context.Context, arg GetAgentSwitchByIdempotencyKeyParams) (AgentSwitch, error) {
 	row := q.db.QueryRowContext(ctx, getAgentSwitchByIdempotencyKey, arg.SessionID, arg.IdempotencyKey)
-	var i GetAgentSwitchByIdempotencyKeyRow
+	var i AgentSwitch
 	err := row.Scan(
 		&i.ID,
 		&i.SessionID,
@@ -532,11 +451,11 @@ func (q *Queries) GetAgentSwitchByIdempotencyKey(ctx context.Context, arg GetAge
 		&i.TargetRuntimeHandleID,
 		&i.TargetAcknowledgedAt,
 		&i.ErrorCode,
-		&i.FailurePoint,
 		&i.RequestedAt,
 		&i.UpdatedAt,
 		&i.FinalHandoffPath,
 		&i.FinalHandoffHash,
+		&i.FailurePoint,
 	)
 	return i, err
 }
@@ -666,48 +585,21 @@ SELECT id, session_id, idempotency_key, request_fingerprint,
        agent_handoff_path, agent_handoff_hash,
        source_generation_id, target_generation_id,
        target_runtime_handle_id, target_acknowledged_at,
-       error_code, failure_point, requested_at, updated_at,
-       final_handoff_path, final_handoff_hash
+       error_code, requested_at, updated_at,
+       final_handoff_path, final_handoff_hash, failure_point
 FROM agent_switches
 WHERE state NOT IN ('completed', 'failed')
 `
 
-type ListActiveAgentSwitchesRow struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
-	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
-	AgentHandoffPath        string
-	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
-	TargetRuntimeHandleID   string
-	TargetAcknowledgedAt    sql.NullTime
-	ErrorCode               string
-	FailurePoint            string
-	RequestedAt             time.Time
-	UpdatedAt               time.Time
-	FinalHandoffPath        string
-	FinalHandoffHash        string
-}
-
-func (q *Queries) ListActiveAgentSwitches(ctx context.Context) ([]ListActiveAgentSwitchesRow, error) {
+func (q *Queries) ListActiveAgentSwitches(ctx context.Context) ([]AgentSwitch, error) {
 	rows, err := q.db.QueryContext(ctx, listActiveAgentSwitches)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListActiveAgentSwitchesRow{}
+	items := []AgentSwitch{}
 	for rows.Next() {
-		var i ListActiveAgentSwitchesRow
+		var i AgentSwitch
 		if err := rows.Scan(
 			&i.ID,
 			&i.SessionID,
@@ -728,11 +620,11 @@ func (q *Queries) ListActiveAgentSwitches(ctx context.Context) ([]ListActiveAgen
 			&i.TargetRuntimeHandleID,
 			&i.TargetAcknowledgedAt,
 			&i.ErrorCode,
-			&i.FailurePoint,
 			&i.RequestedAt,
 			&i.UpdatedAt,
 			&i.FinalHandoffPath,
 			&i.FinalHandoffHash,
+			&i.FailurePoint,
 		); err != nil {
 			return nil, err
 		}
@@ -796,50 +688,23 @@ SELECT id, session_id, idempotency_key, request_fingerprint,
     state, agent_handoff_status, source_transcript_status, semantic_handoff_included,
     agent_handoff_path, agent_handoff_hash,
     source_generation_id, target_generation_id, target_runtime_handle_id,
-    target_acknowledged_at, error_code, failure_point,
+    target_acknowledged_at, error_code,
     requested_at, updated_at,
-    final_handoff_path, final_handoff_hash
+    final_handoff_path, final_handoff_hash, failure_point
 FROM agent_switches
 WHERE session_id = ?
 ORDER BY requested_at DESC, id DESC
 `
 
-type ListAgentSwitchesRow struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
-	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
-	AgentHandoffPath        string
-	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
-	TargetRuntimeHandleID   string
-	TargetAcknowledgedAt    sql.NullTime
-	ErrorCode               string
-	FailurePoint            string
-	RequestedAt             time.Time
-	UpdatedAt               time.Time
-	FinalHandoffPath        string
-	FinalHandoffHash        string
-}
-
-func (q *Queries) ListAgentSwitches(ctx context.Context, sessionID domain.SessionID) ([]ListAgentSwitchesRow, error) {
+func (q *Queries) ListAgentSwitches(ctx context.Context, sessionID domain.SessionID) ([]AgentSwitch, error) {
 	rows, err := q.db.QueryContext(ctx, listAgentSwitches, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListAgentSwitchesRow{}
+	items := []AgentSwitch{}
 	for rows.Next() {
-		var i ListAgentSwitchesRow
+		var i AgentSwitch
 		if err := rows.Scan(
 			&i.ID,
 			&i.SessionID,
@@ -860,11 +725,11 @@ func (q *Queries) ListAgentSwitches(ctx context.Context, sessionID domain.Sessio
 			&i.TargetRuntimeHandleID,
 			&i.TargetAcknowledgedAt,
 			&i.ErrorCode,
-			&i.FailurePoint,
 			&i.RequestedAt,
 			&i.UpdatedAt,
 			&i.FinalHandoffPath,
 			&i.FinalHandoffHash,
+			&i.FailurePoint,
 		); err != nil {
 			return nil, err
 		}
