@@ -510,16 +510,15 @@ test("does not claim unavailability while the connector is merely starting", asy
 	await waitFor(() => expect(screen.queryByTestId("mobile-remote-unavailable")).toBeNull());
 });
 
-// The install offer belongs with the caveat: the user learns that remote access
-// is unavailable and can act on it in the same place, rather than being told to
-// go and find a terminal.
-test("offers to install the connector when it is missing", async () => {
+// Hosted AO retains authenticated LAN pairing without a production connector installer.
+test("keeps LAN pairing available without a cloudflared installer", async () => {
 	mobileStatus.tunnel = {
 		supported: false, running: false, ready: false, hostname: "", location: "", lastError: "",
 	};
 	renderMobileSettings();
 
-	expect(await screen.findByTestId("mobile-install-cloudflared")).toBeInTheDocument();
+	await screen.findByTestId("mobile-remote-unavailable");
+	expect(screen.queryByTestId("mobile-install-cloudflared")).toBeNull();
 });
 
 test("does not offer an install when a connector already exists", async () => {

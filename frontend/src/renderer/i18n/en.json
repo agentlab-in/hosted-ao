@@ -478,6 +478,7 @@
   "mobile.loadFailed": "Failed to load mobile status.",
   "mobile.noPairingHost": "No network address found for this computer. Connect to Wi-Fi or Ethernet, or set up Tailscale.",
   "mobile.tunnelStarting": "Preparing remote access, 30-60 seconds",
+  "mobile.hostedNetworkOnly": "Hosted AO supports mobile access on your home network only.",
   "mobile.remoteAccessUnavailable": "Works on this network only, cloudflared isn't installed, so this machine can't be reached from elsewhere.",
   "mobile.installConnector": "Install cloudflared",
   "mobile.installingConnector": "Installing cloudflared…",

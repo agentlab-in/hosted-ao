@@ -12,7 +12,6 @@ import { reasonMessage, type SetupMode } from "./ConnectMobileSetup";
 import { StyledQRCode } from "./StyledQRCode";
 import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
-import { InstallCloudflared } from "./InstallCloudflared";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
@@ -283,14 +282,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onError: () => setOptimisticEnabled(null),
 	});
 
-	const startRemoteAccess = useMutation({
-		mutationFn: async () => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		onSuccess: invalidate,
-	});
 
 	const regenerate = useMutation({
 		mutationFn: async () => {
@@ -361,14 +352,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
 	const busy =
 		enable.isPending ||
-		startRemoteAccess.isPending ||
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending;
 
 	const clearActionErrors = () => {
 		enable.reset();
-		startRemoteAccess.reset();
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
@@ -402,7 +391,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const actionError =
 		(enable.error instanceof Error && enable.error.message) ||
-		(startRemoteAccess.error instanceof Error && startRemoteAccess.error.message) ||
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
@@ -571,15 +559,10 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<div className="mt-3">
 							<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
 								{t(
-									"mobile.remoteAccessUnavailable",
-									"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
+									"mobile.hostedNetworkOnly",
+									"Hosted AO supports mobile access on your home network only.",
 								)}
 							</p>
-							{/* Deliberately not enable(): that mints a fresh password, so
-							    installing remote access would invalidate the phone the user
-							    had already paired. This re-checks for the binary and starts
-							    the connector, leaving the credential alone. */}
-							<InstallCloudflared onInstalled={() => void startRemoteAccess.mutate()} />
 						</div>
 					)}
 					{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
