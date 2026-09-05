@@ -60,6 +60,7 @@ var blockedAPIPrefixes = []string{
 	"/api/v1/agents/codex",
 	"/api/v1/agents/installers",
 	"/api/v1/agents/install-jobs",
+	"/api/v1/agents/readiness/ensure",
 	"/api/v1/desktop",
 }
 

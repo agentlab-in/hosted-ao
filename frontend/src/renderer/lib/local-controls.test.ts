@@ -53,3 +53,16 @@ it("allows credential queries on the selected local daemon without a gateway bea
   expect(fetch).toHaveBeenCalledOnce();
   expect(token).not.toHaveBeenCalled();
 });
+
+
+it("keeps launch readiness local because it can refresh account credentials", async () => {
+  const result = await apiClient.POST("/api/v1/agents/readiness/ensure", {
+    body: { agentIds: [], purpose: "launch" },
+  });
+  expect(result.response.status).toBe(403);
+  expect(token).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  await apiClient.GET("/api/v1/agents/readiness");
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(token).toHaveBeenCalledOnce();
+});

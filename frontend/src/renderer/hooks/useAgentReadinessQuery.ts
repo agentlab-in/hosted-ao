@@ -22,6 +22,10 @@ export async function ensureAgentReadiness(
 	const { data, error } = await apiClient.POST("/api/v1/agents/readiness/ensure", {
 		body: { agentIds, purpose },
 	});
+	// The remote client guard rejects this credential-refreshing operation before
+	// bearer acquisition or fetch. Cached diagnostics remain useful remotely;
+	// actual session launch performs its own authoritative validation.
+	if (error?.code === "local_machine_required") return fetchAgentReadiness();
 	if (error) throw new Error(apiErrorMessage(error));
 	return data as AgentReadiness;
 }

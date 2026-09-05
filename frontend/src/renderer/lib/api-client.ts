@@ -325,6 +325,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
   const controlPath = new URL(input.url).pathname;
   const localControl =
     /^\/api\/v1\/agents\/codex(?:\/|$)/.test(controlPath) ||
+    /^\/api\/v1\/agents\/readiness\/ensure(?:\/|$)/.test(controlPath) ||
     /^\/api\/v1\/agents\/(?:installers|install-jobs)(?:\/|$)/.test(controlPath) ||
     /^\/api\/v1\/agents\/[^/]+\/(?:install|verify)(?:\/|$)/.test(controlPath) ||
     /^\/api\/v1\/(?:system\/install|desktop)(?:\/|$)/.test(controlPath) ||

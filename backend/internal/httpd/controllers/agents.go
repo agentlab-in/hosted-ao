@@ -106,6 +106,11 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 		envelope.WriteError(w, r, err)
 		return
 	}
+	// Discovery and persisted cache warnings can contain local config paths or
+	// provider diagnostics. Keep those details behind the HTTP boundary.
+	if catalog.Warning != "" {
+		catalog.Warning = "Some model catalog information is unavailable."
+	}
 	envelope.WriteJSON(w, http.StatusOK, catalog)
 }
 

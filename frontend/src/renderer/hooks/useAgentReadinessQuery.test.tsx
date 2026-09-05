@@ -16,6 +16,7 @@ vi.mock("../lib/api-client", () => ({
 
 import {
 	agentReadinessQueryOptions,
+	ensureAgentReadiness,
 	agentReadinessQueryKey,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
@@ -79,4 +80,12 @@ describe("agent readiness query", () => {
 			agents: [claude, freshCodex],
 		});
 	});
+});
+
+
+it("uses cached diagnostics when the remote client refuses credential-refreshing ensure", async () => {
+	postMock.mockResolvedValue({ error: { code: "local_machine_required" } });
+	const result = await ensureAgentReadiness([], "launch");
+	expect(getMock).toHaveBeenCalledWith("/api/v1/agents/readiness");
+	expect(result.agents[0]?.id).toBe("codex");
 });
