@@ -1,6 +1,6 @@
 // Pure failure-to-copy mapping for pairing and manual connect. Free of React
 // Native / Expo imports (and of `api.ts`, which pulls in AsyncStorage via
-// `config.ts`) so it can be unit-tested directly — mirroring `pushStatus.ts`.
+// `config.ts`) so it can be unit-tested directly; mirroring `pushStatus.ts`.
 //
 // The guiding rule, same as `classifyServerFailure`: reaching the server and
 // being rejected by it is not the same as never reaching it. Telling someone
@@ -8,10 +8,14 @@
 // debug the wrong thing.
 
 export type ConnectionFailure =
+	| "v2-unavailable"
+	| "verify-failed"
 	| "not-ao-qr" // the scanned code wasn't an AO pairing payload
+	| "outdated-desktop" // a v1 code: AO on the computer is too old to pair with
+	| "tunnel-rotated" // nothing answered, and the only remote path was a tunnel
 	| "unreachable" // nothing answered (DNS failure, refused, timeout)
-	| "auth" // 401/403 — the password is wrong or was rotated
-	| "rate-limited" // 429 — the daemon's failed-attempt lockout
+	| "auth" // 401/403; the password is wrong or was rotated
+	| "rate-limited" // 429; the daemon's failed-attempt lockout
 	| "server-error"; // answered, but with some other error status
 
 /**
@@ -30,7 +34,7 @@ export function classifyConnectionFailure(status: number | undefined): Connectio
  *
  * Rejection is not the same as failure. A wrong or rotated password will be
  * wrong on the next tick too, and the daemon locks a device out for a minute
- * after five failed auths — so polling into a 401 walks the phone into a
+ * after five failed auths; so polling into a 401 walks the phone into a
  * lockout that then blocks the pairing scan meant to fix it. A 429 says that
  * has already started. Everything else (unreachable, 5xx) is transient by
  * nature, so the poll keeps going and recovers on its own.
@@ -46,7 +50,7 @@ export function shouldKeepPolling(status: number | undefined): boolean {
 }
 
 /**
- * True for addresses on the phone's own LAN — the ones iOS gates behind the
+ * True for addresses on the phone's own LAN; the ones iOS gates behind the
  * Local Network permission prompt.
  *
  * Tailscale's 100.64/10 CGNAT range is deliberately excluded: it rides a VPN
@@ -105,6 +109,32 @@ export function describeConnectionFailure(
 		reason === "unreachable" && target.platform === "ios" && isLocalNetworkHost(target.host);
 
 	switch (reason) {
+		case "verify-failed":
+			return {
+				title: "Could not verify this connection",
+				message: "Check the address and connection password in Connect Mobile, then try again on your trusted home network or Tailscale.",
+				showLocalNetworkHint: false,
+			};
+		case "v2-unavailable":
+			return {
+				title: "QR v2 pairing is unavailable",
+				message: "QR v2 pairing is unavailable in this build. Use a compatible desktop's v1 QR code or Connect manually on your trusted home network or Tailscale.",
+				showLocalNetworkHint: false,
+			};
+		case "tunnel-rotated":
+			return {
+				title: "This machine's remote address changed",
+				message:
+					"AO on your computer restarted, which gives it a new address. Open Settings \u2192 Connect Mobile there and scan the code again.",
+				showLocalNetworkHint: false,
+			};
+		case "outdated-desktop":
+			return {
+				title: "Update AO on your computer",
+				message:
+					"That code was made by an older version of AO. Update the desktop app, then generate a new code.",
+				showLocalNetworkHint: false,
+			};
 		case "not-ao-qr":
 			return {
 				title: "Not an AO pairing code",
@@ -125,8 +155,8 @@ export function describeConnectionFailure(
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
-				title: "Your desktop rejected the password",
-				message: "That password was rotated. Re-scan the code on your computer.",
+				title: "Check the connection password",
+				message: "Enter the connection password from Connect Mobile, or scan a compatible v1 QR code.",
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
@@ -137,7 +167,7 @@ export function describeConnectionFailure(
 				title: "Too many attempts",
 				message:
 					"Your computer locked this device out after too many failed attempts. " +
-					"It clears on its own in about a minute — check the password, then try again.",
+					"It clears on its own in about a minute; check the password, then try again.",
 				showLocalNetworkHint: false,
 			};
 		case "server-error":

@@ -206,6 +206,10 @@ Rules:
 
 The current Hosted AO root is `~/.ao/hosted`, derived in Go by `config.StateRootSegments()` (`backend/internal/config/config.go`) and mirrored by `STATE_ROOT_SEGMENTS` (`frontend/src/shared/state-root.ts`). Existing defaults put `running.json` at the root and daemon data below `data`; explicit `AO_RUN_FILE` and `AO_DATA_DIR` overrides continue to win. Electron pins `userData` below this root rather than using OS application-data defaults.
 
+Runtime override precedence is shared by daemon state, HAO, Electron and ACP: the parent of normalized `AO_RUN_FILE` wins, otherwise the parent of normalized `AO_DATA_DIR`, otherwise `~/.ao/hosted`. Relative overrides resolve against the launch working directory. Explicit data and run-file paths remain independent; unspecified paths resolve as `<runtime-root>/data` and `<runtime-root>/running.json`.
+
+Persistent gateway identity is a deliberate exception. `machine.json`, the pair certificate/private key, and the pair passcode store keep their existing `DefaultStateDir()` fallbacks used by `setup-vm`, even when either runtime override is set. `AO_MACHINE_FILE` and explicit gateway certificate/passcode overrides still win. Runtime overrides never move, copy, regenerate or select a new gateway identity. Any future identity-root migration requires an explicit atomic migration and compatibility design that preserves fingerprint pins.
+
 V1 should keep this root to avoid breaking installations. Proposed additions are:
 
 ```text

@@ -1,4 +1,4 @@
-import { STATE_ROOT_SEGMENTS } from "./state-root";
+import { resolveRuntimePaths } from "./state-root";
 
 export type DaemonLaunchSpec = {
 	command: string;
@@ -23,6 +23,7 @@ export function resolveDaemonLaunch(
 	appPath: string,
 	homeDir: string,
 	platform: NodeJS.Platform,
+	launchWorkingDirectory = process.cwd(),
 ): DaemonLaunchSpec | null {
 	const configuredCommand = env.AO_DAEMON_COMMAND?.trim();
 	if (configuredCommand) {
@@ -57,7 +58,7 @@ export function resolveDaemonLaunch(
 	return {
 		command: joinPath(resourcesPath, "daemon", bundledDaemonBinaryName(platform)),
 		args: ["daemon"],
-		cwd: joinPath(homeDir, ...STATE_ROOT_SEGMENTS),
+		cwd: resolveRuntimePaths(env, homeDir, launchWorkingDirectory, platform).stateRoot,
 		shell: false,
 		source: "bundled",
 	};

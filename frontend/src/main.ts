@@ -33,7 +33,13 @@ import {
   listFeatureBuilds,
   getActiveFeatureBuild,
 } from "./main/feature-builds";
-import { initMainSentry } from "./main/sentry-main";
+import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
+import {
+  TelemetryPolicyAuthority,
+} from "./main/telemetry-policy-file";
+import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
+import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
+import { AgentSwitchVisibilityController } from "./main/agent-switch-observability";
 import {
   readUpdateSettings,
   type UpdateSettings,
@@ -91,10 +97,9 @@ import {
 } from "./shared/daemon-launch";
 import {
   createListenPortScanner,
-  defaultRunFilePath,
   parseRunFile,
 } from "./shared/daemon-discovery";
-import { STATE_ROOT_SEGMENTS } from "./shared/state-root";
+import { STATE_ROOT_SEGMENTS, resolveRuntimePaths } from "./shared/state-root";
 import type { DaemonStatus } from "./shared/daemon-status";
 import {
   refreshSlowDaemonStartupDetails,
@@ -126,9 +131,16 @@ import {
 } from "./shared/daemon-takeover";
 import {
   buildDaemonEnv,
+  devDaemonAllowedOrigins,
   resolveShellEnv,
+  resolveShellEnvWithSpec,
+  resolveWindowsShellProbe,
   type ShellRunner,
 } from "./shared/shell-env";
+import {
+  DEFAULT_TERMINAL_SHELL,
+  type TerminalShellPreference,
+} from "./shared/ui-locale";
 import {
   bundledTmuxBinaryPath,
   stableBundledTmuxBinaryPath,
@@ -139,6 +151,7 @@ import {
   registerCloudProtocol,
   showCloudSignInFailure,
 } from "./main/cloud-auth";
+import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { CLOUD_SIGN_IN_ENABLED } from "./shared/cloud-pin";
 import {
   DEFAULT_POSTHOG_HOST,
@@ -146,11 +159,31 @@ import {
 } from "./shared/posthog-config";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_SENTRY_DSN } from "./shared/sentry-config";
-import { buildTelemetryBootstrap } from "./shared/telemetry";
+import {
+  buildTelemetryBootstrap,
+  rendererTelemetryEnabled,
+} from "./shared/telemetry";
+import {
+  TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
+  TELEMETRY_POLICY_CHANGED_CHANNEL,
+  TELEMETRY_RENDERER_QUEUES_CLEARED_CHANNEL,
+  type RendererTelemetryCapture,
+  type TelemetryPolicyView,
+} from "./shared/telemetry-policy";
 import {
   createBrowserViewHost,
+  shouldHandleAppShortcutInBrowserContext,
   type BrowserViewHost,
 } from "./main/browser-view-host";
+import { createBrowserProfileStore } from "./main/browser-profile-store";
+import { BrowserHistoryStore } from "./main/browser-history-store";
+import { BrowserProfileImportService } from "./main/browser-profile-import";
+import {
+  registerBrowserProfileIpc,
+  type BrowserProfileIpc,
+  type BrowserProfileMenuItem,
+} from "./main/browser-profile-ipc";
+import type { BrowserProfileMenuInput } from "./shared/browser-profiles";
 import {
   createWindowComposition,
   type WindowComposition,
@@ -204,9 +237,11 @@ import { persistSelectedDaemonTerminalTheme } from "./main/terminal-theme";
 import { LOCAL_MACHINE_ID } from "./shared/ao-machines";
 import {
   ancestorRepositorySetupWarning,
+  resolveCheckedOutBranch,
   scanImportFolder,
 } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
+import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -241,7 +276,7 @@ if (process.platform === "win32") {
 // bundled SwiftShader. There is no window yet when the crashes happen, so an
 // in-app setting is unreachable and an env var is the only knob that works.
 // Truthy allowlist mirrors keepDaemonAlive() so "off"/"no" cannot accidentally
-// turn the GPU off. Must run before app ready — the call throws after that.
+// turn the GPU off. Must run before app ready, the call throws after that.
 const disableGpu = process.env.AO_DISABLE_GPU?.trim().toLowerCase();
 if (
   disableGpu === "1" ||
@@ -252,38 +287,84 @@ if (
   app.disableHardwareAcceleration();
 }
 
-// Pin ALL Electron-owned state (Chromium cache, cookies, local/session storage,
-// crash dumps) under the canonical hosted-ao state root at ~/.ao/hosted instead
-// of Electron's macOS default ~/Library/Application Support/<name>. Keeps the
-// app's entire footprint alongside the daemon's data dir and running.json, one
-// level down from ~/.ao so it does not collide with the upstream
-// agent-orchestrator app's own state there. sessionData and crashDumps derive
-// from userData, so this one override reparents them all.
-// Must run before app ready.
-// Dev runs get their own profile under the same hosted state root: the packaged
-// app keeps this directory open, and two Chromium instances sharing one profile
-// corrupt its LevelDB stores. Mirrors how dev already isolates running.json and
-// the daemon data dir into ~/.ao/hosted/dev. DEV_STATE_SUBDIR ("dev") is defined
-// here (rather than near its other uses below) because it is needed before app
-// ready.
-const DEV_STATE_SUBDIR = "dev"; // ~/.ao/hosted/dev/
-app.setPath(
-  "userData",
-  app.isPackaged
-    ? path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "electron")
-    : path.join(
-        os.homedir(),
-        ...STATE_ROOT_SEGMENTS,
-        DEV_STATE_SUBDIR,
-        "electron",
-      ),
-);
+// Resolve once at process launch. Explicit paths survive child cwd changes.
+// Pin Electron state before ready; never use the OS app-data default.
+const desktopLaunchWorkingDirectory = process.cwd();
+const desktopPaths = resolveRuntimePaths(process.env, os.homedir(), desktopLaunchWorkingDirectory, process.platform, !app.isPackaged);
+const desktopDataDir = desktopPaths.dataDir;
+const DEV_STATE_SUBDIR = "dev"; // Existing browser runtime namespace; excluded from this audit.
+app.setPath("userData", desktopPaths.userData);
 
-// Init main-process Sentry as early as possible so startup crashes are caught,
-// and after userData is pinned so its cache resolves under ~/.ao/electron. The
-// renderer SDK forwards over IPC to this main process, so this is required for
-// any desktop event to upload. No-op unless AO_SENTRY_DSN is set.
-void initMainSentry(app.getVersion());
+let telemetryPolicyController: DesktopTelemetryController | null = null;
+let agentSwitchVisibilityController: AgentSwitchVisibilityController | null =
+  null;
+const trustedShellWebContents = new Map<number, WebContents>();
+const pendingRendererQueuePurges = new Map<
+  string,
+  {
+    senderId: number;
+    contents: WebContents;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+    onDestroyed: () => void;
+  }
+>();
+
+function finishRendererQueuePurge(requestId: string, error?: Error): void {
+  const pending = pendingRendererQueuePurges.get(requestId);
+  if (!pending) return;
+  pendingRendererQueuePurges.delete(requestId);
+  clearTimeout(pending.timeout);
+  pending.contents.removeListener("destroyed", pending.onDestroyed);
+  if (error) pending.reject(error);
+  else pending.resolve();
+}
+
+function requestRendererQueuePurge(contents: WebContents): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const requestId = randomUUID();
+    const onDestroyed = () =>
+      finishRendererQueuePurge(
+        requestId,
+        new Error("renderer destroyed before telemetry queue purge"),
+      );
+    const timeout = setTimeout(
+      () =>
+        finishRendererQueuePurge(
+          requestId,
+          new Error("renderer telemetry queue purge timed out"),
+        ),
+      5_000,
+    );
+    pendingRendererQueuePurges.set(requestId, {
+      senderId: contents.id,
+      contents,
+      resolve,
+      reject,
+      timeout,
+      onDestroyed,
+    });
+    contents.once("destroyed", onDestroyed);
+    try {
+      contents.send(TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL, { requestId });
+    } catch (error) {
+      finishRendererQueuePurge(
+        requestId,
+        error instanceof Error
+          ? error
+          : new Error("renderer telemetry queue purge failed"),
+      );
+    }
+  });
+}
+
+async function clearRendererTelemetryQueues(): Promise<void> {
+  const liveShells = [...trustedShellWebContents.values()].filter(
+    (contents) => !contents.isDestroyed(),
+  );
+  await Promise.all(liveShells.map(requestRendererQueuePurge));
+}
 
 let mainWindow: BaseWindow | null = null;
 let trayController: TrayController | null = null;
@@ -298,7 +379,7 @@ const trayLifecycle = createTrayLifecycle({
 const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // Folder path from a cold-start launch (icon/shortcut drop while not running)
 // whose renderer isn't mounted yet. Flushed once the shell signals readiness
-// via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
+// via TRAY_RENDERER_READY_CHANNEL, see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
@@ -318,6 +399,8 @@ let daemonStatus: DaemonStatus = remoteDaemonLifecycle.currentStatus() ?? {
 };
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
+let browserProfileIpc: BrowserProfileIpc | null = null;
+let browserProfileImporter: BrowserProfileImportService | null = null;
 let windowComposition: WindowComposition | null = null;
 const browserCleanupPromises = new Set<Promise<void>>();
 let browserQuitCleanupPromise: Promise<void> | null = null;
@@ -376,26 +459,23 @@ function syncNativeWindowBackground(): void {
 }
 
 function resolvedDaemonDataDir(): string {
-	const override = process.env.AO_DATA_DIR?.trim();
-	if (override) return override;
-	if (isDev) return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR, "data");
-	return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "data");
+  return desktopDataDir;
 }
 
 // Cursor Agent reads TERM_THEME at process start. The daemon applies it from
 // this file when spawning a PTY. The renderer writes the resolved light/dark
 // scheme here so it matches the xterm palette (not Electron nativeTheme alone).
 function persistLocalTerminalThemeHint(scheme: "light" | "dark"): void {
-	const dir = resolvedDaemonDataDir();
-	try {
-		mkdirSync(dir, { recursive: true, mode: 0o750 });
-		const target = path.join(dir, "terminal-theme");
-		const temporary = `${target}.${process.pid}.tmp`;
-		writeFileSync(temporary, `${scheme}\n`, { mode: 0o600 });
-		renameSync(temporary, target);
-	} catch (error) {
-		console.warn("AO: unable to persist terminal theme hint", error);
-	}
+  const dir = resolvedDaemonDataDir();
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o750 });
+    const target = path.join(dir, "terminal-theme");
+    const temporary = `${target}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${scheme}\n`, { mode: 0o600 });
+    renameSync(temporary, target);
+  } catch (error) {
+    console.warn("AO: unable to persist terminal theme hint", error);
+  }
 }
 
 nativeTheme.on("updated", syncNativeWindowBackground);
@@ -583,9 +663,17 @@ function buildMacAppMenu(): Menu {
 async function disposeBrowserViewHost(): Promise<void> {
   const host = browserViewHost;
   browserViewHost = null;
-  if (!host) return;
+  const profileIpc = browserProfileIpc;
+  browserProfileIpc = null;
+  profileIpc?.dispose();
+  const profileImporter = browserProfileImporter;
+  browserProfileImporter = null;
+  if (!host && !profileImporter) return;
   const cleanup = Promise.resolve()
-    .then(() => host.dispose())
+    .then(async () => {
+      await profileImporter?.dispose();
+      await host?.dispose();
+    })
     .catch((error) => {
       console.error("browser host cleanup failed:", error);
     });
@@ -595,6 +683,23 @@ async function disposeBrowserViewHost(): Promise<void> {
     () => browserCleanupPromises.delete(cleanup),
   );
   await cleanup;
+}
+
+function browserProfileStateDir(): string {
+  const runFile = runFilePath();
+  return path.dirname(
+    runFile ?? path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "running.json"),
+  );
+}
+
+async function clearElectronBrowserProfileData(
+  partition: string,
+): Promise<void> {
+  const browserSession = session.fromPartition(partition);
+  await Promise.all([
+    browserSession.clearStorageData(),
+    browserSession.clearCache(),
+  ]);
 }
 
 async function disposeAllBrowserViewHosts(): Promise<void> {
@@ -628,6 +733,19 @@ async function createWindowInternal(): Promise<void> {
     await agentBrowserRuntime.dispose();
     return;
   }
+  const browserProfileStore = await createBrowserProfileStore({
+    stateDir: browserProfileStateDir(),
+  });
+  const browserHistoryStore = new BrowserHistoryStore({
+    stateDir: browserProfileStateDir(),
+  });
+  const profileImporter = new BrowserProfileImportService({
+    stateDir: browserProfileStateDir(),
+    profileStore: browserProfileStore,
+    historyStore: browserHistoryStore,
+    fromPartition: (partition) => session.fromPartition(partition),
+  });
+  await profileImporter.initialize();
   const windowOptions: Electron.BaseWindowConstructorOptions = {
     width: 1320,
     height: 860,
@@ -648,7 +766,7 @@ async function createWindowInternal(): Promise<void> {
         }
       : {
           titleBarStyle: "hiddenInset" as const,
-          // Fixed natural titlebar position — never moved on sidebar toggle.
+          // Fixed natural titlebar position, never moved on sidebar toggle.
           trafficLightPosition: {
             x: MAC_WINDOW_BUTTON_X,
             y: MAC_WINDOW_BUTTON_Y,
@@ -666,6 +784,12 @@ async function createWindowInternal(): Promise<void> {
   const shellWebContents = getShellWebContents();
   if (!shellWebContents)
     throw new Error("AO shell WebContents was not created");
+  trustedShellWebContents.set(shellWebContents.id, shellWebContents);
+  agentSwitchVisibilityController?.registerWindow(shellWebContents.id);
+  shellWebContents.once("destroyed", () => {
+    trustedShellWebContents.delete(shellWebContents.id);
+    agentSwitchVisibilityController?.destroyWindow(shellWebContents.id);
+  });
 
   // On Windows the app paints its own title bar (WindowTitlebar), so the native
   // menu bar is hidden (autoHideMenuBar above). The role-based menu is still
@@ -698,7 +822,7 @@ async function createWindowInternal(): Promise<void> {
   });
 
   // Application shortcuts are handled here so they fire no matter which web
-  // contents holds focus — the shell renderer, xterm's helper textarea, or a
+  // contents holds focus, the shell renderer, xterm's helper textarea, or a
   // browser-preview view (wired per-view in the browser host).
   const isMac = process.platform === "darwin";
   attachAppShortcuts(
@@ -708,7 +832,9 @@ async function createWindowInternal(): Promise<void> {
     false,
     () => keybindingOverrides,
     () => keybindingRecordingActive,
-    () => true,
+    (id, chord) =>
+      !browserViewHost?.isLastUsedBrowser() ||
+      shouldHandleAppShortcutInBrowserContext(id, chord, isMac),
     (id) => {
       if (id !== "toggle-browser-devtools") return;
       void browserViewHost
@@ -732,6 +858,38 @@ async function createWindowInternal(): Promise<void> {
     agentBrowserRuntime,
     isCloseShellTerminalShortcutEnabled: () =>
       closeShellTerminalShortcutEnabled,
+    browserProfileStore,
+    browserHistoryStore,
+    clearBrowserProfileData: clearElectronBrowserProfileData,
+  });
+  browserProfileImporter = profileImporter;
+  browserProfileIpc = registerBrowserProfileIpc({
+    ipcMain,
+    shellWebContents,
+    mainWindow,
+    store: browserProfileStore,
+    importer: profileImporter,
+    host: browserViewHost,
+    buildMenu: (items: BrowserProfileMenuItem[]) => {
+      const menu = Menu.buildFromTemplate(
+        items as Electron.MenuItemConstructorOptions[],
+      );
+      return {
+        popup: (options) => menu.popup(options as Electron.PopupOptions),
+      };
+    },
+    confirmSwitch: async (labels: BrowserProfileMenuInput["labels"]) => {
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: labels.switchTitle,
+        message: labels.switchMessage,
+        detail: labels.switchDetail,
+        buttons: [labels.cancel, labels.confirm],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      return result.response === 1;
+    },
   });
   if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
@@ -825,15 +983,7 @@ const RUN_FILE_FRESHNESS_SKEW_MS = 2_000;
 const DAEMON_PROBE_TIMEOUT_MS = 2_000;
 
 function runFilePath(): string | null {
-  if (process.env.AO_RUN_FILE) return process.env.AO_RUN_FILE;
-  if (isDev)
-    return path.join(
-      os.homedir(),
-      ...STATE_ROOT_SEGMENTS,
-      DEV_STATE_SUBDIR,
-      "running.json",
-    );
-  return defaultRunFilePath(process.platform, process.env, os.homedir());
+  return desktopPaths.runFile;
 }
 
 function editorStateDir(): string {
@@ -906,6 +1056,9 @@ const SHELL_ENV_TIMEOUT_MS = 3_000;
 let cachedShellEnv: Record<string, string> | null = null;
 // Memoize the in-flight resolution so concurrent/repeat awaits are cheap.
 let shellEnvPromise: Promise<void> | null = null;
+let terminalShellPreference: TerminalShellPreference = {
+  ...DEFAULT_TERMINAL_SHELL,
+};
 
 // Telemetry defaults stamped on the daemon env on every platform; explicit env
 // always wins.
@@ -985,12 +1138,57 @@ const runLoginShell: ShellRunner = (shellPath, args) =>
     });
   });
 
-// Resolve the login-shell env once and cache it. No-op on Windows (the launchd
-// shell split does not apply; a static PATH floor suffices). Awaited at the
-// daemon-spawn chokepoint so the cache is populated before the first spawn.
+function lookupWindowsExecutable(candidate: string): string | null {
+  const trimmed = candidate.trim().replace(/^"|"$/g, "");
+  if (!trimmed) return null;
+  const hasDirectory =
+    trimmed.includes("\\") || trimmed.includes("/") || path.isAbsolute(trimmed);
+  const candidates = hasDirectory
+    ? [trimmed]
+    : (process.env.PATH ?? process.env.Path ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((directory) => path.join(directory, trimmed));
+  for (const resolved of candidates) {
+    if (existsSync(resolved)) return resolved;
+  }
+  return null;
+}
+
+// Resolve the login-shell env once and cache it. On Windows the selected
+// terminal shell is used for the probe too, so shell profiles and PATH exports
+// stay consistent between standalone terminals and daemon startup.
 function ensureShellEnv(): Promise<void> {
-  if (process.platform === "win32") return Promise.resolve();
   if (!shellEnvPromise) {
+    if (process.platform === "win32") {
+      const probe =
+        resolveWindowsShellProbe(
+          terminalShellPreference,
+          process.env,
+          lookupWindowsExecutable,
+        ) ??
+        resolveWindowsShellProbe(
+          DEFAULT_TERMINAL_SHELL,
+          process.env,
+          lookupWindowsExecutable,
+        );
+      if (!probe) {
+        shellEnvPromise = Promise.resolve();
+        cachedShellEnv = null;
+        return shellEnvPromise;
+      }
+      shellEnvPromise = resolveShellEnvWithSpec(probe, runLoginShell).then(
+        (resolved) => {
+          cachedShellEnv = resolved;
+          if (!resolved) {
+            console.error(
+              "AO: could not read the login-shell environment; falling back to the process environment.",
+            );
+          }
+        },
+      );
+      return shellEnvPromise;
+    }
     shellEnvPromise = resolveShellEnv(process.env, runLoginShell).then(
       (resolved) => {
         cachedShellEnv = resolved;
@@ -1020,8 +1218,7 @@ async function ensureBundledTmuxStaged(): Promise<void> {
   );
   const destination = stableBundledTmuxBinaryPath(
     app.isPackaged,
-    process.env.AO_DATA_DIR?.trim() ||
-      path.join(os.homedir(), ...STATE_ROOT_SEGMENTS),
+    desktopPaths.stateRoot,
     app.getVersion(),
     process.platform,
     process.arch,
@@ -1065,6 +1262,8 @@ function daemonEnv(
   const bundledTmuxBinary = stagedBundledTmuxBinary;
   const ownerTag = {
     AO_OWNER,
+    AO_DATA_DIR: desktopDataDir,
+    AO_RUN_FILE: desktopPaths.runFile,
     AO_APP_RUN_ID: appRunId,
     // The browser runtime token is handed over through the child's private
     // stdin pipe below. Never put it in the daemon environment, where a
@@ -1088,24 +1287,21 @@ function daemonEnv(
       ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" }
       : {}),
   };
-  // In dev mode, inject isolation defaults so the dev daemon never collides with
-  // the installed app. User-set env vars take priority (checked first).
+  // Development keeps its isolated default root unless a state override is set.
   const devExtras: Record<string, string> = {};
   if (isDev) {
     if (!process.env.AO_PORT) devExtras.AO_PORT = String(DEV_DAEMON_PORT);
-    if (!process.env.AO_RUN_FILE) devExtras.AO_RUN_FILE = runFilePath() ?? "";
-    if (!process.env.AO_DATA_DIR)
-      devExtras.AO_DATA_DIR = path.join(
-        os.homedir(),
-        ...STATE_ROOT_SEGMENTS,
-        DEV_STATE_SUBDIR,
-        "data",
-      );
+    devExtras.AO_ALLOWED_ORIGINS = devDaemonAllowedOrigins(
+      process.env.AO_ALLOWED_ORIGINS,
+      rendererUrl(),
+    );
   }
-  // Windows keeps the old behavior exactly: no shell probe, no unix PATH floor.
+  // Windows keeps its native environment semantics while overlaying values
+  // exported by the selected login-shell probe.
   if (process.platform === "win32") {
     return {
       ...process.env,
+      ...(cachedShellEnv ?? {}),
       ...devExtras,
       ...telemetryOverrides(),
       ...ownerTag,
@@ -1381,6 +1577,7 @@ async function refreshLocalDaemonStatus(): Promise<DaemonStatus> {
     app.getAppPath(),
     os.homedir(),
     process.platform,
+    desktopLaunchWorkingDirectory,
   );
   if (!launch) return daemonStatus;
   const existing = await inspectExistingDaemon(launch);
@@ -1475,6 +1672,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     app.getAppPath(),
     os.homedir(),
     process.platform,
+    desktopLaunchWorkingDirectory,
   );
   if (!launch) {
     setDaemonStatus({
@@ -1519,11 +1717,11 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 
   // Defensive: inspectExistingDaemon only attaches when the run-file agrees with
   // a live daemon. Any divergence (missing/stale/unparseable run-file, dead PID,
-  // health.pid mismatch) makes it return null — yet a daemon may still be serving
+  // health.pid mismatch) makes it return null, yet a daemon may still be serving
   // the port. Spawning then would just make the Go child refuse and exit 1. Probe
   // the expected port directly, independent of the run-file, and attach if a
   // daemon answers. The expected port (AO_PORT or the default) is exactly the
-  // port the Go child would bind and collide on — probing a hardcoded 3001 would
+  // port the Go child would bind and collide on, probing a hardcoded 3001 would
   // miss an AO_PORT override.
   const directDaemon = await resolveDaemonFromPort({
     expectedPort: resolvedDaemonPort(),
@@ -1684,7 +1882,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
   // the whole group via killDaemon() reaches the daemon and any PTY children.
   //
   // AO_KEEP_DAEMON: the daemon must survive this app, so it cannot inherit
-  // Electron-owned stdout/stderr pipes — when Electron exits, the pipe read
+  // Electron-owned stdout/stderr pipes, when Electron exits, the pipe read
   // ends close and the daemon's next stderr log write (SIGPIPE/EPIPE) kills it,
   // defeating the keep-alive. Redirect stdio to ~/.ao/hosted/daemon.log and
   // unref the child so the parent does not wait on it. Port discovery then
@@ -1696,17 +1894,13 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     | "ignore"
     | ["pipe", number | "ignore", number | "ignore"] = "pipe";
   if (keep) {
-    const logPath = path.join(
-      os.homedir(),
-      ...STATE_ROOT_SEGMENTS,
-      "daemon.log",
-    );
+    const logPath = path.join(desktopPaths.stateRoot, "daemon.log");
     try {
       keepDaemonLogFd = openSync(logPath, "a");
       stdio = ["pipe", keepDaemonLogFd, keepDaemonLogFd];
     } catch {
       // Log redirect failed (e.g. ~/.ao not creatable, permission denied):
-      // fall back to "ignore" so the daemon still runs, but warn — otherwise
+      // fall back to "ignore" so the daemon still runs, but warn, otherwise
       // a long-lived keep-alive daemon would run with zero log output.
       console.warn(
         `AO: keep-daemon log redirect failed; daemon will run with stdio disabled: ${logPath}`,
@@ -1732,7 +1926,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
       try {
         closeSync(keepDaemonLogFd);
       } catch {
-        // best-effort — the throw below is the real error
+        // best-effort, the throw below is the real error
       }
     }
     throw err;
@@ -1744,7 +1938,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     try {
       closeSync(keepDaemonLogFd);
     } catch {
-      // best-effort — the child still holds its inherited copy
+      // best-effort, the child still holds its inherited copy
     }
     keepDaemonLogFd = undefined;
   }
@@ -1762,8 +1956,8 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 
   // Discover the port the daemon ACTUALLY bound rather than trusting AO_PORT:
   // the daemon may fall back to a different port than the one requested. Two
-  // confirmed sources race — the "daemon listening" slog line (stderr, but both
-  // streams are scanned) and the running.json handshake — first one wins.
+  // confirmed sources race, the "daemon listening" slog line (stderr, but both
+  // streams are scanned) and the running.json handshake, first one wins.
   const spawnedAtMs = Date.now();
   let portConfirmed = false;
   let runFileTimer: ReturnType<typeof setInterval> | undefined;
@@ -1801,7 +1995,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     // here: the flag is a property of this spawn, not a value that should be
     // able to flip between spawn and port-confirmation. (The process.on("exit")
     // orphan-cleanup below re-reads process.env because this `keep` is scoped
-    // to the spawn function — AO_KEEP_DAEMON is set once at startup and never
+    // to the spawn function, AO_KEEP_DAEMON is set once at startup and never
     // mutated, so both reads agree.)
     if (!keep) {
       establishSupervisorLink();
@@ -1894,7 +2088,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     // An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
     // daemon-telemetry reports any status carrying a `code` as
     // ao.renderer.daemon_failure, so don't stamp `code: "exited"` on a stop
-    // the user or app asked for — that would count intentional stops as
+    // the user or app asked for, that would count intentional stops as
     // failures. Preserve the clean stopped status instead.
     if (daemonStoppingProcess === child) {
       daemonStoppingProcess = null;
@@ -2073,21 +2267,22 @@ ipcMain.handle(
 );
 
 ipcMain.handle("theme:persist-terminal", async (_event, scheme: unknown) => {
-	if (scheme === "light" || scheme === "dark") {
-		try {
-			await persistSelectedDaemonTerminalTheme(scheme, {
-				isRemoteSelected: () => machineSelection().getState().activeMachineId !== LOCAL_MACHINE_ID,
-				activeRemoteStatus: () => activeMachineStatus,
-				gatewayToken: () => machineSelection().gatewayToken(),
-				writeLocal: persistLocalTerminalThemeHint,
-				// Electron net.fetch uses session.defaultSession, preserving the
-				// installed certificate verifier for paired machines.
-				fetchRemote: (url, init) => net.fetch(url, init),
-			});
-		} catch (error) {
-			console.warn("AO: unable to persist terminal theme hint", error);
-		}
-	}
+  if (scheme === "light" || scheme === "dark") {
+    try {
+      await persistSelectedDaemonTerminalTheme(scheme, {
+        isRemoteSelected: () =>
+          machineSelection().getState().activeMachineId !== LOCAL_MACHINE_ID,
+        activeRemoteStatus: () => activeMachineStatus,
+        gatewayToken: () => machineSelection().gatewayToken(),
+        writeLocal: persistLocalTerminalThemeHint,
+        // Electron net.fetch uses session.defaultSession, preserving the
+        // installed certificate verifier for paired machines.
+        fetchRemote: (url, init) => net.fetch(url, init),
+      });
+    } catch (error) {
+      console.warn("AO: unable to persist terminal theme hint", error);
+    }
+  }
 });
 
 // Renderer calls this when focus lands on real shell UI (not the titlebar menu), so menu:action's panel fallback below doesn't go stale.
@@ -2099,7 +2294,7 @@ ipcMain.on("browser:overlay", (event, open: unknown) => {
   windowComposition?.setOverlayOpen(open);
   // Raising the shell can leave the live page's own compositor surface stale
   // (the same class of bug window-composition.ts already works around for
-  // the shell itself) — nudge it the same way once the shell is on top.
+  // the shell itself), nudge it the same way once the shell is on top.
   if (open) browserViewHost?.refreshLastFocusedPanelSurface();
 });
 
@@ -2184,15 +2379,94 @@ ipcMain.handle("menu:action", (_event, action: string) => {
       return;
   }
 });
-ipcMain.handle("telemetry:getBootstrap", () =>
-  buildTelemetryBootstrap(
-    process.env,
+ipcMain.handle("telemetry:getBootstrap", () => {
+  if (!telemetryPolicyController) return null;
+  return buildTelemetryBootstrap(
+    { ...process.env, AO_DATA_DIR: desktopDataDir },
     app.getVersion(),
     process.platform,
     os.homedir(),
     app.isPackaged,
-  ),
+    telemetryPolicyController.snapshot(),
+  );
+});
+ipcMain.handle(
+  "telemetry:getPolicy",
+  () =>
+    telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView(),
 );
+ipcMain.handle(
+  "telemetry:setEventsEnabled",
+  (
+    _event,
+    input: { eventsEnabled?: unknown; expectedGeneration?: unknown },
+  ) => {
+    if (
+      !telemetryPolicyController ||
+      typeof input?.eventsEnabled !== "boolean" ||
+      typeof input.expectedGeneration !== "string"
+    )
+      throw new Error("invalid telemetry policy request");
+    return telemetryPolicyController.setEventsEnabled(
+      input.eventsEnabled,
+      input.expectedGeneration,
+    );
+  },
+);
+ipcMain.on(
+  TELEMETRY_RENDERER_QUEUES_CLEARED_CHANNEL,
+  (event, input: unknown) => {
+    const trustedSender = trustedShellWebContents.get(event.sender.id);
+    if (
+      !trustedSender ||
+      trustedSender !== event.sender ||
+      trustedSender.isDestroyed()
+    )
+      return;
+    if (!input || typeof input !== "object" || Array.isArray(input)) return;
+    const result = input as Record<string, unknown>;
+    if (
+      Object.keys(result).length !== 2 ||
+      typeof result.requestId !== "string" ||
+      typeof result.ok !== "boolean"
+    )
+      return;
+    const pending = pendingRendererQueuePurges.get(result.requestId);
+    if (!pending || pending.senderId !== event.sender.id) return;
+    finishRendererQueuePurge(
+      result.requestId,
+      result.ok
+        ? undefined
+        : new Error("renderer telemetry queue purge failed"),
+    );
+  },
+);
+ipcMain.handle(
+  "telemetry:capture",
+  (_event, request: RendererTelemetryCapture) => {
+    const sanitized = sanitizeRendererCapture(request);
+    if (!telemetryPolicyController || !sanitized) return false;
+    return telemetryPolicyController.capture(sanitized);
+  },
+);
+ipcMain.on(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, (event, request: unknown) => {
+  const trustedSender = trustedShellWebContents.get(event.sender.id);
+  if (trustedSender !== event.sender || trustedSender.isDestroyed()) return;
+  agentSwitchVisibilityController?.signal(event.sender.id, request);
+});
+
+function failClosedTelemetryPolicyView(): TelemetryPolicyView {
+  return {
+    eventsEnabled: false,
+    consentGeneration: "unavailable",
+    updatedAt: new Date(0).toISOString(),
+    acknowledged: false,
+    state: "cleanup_failed",
+    environmentVeto: true,
+    durabilitySupported: false,
+    reason: "invalid_authority",
+  };
+}
 async function chooseDirectory(title: string): Promise<string | null> {
   const options: OpenDialogOptions = {
     properties: ["openDirectory"],
@@ -2232,6 +2506,13 @@ ipcMain.handle("app:checkAncestorRepo", async (_event, path: string) => {
     homeDir: os.homedir(),
   });
 });
+ipcMain.handle("app:getRepositoryBranch", async (_event, path: string) => {
+  await ensureShellEnv();
+  return resolveCheckedOutBranch(path, {
+    env: daemonEnv(),
+    homeDir: os.homedir(),
+  });
+});
 ipcMain.handle("clipboard:writeText", (_event, text: string) => {
   clipboard.writeText(text, "clipboard");
   if (process.platform === "linux") {
@@ -2241,7 +2522,7 @@ ipcMain.handle("clipboard:writeText", (_event, text: string) => {
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
-// is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
+// is unavailable to the sandboxed renderer on macOS, see webUtils.getPathForFile
 // regressions in Electron 30-33). Stash the bytes under the app's own state dir
 // and return the path so the terminal can insert it, mirroring how a native
 // terminal inserts a dropped file's path.
@@ -2310,6 +2591,9 @@ ipcMain.handle(
       : await writeUiSettings(path.dirname(runFile), settings);
     trayController?.setLocale(result.locale);
     soundNotificationsEnabled = result.soundNotificationsEnabled;
+    terminalShellPreference = result.terminalShell;
+    shellEnvPromise = null;
+    cachedShellEnv = null;
     return result;
   },
 );
@@ -2468,8 +2752,10 @@ ipcMain.handle(
   (_event, address: string, port: number, requestId?: string) =>
     pairedMachines().probeFingerprint(address, port, requestId),
 );
-ipcMain.on("pairedMachines:cancelFingerprintProbe", (_event, requestId: string) =>
-  pairedMachines().cancelFingerprintProbe(requestId),
+ipcMain.on(
+  "pairedMachines:cancelFingerprintProbe",
+  (_event, requestId: string) =>
+    pairedMachines().cancelFingerprintProbe(requestId),
 );
 ipcMain.handle("pairedMachines:getPinnedFingerprint", (_event, id: string) =>
   pairedMachines().getPinnedFingerprint(id),
@@ -2538,7 +2824,7 @@ ipcMain.handle(
         title: notification.title,
         body: notification.body,
         // AO logo as the notification icon on Windows/Linux. Omitted on macOS,
-        // where a custom icon renders only as a redundant right-side content image —
+        // where a custom icon renders only as a redundant right-side content image,
         // macOS uses the app-bundle icon (the AO logo in a packaged build) as the
         // single main icon.
         icon: process.platform === "darwin" ? undefined : windowIconPath(),
@@ -2554,7 +2840,7 @@ ipcMain.handle(
     }
 
     // Dock (macOS) / taskbar (Windows/Linux) attention signal. On macOS every
-    // notification bounces the dock — urgency is carried by the bounce type,
+    // notification bounces the dock, urgency is carried by the bounce type,
     // so a merged PR bounces once while a blocked agent keeps bouncing. On
     // Windows/Linux only the actionable types flash (see
     // shouldSignalAttention), preserving the pre-existing behavior there.
@@ -2627,7 +2913,7 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
     }
   } else if (process.platform === "win32") {
     if (n > 0) {
-      // Pre-built red dot PNG overlay — indicates unread without needing Canvas.
+      // Pre-built red dot PNG overlay, indicates unread without needing Canvas.
       const badgeDataUrl =
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAN0lEQVR42mNgoAW4o6b2HxumSDNRhhDSjNcQYjVjNYRUzRiGjBpABQMojkaqJCSqJGWqZCZSAQASKE/UCaPI8AAAAABJRU5ErkJggg==";
       const icon = nativeImage.createFromDataURL(badgeDataUrl);
@@ -2658,15 +2944,9 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
   }
 });
 
-// Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
-// Resolves to ~/.ao/hosted (prod) or ~/.ao/hosted/dev (dev), matching the
-// daemon's own data dir. cloud-auth.ts writes cloud-auth.bin here, so a bare
-// ~/.ao would make this build and the upstream agent-orchestrator build fight
-// over one file holding two different sessions.
+// Cloud-account state follows the canonical runtime root, including overrides.
 function cloudDataDir(): string {
-  return isDev
-    ? path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR)
-    : path.join(os.homedir(), ...STATE_ROOT_SEGMENTS);
+  return desktopPaths.stateRoot;
 }
 
 function notifyRenderersOfCloudSession(
@@ -2679,7 +2959,12 @@ function notifyRenderersOfCloudSession(
 
 installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
-// Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
+// Dev-only local (email/password) sign-in against a loopback Docker control
+// plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback
+// CP inside the handlers; a no-op surface for production/WorkOS users.
+installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
+
+// Cloud control-plane proxy IPC, cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
 installCloudCpProxy(cloudDataDir);
 
@@ -2728,7 +3013,7 @@ app.on("second-instance", (_event, argv) => {
   }
   // A folder dropped on the taskbar icon/shortcut while already running.
   // Usually the renderer is already mounted and listening, so send directly
-  // — but this can still fire while the first instance is early in
+  //, but this can still fire while the first instance is early in
   // app.whenReady() or creating its window, before any shell WebContents
   // exists. Fall back to the same pendingFolderPath queue the cold-start
   // path uses rather than silently dropping it.
@@ -2755,7 +3040,7 @@ app.on("second-instance", (_event, argv) => {
   window.focus();
 });
 // (see forge.config.ts publishers). In dev there is no feed, so it is skipped.
-// A live updater additionally requires a signed + notarized build — see
+// A live updater additionally requires a signed + notarized build, see
 // frontend/docs/desktop-release.md.
 function initAutoUpdates(): void {
   if (!app.isPackaged) return;
@@ -2813,6 +3098,64 @@ async function writeAppStateOnLaunch(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  const visibilityKillSwitched = (
+    process.env.AO_TELEMETRY_DISABLED_EVENTS ?? ""
+  )
+    .split(",")
+    .some((name) => name.trim() === "ao.agent_switch.visibility_failure");
+  // The approved release gate is intentionally closed. Tests inject the
+  // dedicated no-cache sender; the shipping composition creates no visibility
+  // network transport until that gate is separately approved.
+  agentSwitchVisibilityController = new AgentSwitchVisibilityController({
+    send: async () => undefined,
+    killSwitched: visibilityKillSwitched,
+    diagnostic: (code) =>
+      console.warn("agent switch visibility diagnostic:", code),
+  });
+  for (const shellContents of trustedShellWebContents.values())
+    agentSwitchVisibilityController.registerWindow(shellContents.id);
+  const authority = new TelemetryPolicyAuthority({
+    dataDir: desktopDataDir,
+    packagedDefault: app.isPackaged,
+    platform: process.platform,
+  });
+  const daemonPolicy = new DaemonTelemetryPolicyClient(
+    () =>
+      daemonStatus.state === "ready" && daemonStatus.port
+        ? `http://127.0.0.1:${daemonStatus.port}`
+        : null,
+    (url, init) => net.fetch(url, init),
+  );
+  const policyController = new DesktopTelemetryController({
+    authority,
+    daemon: daemonPolicy,
+    environmentAllowsEvents: rendererTelemetryEnabled(
+      process.env,
+      app.isPackaged,
+    ),
+    transportFactory: () =>
+      initMainSentry(app.getVersion(), app.getPath("userData")),
+    visibility: agentSwitchVisibilityController,
+    clearRendererQueues: clearRendererTelemetryQueues,
+    broadcast: (view) => {
+      for (const shellContents of trustedShellWebContents.values())
+        if (!shellContents.isDestroyed())
+          shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
+    },
+  });
+  telemetryPolicyController = policyController;
+  try {
+    await policyController.initialize();
+  } catch (error) {
+    console.error(
+      "telemetry policy bootstrap failed; reporting remains disabled:",
+      error,
+    );
+  }
+  setInterval(() => {
+    if (policyController.snapshot().state !== "applied")
+      void policyController.retryPendingCleanup();
+  }, 1_000).unref();
   // Capture install provenance BEFORE relocation. moveToApplicationsFolder()
   // relaunches from /Applications WITHOUT forwarding our --installed-via arg, and
   // code past a successful move never runs in this instance, so a post-move-only
@@ -2894,6 +3237,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setCertificateVerifyProc(
     pairedMachines().verifyCertificate,
   );
+  terminalShellPreference = initialUiSettings.terminalShell;
   if (isTrayEnabled(process.platform, app.isPackaged, app.getVersion())) {
     trayController = createTrayController({
       focusWindow: focusMainWindow,
@@ -2921,7 +3265,7 @@ app.whenReady().then(async () => {
 
   // Windows/Linux: a folder dropped on the taskbar icon/shortcut while the
   // app was not running launches it with the folder's path in argv. The
-  // renderer isn't mounted yet — queue it, flushed on TRAY_RENDERER_READY_CHANNEL.
+  // renderer isn't mounted yet, queue it, flushed on TRAY_RENDERER_READY_CHANNEL.
   const folderPathArg = parseOpenFolderPathArg(process.argv);
   if (folderPathArg) {
     pendingFolderPath = folderPathArg;
@@ -2948,11 +3292,16 @@ app.on("before-quit", (event) => {
   if (!browserCleanupComplete) {
     event.preventDefault();
     if (!browserQuitCleanupPromise) {
-      browserQuitCleanupPromise = disposeAllBrowserViewHosts().finally(() => {
-        browserCleanupComplete = true;
-        browserQuitCleanupPromise = null;
-        app.quit();
-      });
+      browserQuitCleanupPromise = Promise.all([
+        disposeAllBrowserViewHosts(),
+        telemetryPolicyController?.close() ?? Promise.resolve(),
+      ])
+        .then(() => undefined)
+        .finally(() => {
+          browserCleanupComplete = true;
+          browserQuitCleanupPromise = null;
+          app.quit();
+        });
     }
     return;
   }
@@ -2968,7 +3317,7 @@ app.on("before-quit", (event) => {
 //
 // AO_KEEP_DAEMON opts out entirely: the daemon is deliberately spawned without a
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
-// must be skipped — otherwise it would defeat the whole point on quit.
+// must be skipped, otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
   if (
     daemonProcess &&

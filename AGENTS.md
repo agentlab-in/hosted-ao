@@ -4,11 +4,11 @@ Operational guidance for coding agents working in this repository. Keep changes 
 
 ## Repo layout
 
-- `backend/` — Go rewrite of Agent Orchestrator: Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.
-- `frontend/` — Electron + React supervisor wired to the daemon via the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
-- `docs/` — current architecture/status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
-- `test/` — external smoke/e2e assets, including the CLI fresh-install container check.
-- `.github/workflows/` — CI definitions. Mirror these commands locally when possible.
+- `backend/`: Go rewrite of Agent Orchestrator: Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.
+- `frontend/`: Electron + React supervisor wired to the daemon via the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
+- `docs/`: current architecture/status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
+- `test/`: external smoke/e2e assets, including the CLI fresh-install container check.
+- `.github/workflows/`: CI definitions. Mirror these commands locally when possible.
 
 ## Commands
 
@@ -45,12 +45,12 @@ When showing or demoing frontend changes, run `ao preview [url]` from inside the
 
 ## Where to look first
 
-- `README.md` — current run/config/test quickstart.
-- `docs/README.md` — docs index.
-- `docs/architecture.md` — backend mental model, package layout, lifecycle/session/service boundaries, and load-bearing rules.
-- `docs/STATUS.md` — what is shipped on `main` today and what is still in flight.
-- `docs/cli/README.md` — intended CLI shape: thin Cobra client over daemon HTTP, never direct storage/runtime access.
-- `CLAUDE.md` — compatibility pointer for Claude Code; it directs agents back to `AGENTS.md`.
+- `README.md`: current run/config/test quickstart.
+- `docs/README.md`: docs index.
+- `docs/architecture.md`: backend mental model, package layout, lifecycle/session/service boundaries, and load-bearing rules.
+- `docs/STATUS.md`: what is shipped on `main` today and what is still in flight.
+- `docs/cli/README.md`: intended CLI shape: thin Cobra client over daemon HTTP, never direct storage/runtime access.
+- `CLAUDE.md`: compatibility pointer for Claude Code; it directs agents back to `AGENTS.md`.
 
 For code entry points:
 
@@ -85,7 +85,7 @@ For code entry points:
 ## Hard rules and boundaries
 
 - The daemon's **primary (loopback) listener** stays bound to `127.0.0.1` and unauthenticated. Do not change its bind host or add auth to it.
-- The daemon MAY run a **second, opt-in LAN listener** (the "Connect Mobile" feature) that binds `0.0.0.0` **only while explicitly enabled**, **only** behind the bearer-password `authMiddleware`, serving the app API but never the loopback-gated control routes (`/shutdown`, telemetry, mobile control). It is plaintext and home-network-only by deliberate decision — see `docs/adr/0001-lan-listener-for-mobile.md` and `CONTEXT.md`.
+- The daemon MAY run a **second, opt-in LAN listener** (the "Connect Mobile" feature) that binds `0.0.0.0` **only while explicitly enabled**, **only** behind the bearer-password `authMiddleware`, serving the app API but never the loopback-gated control routes (`/shutdown`, telemetry, mobile control). It is plaintext and home-network-only by deliberate decision, see `docs/adr/0001-lan-listener-for-mobile.md` and `CONTEXT.md`.
 - A permitted network-facing bind is `ao vm serve` in its **hosted configuration**, the VM gateway: a separate process from the daemon, run only on a user-owned, user-bound hosted VM (never local mode), that binds `:80` and `:443` for ACME/TLS, verifies the AO access token on every request before proxying to the loopback daemon, and never proxies the loopback-gated control routes (`/shutdown`, telemetry, mobile control); see `docs/adr/0002-hosted-public-gateway.md`. The daemon itself is unchanged by this: still loopback-only, still unauthenticated.
 - The **only remaining** permitted network-facing bind is `ao vm serve` in **pair mode**: the same separate gateway process, run only on a user-owned box the user has explicitly paired (never local mode), that binds **only** the HTTPS port (no `:80`, no ACME) and serves a persisted self-signed certificate whose SHA-256 fingerprint the user pins out of band, verifies the box's 8-character passcode (hash compared constant-time, per-source lockout) on every request before proxying to the loopback daemon, never proxies the loopback-gated control routes (`/shutdown`, telemetry, mobile control), and never contacts the control plane; see `docs/adr/0003-pair-mode-gateway.md`. Reaching a box by bare IP is in scope for this mode only, not for the hosted configuration. Pair mode is the default way to add any machine, a LAN box or a cloud VM alike, not a LAN-only carve-out: see `docs/adr/0004-pairing-string-and-cloud-pair-scope.md`, which reverses 0003's "cloud VM is not a supported configuration" scoping while leaving the transport itself unchanged. The daemon is unchanged by this too: still loopback-only, still unauthenticated. Do not add any other network-facing bind.
 - The CLI is a thin client. Do not port old in-process TypeScript CLI behavior that bypasses daemon HTTP routes.
@@ -102,12 +102,12 @@ For code entry points:
 
 ## API contract changes
 
-The daemon API is code-first. The OpenAPI spec and frontend TypeScript types are generated artifacts — edit the source, then regenerate.
+The daemon API is code-first. The OpenAPI spec and frontend TypeScript types are generated artifacts, edit the source, then regenerate.
 
 **Source files to edit:**
 
-- `backend/internal/httpd/controllers/dto.go` — request/response shapes.
-- `backend/internal/httpd/apispec/specgen/build.go` — operation registry; add a `schemaNames` entry for any new named type.
+- `backend/internal/httpd/controllers/dto.go`: request/response shapes.
+- `backend/internal/httpd/apispec/specgen/build.go`: operation registry; add a `schemaNames` entry for any new named type.
 
 **Regenerate after editing:**
 
@@ -125,7 +125,7 @@ npm run api:ts       # npx openapi-typescript@7.4.4 backend/internal/httpd/apisp
 **Verify:**
 
 ```bash
-cd backend && go test ./internal/httpd/...    # spec drift + route/spec parity tests (does not cover schema.ts — that is checked by the api-drift CI job)
+cd backend && go test ./internal/httpd/...    # spec drift + route/spec parity tests (does not cover schema.ts, that is checked by the api-drift CI job)
 ```
 
 Commit `openapi.yaml` and `frontend/src/api/schema.ts` together with the Go changes. CI will regenerate both files and fail if the committed versions are out of date. The CLI hand-mirrored DTOs remain a deliberate manual boundary and are not generated.

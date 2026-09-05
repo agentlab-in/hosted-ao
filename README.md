@@ -28,7 +28,7 @@ Run agents on your local machine or pair another machine you can reach, includin
 - **Pull requests and reviews.** Inspect CI and mergeability, run interactive agent reviews, and return requested changes to the worker that owns the task.
 - **Agent-controlled previews.** Open a worker's app beside its session and let the agent inspect or interact with that isolated browser surface.
 - **Desktop and mobile access.** Supervise the same daemon-backed sessions through the Electron desktop app and the mobile client.
-- **Multiple coding harnesses.** Use installed agents such as Claude Code, Codex, Cursor, OpenCode, Pi, OMP, and other supported harnesses without moving provider authentication into AO.
+- **Multiple coding harnesses.** Use installed agents such as Claude Code, Codex, Cursor, OpenCode, Pi, OMP, and other supported harnesses, with local account and login controls where supported.
 
 See [the current status](docs/STATUS.md) for the complete shipped capability list and explicit in-flight boundaries.
 

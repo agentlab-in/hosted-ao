@@ -126,9 +126,9 @@ describe("defaultRunFilePath", () => {
 
 	it("ignores APPDATA on windows", () => {
 		expect(defaultRunFilePath("win32", { APPDATA: "C:\\Users\\me\\AppData\\Roaming" }, "C:\\Users\\me")).toBe(
-			"C:\\Users\\me/.ao/hosted/running.json",
+			"C:\\Users\\me\\.ao\\hosted\\running.json",
 		);
-		expect(defaultRunFilePath("win32", {}, "C:\\Users\\me")).toBe("C:\\Users\\me/.ao/hosted/running.json");
+		expect(defaultRunFilePath("win32", {}, "C:\\Users\\me")).toBe("C:\\Users\\me\\.ao\\hosted\\running.json");
 	});
 
 	it("returns null when no home directory can be resolved", () => {

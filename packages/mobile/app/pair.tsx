@@ -4,11 +4,9 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ApiError, pingServer } from "../lib/api";
 import { pickNormalLens } from "../lib/cameraLens";
-import { loadConfig, saveConfig, type ServerConfig } from "../lib/config";
+import { saveConfig } from "../lib/config";
 import {
-	classifyConnectionFailure,
 	describeConnectionFailure,
 	LOCAL_NETWORK_HINT,
 	type ConnectionErrorCopy,
@@ -16,7 +14,10 @@ import {
 import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
-import { applyPairingPayload, parsePairingPayload } from "../lib/pairing";
+import { pairFromCode } from "../lib/pairFlow";
+import { parsePairingCode } from "../lib/pairingCode";
+import { parsePairingPayload } from "../lib/pairing";
+import { verifyLegacyConnection } from "../lib/connectRuntime";
 import { connectSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
 import { Button, NumberedStep } from "../lib/ui";
@@ -40,17 +41,20 @@ export default function PairScreen() {
 	// frame would otherwise pair behind it. This replaces the old `manualOpen`
 	// flag now that the sheet is a route pushed on top rather than local state.
 	const focused = useRef(true);
+	const attempt = useRef<AbortController | null>(null);
 	useFocusEffect(
 		useCallback(() => {
 			focused.current = true;
+			setBusy(false);
 			return () => {
 				focused.current = false;
+				attempt.current?.abort();
 			};
 		}, []),
 	);
 	const scanned = useRef(false);
 	const rejected = useRef<string | null>(null);
-	const pending = useRef<ServerConfig | null>(null);
+	const pendingCode = useRef<string | null>(null);
 
 	const camera = useRef<CameraView>(null);
 	const [lens, setLens] = useState<string | undefined>(undefined);
@@ -75,8 +79,9 @@ export default function PairScreen() {
 
 	async function onScan({ data }: { data: string }) {
 		if (scanned.current || busy || !focused.current) return;
-		const parsed = parsePairingPayload(data);
-		if (!parsed) {
+		// Cheap reject first: the camera sees every barcode in frame, and only a
+		// code we can actually parse should stop the scanner.
+		if (!parsePairingPayload(data) && !parsePairingCode(data)) {
 			if (rejected.current !== data) {
 				rejected.current = data;
 				setFailure(describeConnectionFailure("not-ao-qr", { host: "", port: "", platform: Platform.OS }));
@@ -85,40 +90,45 @@ export default function PairScreen() {
 		}
 		rejected.current = null;
 		scanned.current = true;
-		const cfg = await loadConfig();
-		await verify(applyPairingPayload(cfg, parsed));
+		await pair(data);
 	}
 
-	async function verify(target: ServerConfig) {
-		pending.current = target;
+	// V1 preserves authenticated verification before save. V2 is gated before any network call.
+	async function pair(code: string) {
+		attempt.current?.abort();
+		const controller = new AbortController();
+		attempt.current = controller;
+		pendingCode.current = code;
 		setBusy(true);
 		setFailure(null);
 		try {
-			await pingServer(target);
-			await saveConfig(target);
+			const result = await pairFromCode(code, {
+				verify: verifyLegacyConnection, persist: saveConfig,
+			}, controller.signal);
+			if (controller.signal.aborted) return;
+			if (!result.ok) {
+				if (result.reason === "cancelled") return;
+				haptics.warning();
+				setFailure(describeConnectionFailure(
+					result.reason,
+					{ host: "", port: "", platform: Platform.OS },
+				));
+				return;
+			}
 			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "qr", from_onboarding: fromOnboarding });
 			if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 			haptics.success();
 			await finish();
-		} catch (e) {
-			haptics.warning();
-			const status = e instanceof ApiError ? e.status : undefined;
-			setFailure(
-				describeConnectionFailure(classifyConnectionFailure(status), {
-					host: target.host,
-					port: target.httpPort,
-					platform: Platform.OS,
-				}),
-			);
-			setBusy(false);
+		} finally {
+			if (attempt.current === controller) setBusy(false);
 		}
 	}
 
 	function retry() {
 		setFailure(null);
 		rejected.current = null;
-		if (pending.current) {
-			void verify(pending.current);
+		if (pendingCode.current) {
+			void pair(pendingCode.current);
 			return;
 		}
 		scanned.current = false;
@@ -133,7 +143,7 @@ export default function PairScreen() {
 			<View style={styles.steps}>
 				<NumberedStep n={1} title="Open AO on your computer" compact />
 				<NumberedStep n={2} title="Go to Settings → Connect Mobile" compact />
-				<NumberedStep n={3} title="Scan the QR code" compact />
+				<NumberedStep n={3} title="Scan a compatible v1 QR code" compact />
 			</View>
 
 			<View style={styles.viewfinder}>
@@ -190,7 +200,7 @@ export default function PairScreen() {
 				</View>
 			) : null}
 
-			{/* Always reachable — including when the camera is permanently denied,
+			{/* Always reachable; including when the camera is permanently denied,
 			    which would otherwise leave the user with no way forward at all. */}
 			<Pressable
 				onPress={() => { haptics.tap(); router.push(connectSheetRoute(() => void finish())); }}

@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import type { EndpointKind } from "./endpoints";
 import { useCallback, useEffect, useState } from "react";
 
 // The user points the app at their AO daemon (over Tailscale/LAN). We store the
@@ -15,6 +16,20 @@ export type ServerConfig = {
 	muxPort: string; // legacy separate mux port - unused against the Go daemon
 	secure?: boolean; // use https/wss instead of http/ws (TLS / Tailscale funnel)
 	password: string; // daemon connection password for Authorization header
+	/**
+	 * The machine's stable identity, when known. Used to key per-machine state
+	 * (the chat event cursor) so it survives the address changing as the app
+	 * races between LAN, Tailscale and the tunnel. Absent for a pairing migrated
+	 * from the single-server config until its first connect.
+	 */
+	hostId?: string;
+	/**
+	 * Which kind of endpoint won the race. Drives how often we poll: the
+	 * conversation event stream cannot deliver over a Cloudflare quick tunnel
+	 * (it forwards the body in ~128 KB chunks), so polling is the only live
+	 * signal on that path. Absent for a config that predates the race.
+	 */
+	endpointKind?: EndpointKind;
 };
 
 export const DEFAULT_CONFIG: ServerConfig = {
@@ -49,6 +64,9 @@ export async function loadConfig(): Promise<ServerConfig> {
 	try {
 		const raw = await AsyncStorage.getItem(KEY);
 		const parsed = raw ? (JSON.parse(raw) as Partial<ServerConfig>) : {};
+		// The v2 endpoint race stamped these fields. Its credentials must not be
+		// revived by terminal/settings callers that read this config directly.
+		if (parsed.hostId !== undefined || parsed.endpointKind !== undefined) return DEFAULT_CONFIG;
 		const base = { ...DEFAULT_CONFIG, ...parsed };
 		// Migration: older builds persisted the password inside the AsyncStorage
 		// blob. If we find one there, move it into SecureStore and rewrite the blob

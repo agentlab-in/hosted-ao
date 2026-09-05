@@ -25,9 +25,12 @@ export {
 export type GlobalSettingsSection =
   | "general"
   | "self-hosting"
+  | "harness"
+  | "agents"
   | "cloud"
   | "mobile"
   | "shortcuts"
+  | "browserProfiles"
   | "updates"
   | "help";
 
@@ -38,7 +41,7 @@ export type SettingsModal =
       projectId: string;
     };
 
-/** Worker detail view toggles — Changes (Git rail) is the default. */
+/** Worker detail view toggles, Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
 export type InspectorView = "summary" | "reviews" | "browser" | "files";
 
@@ -55,27 +58,27 @@ export type InspectorSessionState = {
   initialized?: boolean;
 };
 
-// Selection (which project/session is open) now lives in the URL — the router
+export type GlobalToast = {
+  title: string;
+  body?: string;
+  nonce: number;
+};
+
+// Selection (which project/session is open) now lives in the URL, the router
 // is the single source of truth, read via route params. This store holds only
 // ephemeral UI: theme, sidebar collapse, command palette, per-session inspector
 // state, and the active workbench tab within a session.
 export type UiState = {
   workbenchTab: WorkbenchTab;
-  /** The user's durable sidebar preference. Workspace pressure never mutates it. */
+  /** The user's durable sidebar preference. */
   isSidebarOpen: boolean;
-  /** A live workspace may temporarily reclaim the sidebar's width. */
-  isSidebarAutoCollapsed: boolean;
-  /** The user explicitly reopened the sidebar while auto-collapse is active. */
-  sidebarAutoCollapseOverride: boolean;
-  /** Active workspace width needed beside a fully expanded sidebar; owned by the shell. */
-  sidebarWorkspaceDemandPx: number | null;
   inspectorSessions: Record<string, InspectorSessionState>;
   isCommandPaletteOpen: boolean;
   settingsModal: SettingsModal | null;
   themePreference: ThemePreference;
   /** Resolved light/dark for React consumers; may track OS while preference is system. */
   resolvedTheme: Theme;
-  /** Named color style theme (e.g. "catppuccin", "nord") — independent of light/dark mode. */
+  /** Named color style theme (e.g. "catppuccin", "nord"), independent of light/dark mode. */
   themeStyle: ThemeStyle;
   /** When true, developer-only release controls are available. Default off. */
   developerMode: boolean;
@@ -84,15 +87,16 @@ export type UiState = {
   restartingProjectIds: ReadonlySet<string>;
   orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
   orchestratorStartupErrors: Record<string, string>;
+  globalToast: GlobalToast | null;
   // Transient "open the New Task dialog for this project" signal. The nonce
   // bumps on every request so a repeat press (even for the same project) still
   // re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
-  // still lives in the URL — this is a one-shot action, not persisted state.
+  // still lives in the URL, this is a one-shot action, not persisted state.
   newTaskRequest: { projectId: string; nonce: number } | null;
   // Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
   // when no project is in scope).
   createProjectNonce: number;
-  // Transient "a folder was dropped onto the app window — open the
+  // Transient "a folder was dropped onto the app window, open the
   // create-project flow for this path" signal, mirroring newTaskRequest: the
   // nonce always bumps so dropping the same folder twice in a row still
   // re-fires. Consumed by the same CreateProjectFlow instance that owns
@@ -101,7 +105,7 @@ export type UiState = {
   // Bumps to ask for a new standalone shell terminal. Like newTaskRequest this
   // is a one-shot signal, not state: the tab-strip + button and Ctrl+Shift+` both
   // raise it so they cannot drift apart, and a repeat press re-fires because
-  // the nonce always changes. The shell layout is its single consumer — it is
+  // the nonce always changes. The shell layout is its single consumer, it is
   // mounted on every route, so the request is honoured from anywhere in the app.
   newShellTerminalNonce: number;
   // The shell terminal the user most recently opened or selected. Both the
@@ -125,15 +129,12 @@ export type UiState = {
   /** Refresh resolvedTheme from OS without writing light/dark to storage. */
   syncSystemTheme: () => void;
   toggleSidebar: () => void;
-  setSidebarAutoCollapsed: (collapsed: boolean) => void;
-  clearSidebarAutoCollapse: () => void;
-  setSidebarWorkspaceDemand: (demandPx: number | null) => void;
   setInspectorOpen: (sessionId: string, isOpen: boolean) => void;
   toggleInspector: (sessionId: string) => void;
   setInspectorView: (sessionId: string, view: InspectorView) => void;
   /**
-   * Runs the "entering this session" defaults — Summary tab, baseline browser
-   * reveal — exactly once per session's lifetime. Backed by persisted store
+   * Runs the "entering this session" defaults, Summary tab, baseline browser
+   * reveal, exactly once per session's lifetime. Backed by persisted store
    * state (not a component-local ref) so it stays a no-op across unmount and
    * remount of the session view, not just across re-renders of one mounted
    * instance.
@@ -156,6 +157,8 @@ export type UiState = {
     projectId: string,
     message: string | null,
   ) => void;
+  showGlobalToast: (title: string, body?: string) => void;
+  clearGlobalToast: () => void;
   requestNewTask: (projectId: string) => void;
   requestCreateProject: () => void;
   requestCreateProjectFromPath: (path: string) => void;
@@ -201,34 +204,13 @@ function inspectorState(
   return sessions[sessionId] ?? { isOpen: true, view: "summary" };
 }
 
-/** Effective visibility keeps temporary workspace pressure out of the persisted preference. */
 export function sidebarIsVisible(
-  state: Pick<
-    UiState,
-    "isSidebarOpen" | "isSidebarAutoCollapsed" | "sidebarAutoCollapseOverride"
-  >,
+  state: Pick<UiState, "isSidebarOpen">,
 ): boolean {
-  return (
-    state.isSidebarOpen &&
-    (!state.isSidebarAutoCollapsed || state.sidebarAutoCollapseOverride)
-  );
+  return state.isSidebarOpen;
 }
 
-/** Auto pressure keeps navigation available as an icon rail; only the user's durable close hides it. */
-export function sidebarIsCompact(
-  state: Pick<
-    UiState,
-    "isSidebarOpen" | "isSidebarAutoCollapsed" | "sidebarAutoCollapseOverride"
-  >,
-): boolean {
-  return (
-    state.isSidebarOpen &&
-    state.isSidebarAutoCollapsed &&
-    !state.sidebarAutoCollapseOverride
-  );
-}
-
-/** Expanded and compact rails both occupy shell layout; a durable user close does not. */
+/** The expanded sidebar occupies shell layout; a user close does not. */
 export function sidebarOccupiesLayout(
   state: Pick<UiState, "isSidebarOpen">,
 ): boolean {
@@ -241,9 +223,6 @@ const initialThemeStyle = readStoredThemeStyle();
 export const useUiStore = create<UiState>((set, get) => ({
   workbenchTab: "changes",
   isSidebarOpen: initialSidebarOpen(),
-  isSidebarAutoCollapsed: false,
-  sidebarAutoCollapseOverride: false,
-  sidebarWorkspaceDemandPx: null,
   inspectorSessions: {},
   isCommandPaletteOpen: false,
   settingsModal: null,
@@ -255,6 +234,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   restartingProjectIds: new Set<string>(),
   orchestratorReplacementErrors: {},
   orchestratorStartupErrors: {},
+  globalToast: null,
   newTaskRequest: null,
   createProjectNonce: 0,
   folderDropRequest: null,
@@ -304,40 +284,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   toggleSidebar: () =>
     set((state) => {
-      const wasVisible = sidebarIsVisible(state);
-      // While Browser pressure owns the compact rail, expand/collapse is a
-      // temporary override cycle and must not mutate the durable preference.
-      if (state.isSidebarOpen && state.isSidebarAutoCollapsed) {
-        return {
-          sidebarAutoCollapseOverride: !state.sidebarAutoCollapseOverride,
-        };
-      }
-      const isSidebarOpen = !wasVisible;
+      const isSidebarOpen = !state.isSidebarOpen;
       getLocalStorage()?.setItem(sidebarStorageKey, String(isSidebarOpen));
-      return {
-        isSidebarOpen,
-        // Reopening under active workspace pressure is an explicit override.
-        // Closing clears it so the next open follows the current layout policy.
-        sidebarAutoCollapseOverride:
-          isSidebarOpen && state.isSidebarAutoCollapsed,
-      };
+      return { isSidebarOpen };
     }),
-  setSidebarAutoCollapsed: (isSidebarAutoCollapsed) =>
-    set((state) => {
-      if (state.isSidebarAutoCollapsed === isSidebarAutoCollapsed) return state;
-      // Pressure can cross its threshold while the rail is still moving. Never
-      // discard an explicit expansion here; the shell clears it only when the
-      // workspace that created the pressure actually closes.
-      return { isSidebarAutoCollapsed };
-    }),
-  clearSidebarAutoCollapse: () =>
-    set({ isSidebarAutoCollapsed: false, sidebarAutoCollapseOverride: false }),
-  setSidebarWorkspaceDemand: (sidebarWorkspaceDemandPx) =>
-    set((state) =>
-      state.sidebarWorkspaceDemandPx === sidebarWorkspaceDemandPx
-        ? state
-        : { sidebarWorkspaceDemandPx },
-    ),
   setInspectorOpen: (sessionId, isOpen) =>
     set((state) => {
       const current = inspectorState(state.inspectorSessions, sessionId);
@@ -372,7 +322,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   initializeInspectorSession: (sessionId, hasBrowserContent, hasInspector) =>
     set((state) => {
       // Sessions without an inspector (e.g. orchestrator sessions) must not
-      // gain a store entry at all — leave inspectorSessions[sessionId]
+      // gain a store entry at all, leave inspectorSessions[sessionId]
       // undefined so callers that key off its presence stay correct.
       if (!hasInspector) return state;
       const current = inspectorState(state.inspectorSessions, sessionId);
@@ -464,6 +414,11 @@ export const useUiStore = create<UiState>((set, get) => ({
       }
       return { orchestratorStartupErrors };
     }),
+  showGlobalToast: (title, body) =>
+    set((state) => ({
+      globalToast: { title, body, nonce: (state.globalToast?.nonce ?? 0) + 1 },
+    })),
+  clearGlobalToast: () => set({ globalToast: null }),
   requestNewTask: (projectId) =>
     set((state) => ({
       newTaskRequest: {

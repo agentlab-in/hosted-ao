@@ -1,15 +1,20 @@
-import { lazy, Suspense } from "react";
+import { getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { isRemoteDaemonBaseUrl } from "../../shared/remote-daemon";
+import { lazy, Suspense, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { CloudSection } from "./settings/CloudSection";
 import { MachinesSection } from "./settings/MachinesSection";
 import type { GlobalSettingsSection as GlobalSettingsPage } from "../stores/ui-store";
 import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
+import { HarnessSettingsSection } from "./settings/HarnessSettingsSection";
 import { CloudCredentialsSection } from "./settings/CloudCredentialsSection";
+import { CodexAccountsSection } from "./settings/CodexAccountsSection";
 import { ConnectMobileContent } from "./settings/ConnectMobileContent";
 import { KeyboardShortcutsContent } from "./settings/KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./settings/MobileDevicesSection";
 import { ReportProblemContent } from "./settings/ReportProblemContent";
 import { SettingsSection } from "./settings/SettingsSection";
+import { BrowserProfilesSection } from "./settings/BrowserProfilesSection";
 
 // ponytail: Machine and cloud settings are not yet wired into react-i18next
 // (their copy is hardcoded English below, matching the section components
@@ -21,7 +26,7 @@ const UpdatesSection = lazy(async () => {
 
 export type GlobalSettingsSection = GlobalSettingsPage | "all";
 
-/** Full-width panel for page-level content (forms, editors) — matches the
+/** Full-width panel for page-level content (forms, editors), matches the
  *  grouped-row surface so pages read as one coherent family. */
 function SettingsContentPanel({ children }: { children: React.ReactNode }) {
   return (
@@ -38,6 +43,11 @@ export function GlobalSettingsForm({
 }) {
   const { t } = useTranslation();
   const all = section === "all";
+  const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+  const localControls = !isRemoteDaemonBaseUrl(baseUrl);
+  if (!localControls && ["harness", "agents", "mobile", "cloud"].includes(section)) {
+    return <p role="status">{t("settings.localControlsOnly")}</p>;
+  }
   // One section per page means the dialog header already names it, so a
   // leading in-page heading would just repeat that title.
   const titleHidden = !all;
@@ -56,8 +66,19 @@ export function GlobalSettingsForm({
       )}
 
       {(all || section === "self-hosting") && <MachinesSection />}
+      {localControls && (all || section === "harness") && (
+        <HarnessSettingsSection titleHidden={titleHidden} />
+      )}
 
-      {(all || section === "mobile") && (
+      {localControls && (all || section === "agents") && (
+        <CodexAccountsSection titleHidden={titleHidden} />
+      )}
+
+      {(all || section === "browserProfiles") && (
+        <BrowserProfilesSection titleHidden={titleHidden} />
+      )}
+
+      {localControls && (all || section === "mobile") && (
         <SettingsSection title={t("settings.mobile")} titleHidden={titleHidden}>
           <div className="rounded-md bg-[var(--color-bg-settings-row)] px-4 pb-4 pt-0">
             <ConnectMobileContent active />
@@ -66,7 +87,7 @@ export function GlobalSettingsForm({
         </SettingsSection>
       )}
 
-      {(all || section === "cloud") && (
+      {localControls && (all || section === "cloud") && (
         <CloudCredentialsSection titleHidden={titleHidden} />
       )}
 

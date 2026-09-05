@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
 )
 
 // Manager is the controller-facing contract for the /api/v1/projects surface.
@@ -70,6 +72,7 @@ type Service struct {
 	// reposRoot is where POST /projects clones land when CloneURL is set:
 	// <reposRoot>/<owner>-<repo>. Empty means cloning by URL is not configured.
 	reposRoot string
+	logger    *slog.Logger
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -95,6 +98,9 @@ type Deps struct {
 	// set. Wired from the daemon's data dir (<DataDir>/repos) so it stays
 	// under ~/.ao and honours AO_DATA_DIR overrides.
 	ReposRoot string
+	// Logger receives structured logs. Left nil, the service falls back to
+	// slog.Default, keeping service-focused tests logger-free.
+	Logger *slog.Logger
 }
 
 // New returns a project service backed by the given durable store.
@@ -115,9 +121,13 @@ func NewWithDeps(d Deps) *Service {
 		telemetry:      d.Telemetry,
 		defaultHarness: defaultHarness,
 		reposRoot:      d.ReposRoot,
+		logger:         d.Logger,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
+	}
+	if s.logger == nil {
+		s.logger = slog.Default()
 	}
 	return s
 }
@@ -130,6 +140,13 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 	}
 	out := make([]Summary, 0, len(projects))
 	for _, row := range projects {
+		folderMissing := false
+		exists, err := folderExists(row.Path)
+		if err != nil {
+			m.logger.Warn("project: stat failed", "path", row.Path, "error", err)
+		} else {
+			folderMissing = !exists
+		}
 		out = append(out, Summary{
 			ID:                domain.ProjectID(row.ID),
 			Name:              displayName(row),
@@ -137,6 +154,7 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			Kind:              row.Kind.WithDefault(),
 			SessionPrefix:     resolveSessionPrefix(row),
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
+			FolderMissing:     folderMissing,
 		})
 	}
 	return out, nil
@@ -228,10 +246,16 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if existing, ok, err := m.store.GetProject(ctx, string(id)); err != nil {
 		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
 	} else if ok && existing.ArchivedAt.IsZero() && existing.Path != path {
-		return Project{}, apierr.Conflict("ID_ALREADY_REGISTERED", "A project with this id is already registered for a different path", map[string]any{
-			"existingProjectId":  existing.ID,
-			"suggestedProjectId": string(m.suggestID(ctx, id)),
-		})
+		if in.ProjectID != nil {
+			return Project{}, apierr.Conflict("ID_ALREADY_REGISTERED", "A project with this id is already registered for a different path", map[string]any{
+				"existingProjectId":  existing.ID,
+				"suggestedProjectId": string(m.suggestID(ctx, id)),
+			})
+		}
+		// A caller that omitted projectId asked the service to derive one from
+		// the basename. Resolve that derived collision here; explicit IDs retain
+		// their conflict semantics so user intent is never silently rewritten.
+		id = m.suggestID(ctx, id)
 	}
 
 	var projectConfig domain.ProjectConfig
@@ -261,7 +285,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
-		m.emitProjectAdded(row, projectCountBefore == 0)
+		m.emitProjectAdded(ctx, row, projectCountBefore == 0)
 		p := m.projectFromRow(ctx, row)
 		p.WorkspaceRepos = workspaceReposFromRecords(repos)
 		return p, nil
@@ -279,7 +303,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register project")
 	}
-	m.emitProjectAdded(row, projectCountBefore == 0)
+	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -510,7 +534,7 @@ func (m *Service) activeProjectCount(ctx context.Context) (int, error) {
 	return len(projects), nil
 }
 
-func (m *Service) emitProjectAdded(row domain.ProjectRecord, firstProject bool) {
+func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool) {
 	if m.telemetry == nil {
 		return
 	}
@@ -531,6 +555,7 @@ func (m *Service) emitProjectAdded(row domain.ProjectRecord, firstProject bool) 
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,
 		ProjectID:  &projectID,
+		RequestID:  reqid.FromContext(ctx),
 		Payload:    payload,
 	})
 	if !firstProject {
@@ -542,6 +567,7 @@ func (m *Service) emitProjectAdded(row domain.ProjectRecord, firstProject bool) 
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,
 		ProjectID:  &projectID,
+		RequestID:  reqid.FromContext(ctx),
 		Payload:    payload,
 	})
 }
@@ -757,11 +783,20 @@ func (m *Service) suggestID(ctx context.Context, base domain.ProjectID) domain.P
 
 func (m *Service) projectFromRow(ctx context.Context, row domain.ProjectRecord) Project {
 	kind := row.Kind.WithDefault()
+	folderMissing := false
+	exists, err := folderExists(row.Path)
+	if err != nil {
+		m.logger.Warn("project: stat failed", "path", row.Path, "error", err)
+	} else {
+		folderMissing = !exists
+	}
 	defaultBranch := ""
 	if kind != domain.ProjectKindScratch {
 		defaultBranch = row.Config.WorktreeBaseBranch()
 		if defaultBranch == "" {
-			defaultBranch = resolveDefaultBranch(ctx, row.Path)
+			if !folderMissing {
+				defaultBranch = resolveDefaultBranch(ctx, row.Path)
+			}
 			if defaultBranch == "" {
 				defaultBranch = domain.DefaultBranchAuto
 			}
@@ -775,6 +810,7 @@ func (m *Service) projectFromRow(ctx context.Context, row domain.ProjectRecord) 
 		Repo:          row.RepoOriginURL,
 		DefaultBranch: defaultBranch,
 		Agent:         string(m.defaultHarness),
+		FolderMissing: folderMissing,
 	}
 	p.Config = projectConfigPtr(row.Config)
 	return p
@@ -816,6 +852,23 @@ func normalizePath(raw string) (string, error) {
 		return "", apierr.Invalid("INVALID_PATH", "Repository path is invalid", nil)
 	}
 	return filepath.Clean(abs), nil
+}
+
+// folderExists reports whether path currently exists as a directory. Only
+// os.ErrNotExist (or a path that is not a directory) means "missing". All other
+// stat errors are surfaced so the caller can log them and avoid guessing.
+func folderExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, nil
+	}
+	return true, nil
 }
 
 func ensureDirectoryPath(path string) error {

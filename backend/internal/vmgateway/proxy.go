@@ -57,6 +57,11 @@ var blockedAPIPrefixes = []string{
 	"/api/v1/dev",
 	"/api/v1/system/install",
 	"/api/v1/browser",
+	"/api/v1/agents/codex",
+	"/api/v1/agents/installers",
+	"/api/v1/agents/install-jobs",
+	"/api/v1/agents/readiness/ensure",
+	"/api/v1/desktop",
 }
 
 // maxRequestBodyBytes bounds a proxied request body before httputil.ReverseProxy
@@ -339,12 +344,21 @@ func stripCredentials(r *http.Request) {
 // all (no 401/403 that would confirm a blocked route exists).
 func denyByDefault(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isProxyablePath(r.URL.Path) {
+		if !isProxyablePath(r.URL.Path) || isAgentControlRequest(r.Method, r.URL.Path) {
 			notFoundJSON(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isAgentControlRequest keeps harness installation and verification on loopback.
+func isAgentControlRequest(method, path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 5 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "agents" {
+		return false
+	}
+	return parts[4] == "install" || parts[4] == "verify" || (method == http.MethodPost && parts[4] == "auth")
 }
 
 func isProxyablePath(path string) bool {
@@ -598,7 +612,7 @@ func corsGate(allowedOrigins []string) func(http.Handler) http.Handler {
 				// here. corsGate runs before denyByDefault, so without this
 				// a 204 would confirm the existence of a route every real
 				// method 404s.
-				if !isProxyablePath(r.URL.Path) {
+				if !isProxyablePath(r.URL.Path) || isAgentControlRequest(r.Header.Get("Access-Control-Request-Method"), r.URL.Path) {
 					notFoundJSON(w, r)
 					return
 				}
