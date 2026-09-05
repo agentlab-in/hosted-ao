@@ -53,7 +53,7 @@ func TestIntakeModelDiagnosticsHideRealConfigPath(t *testing.T) {
 }
 
 func TestIntakeModelDiagnosticsHidePersistedWarning(t *testing.T) {
-	for _, warning := range []string{"", "read /private/old-home/config.yaml: private-test-token"} {
+	for _, warning := range []string{"", "read /private/old-home/config.yaml: private-test-token", "Authorization: Bearer fixture-secret-token", "provider response: private-account@example.test", "command stderr: /Users/private-user/config", "line one\npassword=fixture-only\nline three"} {
 		catalog := &fakeAgentCatalog{models: ports.AgentModelCatalog{AgentID: "qwen", Warning: warning}}
 		log := slog.New(slog.NewTextHandler(io.Discard, nil))
 		srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Agents: catalog}, httpd.ControlDeps{}))
@@ -69,8 +69,12 @@ func TestIntakeModelDiagnosticsHidePersistedWarning(t *testing.T) {
 		if err := json.Unmarshal(body, &response); err != nil {
 			t.Fatal(err)
 		}
-		if (response.Warning == "") != (warning == "") {
-			t.Fatal("warning presence changed")
+		expected := ""
+		if warning != "" {
+			expected = "Some model catalog information is unavailable."
+		}
+		if response.Warning != expected {
+			t.Fatalf("warning=%q, want fixed safe shape %q", response.Warning, expected)
 		}
 		if catalog.models.Warning != warning {
 			t.Fatal("serialization mutated cached diagnostics")

@@ -32,9 +32,11 @@ type diagnosticAdapter struct {
 	ports.Agent
 	mutations atomic.Int32
 	probes    atomic.Int32
+	resolves  atomic.Int32
 }
 
 func (a *diagnosticAdapter) ResolveBinary(context.Context) (string, error) {
+	a.resolves.Add(1)
 	return diagnosticCanary, nil
 }
 func (a *diagnosticAdapter) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
@@ -75,6 +77,11 @@ func TestIntakeRemoteDiagnosticsRealHandlers(t *testing.T) {
 			routes := []routeCase{
 				{"GET", "/api/v1/agents/auth-plans", "", 200, false},
 				{"GET", "/api/v1/agents/readiness", "", 200, false},
+				{"GET", "/api/v1/agents", "", 200, false},
+				{"POST", "/api/v1/agents/readiness/ensure", `{"agentIds":[],"purpose":"launch"}`, 404, true},
+				{"POST", "/api/v1/agents/readiness/ensure", `{"purpose":"launch"}`, 404, true},
+				{"POST", "/api/v1/agents/readiness/ensure", `{"agentIds":["codex","claude-code"],"purpose":"launch"}`, 404, true},
+				{"POST", "/api/v1/agents/readiness/ensure", `{"agentIds":[],"purpose":"display"}`, 404, true},
 				{"POST", "/api/v1/agents/readiness/ensure", `{"agentIds":["claude-code"],"purpose":"launch"}`, 404, true},
 				{"POST", "/api/v1/agents/claude-code/probe", "", 200, false},
 				{"POST", "/api/v1/agents/refresh", "", 200, false},
@@ -116,6 +123,7 @@ func TestIntakeRemoteDiagnosticsRealHandlers(t *testing.T) {
 					}
 					before := calls.Load()
 					beforeProbes := adapter.probes.Load()
+					beforeResolves := adapter.resolves.Load()
 					rec := httptest.NewRecorder()
 					handler.ServeHTTP(rec, req)
 					want := route.status
@@ -133,8 +141,11 @@ func TestIntakeRemoteDiagnosticsRealHandlers(t *testing.T) {
 					if calls.Load()-before != reached {
 						t.Fatalf("%s %s reached daemon %d times, want %d", route.method, route.path, calls.Load()-before, reached)
 					}
-					if reached == 0 && adapter.probes.Load() != beforeProbes {
-						t.Fatal("rejected request invoked host probe")
+					cachedRead := route.method == http.MethodGet && (route.path == "/api/v1/agents/readiness" || route.path == "/api/v1/agents")
+					if reached == 0 || cachedRead {
+						if adapter.probes.Load() != beforeProbes || adapter.resolves.Load() != beforeResolves {
+							t.Fatal("rejected request or cached diagnostic invoked host work")
+						}
 					}
 					if adapter.mutations.Load() != 0 {
 						t.Fatal("remote diagnostic invoked launch/authentication")

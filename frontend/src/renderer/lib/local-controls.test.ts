@@ -66,3 +66,16 @@ it("keeps launch readiness local because it can refresh account credentials", as
   expect(fetch).toHaveBeenCalledOnce();
   expect(token).toHaveBeenCalledOnce();
 });
+
+
+it("preserves local launch readiness without a remote bearer", async () => {
+  setApiBaseUrl("http://127.0.0.1:3001");
+  const result = await apiClient.POST("/api/v1/agents/readiness/ensure", {
+    body: { agentIds: [], purpose: "launch" },
+  });
+  expect(result.response.status).toBe(200);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(token).not.toHaveBeenCalled();
+  const init = vi.mocked(fetch).mock.calls[0][1];
+  expect(new Headers(init?.headers).has("Authorization")).toBe(false);
+});
