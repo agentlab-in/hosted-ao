@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { STATE_ROOT_SEGMENTS } from "./state-root";
+import { resolveRuntimePaths } from "./state-root";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
 
 export type TelemetryBootstrap = {
@@ -54,11 +54,10 @@ export function defaultDataDir(
   platform: NodeJS.Platform,
   env: Record<string, string | undefined>,
   homeDir: string,
+  launchWorkingDirectory = process.cwd(),
 ): string | null {
-  void platform;
-  if (env.AO_DATA_DIR) return env.AO_DATA_DIR;
-  if (!homeDir) return null;
-  return path.join(homeDir, ...STATE_ROOT_SEGMENTS, "data");
+  if (!homeDir && !env.AO_RUN_FILE?.trim() && !env.AO_DATA_DIR?.trim()) return null;
+  return resolveRuntimePaths(env, homeDir, launchWorkingDirectory, platform).dataDir;
 }
 
 export async function loadOrCreateTelemetryInstallId(

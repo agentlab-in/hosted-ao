@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { STATE_ROOT_SEGMENTS } from "../shared/state-root";
+import { resolveRuntimePaths } from "../shared/state-root";
 import {
 	parseTelemetryPolicyDiskRecord,
 	telemetryPolicySnapshot,
@@ -44,9 +44,7 @@ export function resolveDesktopDataDir(
 	launchWorkingDirectory: string,
 	isPackaged: boolean,
 ): string {
-	const configured = env.AO_DATA_DIR?.trim();
-	if (configured) return path.resolve(launchWorkingDirectory, configured);
-	return path.resolve(homeDir, ...STATE_ROOT_SEGMENTS, isPackaged ? "data" : path.join("dev", "data"));
+	return resolveRuntimePaths(env, homeDir, launchWorkingDirectory, process.platform, !isPackaged).dataDir;
 }
 
 export class TelemetryPolicyAuthority {

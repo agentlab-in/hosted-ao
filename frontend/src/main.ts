@@ -36,7 +36,6 @@ import {
 import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import {
   TelemetryPolicyAuthority,
-  resolveDesktopDataDir,
 } from "./main/telemetry-policy-file";
 import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
@@ -98,10 +97,9 @@ import {
 } from "./shared/daemon-launch";
 import {
   createListenPortScanner,
-  defaultRunFilePath,
   parseRunFile,
 } from "./shared/daemon-discovery";
-import { STATE_ROOT_SEGMENTS } from "./shared/state-root";
+import { STATE_ROOT_SEGMENTS, resolveRuntimePaths } from "./shared/state-root";
 import type { DaemonStatus } from "./shared/daemon-status";
 import {
   refreshSlowDaemonStartupDetails,
@@ -289,42 +287,14 @@ if (
   app.disableHardwareAcceleration();
 }
 
-// Pin ALL Electron-owned state (Chromium cache, cookies, local/session storage,
-// crash dumps) under the canonical hosted-ao state root at ~/.ao/hosted instead
-// of Electron's macOS default ~/Library/Application Support/<name>. Keeps the
-// app's entire footprint alongside the daemon's data dir and running.json, one
-// level down from ~/.ao so it does not collide with the upstream
-// agent-orchestrator app's own state there. sessionData and crashDumps derive
-// from userData, so this one override reparents them all.
-// Must run before app ready.
-// Dev runs get their own profile under the same hosted state root: the packaged
-// app keeps this directory open, and two Chromium instances sharing one profile
-// corrupt its LevelDB stores. Mirrors how dev already isolates running.json and
-// the daemon data dir into ~/.ao/hosted/dev. DEV_STATE_SUBDIR ("dev") is defined
-// here (rather than near its other uses below) because it is needed before app
-// ready.
-const DEV_STATE_SUBDIR = "dev"; // ~/.ao/hosted/dev/
-app.setPath(
-  "userData",
-  app.isPackaged
-    ? path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "electron")
-    : path.join(
-        os.homedir(),
-        ...STATE_ROOT_SEGMENTS,
-        DEV_STATE_SUBDIR,
-        "electron",
-      ),
-);
-
-// Resolve once against the launch cwd, before the daemon can chdir. The exact
-// absolute value is shared by policy bootstrap and every daemon spawn.
+// Resolve once at process launch. Explicit paths survive child cwd changes.
+// Pin Electron state before ready; never use the OS app-data default.
 const desktopLaunchWorkingDirectory = process.cwd();
-const desktopDataDir = resolveDesktopDataDir(
-  process.env,
-  os.homedir(),
-  desktopLaunchWorkingDirectory,
-  app.isPackaged,
-);
+const desktopPaths = resolveRuntimePaths(process.env, os.homedir(), desktopLaunchWorkingDirectory, process.platform, !app.isPackaged);
+const desktopDataDir = desktopPaths.dataDir;
+const DEV_STATE_SUBDIR = "dev"; // Existing browser runtime namespace; excluded from this audit.
+app.setPath("userData", desktopPaths.userData);
+
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 let agentSwitchVisibilityController: AgentSwitchVisibilityController | null =
   null;
@@ -489,16 +459,7 @@ function syncNativeWindowBackground(): void {
 }
 
 function resolvedDaemonDataDir(): string {
-  const override = process.env.AO_DATA_DIR?.trim();
-  if (override) return override;
-  if (isDev)
-    return path.join(
-      os.homedir(),
-      ...STATE_ROOT_SEGMENTS,
-      DEV_STATE_SUBDIR,
-      "data",
-    );
-  return path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, "data");
+  return desktopDataDir;
 }
 
 // Cursor Agent reads TERM_THEME at process start. The daemon applies it from
@@ -1022,15 +983,7 @@ const RUN_FILE_FRESHNESS_SKEW_MS = 2_000;
 const DAEMON_PROBE_TIMEOUT_MS = 2_000;
 
 function runFilePath(): string | null {
-  if (process.env.AO_RUN_FILE) return process.env.AO_RUN_FILE;
-  if (isDev)
-    return path.join(
-      os.homedir(),
-      ...STATE_ROOT_SEGMENTS,
-      DEV_STATE_SUBDIR,
-      "running.json",
-    );
-  return defaultRunFilePath(process.platform, process.env, os.homedir());
+  return desktopPaths.runFile;
 }
 
 function editorStateDir(): string {
@@ -1265,8 +1218,7 @@ async function ensureBundledTmuxStaged(): Promise<void> {
   );
   const destination = stableBundledTmuxBinaryPath(
     app.isPackaged,
-    process.env.AO_DATA_DIR?.trim() ||
-      path.join(os.homedir(), ...STATE_ROOT_SEGMENTS),
+    desktopPaths.stateRoot,
     app.getVersion(),
     process.platform,
     process.arch,
@@ -1311,6 +1263,7 @@ function daemonEnv(
   const ownerTag = {
     AO_OWNER,
     AO_DATA_DIR: desktopDataDir,
+    AO_RUN_FILE: desktopPaths.runFile,
     AO_APP_RUN_ID: appRunId,
     // The browser runtime token is handed over through the child's private
     // stdin pipe below. Never put it in the daemon environment, where a
@@ -1334,19 +1287,10 @@ function daemonEnv(
       ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" }
       : {}),
   };
-  // In dev mode, inject isolation defaults so the dev daemon never collides with
-  // the installed app. User-set env vars take priority (checked first).
+  // Development keeps its isolated default root unless a state override is set.
   const devExtras: Record<string, string> = {};
   if (isDev) {
     if (!process.env.AO_PORT) devExtras.AO_PORT = String(DEV_DAEMON_PORT);
-    if (!process.env.AO_RUN_FILE) devExtras.AO_RUN_FILE = runFilePath() ?? "";
-    if (!process.env.AO_DATA_DIR)
-      devExtras.AO_DATA_DIR = path.join(
-        os.homedir(),
-        ...STATE_ROOT_SEGMENTS,
-        DEV_STATE_SUBDIR,
-        "data",
-      );
     devExtras.AO_ALLOWED_ORIGINS = devDaemonAllowedOrigins(
       process.env.AO_ALLOWED_ORIGINS,
       rendererUrl(),
@@ -1633,6 +1577,7 @@ async function refreshLocalDaemonStatus(): Promise<DaemonStatus> {
     app.getAppPath(),
     os.homedir(),
     process.platform,
+    desktopLaunchWorkingDirectory,
   );
   if (!launch) return daemonStatus;
   const existing = await inspectExistingDaemon(launch);
@@ -1727,6 +1672,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     app.getAppPath(),
     os.homedir(),
     process.platform,
+    desktopLaunchWorkingDirectory,
   );
   if (!launch) {
     setDaemonStatus({
@@ -1948,11 +1894,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
     | "ignore"
     | ["pipe", number | "ignore", number | "ignore"] = "pipe";
   if (keep) {
-    const logPath = path.join(
-      os.homedir(),
-      ...STATE_ROOT_SEGMENTS,
-      "daemon.log",
-    );
+    const logPath = path.join(desktopPaths.stateRoot, "daemon.log");
     try {
       keepDaemonLogFd = openSync(logPath, "a");
       stdio = ["pipe", keepDaemonLogFd, keepDaemonLogFd];
@@ -3002,15 +2944,9 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
   }
 });
 
-// Cloud auth IPC, cloud:getSession, cloud:signIn, cloud:signOut.
-// Resolves to ~/.ao/hosted (prod) or ~/.ao/hosted/dev (dev), matching the
-// daemon's own data dir. cloud-auth.ts writes cloud-auth.bin here, so a bare
-// ~/.ao would make this build and the upstream agent-orchestrator build fight
-// over one file holding two different sessions.
+// Cloud-account state follows the canonical runtime root, including overrides.
 function cloudDataDir(): string {
-  return isDev
-    ? path.join(os.homedir(), ...STATE_ROOT_SEGMENTS, DEV_STATE_SUBDIR)
-    : path.join(os.homedir(), ...STATE_ROOT_SEGMENTS);
+  return desktopPaths.stateRoot;
 }
 
 function notifyRenderersOfCloudSession(

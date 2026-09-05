@@ -121,8 +121,8 @@ func TestLoadAbsolutizesRelativeOverrides(t *testing.T) {
 	if want := filepath.Join(cwd, "rel-data"); cfg.DataDir != want {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, want)
 	}
-	if cfg.StateDir != cfg.DataDir {
-		t.Errorf("StateDir = %q, want explicit DataDir %q", cfg.StateDir, cfg.DataDir)
+	if cfg.StateDir != cwd {
+		t.Errorf("StateDir = %q, want run-file root %q", cfg.StateDir, cwd)
 	}
 	if want := filepath.Join(cwd, "rel-running.json"); cfg.RunFilePath != want {
 		t.Errorf("RunFilePath = %q, want %q", cfg.RunFilePath, want)
@@ -164,8 +164,8 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.DataDir != dataDir {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, dataDir)
 	}
-	if cfg.StateDir != dataDir {
-		t.Errorf("StateDir = %q, want explicit DataDir %q", cfg.StateDir, dataDir)
+	if cfg.StateDir != overrideDir {
+		t.Errorf("StateDir = %q, want run-file root %q", cfg.StateDir, overrideDir)
 	}
 	if !cfg.Telemetry.Events || cfg.Telemetry.Metrics {
 		t.Fatalf("Telemetry toggles = %+v", cfg.Telemetry)

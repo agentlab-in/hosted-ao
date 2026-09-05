@@ -132,9 +132,8 @@ type Config struct {
 	// DataDir is the directory holding durable SQLite state: DB and WAL files.
 	// It is created on first use by the storage layer.
 	DataDir string
-	// StateDir is the root for non-SQLite AO state, resolved by DefaultStateDir. When
-	// AO_DATA_DIR is explicitly set, that override is also the state root so an
-	// isolated daemon never leaks account state into the default home.
+	// StateDir is the canonical non-SQLite state root from ResolveStateRoot.
+	// It shares override precedence with HAO and daemon account storage.
 	StateDir string
 	// Agent is the compatibility agent adapter id selected by AO_AGENT;
 	// startSession fails fast if no adapter with this id is registered.
@@ -385,10 +384,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.DataDir = dataDir
-	if raw, ok := os.LookupEnv("AO_DATA_DIR"); ok && raw != "" {
-		cfg.StateDir = dataDir
-	} else {
-		cfg.StateDir = filepath.Dir(dataDir)
+	cfg.StateDir, err = ResolveStateRoot()
+	if err != nil {
+		return Config{}, err
 	}
 
 	return cfg, nil
@@ -509,10 +507,10 @@ func newAppRunID() string {
 // wins; otherwise it sits under the canonical AO home directory so the CLI and
 // Electron supervisor share one handshake location.
 func resolveRunFilePath() (string, error) {
-	if p, ok := os.LookupEnv("AO_RUN_FILE"); ok && p != "" {
+	if p := strings.TrimSpace(os.Getenv("AO_RUN_FILE")); p != "" {
 		return absOverride("AO_RUN_FILE", p)
 	}
-	stateDir, err := DefaultStateDir()
+	stateDir, err := ResolveStateRoot()
 	if err != nil {
 		return "", err
 	}
@@ -528,10 +526,10 @@ func ResolveRunFilePath() (string, error) { return resolveRunFilePath() }
 // AO_DATA_DIR wins; otherwise it defaults under the same canonical AO home
 // directory as the run-file.
 func resolveDataDir() (string, error) {
-	if p, ok := os.LookupEnv("AO_DATA_DIR"); ok && p != "" {
+	if p := strings.TrimSpace(os.Getenv("AO_DATA_DIR")); p != "" {
 		return absOverride("AO_DATA_DIR", p)
 	}
-	stateDir, err := DefaultStateDir()
+	stateDir, err := ResolveStateRoot()
 	if err != nil {
 		return "", err
 	}
@@ -605,6 +603,9 @@ func ResolveStateRoot() (string, error) {
 // (e.g. AO_DATA_DIR=data -> <cwd>/data/data). Absolutizing here keeps the path
 // stable regardless of the later chdir.
 func absOverride(name, p string) (string, error) {
+	if strings.ContainsRune(p, 0) {
+		return "", fmt.Errorf("%s contains a NUL byte", name)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s %q: %w", name, p, err)
