@@ -22,11 +22,11 @@ import {
 	type ProjectInfo,
 	type SessionMode,
 } from "./api";
-import { isConfigured, loadConfig, type ServerConfig } from "./config";
+import { isConfigured, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
 import type { Endpoint } from "./endpoints";
-import { activeHost, loadHosts } from "./hosts";
+import { loadHosts } from "./hosts";
 import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { sameServerConfig } from "./sameConfig";
@@ -195,15 +195,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const resumedRef = useRef(false);
 
 	const reloadConfig = useCallback(async () => {
-		// Races the active machine's endpoints rather than reading one stored
-		// address, so the app lands on LAN at home and the tunnel from anywhere
-		// else without the user choosing. Always resolves to something: every
-		// failure path inside falls back to the last stored config.
+		// Reconnect the v1 single-server config. V2 remains gated without a legacy fallback.
 		// Marked resolved whatever happens below. An unhandled failure here would
 		// otherwise leave the loader up forever, which is a worse failure than
 		// the blank screen this flag exists to prevent.
 		try {
-			const c = (await resolveActiveConfig(runtimeResolveDeps())) ?? (await loadConfig());
+			const c = await resolveActiveConfig(runtimeResolveDeps());
 		// Keep the previous object when the endpoint has not actually changed.
 		// Resolution builds a fresh one every time, and the live conversation
 		// stream, the poll loop and the terminal mux all key on this value's
@@ -221,7 +218,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Read alongside the config so a failure can be explained: a stored
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
-			setActiveEndpoints((await activeHost())?.endpoints ?? []);
+			setActiveEndpoints([]);
 		} finally {
 			setConfigResolved(true);
 		}
@@ -236,7 +233,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// on device, holding a Cloudflare connection with a working LAN unused.
 	// This is the only thing that moves the app back up the preference order.
 	useEffect(() => {
-		if (!config || !isConfigured(config) || !appActive) return;
+		// V1 has no endpoint kind; its reconnect must not read or race v2 hosts.
+		if (!config || !config.endpointKind || !isConfigured(config) || !appActive) return;
 		let stopped = false;
 		const check = async () => {
 			if (stopped) return;

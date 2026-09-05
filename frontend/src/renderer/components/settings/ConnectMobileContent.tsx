@@ -42,11 +42,7 @@ const STORE_LINKS = [
 ] as const;
 
 
-import {
-	buildPairingOffer,
-	pairingCodeUrl,
-	type PairingEndpoint,
-} from "../../lib/pairing-payload";
+import type { PairingEndpoint } from "../../lib/pairing-payload";
 
 export const mobileStatusQueryKey = ["mobile-status"] as const;
 
@@ -57,28 +53,6 @@ export function pairingPayload(host: string, port: number, password: string, sec
 	return JSON.stringify(secure ? { v: 1, host, port, password, secure: true } : { v: 1, host, port, password });
 }
 
-/** The v2 pairing link carries the daemon's endpoints and credential in its
- * fragment, which is not sent to a web server. */
-export function qrValueFor(input: {
-	hostId: string;
-	host: string;
-	platform: string;
-	password: string;
-	endpoints: readonly PairingEndpoint[];
-}): string {
-	// An empty endpoint list keeps the panel in its preparing state.
-	return pairingCodeUrl(
-		buildPairingOffer({
-			endpoints: input.endpoints,
-			password: input.password,
-			hostId: input.hostId,
-			name: input.host,
-			platform: input.platform,
-		}),
-		PAIRING_LINK_BASE,
-	);
-}
-
 /** Wait only for an enabled LAN listener to advertise its endpoints. */
 export function mobileStatusRefetchInterval(
 	status: { enabled?: boolean; endpoints?: readonly PairingEndpoint[]; tunnel?: { running: boolean; ready: boolean } } | undefined,
@@ -87,25 +61,6 @@ export function mobileStatusRefetchInterval(
 }
 
 const MOBILE_STATUS_POLL_MS = 2_000;
-
-/** Home-network pairing does not depend on a public tunnel. */
-export function qrIsReady(status: {
-	enabled: boolean;
-	endpoints?: readonly PairingEndpoint[];
-	tunnel?: { running: boolean; ready: boolean; [k: string]: unknown };
-}): boolean {
-	if (!status.enabled) return false;
-	// Nothing to encode: a v2 code carries the endpoint list, and there is no
-	// longer a v1 form to fall back to. An absent list is as unready as an empty
-	// one , it means the daemon has not told us where it can be reached.
-	if (!status.endpoints || status.endpoints.length === 0) return false;
-	return true;
-}
-
-/** The app's registered scheme (app.json `expo.scheme`), not a universal link:
- * it works today, with no association files to host and no store listing
- * required. Universal links can be added later without changing the payload. */
-const PAIRING_LINK_BASE = "aomobile://pair";
 
 /** A decoy with the same payload shape as a real pairing offer. Keeping the
  * same QR version makes the blurred preview look like the code it becomes. */
@@ -362,21 +317,10 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	}
 	if (!status) return null;
 
-	const showRealQR =
-		enabled &&
-		activeHost &&
-		!secureBlocked &&
-		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
-	// v2 when the daemon advertises endpoints, v1 otherwise. Computed once so
-	// the rendered QR and its data attribute cannot drift apart.
+	const showRealQR = enabled && activeHost && !secureBlocked && Boolean(status.password);
+	// Preserve the frozen authenticated single-endpoint v1 phone contract.
 	const qrValue = showRealQR
-		? qrValueFor({
-				hostId: status?.hostId ?? "",
-				host: activeHost,
-				platform: "",
-				password: status?.password ?? "",
-				endpoints: status?.endpoints ?? [],
-			})
+		? pairingPayload(activeHost, activePort, status.password, secureActive)
 		: undefined;
 	if (qrValue) lastQrValueRef.current = qrValue;
 	// Keep the preview in place while enable/remote access is still preparing.

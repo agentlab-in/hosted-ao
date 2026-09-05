@@ -64,6 +64,9 @@ export async function loadConfig(): Promise<ServerConfig> {
 	try {
 		const raw = await AsyncStorage.getItem(KEY);
 		const parsed = raw ? (JSON.parse(raw) as Partial<ServerConfig>) : {};
+		// The v2 endpoint race stamped these fields. Its credentials must not be
+		// revived by terminal/settings callers that read this config directly.
+		if (parsed.hostId !== undefined || parsed.endpointKind !== undefined) return DEFAULT_CONFIG;
 		const base = { ...DEFAULT_CONFIG, ...parsed };
 		// Migration: older builds persisted the password inside the AsyncStorage
 		// blob. If we find one there, move it into SecureStore and rewrite the blob

@@ -1,134 +1,79 @@
-/**
- * Production wiring for the endpoint race.
- *
- * UNVERIFIED. Everything this file calls is unit-tested — race.ts, hosts.ts,
- * connect.ts, connectionAction.ts — but this glue itself is not: it needs a
- * real device or simulator, because it depends on React Native's fetch,
- * AbortSignal and timer behaviour rather than the Node equivalents vitest
- * provides. Treat the shapes as correct and the runtime behaviour as claimed
- * until it has been run. See docs for the local end-to-end check.
- */
-import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
-import { type Endpoint, endpointBaseUrl } from "./endpoints";
-import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
+/** Frozen-downstream single-endpoint compatibility. V2 identity racing is unavailable. */
+import { fetch } from "expo/fetch";
+import type { ConnectDeps, ConnectResult } from "./connect";
+import type { ServerConfig } from "./config";
+import { isLocalNetworkHost, isTailscaleHost } from "./connectionError";
+import type { Endpoint } from "./endpoints";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
-import { type ProbeAnswer, raceEndpoints } from "./race";
+import type { ProbeAnswer } from "./race";
 
-/** How long a single endpoint gets to identify itself.
- *
- * Short on purpose. Every candidate is probed at once, so this is the ceiling
- * on the whole race, and a dead LAN address is the common case after changing
- * networks — waiting on it is exactly what the race exists to avoid. */
 export const PROBE_TIMEOUT_MS = 3_000;
 
-/**
- * Asks an endpoint which machine it is.
- *
- * Unauthenticated by design: the answer is what decides whether this endpoint
- * is safe to send a credential to, so it has to come first. See
- * docs/adr/0003-unauthenticated-identity-probe.md.
- */
-export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal): Promise<ProbeAnswer> {
-	// A tunnel hostname may simply not have propagated yet; see probeRetry.
-	const startedAt = Date.now();
-	for (;;) {
-		try {
-			return await probeOnce(endpoint, signal);
-		} catch (e) {
-			if (signal.aborted) throw e; // The race already has a winner.
-			if (!shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
-			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
-		}
+export class MobileConnectionError extends Error {
+	constructor(readonly status: number) {
+		super(`Connection request returned ${status}`);
 	}
 }
 
-/** Resolves when the delay elapses, or rejects as soon as the race is over. */
-function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => {
-			signal.removeEventListener("abort", onAbort);
-			resolve();
-		}, ms);
-		function onAbort() {
-			clearTimeout(timer);
-			reject(new Error("probe aborted"));
-		}
-		signal.addEventListener("abort", onAbort, { once: true });
-	});
+/** Neither anonymous identity nor password-before-identity is permitted for v2. */
+export async function probeEndpoint(_endpoint: Endpoint, _signal: AbortSignal): Promise<ProbeAnswer> {
+	throw new Error("QR v2 pairing is unavailable in this build.");
 }
 
-async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<ProbeAnswer> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-	// Abort when either the race picked a winner or our own timeout fired.
-	const onOuterAbort = () => controller.abort();
-	signal.addEventListener("abort", onOuterAbort);
-	try {
-		const res = await fetch(`${endpointBaseUrl(endpoint)}/api/v1/identity`, {
-			method: "GET",
-			signal: controller.signal,
-		});
-		if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
-		const body = (await res.json()) as { hostId?: unknown };
-		if (typeof body.hostId !== "string" || body.hostId === "") {
-			throw new Error("identity probe returned no host id");
-		}
-		return { hostId: body.hostId };
-	} finally {
-		clearTimeout(timeout);
-		signal.removeEventListener("abort", onOuterAbort);
-	}
-}
-
-/**
- * The host id at a plain address, for a connection made by hand rather than by
- * scanning. Same endpoint as the race's probe, without a candidate to race.
- */
-export async function probeIdentity(cfg: {
-	host: string;
-	httpPort: string;
-	secure?: boolean;
+export async function probeIdentity(_cfg: {
+	host: string; httpPort: string; secure?: boolean;
 }): Promise<string> {
-	const base = `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}`;
-	const res = await fetch(`${base}/api/v1/identity`, { method: "GET" });
-	if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
-	const body = (await res.json()) as { hostId?: unknown };
-	return typeof body.hostId === "string" ? body.hostId : "";
+	throw new Error("QR v2 pairing is unavailable in this build.");
 }
 
-/**
- * Re-reads what the daemon advertises now.
- *
- * Deliberately GET /api/v1/endpoints and not /api/v1/mobile/status: the mobile
- * control routes are 404'd on the LAN listener, which is the only listener a
- * phone can reach.
- */
-async function fetchAdvertisedEndpoints(base: string, token: string): Promise<Endpoint[]> {
-	const res = await fetch(`${base}/api/v1/endpoints`, {
-		headers: token ? { Authorization: `Bearer ${token}` } : {},
-	});
-	if (!res.ok) throw new Error(`endpoint refresh returned ${res.status}`);
-	const body = (await res.json()) as { endpoints?: Endpoint[] };
-	return body.endpoints ?? [];
-}
-
-/** The production dependency set for connectHost. */
+/** Retain exported dependencies for callers, but never activate the upstream race. */
 export function runtimeConnectDeps(): ConnectDeps {
 	return {
 		findHost,
-		race: (host) => raceEndpoints(host.endpoints, host.id, probeEndpoint),
-		refreshEndpoints: (config) =>
-			fetchAdvertisedEndpoints(
-				`${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`,
-				config.password,
-			),
+		race: async () => ({ ok: false, reason: "no-candidates" }),
+		refreshEndpoints: async () => { throw new Error("QR v2 pairing is unavailable in this build."); },
 		saveEndpoints: updateHostEndpoints,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,
 	};
 }
 
-/** Connects to a paired machine using the real network and storage. */
-export function connectToHost(hostId: string): Promise<ConnectResult> {
-	return connectHost(hostId, runtimeConnectDeps());
+export async function connectToHost(_hostId: string): Promise<ConnectResult> {
+	return { ok: false, reason: "no-candidates" };
+}
+
+/** The v1 single-server config has no host identity or raced endpoint metadata. */
+export function isLegacyConnection(config: ServerConfig): boolean {
+	return config.hostId === undefined && config.endpointKind === undefined;
+}
+
+/** Frozen v1 verifies the authenticated application API, without requesting identity.
+ * Restrict this compatibility path to the existing home-network/Tailscale scope. */
+export async function verifyLegacyConnection(config: ServerConfig, signal?: AbortSignal): Promise<void> {
+	if (!isLegacyConnection(config)) throw new Error("QR v2 pairing is unavailable in this build.");
+	if (!config.password) throw new MobileConnectionError(401);
+	const host = config.host.trim();
+	const port = Number(config.httpPort);
+	if (!/^[a-zA-Z0-9.-]+$/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535 ||
+		!(isLocalNetworkHost(host) || isTailscaleHost(host) || /^[a-zA-Z0-9.-]+\.ts\.net$/.test(host))) {
+		throw new Error("Use the address from Connect Mobile on your trusted home network or Tailscale.");
+	}
+	if (signal?.aborted) throw new Error("Connection cancelled");
+	const controller = new AbortController();
+	const onAbort = () => controller.abort();
+	signal?.addEventListener("abort", onAbort, { once: true });
+	const timeout = setTimeout(onAbort, PROBE_TIMEOUT_MS);
+	try {
+		const res = await fetch(`${config.secure ? "https" : "http"}://${host}:${port}/api/v1/sessions`, {
+			method: "GET", headers: { Authorization: `Bearer ${config.password}` },
+			redirect: "error", credentials: "omit", signal: controller.signal,
+		});
+		if (!res.ok) throw new MobileConnectionError(res.status);
+		await res.json();
+		if (controller.signal.aborted) throw new Error("Connection cancelled");
+	} finally {
+		clearTimeout(timeout);
+		controller.abort();
+		signal?.removeEventListener("abort", onAbort);
+	}
 }

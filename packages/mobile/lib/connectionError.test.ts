@@ -111,7 +111,7 @@ describe("describeConnectionFailure", () => {
 
 	it("blames the password, not the network, on a 401", () => {
 		const d = describeConnectionFailure("auth", target());
-		expect(d.message).toContain("rotated");
+		expect(d.message).toContain("connection password");
 		expect(d.message).not.toContain("Wi-Fi");
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
@@ -192,5 +192,16 @@ describe("shouldKeepPolling", () => {
 	// silently turned the guard off.
 	it("catches 403, which prefix-matching on the message never did", () => {
 		expect(shouldKeepPolling(403)).toBe(false);
+	});
+});
+
+
+describe("v2 product gate", () => {
+	it("provides stable remediation without suggesting a backend exemption", () => {
+		expect(describeConnectionFailure("v2-unavailable", target())).toEqual({
+			title: "QR v2 pairing is unavailable",
+			message: "QR v2 pairing is unavailable in this build. Use a compatible desktop's v1 QR code or Connect manually on your trusted home network or Tailscale.",
+			showLocalNetworkHint: false,
+		});
 	});
 });
