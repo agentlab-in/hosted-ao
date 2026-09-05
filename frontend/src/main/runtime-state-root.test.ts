@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath, URL } from "node:url";
 import path from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
@@ -8,7 +7,7 @@ import { resolveRuntimePaths } from "../shared/state-root";
 import { buildDaemonEnv, devDaemonAllowedOrigins } from "../shared/shell-env";
 
 // Execute the actual bootstrap/path functions without loading Electron or starting the app.
-const source = ts.createSourceFile("main.ts", readFileSync(fileURLToPath(new URL("../main.ts", import.meta.url)), "utf8"), ts.ScriptTarget.Latest, true);
+const source = ts.createSourceFile("main.ts", readFileSync(path.resolve(__dirname, "../main.ts"), "utf8"), ts.ScriptTarget.Latest, true);
 const names = new Set(["desktopLaunchWorkingDirectory", "desktopPaths", "desktopDataDir"]);
 const functions = new Set(["daemonEnv", "runFilePath", "resolvedDaemonDataDir", "cloudDataDir"]);
 const selected = source.statements.filter((statement) => {
