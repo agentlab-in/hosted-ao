@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Linking, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import { ApiError, pingServer } from "./api";
+import { MobileConnectionError, verifyLegacyConnection } from "./connectRuntime";
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type ServerConfig } from "./config";
 import {
 	classifyConnectionFailure,
@@ -26,6 +26,8 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
+	const attempt = useRef<AbortController | null>(null);
+	useEffect(() => () => attempt.current?.abort(), []);
 	const [busy, setBusy] = useState(false);
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 
@@ -33,30 +35,36 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 	// to re-try the scanner doesn't lose what they typed. Mount is the open now
 	// that this is a route rather than an always-rendered component.
 	useEffect(() => {
-		loadConfig().then(setCfg);
+		loadConfig().then((saved) => setCfg({ ...DEFAULT_CONFIG, host: saved.host, httpPort: saved.httpPort, secure: saved.secure }));
 	}, []);
 
-	const set = (k: keyof ServerConfig) => (v: string) => setCfg((prev) => ({ ...prev, [k]: v }));
+	const set = (k: keyof ServerConfig) => (v: string) => setCfg((prev) => ({ ...prev, [k]: v, ...(k === "host" || k === "httpPort" ? { password: "" } : {}) }));
 
 	async function connect() {
+		attempt.current?.abort();
+		const controller = new AbortController();
+		attempt.current = controller;
 		setBusy(true);
 		setFailure(null);
 		const target = { ...cfg, host: cfg.host.trim() };
 		try {
-			// Verify BEFORE persisting. pingServer takes the config it is handed, so
-			// nothing needs to be saved to test it — and saving first would leave
+			// Verify BEFORE persisting. The verifier uses only the supplied config, so
+			// nothing needs to be saved to test it; and saving first would leave
 			// known-bad credentials on disk. The background poller retries every 8s,
 			// and the daemon locks a device out for a minute after 5 failed auths,
 			// so a persisted wrong password locks the user out on its own in ~40s,
 			// with no further input from them.
-			await pingServer(target);
+			await verifyLegacyConnection(target, controller.signal);
+			if (controller.signal.aborted) return;
 			await saveConfig(target);
+			if (controller.signal.aborted) return;
 			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
 			haptics.success();
 			onConnected();
 		} catch (e) {
 			haptics.warning();
-			const status = e instanceof ApiError ? e.status : undefined;
+			if (controller.signal.aborted) return;
+			const status = e instanceof MobileConnectionError ? e.status : undefined;
 			setFailure(
 				describeConnectionFailure(classifyConnectionFailure(status), {
 					host: target.host,
@@ -65,7 +73,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 				}),
 			);
 		} finally {
-			setBusy(false);
+			if (attempt.current === controller) setBusy(false);
 		}
 	}
 
@@ -94,7 +102,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 				<Text style={styles.toggleLabel}>Use TLS (https / wss)</Text>
 				<Switch
 					value={!!cfg.secure}
-					onValueChange={(v) => setCfg((prev) => ({ ...prev, secure: v }))}
+					onValueChange={(v) => setCfg((prev) => ({ ...prev, secure: v, password: "" }))}
 					trackColor={{ true: t.blue, false: t.borderStrong }}
 				/>
 			</View>
@@ -132,7 +140,7 @@ export function ManualConnectSheet({ onConnected }: { onConnected: () => void })
 	);
 
 	// Android's sheet is sized by detents rather than by its content (see
-	// CONNECT_SHEET_OPTIONS — two detents are what lets the OS expand it for the
+	// CONNECT_SHEET_OPTIONS; two detents are what lets the OS expand it for the
 	// keyboard). A detent gives the content a definite height, so the form scrolls
 	// within it and the Connect button stays reachable once the sheet expands.
 	if (Platform.OS !== "ios") {

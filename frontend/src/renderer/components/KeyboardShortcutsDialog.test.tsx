@@ -19,7 +19,7 @@ describe("KeyboardShortcutsDialog", () => {
 		expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
 		expect(screen.getByText("New session")).toBeInTheDocument();
 		expect(screen.getByText("Toggle sidebar")).toBeInTheDocument();
-		expect(screen.getByText("Open project 1–9")).toBeInTheDocument();
+		expect(screen.getByText("Open project 1-9")).toBeInTheDocument();
 		expect(screen.getByText("Toggle inspector")).toBeInTheDocument();
 		expect(screen.getByText("Open command palette")).toBeInTheDocument();
 		expect(screen.getByLabelText("Ctrl+/")).toBeInTheDocument();

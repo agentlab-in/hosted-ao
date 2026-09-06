@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 func runCLI(t *testing.T, deps Deps, args ...string) (string, string, int) {
@@ -228,5 +230,29 @@ func TestCommandSurfaceContainsNoAOOrchestration(t *testing.T) {
 		if code != 2 {
 			t.Errorf("hao %s exit=%d, want usage exit 2", forbidden, code)
 		}
+	}
+}
+
+func TestProductionConfigPathMatchesDaemonStateRoot(t *testing.T) {
+	base := t.TempDir()
+	for _, tc := range []struct{ name, data, run string }{
+		{name: "default"},
+		{name: "data", data: filepath.Join(base, "data-only", "data")},
+		{name: "run", run: filepath.Join(base, "run-only", "running.json")},
+		{name: "both", data: filepath.Join(base, "db", "data"), run: filepath.Join(base, "discovery", "running.json")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_DATA_DIR", tc.data)
+			t.Setenv("AO_RUN_FILE", tc.run)
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, stderr, code := runCLI(t, Deps{}, "config", "path")
+			want := filepath.Join(cfg.StateDir, "hao", "config.yaml")
+			if code != 0 || stderr != "" || strings.TrimSpace(out) != want {
+				t.Fatalf("HAO path=%q stderr=%q code=%d, daemon root=%q", out, stderr, code, cfg.StateDir)
+			}
+		})
 	}
 }

@@ -270,7 +270,13 @@ func waitForHealth(t *testing.T, base string) {
 	// Per-request timeout so a stalled connect or hung handshake doesn't park
 	// the test for the full Go test timeout; the outer deadline only bounds
 	// the polling loop, not any single GET.
-	client := &http.Client{Timeout: 500 * time.Millisecond}
+	// Do not share the default transport with the subsequent shutdown request.
+	// A speculative replacement dial can otherwise remain StateNew until the
+	// server's five-second shutdown deadline even though all requests finished.
+	client := &http.Client{
+		Timeout:   500 * time.Millisecond,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(base + "/healthz")

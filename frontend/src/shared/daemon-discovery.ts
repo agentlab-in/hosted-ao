@@ -4,18 +4,9 @@
 //   - the slog text line `msg="daemon listening" addr=127.0.0.1:<port>`
 //     (backend/internal/httpd/server.go, written to stderr), and
 //   - the running.json handshake file (backend/internal/runfile).
-// These functions are kept side-effect free and dependency-free (no node:*
-// imports — vite-plugin-electron-renderer's polyfill breaks them under vitest)
-// so tests can exercise them directly; the Electron main process owns the
-// streams, fs polling, and timers.
+// Stream parsing stays pure; discovery paths share the canonical Node path resolver.
 
-import { STATE_ROOT_SEGMENTS } from "./state-root";
-
-// Minimal join: "/" works for fs access on every platform Node supports,
-// including Windows paths that already contain backslashes (e.g. %APPDATA%).
-function joinPath(...segments: string[]): string {
-	return segments.map((segment) => segment.replace(/[/\\]+$/, "")).join("/");
-}
+import { resolveRuntimePaths } from "./state-root";
 
 /**
  * Parse one daemon log line for the listen announcement. slog's TextHandler
@@ -118,10 +109,10 @@ export function parseRunFile(contents: string): RunFileInfo | null {
  */
 export function defaultRunFilePath(
 	platform: NodeJS.Platform,
-	_env: Record<string, string | undefined>,
+	env: Record<string, string | undefined>,
 	homeDir: string,
+	launchWorkingDirectory = process.cwd(),
 ): string | null {
-	void platform;
-	if (!homeDir) return null;
-	return joinPath(homeDir, ...STATE_ROOT_SEGMENTS, "running.json");
+	if (!homeDir && !env.AO_RUN_FILE?.trim() && !env.AO_DATA_DIR?.trim()) return null;
+	return resolveRuntimePaths(env, homeDir, launchWorkingDirectory, platform).runFile;
 }

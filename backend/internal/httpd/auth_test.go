@@ -248,3 +248,41 @@ func TestAuthLockoutIsPerSource(t *testing.T) {
 		t.Fatalf("source B with wrong password: got %d want 401", w.Code)
 	}
 }
+
+// HAO requires authentication on identity probes as on other LAN requests.
+func TestIdentityProbeRequiresLANAuthentication(t *testing.T) {
+	for _, auth := range []string{"", "Bearer wrong", "Bearer secret12"} {
+		h, _ := newAuthUnderTest("secret12", time.Now)
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/identity", nil)
+		r.RemoteAddr = "192.168.1.50:5555"
+		r.Header.Set("Authorization", auth)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		want := http.StatusUnauthorized
+		if auth == "Bearer secret12" {
+			want = http.StatusOK
+		}
+		if w.Code != want {
+			t.Fatalf("identity response = %d, want %d", w.Code, want)
+		}
+	}
+}
+
+func TestIdentityProbeObeysLANLockout(t *testing.T) {
+	h, lock := newAuthUnderTest("secret12", time.Now)
+	for i := 0; i < 5; i++ {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, reqPathCookie(http.MethodGet, "/api/v1/identity", "", ""))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status=%d, want 401", i, w.Code)
+		}
+	}
+	if !lock.blocked("192.168.1.50") {
+		t.Fatal("anonymous identity probes bypass lockout")
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, reqPathCookie(http.MethodGet, "/api/v1/identity", "Bearer secret12", ""))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked identity request: status=%d, want 429", w.Code)
+	}
+}

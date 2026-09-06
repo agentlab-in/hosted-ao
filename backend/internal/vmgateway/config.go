@@ -397,13 +397,10 @@ func normalizeDomain(domain, source string) (string, error) {
 //
 // That asymmetry is deliberate, and it is the answer to a review finding that
 // read it as a bug. AO_DATA_DIR moves durable data (the SQLite database, the
-// ACME cert cache). machine.json is this machine's binding identity and sits
-// beside running.json, which has the same shape: pinned to the state root and
-// moved only by its own override (AO_RUN_FILE there, AO_MACHINE_FILE here).
-// Deriving it from the data dir instead would move the file the gateway reads
-// without moving the file `ao setup-vm` writes (setupPlan.MachineFile is
-// <state root>/machine.json regardless of AO_DATA_DIR), so an operator who set
-// AO_DATA_DIR would get a gateway looking in a place nothing ever writes.
+// ACME cert cache). machine.json is persistent binding identity, and keeps
+// the DefaultStateDir fallback used by setup-vm. AO_DATA_DIR and AO_RUN_FILE
+// isolate runtime state only; they must not select a different identity or
+// invalidate paired clients. AO_MACHINE_FILE remains its explicit override.
 //
 // It is exported so `ao whoami` resolves the same path from the same line of
 // code: the two must name the same file, or whoami confidently reports a

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeBridge } from "./support/fake-bridge";
 
 // CLONE-* RENDERER SMOKE (renderer slice, issue #59).
@@ -46,6 +47,16 @@ async function shot(page: Page, name: string): Promise<void> {
 	await page.screenshot({ path: `${process.env.AO_CLONE_SHOTS}/${name}.png` });
 }
 
+async function stubReadiness(page: Page): Promise<void> {
+	await page.route(/\/api\/v1\/agents\/readiness(?:\/ensure)?$/, (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({ agents: [agentReadiness("claude-code", "Claude Code")] }),
+		}),
+	);
+}
+
 /**
  * Answers the calls the remote (cloneUrl) clone step makes against
  * REMOTE_BASE_URL, captures the POST /api/v1/projects body, and can hold
@@ -55,6 +66,7 @@ async function shot(page: Page, name: string): Promise<void> {
  * instead of racing an unstubbed DNS failure.
  */
 async function stubRemoteDaemon(page: Page, cloneMs = 0): Promise<{ body: () => unknown }> {
+	await stubReadiness(page);
 	let createBody: unknown = null;
 	await page.route(`${REMOTE_BASE_URL}/api/v1/agents`, (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AGENT_CATALOG) }),
@@ -75,6 +87,7 @@ async function stubRemoteDaemon(page: Page, cloneMs = 0): Promise<{ body: () => 
 
 /** Same shape as stubRemoteDaemon, but for the local daemon's clone wire. */
 async function stubLocalCloneDaemon(page: Page): Promise<{ body: () => unknown }> {
+	await stubReadiness(page);
 	let cloneBody: unknown = null;
 	await page.route("**/api/v1/agents", (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AGENT_CATALOG) }),
@@ -92,7 +105,7 @@ async function submitClone(page: Page, url: string): Promise<void> {
 	await page.getByRole("button", { name: "Clone from Git" }).click();
 	await page.getByRole("dialog", { name: "Clone a Git repository" }).getByLabel("Repository URL").fill(url);
 	await page.getByRole("button", { name: "Continue" }).click();
-	await page.getByRole("button", { name: "Clone and start" }).click();
+	await page.getByRole("button", { name: "Clone", exact: true }).click();
 }
 
 test("renderer: clone by URL sends only a clone URL and surfaces the daemon's remediation @P0 @CLONE", async ({
@@ -116,11 +129,11 @@ test("renderer: clone by URL sends only a clone URL and surfaces the daemon's re
 	await cloneDialog.getByRole("button", { name: "Continue" }).click();
 	await expect(cloneDialog.getByRole("alert")).toContainText("Enter a valid HTTPS, SSH, Git, or file URL.");
 	await expect(cloneDialog.getByLabel("Repository URL")).toHaveValue("github.com/agentlab-in");
-	await expect(page.getByRole("button", { name: "Clone and start" })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "Clone", exact: true })).toHaveCount(0);
 
 	await cloneDialog.getByLabel("Repository URL").fill("https://github.com/agentlab-in/hosted-ao.git");
 	await cloneDialog.getByRole("button", { name: "Continue" }).click();
-	await page.getByRole("button", { name: "Clone and start" }).click();
+	await page.getByRole("button", { name: "Clone", exact: true }).click();
 
 	// The daemon's CLONE_AUTH_FAILED envelope surfaces on the agent sheet
 	// (projectSheetError falls through to the generic clone-failed title,
@@ -146,7 +159,7 @@ test("renderer: a clone in flight keeps reporting itself rather than freezing @P
 	// counter was dead code the upstream merge deleted outright: no callers,
 	// no elapsed counter anywhere in the new flow. The busy submit label is
 	// now the liveness signal, so a frozen dialog is what this has to catch.
-	const sheet = page.getByRole("dialog", { name: "Project agents" });
+	const sheet = page.getByRole("dialog", { name: "Set up project" });
 	const submit = page.getByRole("button", { name: "Cloning..." });
 	await expect(submit).toBeVisible();
 	await expect(submit).toBeDisabled();

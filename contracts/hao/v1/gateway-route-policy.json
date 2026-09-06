@@ -9,7 +9,12 @@
     { "kind": "prefix", "path": "/api/v1/mobile" },
     { "kind": "prefix", "path": "/api/v1/dev" },
     { "kind": "prefix", "path": "/api/v1/system/install" },
-    { "kind": "prefix", "path": "/api/v1/browser" }
+    { "kind": "prefix", "path": "/api/v1/browser" },
+    { "kind": "prefix", "path": "/api/v1/agents/codex" },
+    { "kind": "prefix", "path": "/api/v1/agents/installers" },
+    { "kind": "prefix", "path": "/api/v1/agents/install-jobs" },
+    { "kind": "prefix", "path": "/api/v1/agents/readiness/ensure" },
+    { "kind": "prefix", "path": "/api/v1/desktop" }
   ],
   "fixtures": [
     { "path": "/mux", "allowed": true, "surface": "terminal_mux" },
@@ -26,6 +31,11 @@
     { "path": "/api/v1/system/install/git", "allowed": false, "surface": "host_mutation" },
     { "path": "/api/v1/browser/status", "allowed": false, "surface": "browser_control" },
     { "path": "/api/v1/browserapp", "allowed": true, "surface": "prefix_boundary_sibling" },
+    { "path": "/api/v1/agents/codex/accounts", "allowed": false, "surface": "local_account_control" },
+    { "path": "/api/v1/agents/codex/account-switches", "allowed": false, "surface": "local_account_control" },
+    { "path": "/api/v1/agents/codexapp/accounts", "allowed": true, "surface": "prefix_boundary_sibling" },
+    { "path": "/api/v1/agents/readiness/ensure", "allowed": false, "surface": "local_credential_refresh" },
+    { "path": "/api/v1/agents/readiness/ensure-extra", "allowed": true, "surface": "prefix_boundary_sibling" },
     { "path": "/healthz", "allowed": false, "surface": "unclassified_health" },
     { "path": "/unknown", "allowed": false, "surface": "unknown" }
   ]

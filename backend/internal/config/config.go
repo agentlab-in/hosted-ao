@@ -61,11 +61,15 @@ const (
 
 // TelemetryConfig controls local and remote telemetry behavior.
 type TelemetryConfig struct {
-	Events      bool
-	Metrics     bool
-	Remote      TelemetryRemote
-	PostHogKey  string
-	PostHogHost string
+	Events bool
+	// EventsExplicit distinguishes an operator/supervisor choice from the
+	// default. A missing policy file may use a boot-scoped headless token only
+	// when AO_TELEMETRY_EVENTS was explicitly set to on.
+	EventsExplicit bool
+	Metrics        bool
+	Remote         TelemetryRemote
+	PostHogKey     string
+	PostHogHost    string
 	// DisabledEvents names event streams that must never reach the remote
 	// (billed) sink. This is the kill switch: a stream that turns out to be
 	// noisy or expensive can be silenced by configuration, without waiting for
@@ -99,9 +103,10 @@ type GitLabConfig struct {
 }
 
 // DefaultAllowedOrigins are the browser origins the daemon's CORS boundary
-// trusts, beyond loopback-served content (which the middleware always trusts —
-// local pages can reach the no-auth daemon directly anyway). The daemon has no
-// auth, so every entry must be an origin web content cannot present:
+// trusts. General routes additionally admit loopback-served content, while
+// credential-management routes accept only this exact list (plus native
+// callers without an Origin header). The daemon has no auth, so every default
+// entry must be an origin ordinary web content cannot present:
 // app://renderer is the packaged Electron renderer, served from a custom
 // scheme only the desktop app registers — no website can bear it. The opaque
 // "null" origin (file:// pages, sandboxed iframes on any website) must never
@@ -127,6 +132,9 @@ type Config struct {
 	// DataDir is the directory holding durable SQLite state: DB and WAL files.
 	// It is created on first use by the storage layer.
 	DataDir string
+	// StateDir is the canonical non-SQLite state root from ResolveStateRoot.
+	// It shares override precedence with HAO and daemon account storage.
+	StateDir string
 	// Agent is the compatibility agent adapter id selected by AO_AGENT;
 	// startSession fails fast if no adapter with this id is registered.
 	Agent string
@@ -277,12 +285,13 @@ func Load() (Config, error) {
 		cfg.AllowedOrigins = origins
 	}
 
-	if raw := os.Getenv("AO_TELEMETRY_EVENTS"); raw != "" {
+	if raw, present := os.LookupEnv("AO_TELEMETRY_EVENTS"); present && strings.TrimSpace(raw) != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_EVENTS", raw)
 		if err != nil {
 			return Config{}, err
 		}
 		cfg.Telemetry.Events = v
+		cfg.Telemetry.EventsExplicit = true
 	}
 	if raw := os.Getenv("AO_TELEMETRY_METRICS"); raw != "" {
 		v, err := parseToggleEnv("AO_TELEMETRY_METRICS", raw)
@@ -375,6 +384,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.DataDir = dataDir
+	cfg.StateDir, err = ResolveStateRoot()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }
@@ -494,10 +507,10 @@ func newAppRunID() string {
 // wins; otherwise it sits under the canonical AO home directory so the CLI and
 // Electron supervisor share one handshake location.
 func resolveRunFilePath() (string, error) {
-	if p, ok := os.LookupEnv("AO_RUN_FILE"); ok && p != "" {
+	if p := strings.TrimSpace(os.Getenv("AO_RUN_FILE")); p != "" {
 		return absOverride("AO_RUN_FILE", p)
 	}
-	stateDir, err := DefaultStateDir()
+	stateDir, err := ResolveStateRoot()
 	if err != nil {
 		return "", err
 	}
@@ -513,10 +526,10 @@ func ResolveRunFilePath() (string, error) { return resolveRunFilePath() }
 // AO_DATA_DIR wins; otherwise it defaults under the same canonical AO home
 // directory as the run-file.
 func resolveDataDir() (string, error) {
-	if p, ok := os.LookupEnv("AO_DATA_DIR"); ok && p != "" {
+	if p := strings.TrimSpace(os.Getenv("AO_DATA_DIR")); p != "" {
 		return absOverride("AO_DATA_DIR", p)
 	}
-	stateDir, err := DefaultStateDir()
+	stateDir, err := ResolveStateRoot()
 	if err != nil {
 		return "", err
 	}
@@ -590,6 +603,9 @@ func ResolveStateRoot() (string, error) {
 // (e.g. AO_DATA_DIR=data -> <cwd>/data/data). Absolutizing here keeps the path
 // stable regardless of the later chdir.
 func absOverride(name, p string) (string, error) {
+	if strings.ContainsRune(p, 0) {
+		return "", fmt.Errorf("%s contains a NUL byte", name)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s %q: %w", name, p, err)

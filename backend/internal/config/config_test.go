@@ -48,8 +48,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DataDir != wantDataDir {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, wantDataDir)
 	}
+	if wantStateDir := filepath.Join(append([]string{homeDir}, StateRootSegments()...)...); cfg.StateDir != wantStateDir {
+		t.Errorf("StateDir = %q, want %q", cfg.StateDir, wantStateDir)
+	}
 	if cfg.Telemetry.Remote != TelemetryRemoteOff || cfg.Telemetry.PostHogHost != DefaultTelemetryPostHogHost {
 		t.Fatalf("Telemetry defaults = %+v", cfg.Telemetry)
+	}
+	if cfg.Telemetry.EventsExplicit {
+		t.Fatal("Telemetry.EventsExplicit = true for an absent setting")
 	}
 }
 
@@ -115,6 +121,9 @@ func TestLoadAbsolutizesRelativeOverrides(t *testing.T) {
 	if want := filepath.Join(cwd, "rel-data"); cfg.DataDir != want {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, want)
 	}
+	if cfg.StateDir != cwd {
+		t.Errorf("StateDir = %q, want run-file root %q", cfg.StateDir, cwd)
+	}
 	if want := filepath.Join(cwd, "rel-running.json"); cfg.RunFilePath != want {
 		t.Errorf("RunFilePath = %q, want %q", cfg.RunFilePath, want)
 	}
@@ -155,8 +164,14 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.DataDir != dataDir {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, dataDir)
 	}
+	if cfg.StateDir != overrideDir {
+		t.Errorf("StateDir = %q, want run-file root %q", cfg.StateDir, overrideDir)
+	}
 	if !cfg.Telemetry.Events || cfg.Telemetry.Metrics {
 		t.Fatalf("Telemetry toggles = %+v", cfg.Telemetry)
+	}
+	if !cfg.Telemetry.EventsExplicit {
+		t.Fatal("Telemetry.EventsExplicit = false for AO_TELEMETRY_EVENTS=on")
 	}
 	if cfg.Telemetry.Remote != TelemetryRemotePostHog || cfg.Telemetry.PostHogKey != "phc_test" || cfg.Telemetry.PostHogHost != "https://eu.i.posthog.com" {
 		t.Fatalf("Telemetry remote = %+v", cfg.Telemetry)

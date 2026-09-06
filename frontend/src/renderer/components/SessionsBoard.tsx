@@ -1,4 +1,11 @@
-import { memo, useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -16,10 +23,10 @@ import {
   workerSessions,
 } from "../types/workspace";
 import {
-	boardKanbanColumnOrder,
+  boardKanbanColumnOrder,
   getAgentActivityView,
-	getKanbanColumnView,
-	type KanbanColumnView,
+  getKanbanColumnView,
+  type KanbanColumnView,
 } from "../lib/session-presentation";
 import {
   useSessionUsageSummaries,
@@ -53,6 +60,7 @@ import {
   isMacPlatform,
   usesBoardActionsInPanel,
 } from "../lib/platform";
+import { formatOrchestratorStartupError } from "../lib/orchestrator-startup-error";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
@@ -78,11 +86,11 @@ const emptyUsageBySession: UsageBySession = new Map();
 // when its SCM outcome remains `merged`, which is exactly what the daemon's
 // `archive` column means.
 function isArchivedSession(session: WorkspaceSession): boolean {
-	return (
-		session.kanbanColumn === "archive" ||
-		session.isTerminated === true ||
-		session.status === "terminated"
-	);
+  return (
+    session.kanbanColumn === "archive" ||
+    session.isTerminated === true ||
+    session.status === "terminated"
+  );
 }
 
 const isMac = isMacPlatform();
@@ -169,7 +177,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
   const health = workspace
     ? orchestratorHealth(workspace, isProjectRestarting)
     : { state: "ok" as const };
-  const visibleSpawnError = spawnError ?? orchestratorStartupError;
+  const visibleSpawnError = formatOrchestratorStartupError(
+    spawnError ?? orchestratorStartupError ?? "",
+  );
 
   // The board instance survives project-to-project navigation (same route,
   // new param), so a spawn failure must not follow the user to another board.
@@ -240,11 +250,14 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
   const activeProjectIdRef = useRef(projectId);
   activeProjectIdRef.current = projectId;
 
-  const openSession = (session: WorkspaceSession) =>
-    void navigate({
-      to: "/projects/$projectId/sessions/$sessionId",
-      params: { projectId: session.workspaceId, sessionId: session.id },
-    });
+  const openSession = useCallback(
+    (session: WorkspaceSession) =>
+      void navigate({
+        to: "/projects/$projectId/sessions/$sessionId",
+        params: { projectId: session.workspaceId, sessionId: session.id },
+      }),
+    [navigate],
+  );
 
   const openOrchestrator = async (mode?: "tui") => {
     if (!projectId || isProjectRestarting) return;
@@ -283,7 +296,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
       // conflict) is the only actionable signal the user gets.
       console.error("Failed to spawn orchestrator:", error);
       setSpawnError(
-        error instanceof Error ? error.message : t("shell.couldNotSpawn"),
+        formatOrchestratorStartupError(
+          error instanceof Error ? error.message : t("shell.couldNotSpawn"),
+        ),
       );
       setCanCreateAsTui(isChatPreflightError(error));
     } finally {
@@ -416,8 +431,8 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
       labels={boardLabels}
       renderSessionCard={(session) => (
         <BoardSessionCardAdapter
-          onOpen={() => openSession(session)}
-          onTerminate={() => terminateSession.mutate(session)}
+          onOpenSession={openSession}
+          onTerminateSession={terminateSession.mutate}
           session={session}
           usage={usageBySession.get(session.id)}
         />
@@ -438,7 +453,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 			    chooser was review feedback on #2432. */}
       {!showWelcome && boardActionsInPanel && (boardLabel || actions) ? (
         <div
-					className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-1"
+          className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-1"
           style={dragStyle}
         >
           {boardLabel ? (
@@ -491,6 +506,15 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
                 {t("shell.restart")}
               </TopbarButton>
             ) : null}
+          </div>
+        ) : null}
+        {workspace?.folderMissing ? (
+          <div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
+            <AlertTriangle
+              className="size-icon-base shrink-0 text-warning"
+              aria-hidden="true"
+            />
+            <span className="min-w-0 flex-1">{t("home.folderMissing")}</span>
           </div>
         ) : null}
         {workspaceStartupState === "error" || workspaceQuery.isError ? (

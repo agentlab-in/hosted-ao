@@ -17,7 +17,7 @@ import {
 // a browser stub that reports the daemon as permanently "stopped" and the app
 // version as "0.0.0-preview". The daemon/version smoke cases (DMN-*, INS-004)
 // need a deterministic *ready* daemon and a known version string, so we inject
-// a complete `window.ao` before any page script runs — the same seam the real
+// a complete `window.ao` before any page script runs, the same seam the real
 // Electron preload fills. This is a fake *bridge*, not a fake agent: no worker
 // process and no GitHub repo are involved, matching the T0 POD constraints.
 //
@@ -25,9 +25,9 @@ import {
 // live preload; the injected bridge is only the deterministic stand-in for the
 // browser harness.
 //
-// SCOPE / CAVEAT — renderer smoke, not full e2e. Because `window.ao`,
+// SCOPE / CAVEAT, renderer smoke, not full e2e. Because `window.ao`,
 // `EventSource`, and the workspace snapshot are all faked here, this harness
-// CANNOT catch daemon, storage, API, preload, PTY, or filesystem regressions —
+// CANNOT catch daemon, storage, API, preload, PTY, or filesystem regressions,
 // those are the packaged-app pod gate's job (#2697). In particular,
 // `useWorkspaceQuery` reads an already-shaped `WorkspaceSummary` straight from
 // `window.__aoFakeAgent.snapshot()`, BYPASSING the generated API client + DTO
@@ -151,7 +151,7 @@ export async function installFakeBridge(
       });
 
       // Full AoBridge surface (mirrors src/preload.ts) so any renderer call
-      // resolves — an incomplete object would throw the moment the app touched
+      // resolves, an incomplete object would throw the moment the app touched
       // a missing method.
       const ao = {
         app: {
@@ -163,6 +163,7 @@ export async function installFakeBridge(
             repos: [],
           }),
           checkAncestorRepo: async () => undefined,
+          getRepositoryBranch: async () => undefined,
           getPathForFile: () => "",
           onOpenFolderPath: () => () => undefined,
           onNewSessionShortcut: unsubscribe,
@@ -240,6 +241,30 @@ export async function installFakeBridge(
         },
         telemetry: {
           getBootstrap: async () => null,
+          getPolicy: async () => ({
+            eventsEnabled: false,
+            consentGeneration: "e2e",
+            updatedAt: new Date(0).toISOString(),
+            acknowledged: false,
+            state: "applied",
+            environmentVeto: true,
+            durabilitySupported: false,
+            reason: "environment_veto",
+          }),
+          setEventsEnabled: async () => ({
+            eventsEnabled: false,
+            consentGeneration: "e2e",
+            updatedAt: new Date(0).toISOString(),
+            acknowledged: false,
+            state: "applied",
+            environmentVeto: true,
+            durabilitySupported: false,
+            reason: "environment_veto",
+          }),
+          onPolicy: () => () => false,
+          onClearQueues: () => () => false,
+          capture: async () => false,
+          signalAgentSwitchVisibility: () => false,
         },
         browser: {
           nativeCompositionEnabled: true,
@@ -247,6 +272,7 @@ export async function installFakeBridge(
           setBounds: () => undefined,
           setOverlayOpen: () => undefined,
           navigate: async ({ viewId }: { viewId: string }) => navState(viewId),
+          historySuggestions: async () => [],
           clear: async (viewId: string) => navState(viewId),
           goBack: async (viewId: string) => navState(viewId),
           goForward: async (viewId: string) => navState(viewId),
@@ -278,6 +304,16 @@ export async function installFakeBridge(
             activeTabId: "t1",
             tabs: [{ id: "t1", url: "", title: "", active: true }],
           }),
+          getProfile: async (viewId: string) => ({
+            viewId,
+            profileId: null,
+            temporary: true,
+          }),
+          showProfileMenu: async () => undefined,
+          notifyPanelUsed: () => undefined,
+          notifyPanelBlur: () => undefined,
+          onFocusLocation: unsubscribe,
+          onReopenClosedTab: unsubscribe,
           devtools: async (input: { viewId: string }) => ({
             viewId: input.viewId,
             open: false,
@@ -294,7 +330,25 @@ export async function installFakeBridge(
           onTabsState: unsubscribe,
           onAgentActivity: unsubscribe,
           onDevToolsState: unsubscribe,
-					onPageFocus: unsubscribe,
+          onProfileState: unsubscribe,
+          onProfileManage: unsubscribe,
+          onPageFocus: unsubscribe,
+        },
+        browserProfiles: {
+          list: async () => ({ profiles: [] }),
+          create: async (name: string) => {
+            const now = new Date().toISOString();
+            return { id: `fake-${name}`, name, createdAt: now, updatedAt: now };
+          },
+          rename: async ({ id, name }: { id: string; name: string }) => {
+            const now = new Date().toISOString();
+            return { id, name, createdAt: now, updatedAt: now };
+          },
+          clear: async () => undefined,
+          delete: async () => undefined,
+          discoverImportSources: async () => ({ sources: [] }),
+          import: async () => ({ sourceName: "", entries: [] }),
+          onImportProgress: () => () => undefined,
         },
         notifications: {
           show: async () => undefined,
@@ -340,8 +394,14 @@ export async function installFakeBridge(
           getActive: async () => null,
         },
         machines: {
-          getState: async () => ({ ...signedOutAoMachines, machines: [...signedOutAoMachines.machines, ...pairedList] }),
-          refresh: async () => ({ ...signedOutAoMachines, machines: [...signedOutAoMachines.machines, ...pairedList] }),
+          getState: async () => ({
+            ...signedOutAoMachines,
+            machines: [...signedOutAoMachines.machines, ...pairedList],
+          }),
+          refresh: async () => ({
+            ...signedOutAoMachines,
+            machines: [...signedOutAoMachines.machines, ...pairedList],
+          }),
           select: async () => signedOutAoMachines,
           // api-client's runtimeFetch answers a local 503 for any remote-base
           // request when this is null, before the request ever reaches the
@@ -404,6 +464,13 @@ export async function installFakeBridge(
           getSession: async () => null,
           signIn: async () => undefined,
           signOut: async () => undefined,
+          localAuthAvailable: async () => false,
+          localRegister: async () => {
+            throw new Error("local auth is unavailable in e2e");
+          },
+          localLogin: async () => {
+            throw new Error("local auth is unavailable in e2e");
+          },
           onSessionChanged: unsubscribe,
         },
         cloudCp: {
@@ -434,11 +501,11 @@ export async function installFakeBridge(
 // raise a needs-input notification). Under the browser harness there is no Go
 // daemon and no agent, so we simulate that timeline at the bridge:
 //
-//   1. A `window.ao` whose daemon is ready on a port — so the renderer sets its
+//   1. A `window.ao` whose daemon is ready on a port, so the renderer sets its
 //      REST base URL and opens its SSE streams (the same seam the packaged app
 //      fills). The `browser.*` IPC is driven off a shared in-page state so the
 //      preview surface is controllable.
-//   2. A fake `window.EventSource` — the daemon's CDC (`/api/v1/events`) and
+//   2. A fake `window.EventSource`, the daemon's CDC (`/api/v1/events`) and
 //      notification (`/api/v1/notifications/stream`) SSE streams. The controller
 //      pushes `session_updated` / `notification_created` frames into it, which is
 //      exactly what drives the renderer's cache-invalidation → refetch path (no
@@ -600,7 +667,7 @@ export async function installFakeAgent(
             kind: "orchestrator",
             branch: "main",
             status: "working",
-						kanbanColumn: "building",
+            kanbanColumn: "building",
             createdAt: nowIso,
             updatedAt: nowIso,
             activity: { state: "active", lastActivityAt: nowIso },
@@ -798,6 +865,7 @@ export async function installFakeAgent(
             repos: [],
           }),
           checkAncestorRepo: async () => undefined,
+          getRepositoryBranch: async () => undefined,
           getPathForFile: () => "",
           onOpenFolderPath: () => () => undefined,
           onNewSessionShortcut: unsubscribe,
@@ -873,7 +941,33 @@ export async function installFakeAgent(
             kind: "editor" as const,
           }),
         },
-        telemetry: { getBootstrap: async () => null },
+        telemetry: {
+          getBootstrap: async () => null,
+          getPolicy: async () => ({
+            eventsEnabled: false,
+            consentGeneration: "e2e",
+            updatedAt: new Date(0).toISOString(),
+            acknowledged: false,
+            state: "applied",
+            environmentVeto: true,
+            durabilitySupported: false,
+            reason: "environment_veto",
+          }),
+          setEventsEnabled: async () => ({
+            eventsEnabled: false,
+            consentGeneration: "e2e",
+            updatedAt: new Date(0).toISOString(),
+            acknowledged: false,
+            state: "applied",
+            environmentVeto: true,
+            durabilitySupported: false,
+            reason: "environment_veto",
+          }),
+          onPolicy: () => () => false,
+          onClearQueues: () => () => false,
+          capture: async () => false,
+          signalAgentSwitchVisibility: () => false,
+        },
         browser: {
           nativeCompositionEnabled: true,
           ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
@@ -883,6 +977,7 @@ export async function installFakeAgent(
             state.browserError
               ? navState(viewId, "", state.browserError)
               : navState(viewId, url),
+          historySuggestions: async () => [],
           clear: async (viewId: string) => navState(viewId),
           goBack: async (viewId: string) => navState(viewId),
           goForward: async (viewId: string) => navState(viewId),
@@ -914,6 +1009,16 @@ export async function installFakeAgent(
             activeTabId: "t1",
             tabs: [{ id: "t1", url: "", title: "", active: true }],
           }),
+          getProfile: async (viewId: string) => ({
+            viewId,
+            profileId: null,
+            temporary: true,
+          }),
+          showProfileMenu: async () => undefined,
+          notifyPanelUsed: () => undefined,
+          notifyPanelBlur: () => undefined,
+          onFocusLocation: unsubscribe,
+          onReopenClosedTab: unsubscribe,
           devtools: async (input: { viewId: string }) => ({
             viewId: input.viewId,
             open: false,
@@ -930,7 +1035,25 @@ export async function installFakeAgent(
           onTabsState: unsubscribe,
           onAgentActivity: unsubscribe,
           onDevToolsState: unsubscribe,
-					onPageFocus: unsubscribe,
+          onProfileState: unsubscribe,
+          onProfileManage: unsubscribe,
+          onPageFocus: unsubscribe,
+        },
+        browserProfiles: {
+          list: async () => ({ profiles: [] }),
+          create: async (name: string) => {
+            const now = new Date().toISOString();
+            return { id: `fake-${name}`, name, createdAt: now, updatedAt: now };
+          },
+          rename: async ({ id, name }: { id: string; name: string }) => {
+            const now = new Date().toISOString();
+            return { id, name, createdAt: now, updatedAt: now };
+          },
+          clear: async () => undefined,
+          delete: async () => undefined,
+          discoverImportSources: async () => ({ sources: [] }),
+          import: async () => ({ sourceName: "", entries: [] }),
+          onImportProgress: () => () => undefined,
         },
         notifications: {
           show: async () => undefined,
@@ -1015,6 +1138,13 @@ export async function installFakeAgent(
           getSession: async () => null,
           signIn: async () => undefined,
           signOut: async () => undefined,
+          localAuthAvailable: async () => false,
+          localRegister: async () => {
+            throw new Error("local auth is unavailable in e2e");
+          },
+          localLogin: async () => {
+            throw new Error("local auth is unavailable in e2e");
+          },
           onSessionChanged: unsubscribe,
         },
         cloudCp: {

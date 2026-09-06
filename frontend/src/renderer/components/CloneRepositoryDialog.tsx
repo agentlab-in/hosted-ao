@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, GitBranch, Link2, X } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { ChevronLeft, Folder, Link2, X } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { parseCloneUrl } from "../lib/clone-url";
@@ -9,288 +9,471 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
 export type CloneRepositoryDetails = {
-	remoteUrl: string;
-	destinationParent: string;
+  remoteUrl: string;
+  destinationParent: string;
 };
 
 export type CloneRepositorySelection = CloneRepositoryDetails & {
-	targetPath: string;
+  targetPath: string;
 };
 
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
-	disabled,
-	error,
-	onBack,
-	onChange,
-	onClose,
-	onContinue,
-	open,
-	remote = false,
-	value,
+  disabled,
+  error,
+  onBack,
+  onChange,
+  onClose,
+  onContinue,
+  open,
+  remote = false,
+  value,
 }: {
-	disabled: boolean;
-	error: string | null;
-	onBack: () => void;
-	onChange: (value: CloneRepositoryDetails) => void;
-	onClose: () => void;
-	onContinue: (selection: CloneRepositorySelection) => void;
-	open: boolean;
-	// True when the active machine is not this computer. The destination picker
-	// is the desktop's own folder dialog, so on a remote machine it would hand a
-	// local path to a daemon that has never seen it. There, AO instead clones
-	// into the machine's own managed repos directory and the field is dropped:
-	// the daemon derives the destination from the URL (cloneUrl on
-	// POST /api/v1/projects, see backend/internal/service/project/clone.go).
-	remote?: boolean;
-	value: CloneRepositoryDetails;
+  disabled: boolean;
+  error: string | null;
+  onBack: () => void;
+  onChange: (value: CloneRepositoryDetails) => void;
+  onClose: () => void;
+  onContinue: (selection: CloneRepositorySelection) => void;
+  open: boolean;
+  // True when the active machine is not this computer. The destination picker
+  // is the desktop's own folder dialog, so on a remote machine it would hand a
+  // local path to a daemon that has never seen it. There, AO instead clones
+  // into the machine's own managed repos directory and the field is dropped:
+  // the daemon derives the destination from the URL (cloneUrl on
+  // POST /api/v1/projects, see backend/internal/service/project/clone.go).
+  remote?: boolean;
+  value: CloneRepositoryDetails;
 }) {
-	const { t } = useTranslation();
-	const [submitted, setSubmitted] = useState(false);
-	const [choosingDestination, setChoosingDestination] = useState(false);
-	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
-	// On the remote wire the daemon names the directory <owner>-<repo>, so the
-	// URL must carry both. parseCloneUrl mirrors that parser exactly; upstream's
-	// repositoryNameFromGitUrl is the right check for the local wire, which
-	// derives only the last segment.
-	const remoteTarget = remote ? parseCloneUrl(value.remoteUrl) : null;
-	const repositoryName = remote
-		? (remoteTarget ? `${remoteTarget.owner}-${remoteTarget.repo}` : null)
-		: repositoryNameFromGitUrl(value.remoteUrl);
-	const targetPath = remote
-		? (repositoryName ?? "")
-		: repositoryName && value.destinationParent
-			? joinCloneDestination(value.destinationParent, repositoryName)
-			: "";
-	const urlError = submitted && !repositoryName ? t("createProject.cloneInvalidUrl") : null;
-	const destinationError =
-		!remote && submitted && !value.destinationParent ? t("createProject.cloneDestinationRequired") : null;
+  const { t } = useTranslation();
+  const [submitted, setSubmitted] = useState(false);
+  const [choosingDestination, setChoosingDestination] = useState(false);
+  const [destinationPickerError, setDestinationPickerError] = useState<
+    string | null
+  >(null);
+  // On the remote wire the daemon names the directory <owner>-<repo>, so the
+  // URL must carry both. parseCloneUrl mirrors that parser exactly; upstream's
+  // repositoryNameFromGitUrl is the right check for the local wire, which
+  // derives only the last segment.
+  const remoteTarget = remote ? parseCloneUrl(value.remoteUrl) : null;
+  const repositoryName = remote
+    ? remoteTarget
+      ? `${remoteTarget.owner}-${remoteTarget.repo}`
+      : null
+    : repositoryNameFromGitUrl(value.remoteUrl);
+  const targetPath = remote
+    ? (repositoryName ?? "")
+    : repositoryName && value.destinationParent
+      ? joinCloneDestination(value.destinationParent, repositoryName)
+      : "";
+  const repositoryAvatar = repositoryAvatarFromGitUrl(value.remoteUrl);
+  const urlError =
+    submitted && !repositoryName ? t("createProject.cloneInvalidUrl") : null;
+  const destinationError =
+    !remote && submitted && !value.destinationParent
+      ? t("createProject.cloneDestinationRequired")
+      : null;
 
-	const chooseDestination = async () => {
-		setDestinationPickerError(null);
-		setChoosingDestination(true);
-		try {
-			const selected = await aoBridge.app.chooseDirectory(t("createProject.cloneChooseDestination"));
-			if (!selected) return;
-			try {
-				window.localStorage.setItem(LAST_CLONE_DESTINATION_KEY, selected);
-			} catch {
-				// Remembering the folder is a convenience; cloning still works if
-				// browser storage is unavailable.
-			}
-			onChange({ ...value, destinationParent: selected });
-		} catch (err) {
-			setDestinationPickerError(err instanceof Error ? err.message : t("createProject.couldNotAdd"));
-		} finally {
-			setChoosingDestination(false);
-		}
-	};
+  const chooseDestination = async () => {
+    setDestinationPickerError(null);
+    setChoosingDestination(true);
+    try {
+      const selected = await aoBridge.app.chooseDirectory(
+        t("createProject.cloneChooseDestination"),
+      );
+      if (!selected) return;
+      try {
+        window.localStorage.setItem(LAST_CLONE_DESTINATION_KEY, selected);
+      } catch {
+        // Remembering the folder is a convenience; cloning still works if
+        // browser storage is unavailable.
+      }
+      onChange({ ...value, destinationParent: selected });
+    } catch (err) {
+      setDestinationPickerError(
+        err instanceof Error ? err.message : t("createProject.couldNotAdd"),
+      );
+    } finally {
+      setChoosingDestination(false);
+    }
+  };
 
-	const submit = (event: FormEvent<HTMLFormElement>) => {
-		event.preventDefault();
-		setSubmitted(true);
-		if (!repositoryName || disabled) return;
-		if (remote) {
-			// An empty destinationParent is the marker the flow discriminates on:
-			// it can only ever be produced here, and it is what routes the submit
-			// onto the cloneUrl wire instead of POST /api/v1/projects/clone.
-			onContinue({ remoteUrl: value.remoteUrl.trim(), destinationParent: "", targetPath: repositoryName });
-			return;
-		}
-		if (!value.destinationParent) return;
-		onContinue({
-			...value,
-			remoteUrl: value.remoteUrl.trim(),
-			targetPath: joinCloneDestination(value.destinationParent, repositoryName),
-		});
-	};
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitted(true);
+    if (!repositoryName || disabled) return;
+    if (remote) {
+      // An empty destinationParent is the marker the flow discriminates on:
+      // it can only ever be produced here, and it is what routes the submit
+      // onto the cloneUrl wire instead of POST /api/v1/projects/clone.
+      onContinue({
+        remoteUrl: value.remoteUrl.trim(),
+        destinationParent: "",
+        targetPath: repositoryName,
+      });
+      return;
+    }
+    if (!value.destinationParent) return;
+    onContinue({
+      ...value,
+      remoteUrl: value.remoteUrl.trim(),
+      targetPath: joinCloneDestination(value.destinationParent, repositoryName),
+    });
+  };
 
-	return (
-		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && onClose()}>
-			<Dialog.Portal>
-				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in" />
-				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(var(--size-import-folder-dialog),calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-0 text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)] data-[state=open]:animate-modal-in">
-					<div className="flex shrink-0 items-start gap-4 border-b border-[var(--color-border-import-modal)] p-(--size-import-dialog-padding)">
-						<Button
-							type="button"
-							variant="outline"
-							size="icon"
-							aria-label={t("createProject.cloneBack")}
-							disabled={disabled || choosingDestination}
-							onClick={onBack}
-						>
-							<ChevronLeft className="size-4" aria-hidden="true" />
-						</Button>
-						<div className="min-w-0 flex-1">
-							<Dialog.Title className="text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
-								{t("createProject.cloneTitle")}
-							</Dialog.Title>
-							<Dialog.Description className="mt-1 max-w-[520px] text-pretty text-[13px] font-medium leading-5 text-[var(--color-text-import-muted)]">
-								{remote ? t("createProject.cloneDescription") : t("createProject.cloneDescriptionLocal")}
-							</Dialog.Description>
-						</div>
-						<button
-							type="button"
-							className="settings-close-button"
-							aria-label={t("createProject.cloneClose")}
-							disabled={disabled || choosingDestination}
-							onClick={onClose}
-						>
-							<X className="size-4" aria-hidden="true" />
-						</button>
-					</div>
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => !next && !disabled && onClose()}
+    >
+      <Dialog.Portal>
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
+          <div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={t("createProject.cloneBack")}
+              disabled={disabled || choosingDestination}
+              onClick={onBack}
+            >
+              <ChevronLeft className="size-4" aria-hidden="true" />
+            </Button>
+            <div className="min-w-0 flex-1 pr-8">
+              <Dialog.Title className="text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
+                {t("createProject.cloneTitle")}
+              </Dialog.Title>
+              <Dialog.Description className="sr-only">
+                {remote ? t("createProject.cloneDescription") : t("createProject.cloneDescriptionLocal")}
+              </Dialog.Description>
+            </div>
+            <button
+              type="button"
+              className="settings-close-button"
+              aria-label={t("createProject.cloneClose")}
+              disabled={disabled || choosingDestination}
+              onClick={onClose}
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
 
-					<form className="min-h-0 overflow-y-auto" onSubmit={submit}>
-						<div className="space-y-5 p-(--size-import-dialog-padding)">
-							{error || destinationPickerError ? (
-								<div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-pretty text-[12px] leading-5 text-destructive" role="alert">
-									{destinationPickerError ?? error}
-								</div>
-							) : null}
+          <form className="min-h-0 overflow-y-auto" onSubmit={submit}>
+            <div className="space-y-4 px-4 pb-1 pt-4">
+              {error || destinationPickerError ? (
+                <div
+                  className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-pretty text-[12px] leading-5 text-destructive"
+                  role="alert"
+                >
+                  {destinationPickerError ?? error}
+                </div>
+              ) : null}
 
-							<div className="space-y-2">
-								<Label htmlFor="cloneRepositoryUrl" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
-									{t("createProject.cloneRepositoryUrl")}
-								</Label>
-								<div className="relative">
-									<span className="pointer-events-none absolute inset-y-0 left-3 flex w-4 items-center justify-center text-[var(--color-text-import-muted)]">
-										<Link2 className="size-4" aria-hidden="true" />
-									</span>
-									<Input
-										id="cloneRepositoryUrl"
-										autoFocus
-										autoCapitalize="none"
-										autoComplete="off"
-										aria-describedby={urlError ? "cloneRepositoryUrlError" : "cloneRepositoryUrlHelp"}
-										aria-invalid={urlError ? true : undefined}
-										className="bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
-										disabled={disabled}
-										placeholder={t("createProject.cloneRepositoryUrlPlaceholder")}
-										spellCheck={false}
-										value={value.remoteUrl}
-										onChange={(event) => onChange({ ...value, remoteUrl: event.target.value })}
-									/>
-								</div>
-								{urlError ? (
-									<p id="cloneRepositoryUrlError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
-										{urlError}
-									</p>
-								) : (
-									<p id="cloneRepositoryUrlHelp" className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-										{t("createProject.cloneRepositoryUrlHelp")}
-									</p>
-								)}
-							</div>
+              <div className="space-y-2">
+                <Label
+                  htmlFor="cloneRepositoryUrl"
+                  className="text-[13px] font-semibold text-[var(--color-text-import-title)]"
+                >
+                  {t("createProject.cloneRepositoryUrl")}
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="cloneRepositoryUrl"
+                    autoFocus
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    aria-describedby={
+                      urlError
+                        ? "cloneRepositoryUrlError"
+                        : "cloneRepositoryUrlHelp"
+                    }
+                    aria-invalid={urlError ? true : undefined}
+                    className="bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
+                    disabled={disabled}
+                    placeholder={t(
+                      "createProject.cloneRepositoryUrlPlaceholder",
+                    )}
+                    spellCheck={false}
+                    value={value.remoteUrl}
+                    onChange={(event) =>
+                      onChange({ ...value, remoteUrl: event.target.value })
+                    }
+                  />
+                  <RepositoryOwnerIcon
+                    owner={repositoryAvatar?.owner ?? null}
+                    avatarUrl={repositoryAvatar?.url ?? null}
+                  />
+                </div>
+                {urlError ? (
+                  <p
+                    id="cloneRepositoryUrlError"
+                    className="text-pretty text-[12px] leading-5 text-destructive"
+                    role="alert"
+                  >
+                    {urlError}
+                  </p>
+                ) : (
+                  <span id="cloneRepositoryUrlHelp" className="sr-only">
+                    {t("createProject.cloneRepositoryUrlHelp")}
+                  </span>
+                )}
+              </div>
 
-							{remote ? null : (
-								<div className="space-y-2">
-									<Label htmlFor="cloneDestination" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
-										{t("createProject.cloneDestination")}
-									</Label>
-									<div className="flex gap-2">
-										<div className="relative min-w-0 flex-1">
-											<span className="pointer-events-none absolute inset-y-0 left-3 flex w-4 items-center justify-center text-[var(--color-text-import-muted)]">
-												<Folder className="size-4" aria-hidden="true" />
-											</span>
-											<Input
-												id="cloneDestination"
-												aria-describedby={destinationError ? "cloneDestinationError" : undefined}
-												aria-invalid={destinationError ? true : undefined}
-												className="cursor-default bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
-												placeholder={t("createProject.cloneDestinationPlaceholder")}
-												readOnly
-												value={value.destinationParent}
-											/>
-										</div>
-										<Button
-											type="button"
-											variant="footer"
-											className="h-control-form! px-4"
-											disabled={disabled || choosingDestination}
-											onClick={() => void chooseDestination()}
-										>
-											{choosingDestination ? t("createProject.opening") : t("createProject.cloneChoose")}
-										</Button>
-									</div>
-									{destinationError ? (
-										<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
-											{destinationError}
-										</p>
-									) : null}
-								</div>
-							)}
+              {remote ? (targetPath ? <div><p>{t("createProject.cloneWillCreate")}</p><p>{targetPath}</p></div> : null) : (
+              <div className="space-y-2">
+                <Label
+                  htmlFor="cloneDestination"
+                  className="text-[13px] font-semibold text-[var(--color-text-import-title)]"
+                >
+                  {t("createProject.cloneDestination")}
+                </Label>
+                <button
+                  type="button"
+                  id="cloneDestination"
+                  aria-label={t("createProject.cloneChoose")}
+                  aria-describedby={
+                    destinationError ? "cloneDestinationError" : undefined
+                  }
+                  aria-invalid={destinationError ? true : undefined}
+                  className="flex h-control-form w-full items-center overflow-hidden rounded-md border border-transparent bg-[var(--color-bg-import-card)] text-left text-[13px] text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+                  disabled={disabled || choosingDestination}
+                  onClick={() => void chooseDestination()}
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-3 px-3">
+                    <Folder
+                      className="size-4 shrink-0 text-[var(--color-text-import-muted)]"
+                      aria-hidden="true"
+                    />
+                    <span className="truncate">
+                      {value.destinationParent ||
+                        t("createProject.cloneDestinationPlaceholder")}
+                    </span>
+                  </span>
+                  <span className="flex h-full shrink-0 items-center border-l border-border/60 px-4 text-foreground hover:bg-foreground/10">
+                    {t("createProject.cloneChoose")}
+                  </span>
+                </button>
+                {destinationError ? (
+                  <p
+                    id="cloneDestinationError"
+                    className="text-pretty text-[12px] leading-5 text-destructive"
+                    role="alert"
+                  >
+                    {destinationError}
+                  </p>
+                ) : null}
+              </div>
+              )}
+            </div>
 
-							{targetPath ? (
-								<div className="flex items-center gap-3 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-3 py-3">
-									<span className="grid size-4 shrink-0 place-items-center text-[var(--color-text-import-muted)]">
-										<GitBranch className="size-4" aria-hidden="true" />
-									</span>
-									<div className="min-w-0">
-										<p className="text-[12px] font-medium text-[var(--color-text-import-muted)]">
-											{t("createProject.cloneWillCreate")}
-										</p>
-										<p className="mt-0.5 truncate font-mono text-[13px] font-semibold text-[var(--color-text-import-title)]" title={targetPath}>
-											{targetPath}
-										</p>
-									</div>
-								</div>
-							) : null}
-						</div>
+            <div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
+              <div className="flex items-center justify-end gap-3">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={disabled || choosingDestination}
+                >
+                  {t("createProject.cloneContinue")}
+                </Button>
+              </div>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
 
-						<div className="flex shrink-0 flex-col gap-3 border-t border-[var(--color-border-import-modal)] p-(--size-import-dialog-padding) sm:flex-row sm:items-center sm:justify-between">
-							<p className="max-w-[340px] text-pretty text-[12px] font-medium leading-5 text-[var(--color-text-import-muted)]">
-								{t("createProject.cloneCredentialsHint")}
-							</p>
-							<div className="flex items-center justify-end gap-3">
-								<Button type="button" variant="footer" disabled={disabled} onClick={onClose}>
-									{t("createProject.cancel")}
-								</Button>
-								<Button type="submit" variant="footer-primary" disabled={disabled || choosingDestination}>
-									{t("createProject.cloneContinue")}
-								</Button>
-							</div>
-						</div>
-					</form>
-				</Dialog.Content>
-			</Dialog.Portal>
-		</Dialog.Root>
-	);
+function RepositoryOwnerIcon({
+  avatarUrl,
+  owner,
+}: {
+  avatarUrl: string | null;
+  owner: string | null;
+}) {
+  const [avatarState, setAvatarState] = useState<
+    "loading" | "loaded" | "failed"
+  >("loading");
+  const hasOwner = Boolean(owner);
+
+  useEffect(() => {
+    setAvatarState(avatarUrl ? "loading" : "failed");
+  }, [avatarUrl]);
+
+  const visible = hasOwner;
+  const showAvatar = visible && avatarUrl && avatarState === "loaded";
+  const showSkeleton = Boolean(
+    visible && avatarUrl && avatarState === "loading",
+  );
+  const showFallback = visible && (!avatarUrl || avatarState === "failed");
+
+  return (
+    <span
+      className="pointer-events-none absolute left-3 top-1/2 z-10 flex size-4 -translate-y-1/2 items-center justify-center text-[var(--color-text-import-muted)]"
+      aria-hidden="true"
+    >
+      <span className="relative block size-4">
+        {!visible ? <Link2 className="absolute inset-0 size-4" /> : null}
+        {avatarUrl ? (
+          <img
+            alt=""
+            className={`${showAvatar ? "opacity-100" : "opacity-0"} absolute inset-0 size-4 rounded-full object-cover outline outline-1 -outline-offset-1 outline-black/10 transition-none dark:outline-white/10`}
+            draggable={false}
+            loading="eager"
+            onError={() => setAvatarState("failed")}
+            onLoad={() => setAvatarState("loaded")}
+            referrerPolicy="no-referrer"
+            src={avatarUrl}
+          />
+        ) : null}
+        {showSkeleton ? (
+          <span className="absolute inset-0 size-4 animate-pulse rounded-full bg-muted-foreground/40" />
+        ) : null}
+        {showFallback ? (
+          <span className="absolute inset-0 size-4 rounded-full bg-muted text-center text-[9px] font-semibold leading-4 text-muted-foreground">
+            {ownerInitials(owner)}
+          </span>
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
+function ownerInitials(owner: string | null): string {
+  return (
+    owner
+      ?.split(/[-_\s/]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "?"
+  );
 }
 
 export function repositoryNameFromGitUrl(raw: string): string | null {
-	const value = raw.trim();
-	if (!value || /\s/.test(value) || value.startsWith("-")) return null;
-	let remotePath = "";
-	const scpMatch = value.match(/^[^/@:\s]+@[^/:\s]+:(.+)$/);
-	if (scpMatch?.[1]) {
-		remotePath = scpMatch[1];
-	} else {
-		try {
-			const parsed = new URL(value);
-			if (!["file:", "git:", "http:", "https:", "ssh:"].includes(parsed.protocol)) return null;
-			if (
-				(["http:", "https:"].includes(parsed.protocol) &&
-					(parsed.username || parsed.password || parsed.search)) ||
-				parsed.password
-			) {
-				return null;
-			}
-			// URL.pathname preserves percent escapes, while Go's net/url exposes a
-			// decoded URL.Path to the daemon. Decode once so this preview names the
-			// exact directory the daemon will create, including escaped separators.
-			remotePath = decodeURIComponent(parsed.pathname);
-		} catch {
-			return null;
-		}
-	}
-	const lastSegment = remotePath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-	const name = lastSegment.replace(/\.git$/, "");
-	if (!name || name === "." || name === ".." || /[\\/<>:"|?*]/.test(name)) return null;
-	return name;
+  const value = raw.trim();
+  if (!value || /\s/.test(value) || value.startsWith("-")) return null;
+  let remotePath = "";
+  const scpMatch = value.match(/^[^/@:\s]+@[^/:\s]+:(.+)$/);
+  if (scpMatch?.[1]) {
+    remotePath = scpMatch[1];
+  } else {
+    try {
+      const parsed = new URL(value);
+      if (
+        !["file:", "git:", "http:", "https:", "ssh:"].includes(parsed.protocol)
+      )
+        return null;
+      if (
+        (["http:", "https:"].includes(parsed.protocol) &&
+          (parsed.username || parsed.password || parsed.search)) ||
+        parsed.password
+      ) {
+        return null;
+      }
+      // URL.pathname preserves percent escapes, while Go's net/url exposes a
+      // decoded URL.Path to the daemon. Decode once so this preview names the
+      // exact directory the daemon will create, including escaped separators.
+      remotePath = decodeURIComponent(parsed.pathname);
+    } catch {
+      return null;
+    }
+  }
+  const lastSegment =
+    remotePath
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ?? "";
+  const name = lastSegment.replace(/\.git$/, "");
+  if (!name || name === "." || name === ".." || /[\\/<>:"|?*]/.test(name))
+    return null;
+  return name;
 }
 
-export function joinCloneDestination(parent: string, repositoryName: string): string {
-	const separator = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
-	return `${parent.replace(/[\\/]+$/, "")}${separator}${repositoryName}`;
+export function repositoryAvatarFromGitUrl(
+  raw: string,
+): { owner: string; url: string } | null {
+  const remote = repositoryRemoteParts(raw);
+  if (!remote) return null;
+  const encodedOwner = encodeURIComponent(remote.owner);
+  switch (remote.host) {
+    case "github.com":
+      return {
+        owner: remote.owner,
+        url: `https://github.com/${encodedOwner}.png?size=64`,
+      };
+    case "gitlab.com":
+      return {
+        owner: remote.owner,
+        url: `https://gitlab.com/-/avatar?username=${encodedOwner}`,
+      };
+    case "bitbucket.org":
+      return {
+        owner: remote.owner,
+        url: `https://bitbucket.org/account/${encodedOwner}/avatar/64/`,
+      };
+    default:
+      // Azure DevOps and self-hosted providers do not share one public avatar
+      // endpoint. Unavatar knows the common provider URL shapes and the
+      // initials fallback keeps this non-blocking when it cannot resolve one.
+      return {
+        owner: remote.owner,
+        url: `https://unavatar.io/${encodeURIComponent(remote.host)}/${encodedOwner}`,
+      };
+  }
+}
+
+type RepositoryRemoteParts = {
+  host: string;
+  owner: string;
+};
+
+function repositoryRemoteParts(raw: string): RepositoryRemoteParts | null {
+  const value = raw.trim();
+  if (!value || /\s/.test(value) || value.startsWith("-")) return null;
+
+  let host = "";
+  let remotePath = "";
+  const scpMatch = value.match(/^[^/@:\s]+@([^/:\s]+):(.+)$/);
+  if (scpMatch?.[1] && scpMatch[2]) {
+    host = scpMatch[1].toLowerCase();
+    remotePath = scpMatch[2];
+  } else {
+    try {
+      const parsed = new URL(value);
+      if (!["git:", "http:", "https:", "ssh:"].includes(parsed.protocol))
+        return null;
+      if (parsed.username || parsed.password || parsed.search) return null;
+      host = parsed.hostname.toLowerCase();
+      remotePath = decodeURIComponent(parsed.pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  const segments = remotePath
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .filter(Boolean);
+  if (segments.length < 2) return null;
+  const repository = segments[segments.length - 1]?.replace(/\.git$/, "");
+  const owner = segments[0];
+  if (
+    !repository ||
+    !owner ||
+    repository === "." ||
+    repository === ".." ||
+    /[\\/<>:"|?*]/.test(repository)
+  )
+    return null;
+  return { host, owner };
+}
+
+export function joinCloneDestination(
+  parent: string,
+  repositoryName: string,
+): string {
+  const separator = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
+  return `${parent.replace(/[\\/]+$/, "")}${separator}${repositoryName}`;
 }

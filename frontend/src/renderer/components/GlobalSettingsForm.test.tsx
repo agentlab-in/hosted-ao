@@ -3,10 +3,12 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
-import { GlobalSettingsForm } from "./GlobalSettingsForm";
+import { GlobalSettingsForm, type GlobalSettingsSection } from "./GlobalSettingsForm";
 import { useLocaleStore } from "../stores/locale-store";
 import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
+import { useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useUiStore } from "../stores/ui-store";
+import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const {
@@ -30,6 +32,9 @@ const {
 	getKeybindings,
 	setKeybindings,
 	setKeybindingRecording,
+	getTelemetryPolicy,
+	setTelemetryEvents,
+	onTelemetryPolicy,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
 	setUpdate: vi.fn(),
@@ -51,6 +56,12 @@ const {
 	getKeybindings: vi.fn(),
 	setKeybindings: vi.fn(),
 	setKeybindingRecording: vi.fn(),
+	// agent-switch visibility initializes at module load, before beforeEach can
+	// install the per-test policy response. Preserve the bridge's Promise
+	// contract for that initial read as well.
+	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
+	setTelemetryEvents: vi.fn(),
+	onTelemetryPolicy: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -59,6 +70,11 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 		...actual,
 		useNavigate: () => navigateMock,
 	};
+});
+
+vi.mock("../lib/platform", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/platform")>();
+	return { ...actual, isWindowsPlatform: () => true };
 });
 
 vi.mock("../lib/bridge", () => ({
@@ -82,15 +98,16 @@ vi.mock("../lib/bridge", () => ({
 			onStatus: updOnStatus,
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
+		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn() },
 	},
 }));
 
-function renderForm() {
+function renderForm(section: GlobalSettingsSection = "all") {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={qc}>
 			<TooltipProvider>
-				<GlobalSettingsForm />
+				<GlobalSettingsForm section={section} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -119,15 +136,19 @@ beforeEach(async () => {
 		getKeybindings,
 		setKeybindings,
 		setKeybindingRecording,
+		getTelemetryPolicy,
+		setTelemetryEvents,
+		onTelemetryPolicy,
 	]) {
 		m.mockReset();
 	}
 	getUpdate.mockResolvedValue({ enabled: true, channel: "latest", nightlyAck: false, feature: null });
 	setUpdate.mockResolvedValue(undefined);
-	getUiSettings.mockResolvedValue({ locale: "en", soundNotificationsEnabled: true });
-	setUiSettings.mockImplementation(async (settings: { locale?: string; soundNotificationsEnabled?: boolean }) => ({
+	getUiSettings.mockResolvedValue({ locale: "en", soundNotificationsEnabled: true, terminalShell: { kind: "auto" } });
+	setUiSettings.mockImplementation(async (settings: { locale?: string; soundNotificationsEnabled?: boolean; terminalShell?: { kind: string; path?: string } }) => ({
 		locale: "en",
 		soundNotificationsEnabled: true,
+		terminalShell: { kind: "auto" },
 		...settings,
 	}));
 	updGetStatus.mockResolvedValue({ state: "idle" });
@@ -145,15 +166,31 @@ beforeEach(async () => {
 	getKeybindings.mockResolvedValue({});
 	setKeybindings.mockImplementation(async (overrides) => overrides);
 	setKeybindingRecording.mockResolvedValue(undefined);
+	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
+	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
+	onTelemetryPolicy.mockReturnValue(() => undefined);
 	// Locale defaults to English so existing copy assertions stay green.
 	await appI18n.changeLanguage("en");
 	useLocaleStore.setState({ locale: "en", loaded: false, saving: false, saveError: false });
 	useSoundNotificationsStore.setState({ enabled: true, loaded: false, saving: false, saveError: false });
+	useTerminalShellStore.setState({
+		preference: { kind: "auto" },
+		loaded: false,
+		saving: false,
+		saveError: false,
+	});
 	useUiStore.setState({ developerMode: false });
+	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
+	it("keeps Browser in its dedicated settings page", async () => {
+		renderForm("general");
+		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
+		expect(document.querySelector('[data-section="browserProfiles"]')).not.toBeInTheDocument();
+	});
+
 	it("renders the settings sections", async () => {
 		renderForm();
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
@@ -162,7 +199,7 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByText("Updates")).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
-		// Report form is inline — no dialog, fields directly present.
+		// Report form is inline, no dialog, fields directly present.
 		expect(screen.getByLabelText("Title")).toBeInTheDocument();
 	});
 
@@ -216,6 +253,44 @@ describe("GlobalSettingsForm", () => {
 
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ soundNotificationsEnabled: false }));
 		expect(toggle).not.toBeChecked();
+	});
+
+	it("shows pending daemon cleanup without claiming opt-out completed", async () => {
+		setTelemetryEvents.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off-2", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: false, state: "cleanup_pending", environmentVeto: false, durabilitySupported: true, reason: "daemon_cleanup_pending" });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true });
+		const user = userEvent.setup(); renderForm();
+		await user.click(await screen.findByRole("switch", { name: "Share error events" }));
+		expect(await screen.findByText("Telemetry is off locally. Daemon cleanup is still pending.")).toBeInTheDocument();
+	});
+
+	it("selects Git Bash as the default Windows terminal", async () => {
+		const user = userEvent.setup();
+		renderForm();
+		const selector = await screen.findByLabelText("Default terminal");
+
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
+
+		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
+	});
+
+	it("discards an uncommitted custom shell path when editing is cancelled", async () => {
+		const user = userEvent.setup();
+		renderForm();
+
+		await user.click(await screen.findByLabelText("Default terminal"));
+		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
+		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
+
+		setUiSettings.mockClear();
+		await user.click(screen.getByRole("button", { name: "Edit Shell executable" }));
+		const input = screen.getByLabelText("Shell executable");
+		await user.type(input, "C:\\Tools\\bash.exe");
+		await user.keyboard("{Escape}");
+
+		expect(screen.queryByLabelText("Shell executable")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Edit Shell executable" })).toHaveTextContent("C:\\path\\to\\shell.exe");
+		expect(setUiSettings).not.toHaveBeenCalled();
 	});
 
 	it("keeps the current sound notifications value and reports a persistence failure", async () => {
@@ -329,19 +404,19 @@ describe("GlobalSettingsForm", () => {
 
 	it("shows the current app version", async () => {
 		renderForm();
-		expect(await screen.findByTestId("app-version")).toHaveTextContent("v1.4.0");
-		expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable");
+		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
+		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable"));
 	});
 
 	it("shows the installed Nightly channel separately from the selected update feed", async () => {
 		getVersion.mockResolvedValue("1.4.0-nightly.202608271030");
 		renderForm();
-		expect(await screen.findByTestId("installed-update-channel")).toHaveTextContent("Nightly (Pre-release)");
+		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Nightly (Pre-release)"));
 	});
 
 	it("shows an explicit idle update state and triggers a manual check", async () => {
 		renderForm();
-		expect(await screen.findByTestId("app-version")).toHaveTextContent("v1.4.0");
+		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
 		expect(screen.getByText("Updates haven't been checked yet.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
 		expect(updCheck).toHaveBeenCalled();
@@ -460,7 +535,7 @@ describe("GlobalSettingsForm", () => {
 		updGetStatus.mockResolvedValue({ state: "not-available", staleCheckNudge: true });
 		renderForm();
 		const nudge = await screen.findByText(
-			"Updates haven't been able to check for a while — restarting the app usually fixes this.",
+			"Updates haven't been able to check for a while, restarting the app usually fixes this.",
 		);
 		expect(nudge).toBeInTheDocument();
 		// The nudge is a warning, not an error, and the normal status still shows.
@@ -471,7 +546,7 @@ describe("GlobalSettingsForm", () => {
 		updGetStatus.mockResolvedValue({ state: "error", message: "net::ERR_FAILED", netError: true });
 		renderForm();
 		const guidance = await screen.findByText(
-			"Couldn't reach the update server — the app's network connection appears stuck. Restarting the app usually fixes this.",
+			"Couldn't reach the update server, the app's network connection appears stuck. Restarting the app usually fixes this.",
 		);
 		expect(guidance).toBeInTheDocument();
 	});
@@ -494,12 +569,14 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.queryByRole("combobox", { name: "Report type" })).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Include safe diagnostics")).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Expected behavior")).not.toBeInTheDocument();
-		expect(screen.getByRole("radiogroup", { name: "Report destination" })).toBeInTheDocument();
-		expect(screen.getByRole("radio", { name: "GitHub" })).toHaveAttribute("aria-checked", "true");
+		expect(screen.getByRole("group", { name: "Report destination" })).toBeInTheDocument();
+		expect(screen.queryByRole("radiogroup", { name: "Report destination" })).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Report preview")).not.toBeInTheDocument();
 
 		expect(screen.getByRole("button", { name: /copy & create github issue/i })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /copy & open email/i })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /copy & open discord/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
+		expect(screen.getByLabelText("What happened?")).toHaveClass("resize-none");
 		await user.click(screen.getByRole("button", { name: /copy & create github issue/i }));
 
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
@@ -531,9 +608,8 @@ describe("GlobalSettingsForm", () => {
 		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
 		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
 
-		await user.click(screen.getByRole("radio", { name: "Discord" }));
 		expect(screen.getByRole("button", { name: /copy & open discord/i })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /copy & open email/i })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: /copy & open discord/i }));
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 		expect(writeText.mock.calls[0][0]).toContain("**AO feedback**");
@@ -541,12 +617,9 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByLabelText("Title")).toHaveValue("");
 		expect(screen.getByLabelText("What happened?")).toHaveValue("");
 
-		await user.click(screen.getByRole("radio", { name: "Email" }));
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /copy & open discord/i })).not.toBeInTheDocument();
-		expect(screen.queryByText("Discord draft copied.")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeDisabled();
 		await user.type(screen.getByLabelText("Title"), "Need help with setup");
+		expect(screen.queryByText("Discord draft copied.")).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
 		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
 

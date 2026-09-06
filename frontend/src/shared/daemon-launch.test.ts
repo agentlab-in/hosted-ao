@@ -85,7 +85,7 @@ describe("resolveDaemonLaunch", () => {
 		).toEqual({
 			command: "C:\\Program Files\\AO\\resources/daemon/ao.exe",
 			args: ["daemon"],
-			cwd: "C:\\Users\\alice/.ao/hosted",
+			cwd: "C:\\Users\\alice\\.ao\\hosted",
 			shell: false,
 			source: "bundled",
 		});

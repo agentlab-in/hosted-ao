@@ -1,74 +1,134 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsDialog";
 
+const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+
+vi.mock("../lib/api-client", () => ({
+  apiClient: { POST: postMock },
+  apiErrorCode: (error: { code?: string }) => error?.code,
+  apiErrorMessage: () => "request failed",
+  hasTrustedApiBaseUrl: () => true,
+}));
+
 vi.mock("./ProjectSettingsForm", () => ({
-	ProjectSettingsForm: ({
-		onSaveState,
-	}: {
-		onSaveState?: (state: ProjectSettingsSaveState) => void;
-	}) => (
-		<button
-			type="button"
-			onClick={() =>
-				onSaveState?.({
-					isPending: true,
-					showSaving: false,
-					validationError: null,
-					mutationError: null,
-					saved: false,
-					replacementError: null,
-				})
-			}
-		>
-			Start pending save
-		</button>
-	),
+  ProjectSettingsForm: ({
+    onSaveState,
+  }: {
+    onSaveState?: (state: ProjectSettingsSaveState) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onSaveState?.({
+          isPending: true,
+          showSaving: false,
+          validationError: null,
+          mutationError: null,
+          saved: false,
+          replacementError: null,
+        })
+      }
+    >
+      Start pending save
+    </button>
+  ),
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
-	GlobalSettingsForm: ({ section }: { section: string }) => <div data-testid="global-settings-section">{section}</div>,
+  GlobalSettingsForm: ({ section }: { section: string }) => (
+    <div data-testid="global-settings-section">{section}</div>
+  ),
 }));
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
 // mocked so these tests need no QueryClientProvider (same pattern as Sidebar).
 vi.mock("../hooks/useCloudGate", () => ({
-	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
+  useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
 describe("SettingsDialog", () => {
-	beforeEach(() => {
-		useUiStore.setState({ settingsModal: null });
-	});
+  beforeEach(() => {
+    postMock
+      .mockReset()
+      .mockResolvedValue({
+        data: { operationId: "login-1", status: "cancelled" },
+      });
+    useUiStore.setState({ settingsModal: null });
+  });
 
-	it("does not dismiss project settings while a save is pending", async () => {
-		useUiStore.getState().openProjectSettings("proj-1");
-		render(<SettingsDialog />);
+  function renderSettingsDialog() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsDialog />
+      </QueryClientProvider>,
+    );
+  }
 
-		await userEvent.click(await screen.findByRole("button", { name: "Start pending save" }));
-		const closeButton = screen.getByRole("button", { name: "Close settings" });
-		expect(closeButton).toBeDisabled();
+  it("does not dismiss project settings while a save is pending", async () => {
+    useUiStore.getState().openProjectSettings("proj-1");
+    renderSettingsDialog();
 
-		await userEvent.keyboard("{Escape}");
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-	});
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Start pending save" }),
+    );
+    const closeButton = screen.getByRole("button", { name: "Close settings" });
+    expect(closeButton).toBeDisabled();
 
-	it("opens the requested global settings page", async () => {
-		useUiStore.getState().openGlobalSettings("mobile");
-		render(<SettingsDialog />);
+    await userEvent.keyboard("{Escape}");
+    expect(useUiStore.getState().settingsModal).toEqual({
+      scope: "project",
+      projectId: "proj-1",
+    });
+  });
 
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
-		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("aria-current", "page");
-	});
+  it("opens the requested global settings page", async () => {
+    useUiStore.getState().openGlobalSettings("mobile");
+    renderSettingsDialog();
 
-	it("opens self-hosting from a deep-linked settings request", async () => {
-		useUiStore.getState().openGlobalSettings("self-hosting");
-		render(<SettingsDialog />);
+    expect(
+      await screen.findByTestId("global-settings-section"),
+    ).toHaveTextContent("mobile");
+    expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
 
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("self-hosting");
-		expect(screen.getByRole("button", { name: "Self-hosting" })).toHaveAttribute("aria-current", "page");
-	});
+  it("opens self-hosting from a deep-linked settings request", async () => {
+    useUiStore.getState().openGlobalSettings("self-hosting");
+    render(<SettingsDialog />);
+
+    expect(
+      await screen.findByTestId("global-settings-section"),
+    ).toHaveTextContent("self-hosting");
+    expect(
+      screen.getByRole("button", { name: "Self-hosting" }),
+    ).toHaveAttribute("aria-current", "page");
+  });
+
+  it("closes Settings without cancelling daemon-owned account login work", async () => {
+    useUiStore.getState().openGlobalSettings("agents");
+    renderSettingsDialog();
+
+    expect(
+      await screen.findByTestId("global-settings-section"),
+    ).toHaveTextContent("agents");
+    expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Close settings" }),
+    );
+
+    await vi.waitFor(() =>
+      expect(useUiStore.getState().settingsModal).toBeNull(),
+    );
+    expect(postMock).not.toHaveBeenCalled();
+  });
 });
