@@ -123,6 +123,7 @@ var shippedMigrations = map[int64]string{
 	116: "0116_usage_billing_provider_source.sql",
 	117: "0117_allow_kimi_usage.sql",
 	118: "0118_cancelled_conversation_turns.sql",
+	126: "0126_machine_handoffs.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

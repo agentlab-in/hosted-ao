@@ -203,6 +203,21 @@ type ConversationTurn struct {
 	RetryOfTurnID        sql.NullString
 }
 
+type MachineHandoff struct {
+	ID                 string
+	SessionID          string
+	SourceMachine      string
+	DestinationMachine string
+	Role               string
+	State              string
+	CheckpointHash     string
+	ActivationHash     string
+	ActivationSecret   string
+	Revision           int64
+	CreatedAt          string
+	UpdatedAt          string
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
