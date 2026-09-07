@@ -87,6 +87,7 @@ type SetupServiceAction struct {
 	Content        string `json:"content"`
 	SHA256         string `json:"sha256"`
 	ExpectedSHA256 string `json:"expectedSha256,omitempty"`
+	ExpectedMode   uint32 `json:"expectedMode,omitempty"`
 }
 
 // SetupStep is one stable desired-versus-observed reconciliation decision.
@@ -178,7 +179,7 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 			return err
 		}
 		plan := planSetup(desired, observeSetup(cmd.Context(), deps, desired))
-		if recoveryStep, found, recoveryErr := planSetupRecovery(desired.StateRoot); recoveryErr != nil {
+		if recoveryStep, found, recoveryErr := planSetupRecovery(desired.StateRoot, desired.DataDir); recoveryErr != nil {
 			plan.Steps = append([]SetupStep{blockedStep("transaction.recovery", "setup-transaction", "inspect-recovery", "an interrupted setup journal could not be validated safely", safeDiagnostic(recoveryErr), "inspect the transaction journal manually before retrying")}, plan.Steps...)
 			recountSetupPlan(&plan)
 		} else if found {
@@ -232,7 +233,7 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 				return nil
 			}
 		}
-		result, executeErr := deps.ExecuteSetup(cmd.Context(), plan, desired.StateRoot, SetupExecutionOptions{NonInteractive: nonInteractive, Input: cmd.InOrStdin()})
+		result, executeErr := deps.ExecuteSetup(cmd.Context(), plan, desired.StateRoot, SetupExecutionOptions{NonInteractive: nonInteractive, Input: cmd.InOrStdin(), DataDir: desired.DataDir})
 		if executeErr != nil {
 			if jsonExecution {
 				_ = endSetupExecutionJSON(cmd.OutOrStdout(), result)
@@ -354,7 +355,7 @@ func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSna
 	} else {
 		s.User, s.UserState = currentUser, "known"
 	}
-	directories := map[string]string{"directory.parent": filepath.Dir(desired.StateRoot), "directory.state": desired.StateRoot, "directory.hao": filepath.Join(desired.StateRoot, "hao"), "directory.bin": filepath.Join(desired.StateRoot, "bin"), "directory.data": filepath.Join(desired.StateRoot, "data")}
+	directories := map[string]string{"directory.parent": filepath.Dir(desired.StateRoot), "directory.state": desired.StateRoot, "directory.hao": filepath.Join(desired.StateRoot, "hao"), "directory.bin": filepath.Join(desired.StateRoot, "bin"), "directory.data": desired.DataDir}
 	if desired.Mode == "pair" {
 		directories["directory.gateway"] = filepath.Join(desired.StateRoot, "vm-gateway")
 	}
@@ -722,6 +723,7 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 				step = blockedStep(id, component, "reconcile-definition", "existing service definition has unsafe ownership", item.Evidence, "inspect and reconcile the conflicting definition manually")
 			} else if item.Version != desiredContent {
 				action.Service.ExpectedSHA256 = item.ActualSHA256
+				action.Service.ExpectedMode = uint32(item.Mode.Perm())
 				step = SetupStep{ID: id, Component: component, Operation: "update-definition", Disposition: "update", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "service definition content differs from desired canonical v1 content", Evidence: "canonical content mismatch", Action: action}
 			} else {
 				step = noopStep(id, component, "verify-definition", "service definition is present; setup does not enable or start it", item.Evidence)
@@ -942,7 +944,7 @@ func validateSetupPlan(plan SetupPlan) error {
 			if !filepath.IsAbs(a.Service.Path) || a.Service.Mode != "0644" || a.Service.Version != "1" || a.Service.Content == "" || a.Service.SHA256 != fmt.Sprintf("%x", digest[:]) {
 				return fmt.Errorf("step %s has invalid service definition contract", step.ID)
 			}
-			if (step.Disposition == "create" && a.Service.ExpectedSHA256 != "") || (step.Disposition == "update" && !validSHA256(a.Service.ExpectedSHA256)) {
+			if (step.Disposition == "create" && (a.Service.ExpectedSHA256 != "" || a.Service.ExpectedMode != 0)) || (step.Disposition == "update" && (!validSHA256(a.Service.ExpectedSHA256) || a.Service.ExpectedMode == 0 || a.Service.ExpectedMode&0o022 != 0)) {
 				return fmt.Errorf("step %s has an invalid service precondition", step.ID)
 			}
 			if _, err := consumeSystemdDefinition(a.Service.Content); err != nil {

@@ -500,6 +500,79 @@ func TestSetupExecutorRejectsStaleArtifactUpdate(t *testing.T) {
 	}
 }
 
+func TestSetupExecutorRejectsDesiredArtifactBytesWithStaleMode(t *testing.T) {
+	root := preparedExecutorRoot(t)
+	path := filepath.Join(root, "bin", "ao")
+	if err := os.WriteFile(path, []byte("observed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	desired := []byte("desired")
+	artifact := artifactStep(root, desired, "update")
+	setArtifactPrecondition(t, &artifact)
+	if err := os.WriteFile(path, desired, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	system := &fakeSetupExecutionSystem{payload: desired}
+	if _, err := executeSetupPlanWithSystem(context.Background(), executablePlan(artifact), root, SetupExecutionOptions{}, system); err == nil || commandErrorCode(t, err) != "setup_failed" {
+		t.Fatalf("desired bytes with stale mode accepted: %v", err)
+	}
+	if system.downloadCalls != 0 {
+		t.Fatalf("stale update downloaded %d artifacts", system.downloadCalls)
+	}
+	if _, err := os.Stat(path + ".hao-manifest.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale update wrote trusted manifest: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stale target stat failed: %v", err)
+	}
+	if info.Mode().Perm() != 0o666 {
+		t.Fatalf("stale target was mutated: mode=%v", info.Mode().Perm())
+	}
+}
+
+func TestSetupExecutorRejectsStaleServiceBeforeDesiredContentFastPath(t *testing.T) {
+	oldContent := []byte("old service definition\n")
+	desiredContent := []byte("desired service definition\n")
+	oldDigest := sha256.Sum256(oldContent)
+	desiredDigest := sha256.Sum256(desiredContent)
+
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		mode    os.FileMode
+	}{
+		{name: "desired content and unsafe mode", content: desiredContent, mode: 0o666},
+		{name: "observed content and changed safe mode", content: oldContent, mode: 0o600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := preparedExecutorRoot(t)
+			path := filepath.Join(root, "service.fixture")
+			if err := os.WriteFile(path, tc.content, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			action := &SetupServiceAction{
+				Path: path, Mode: "0644", Version: "1", Content: string(desiredContent), SHA256: fmt.Sprintf("%x", desiredDigest[:]),
+				ExpectedSHA256: fmt.Sprintf("%x", oldDigest[:]), ExpectedMode: 0o644,
+			}
+			system := &fakeSetupExecutionSystem{}
+			executor := setupExecutor{system: system, stateRoot: root, dataDir: filepath.Join(root, "data"), options: SetupExecutionOptions{}}
+			if err := executor.installService(context.Background(), "service.daemon", "update", action); err == nil {
+				t.Fatal("stale service update was accepted")
+			}
+			if len(system.calls) != 0 {
+				t.Fatalf("stale service update ran commands: %+v", system.calls)
+			}
+		})
+	}
+}
+
 func TestAtomicWriteRejectsLinkedTargetAndAncestor(t *testing.T) {
 	root := preparedExecutorRoot(t)
 	outside := filepath.Join(t.TempDir(), "outside")
@@ -593,5 +666,51 @@ func TestSetupDryRunAndExecutionUseIdenticalActionSchema(t *testing.T) {
 	}
 	if report.SchemaVersion != 1 || report.Result.Status != "completed" || !reflect.DeepEqual(report.Plan, executed) {
 		t.Fatalf("execution report=%+v", report)
+	}
+}
+
+func TestSetupCustomDataDirFlowsFromPlannerThroughExecutorAndServices(t *testing.T) {
+	obs := healthyObserver()
+	deps, root := setupDeps(t, "pair", obs)
+	customData := filepath.Join(root, "custom-db")
+	customRunFile := filepath.Join(root, "custom-running.json")
+	deps.DataDir = func() (string, error) { return customData, nil }
+	deps.RunFile = func() (string, error) { return customRunFile, nil }
+	obs.statErr[customData] = os.ErrNotExist
+
+	out, stderr, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
+	if code != 0 || stderr != "" {
+		t.Fatalf("plan code=%d stderr=%q out=%s", code, stderr, out)
+	}
+	plan := decodeSetupPlan(t, out)
+	directory := stepByID(t, plan, "directory.data")
+	if directory.Action == nil || directory.Action.File == nil || directory.Action.File.Path != customData {
+		t.Fatalf("data directory action=%+v want=%q", directory.Action, customData)
+	}
+	for _, id := range []string{"service.daemon", "service.gateway"} {
+		service := stepByID(t, plan, id)
+		if service.Action == nil || service.Action.Service == nil {
+			t.Fatalf("%s action=%+v", id, service.Action)
+		}
+		parsed, err := consumeSystemdDefinition(service.Action.Service.Content)
+		if err != nil {
+			t.Fatalf("consume %s: %v", id, err)
+		}
+		if parsed.Environment["AO_DATA_DIR"] != customData || parsed.Environment["AO_RUN_FILE"] != customRunFile {
+			t.Fatalf("%s runtime paths=%v", id, parsed.Environment)
+		}
+	}
+
+	directory.Dependencies = nil
+	directoryPlan := executablePlan(directory)
+	result, err := executeSetupPlanWithSystem(context.Background(), directoryPlan, root, SetupExecutionOptions{DataDir: customData}, &fakeSetupExecutionSystem{})
+	if err != nil || result.Status != "completed" {
+		t.Fatalf("execution result=%+v err=%v", result, err)
+	}
+	if info, err := os.Stat(customData); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("custom data directory info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "data")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default data directory was unexpectedly created: %v", err)
 	}
 }

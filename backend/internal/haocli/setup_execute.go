@@ -33,6 +33,7 @@ var (
 type SetupExecutionOptions struct {
 	NonInteractive bool      `json:"nonInteractive"`
 	Input          io.Reader `json:"-"`
+	DataDir        string    `json:"-"`
 }
 
 // SetupExecutionResult reports completed, rollback, recovery, and retry facts.
@@ -169,6 +170,7 @@ type journalRecord struct {
 type setupExecutor struct {
 	system         setupExecutionSystem
 	stateRoot      string
+	dataDir        string
 	journalPath    string
 	backupDir      string
 	options        SetupExecutionOptions
@@ -182,7 +184,11 @@ func executeSetupPlan(ctx context.Context, plan SetupPlan, stateRoot string, opt
 }
 
 func executeSetupPlanWithSystem(ctx context.Context, plan SetupPlan, stateRoot string, options SetupExecutionOptions, system setupExecutionSystem) (SetupExecutionResult, error) {
-	if err := validateExecutablePlan(plan, stateRoot); err != nil {
+	dataDir := options.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Join(stateRoot, "data")
+	}
+	if err := validateExecutablePlan(plan, stateRoot, dataDir); err != nil {
 		return SetupExecutionResult{}, commandError{Code: "invalid_setup_plan", Message: "setup plan cannot be executed", Remediation: "rerun hao setup to produce a fresh trusted plan", Details: map[string]any{"diagnostic": safeDiagnostic(err)}, ExitStatus: 1, Cause: err}
 	}
 	lockName := fmt.Sprintf("hao-setup-%x.lock", sha256.Sum256([]byte(filepath.Clean(stateRoot))))
@@ -198,6 +204,7 @@ func executeSetupPlanWithSystem(ctx context.Context, plan SetupPlan, stateRoot s
 	e := &setupExecutor{
 		system:      system,
 		stateRoot:   filepath.Clean(stateRoot),
+		dataDir:     filepath.Clean(dataDir),
 		journalPath: filepath.Join(stateRoot, ".hao-setup-transaction.json"),
 		options:     options,
 		result: SetupExecutionResult{
@@ -262,7 +269,7 @@ func executeSetupPlanWithSystem(ctx context.Context, plan SetupPlan, stateRoot s
 	return e.result, nil
 }
 
-func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
+func validateExecutablePlan(plan SetupPlan, stateRoot, dataDir string) error {
 	if plan.SchemaVersion != setupPlanSchemaVersion || plan.DryRun {
 		return errors.New("plan is not an executable schema v1 plan")
 	}
@@ -270,8 +277,9 @@ func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
 		return err
 	}
 	root := filepath.Clean(stateRoot)
-	if !filepath.IsAbs(root) {
-		return errors.New("state root is not absolute")
+	dataRoot := filepath.Clean(dataDir)
+	if !filepath.IsAbs(root) || !filepath.IsAbs(dataRoot) {
+		return errors.New("state root and data directory must be absolute")
 	}
 	seen := make(map[string]struct{}, len(plan.Steps))
 	for _, step := range plan.Steps {
@@ -296,7 +304,7 @@ func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
 		}
 		switch a.Kind {
 		case "directory", "file-mode":
-			expected := managedDirectoryPath(root, step.ID)
+			expected := managedDirectoryPath(root, dataRoot, step.ID)
 			if expected == "" || filepath.Clean(a.File.Path) != expected || (step.ID == "directory.parent" && a.Kind != "directory") {
 				return fmt.Errorf("step %s targets an unmanaged file", step.ID)
 			}
@@ -321,7 +329,7 @@ func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
 			if step.ID != "transaction.recovery" {
 				return errors.New("recovery action has an invalid step")
 			}
-			expected, found, err := planSetupRecovery(root)
+			expected, found, err := planSetupRecovery(root, dataRoot)
 			if err != nil || !found || expected.Action.Recovery.JournalSHA256 != a.Recovery.JournalSHA256 || expected.Privilege.Required != step.Privilege.Required {
 				return errors.New("recovery action does not match the current interrupted transaction")
 			}
@@ -330,13 +338,13 @@ func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
 	return nil
 }
 
-func managedDirectoryPath(root, stepID string) string {
+func managedDirectoryPath(root, dataDir, stepID string) string {
 	return map[string]string{
 		"directory.parent":  filepath.Dir(root),
 		"directory.state":   root,
 		"directory.hao":     filepath.Join(root, "hao"),
 		"directory.bin":     filepath.Join(root, "bin"),
-		"directory.data":    filepath.Join(root, "data"),
+		"directory.data":    dataDir,
 		"directory.gateway": filepath.Join(root, "vm-gateway"),
 	}[stepID]
 }
@@ -433,24 +441,26 @@ func (e *setupExecutor) installArtifact(ctx context.Context, stepID, disposition
 	}
 	currentDigest, digestErr := fileDigest(action.Path, maxArtifactSize)
 	binaryMatches := digestErr == nil && currentDigest == action.SHA256
-	if binaryMatches && artifactManifestMatches(action) {
-		return nil
-	}
-	_, targetErr := managedLstat(action.Path)
-	if disposition == "create" && targetErr == nil && !binaryMatches {
+	info, targetErr := managedLstat(action.Path)
+	if disposition == "create" && targetErr == nil {
+		if binaryMatches && info.Mode().Perm() == 0o700 && artifactManifestMatches(action) {
+			return nil
+		}
 		return errors.New("artifact target appeared after planning; rerun setup")
 	}
 	if disposition == "update" && errors.Is(targetErr, os.ErrNotExist) {
 		return errors.New("artifact target disappeared after planning; rerun setup")
 	}
-	if disposition == "update" && !binaryMatches {
+	if disposition == "update" {
 		if digestErr != nil || currentDigest != action.ExpectedSHA256 {
 			return errors.New("artifact changed after planning; rerun setup")
 		}
-		info, err := managedLstat(action.Path)
-		if err != nil || uint32(info.Mode().Perm()) != action.ExpectedMode {
+		if targetErr != nil || uint32(info.Mode().Perm()) != action.ExpectedMode {
 			return errors.New("artifact mode changed after planning; rerun setup")
 		}
+	}
+	if binaryMatches && artifactManifestMatches(action) {
+		return nil
 	}
 	if targetErr != nil && !errors.Is(targetErr, os.ErrNotExist) {
 		return targetErr
@@ -579,10 +589,10 @@ func artifactManifestMatches(action *SetupArtifactAction) bool {
 
 func (e *setupExecutor) installService(ctx context.Context, stepID, disposition string, action *SetupServiceAction) error {
 	digest, digestErr := fileDigest(action.Path, 1<<20)
-	if digestErr == nil && digest == action.SHA256 {
-		return nil
-	}
 	info, targetErr := managedLstat(action.Path)
+	if targetErr == nil && (!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0) {
+		return errors.New("service target is not a safe regular unlinked file")
+	}
 	if disposition == "create" && targetErr == nil {
 		return errors.New("service target appeared after planning; rerun setup")
 	}
@@ -592,11 +602,14 @@ func (e *setupExecutor) installService(ctx context.Context, stepID, disposition 
 	if disposition == "update" && !fileDigestEquals(digest, digestErr, action.ExpectedSHA256) {
 		return errors.New("service definition changed after planning; rerun setup")
 	}
-	if targetErr == nil && (!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
-		return errors.New("service target is not a regular unlinked file")
+	if disposition == "update" && targetErr == nil && uint32(info.Mode().Perm()) != action.ExpectedMode {
+		return errors.New("service definition mode changed after planning; rerun setup")
 	}
 	if targetErr != nil && !errors.Is(targetErr, os.ErrNotExist) {
 		return targetErr
+	}
+	if digestErr == nil && digest == action.SHA256 {
+		return nil
 	}
 	targetTemp, err := randomTemporaryPath(filepath.Dir(action.Path), ".hao-service-")
 	if err != nil {
@@ -805,8 +818,12 @@ func (e *setupExecutor) cleanupServiceBackups(ctx context.Context) error {
 	return nil
 }
 
-func planSetupRecovery(stateRoot string) (SetupStep, bool, error) {
-	e := setupExecutor{stateRoot: filepath.Clean(stateRoot), journalPath: filepath.Join(stateRoot, ".hao-setup-transaction.json")}
+func planSetupRecovery(stateRoot string, dataDirs ...string) (SetupStep, bool, error) {
+	dataDir := filepath.Join(stateRoot, "data")
+	if len(dataDirs) > 0 && dataDirs[0] != "" {
+		dataDir = dataDirs[0]
+	}
+	e := setupExecutor{stateRoot: filepath.Clean(stateRoot), dataDir: filepath.Clean(dataDir), journalPath: filepath.Join(stateRoot, ".hao-setup-transaction.json")}
 	journal, digest, found, err := e.readJournal()
 	if err != nil || !found {
 		return SetupStep{}, found, err
@@ -904,11 +921,11 @@ func (e *setupExecutor) validateJournal() error {
 	for _, record := range e.journal.Records {
 		switch record.Kind {
 		case "directory":
-			if record.Target != managedDirectoryPath(e.stateRoot, record.StepID) || record.Reversible || !record.Created {
+			if record.Target != managedDirectoryPath(e.stateRoot, e.dataDir, record.StepID) || record.Reversible || !record.Created {
 				return fmt.Errorf("step %s has an invalid directory record", record.StepID)
 			}
 		case "file-mode":
-			if record.Target != managedDirectoryPath(e.stateRoot, record.StepID) || !record.Reversible || record.Created {
+			if record.Target != managedDirectoryPath(e.stateRoot, e.dataDir, record.StepID) || !record.Reversible || record.Created {
 				return fmt.Errorf("step %s has an invalid mode record", record.StepID)
 			}
 		case "verified-release-artifact":
