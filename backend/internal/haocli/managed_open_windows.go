@@ -42,3 +42,48 @@ func openManagedRegular(path string, maxSize int64) (*os.File, error) {
 	}
 	return file, nil
 }
+
+func managedLstat(path string) (os.FileInfo, error) {
+	if err := ensureNoSymlinkAncestors(path); err != nil {
+		return nil, err
+	}
+	return os.Lstat(path)
+}
+
+func managedChmod(path string, mode os.FileMode) error {
+	if _, err := managedLstat(path); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
+func managedMkdir(path string, mode os.FileMode) error {
+	if err := ensureNoSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return os.Mkdir(path, mode)
+}
+
+func managedCreateExclusive(path string, mode os.FileMode) (*os.File, error) {
+	if err := ensureNoSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+}
+
+func managedRename(source, destination string) error {
+	if err := ensureNoSymlinkAncestors(filepath.Dir(source)); err != nil {
+		return err
+	}
+	if err := ensureNoSymlinkAncestors(filepath.Dir(destination)); err != nil {
+		return err
+	}
+	return os.Rename(source, destination)
+}
+
+func managedRemove(path string) error {
+	if err := ensureNoSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return os.Remove(path)
+}

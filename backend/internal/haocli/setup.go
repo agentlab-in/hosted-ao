@@ -37,6 +37,12 @@ type SetupAction struct {
 	Artifact      *SetupArtifactAction `json:"artifact,omitempty"`
 	Vendor        *SetupVendorAction   `json:"vendor,omitempty"`
 	Service       *SetupServiceAction  `json:"service,omitempty"`
+	Recovery      *SetupRecoveryAction `json:"recovery,omitempty"`
+}
+
+// SetupRecoveryAction binds consent to one durable interrupted transaction.
+type SetupRecoveryAction struct {
+	JournalSHA256 string `json:"journalSha256"`
 }
 
 // SetupFileAction is the payload for one managed file operation.
@@ -56,10 +62,12 @@ type SetupPackageAction struct {
 
 // SetupArtifactAction identifies one immutable release artifact.
 type SetupArtifactAction struct {
-	Path    string `json:"path"`
-	Version string `json:"version"`
-	Source  string `json:"source"`
-	SHA256  string `json:"sha256"`
+	Path           string `json:"path"`
+	Version        string `json:"version"`
+	Source         string `json:"source"`
+	SHA256         string `json:"sha256"`
+	ExpectedSHA256 string `json:"expectedSha256,omitempty"`
+	ExpectedMode   uint32 `json:"expectedMode,omitempty"`
 }
 
 // SetupVendorAction identifies one immutable vendor package.
@@ -73,11 +81,12 @@ type SetupVendorAction struct {
 
 // SetupServiceAction contains a complete canonical service definition.
 type SetupServiceAction struct {
-	Path    string `json:"path"`
-	Mode    string `json:"mode"`
-	Version string `json:"version"`
-	Content string `json:"content"`
-	SHA256  string `json:"sha256"`
+	Path           string `json:"path"`
+	Mode           string `json:"mode"`
+	Version        string `json:"version"`
+	Content        string `json:"content"`
+	SHA256         string `json:"sha256"`
+	ExpectedSHA256 string `json:"expectedSha256,omitempty"`
 }
 
 // SetupStep is one stable desired-versus-observed reconciliation decision.
@@ -115,22 +124,29 @@ type SetupPlan struct {
 	Summary       SetupSummary `json:"summary"`
 }
 
+// SetupExecutionReport is the single JSON document emitted by an execution.
+type SetupExecutionReport struct {
+	SchemaVersion int                  `json:"schemaVersion"`
+	Plan          SetupPlan            `json:"plan"`
+	Result        SetupExecutionResult `json:"result"`
+}
+
 type setupDesired struct {
 	Machine, Mode, AOVersion, Harness, Profile, Install string
 	ServiceEnabled                                      bool
 	PairPort                                            int
-	StateRoot, ConfigPath                               string
+	StateRoot, DataDir, RunFile, ConfigPath             string
 	OS, Arch                                            string
 }
 
 type observedItem struct {
-	State, Evidence, Version, Path, Source, SHA256 string
-	Mode                                           os.FileMode
-	UID                                            int
-	Owner                                          bool
-	IsDir                                          bool
-	Link                                           bool
-	Trusted                                        bool
+	State, Evidence, Version, Path, Source, SHA256, ActualSHA256 string
+	Mode                                                         os.FileMode
+	UID                                                          int
+	Owner                                                        bool
+	IsDir                                                        bool
+	Link                                                         bool
+	Trusted                                                      bool
 }
 
 type setupSnapshot struct {
@@ -162,6 +178,13 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 			return err
 		}
 		plan := planSetup(desired, observeSetup(cmd.Context(), deps, desired))
+		if recoveryStep, found, recoveryErr := planSetupRecovery(desired.StateRoot); recoveryErr != nil {
+			plan.Steps = append([]SetupStep{blockedStep("transaction.recovery", "setup-transaction", "inspect-recovery", "an interrupted setup journal could not be validated safely", safeDiagnostic(recoveryErr), "inspect the transaction journal manually before retrying")}, plan.Steps...)
+			recountSetupPlan(&plan)
+		} else if found {
+			plan.Steps = append([]SetupStep{recoveryStep}, plan.Steps...)
+			recountSetupPlan(&plan)
+		}
 		plan.DryRun = dryRun
 		serializedPlan, err := json.Marshal(plan)
 		if err != nil {
@@ -170,7 +193,10 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 		if _, err := consumeSetupPlanJSON(serializedPlan); err != nil {
 			return operationalError("validate setup plan", err)
 		}
-		if opts.json {
+		jsonExecution := opts.json && !dryRun && plan.Summary.Blocked == 0
+		if jsonExecution {
+			err = beginSetupExecutionJSON(cmd.OutOrStdout(), plan)
+		} else if opts.json {
 			err = writeJSON(cmd.OutOrStdout(), haocontractRedact(plan))
 		} else {
 			err = writeSetupPlan(cmd, plan, yes)
@@ -185,9 +211,16 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 			return nil
 		}
 		if nonInteractive && !yes {
+			if jsonExecution {
+				_ = endSetupExecutionJSON(cmd.OutOrStdout(), SetupExecutionResult{Status: "not_executed", Completed: []string{}, Rollback: []string{}, Recovery: []string{}, Retry: "hao setup --dry-run"})
+			}
 			return commandError{Code: "invalid_usage", Message: "non-interactive setup requires explicit consent", Remediation: "review the dry-run plan, then rerun with --non-interactive --yes", ExitStatus: 2}
 		}
 		if !yes {
+			if opts.json {
+				_ = endSetupExecutionJSON(cmd.OutOrStdout(), SetupExecutionResult{Status: "not_executed", Completed: []string{}, Rollback: []string{}, Recovery: []string{}, Retry: "rerun with --yes after reviewing the plan"})
+				return commandError{Code: "invalid_usage", Message: "JSON setup execution requires explicit consent", Remediation: "review the plan, then rerun with --yes", ExitStatus: 2}
+			}
 			confirmed, confirmErr := confirmSetup(cmd)
 			if confirmErr != nil {
 				return operationalError("read setup confirmation", confirmErr)
@@ -201,13 +234,15 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 		}
 		result, executeErr := deps.ExecuteSetup(cmd.Context(), plan, desired.StateRoot, SetupExecutionOptions{NonInteractive: nonInteractive, Input: cmd.InOrStdin()})
 		if executeErr != nil {
-			if !opts.json {
+			if jsonExecution {
+				_ = endSetupExecutionJSON(cmd.OutOrStdout(), result)
+			} else {
 				writeSetupFailure(cmd.OutOrStdout(), result)
 			}
 			return executeErr
 		}
-		if opts.json {
-			return writeJSON(cmd.OutOrStdout(), haocontractRedact(result))
+		if jsonExecution {
+			return endSetupExecutionJSON(cmd.OutOrStdout(), result)
 		}
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Setup %s. Completed %d action(s).\n", result.Status, len(result.Completed))
 		return err
@@ -217,6 +252,29 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 	cmd.Flags().StringVar(&install, "install", "", "dependency policy: missing or none")
 	cmd.Flags().BoolVar(&yes, "yes", false, "approve and execute the displayed setup plan")
 	return cmd
+}
+
+func beginSetupExecutionJSON(out io.Writer, plan SetupPlan) error {
+	data, err := json.Marshal(haocontractRedact(plan))
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "{\"schemaVersion\":1,\"plan\":%s,\"result\":", data); err != nil {
+		return err
+	}
+	if flusher, ok := out.(interface{ Flush() error }); ok {
+		return flusher.Flush()
+	}
+	return nil
+}
+
+func endSetupExecutionJSON(out io.Writer, result SetupExecutionResult) error {
+	data, err := json.Marshal(haocontractRedact(result))
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "%s}\n", data)
+	return err
 }
 
 func writeSetupFailure(out io.Writer, result SetupExecutionResult) {
@@ -269,6 +327,14 @@ func resolveSetupDesired(deps Deps, path string, object map[string]any, install 
 		return setupDesired{}, operationalError("resolve state root", err)
 	}
 	d.StateRoot = root
+	d.DataDir, err = deps.DataDir()
+	if err != nil {
+		return setupDesired{}, operationalError("resolve data directory", err)
+	}
+	d.RunFile, err = deps.RunFile()
+	if err != nil {
+		return setupDesired{}, operationalError("resolve run file", err)
+	}
 	return d, nil
 }
 
@@ -297,6 +363,9 @@ func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSna
 	}
 	artifactPath := filepath.Join(desired.StateRoot, "bin", "ao")
 	s.Artifact = observeFile(deps.Observer, artifactPath)
+	if s.Artifact.State == "present" && !s.Artifact.IsDir && !s.Artifact.Link {
+		s.Artifact.ActualSHA256, _ = deps.Observer.FileSHA256(ctx, artifactPath, maxArtifactSize)
+	}
 	parentsSafe := true
 	for _, id := range []string{"directory.state", "directory.bin"} {
 		item := s.Directories[id]
@@ -359,6 +428,8 @@ func observeServiceFile(obs Observer, path string) observedItem {
 		return item
 	}
 	item.Version = string(data)
+	digest := sha256.Sum256(data)
+	item.ActualSHA256 = fmt.Sprintf("%x", digest[:])
 	return item
 }
 
@@ -480,20 +551,25 @@ func planSetup(d setupDesired, s setupSnapshot) SetupPlan {
 		add(step)
 	}
 	propagateBlocked(p.Steps)
-	for _, step := range p.Steps {
+	recountSetupPlan(&p)
+	return p
+}
+
+func recountSetupPlan(plan *SetupPlan) {
+	plan.Summary = SetupSummary{}
+	for _, step := range plan.Steps {
 		switch step.Disposition {
 		case "create":
-			p.Summary.Create++
+			plan.Summary.Create++
 		case "update":
-			p.Summary.Update++
+			plan.Summary.Update++
 		case "no-op":
-			p.Summary.NoOp++
+			plan.Summary.NoOp++
 		case "blocked":
-			p.Summary.Blocked++
+			plan.Summary.Blocked++
 		}
 	}
-	p.Summary.Ready = p.Summary.Blocked == 0
-	return p
+	plan.Summary.Ready = plan.Summary.Blocked == 0
 }
 
 func planDirectory(id string, item observedItem) SetupStep {
@@ -544,9 +620,14 @@ func planArtifact(d setupDesired, item observedItem, trusted ArtifactMetadata, a
 	if action == nil {
 		return blockedStep("artifact.ao", "ao-gateway-artifact", "manual-update", "trusted immutable release metadata is unavailable for replacement", item.Evidence, "replace the artifact manually from a trusted release")
 	}
+	if !validSHA256(item.ActualSHA256) {
+		return blockedStep("artifact.ao", "ao-gateway-artifact", "reconcile-artifact", "current artifact digest could not be observed safely", item.Evidence, "inspect the artifact manually, then rerun setup")
+	}
 	if item.Trusted && versionMatches(item.Version, d.AOVersion) {
 		return noopStep("artifact.ao", "ao-gateway-artifact", "verify-artifact", "hao-owned AO/gateway artifact version already matches", item.Version)
 	}
+	action.Artifact.ExpectedSHA256 = item.ActualSHA256
+	action.Artifact.ExpectedMode = uint32(item.Mode.Perm())
 	return SetupStep{ID: "artifact.ao", Component: "ao-gateway-artifact", Operation: "update-artifact", Disposition: "update", Reason: "installed artifact does not match trusted immutable metadata", Evidence: item.Evidence, Action: action}
 }
 
@@ -640,6 +721,7 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 			if item.Link || item.IsDir || item.UID > 0 || item.Mode.Perm()&0o022 != 0 {
 				step = blockedStep(id, component, "reconcile-definition", "existing service definition has unsafe ownership", item.Evidence, "inspect and reconcile the conflicting definition manually")
 			} else if item.Version != desiredContent {
+				action.Service.ExpectedSHA256 = item.ActualSHA256
 				step = SetupStep{ID: id, Component: component, Operation: "update-definition", Disposition: "update", Privilege: SetupPrivilege{Required: true, Scope: "system-service-definition"}, Reason: "service definition content differs from desired canonical v1 content", Evidence: "canonical content mismatch", Action: action}
 			} else {
 				step = noopStep(id, component, "verify-definition", "service definition is present; setup does not enable or start it", item.Evidence)
@@ -654,7 +736,13 @@ func planServices(d setupDesired, s setupSnapshot) []SetupStep {
 }
 
 func renderSystemdDefinition(id string, d setupDesired, user UserObservation) string {
-	dataDir, runFile, binary := filepath.Join(d.StateRoot, "data"), filepath.Join(d.StateRoot, "running.json"), filepath.Join(d.StateRoot, "bin", "ao")
+	dataDir, runFile, binary := d.DataDir, d.RunFile, filepath.Join(d.StateRoot, "bin", "ao")
+	if dataDir == "" {
+		dataDir = filepath.Join(d.StateRoot, "data")
+	}
+	if runFile == "" {
+		runFile = filepath.Join(d.StateRoot, "running.json")
+	}
 	var b strings.Builder
 	b.WriteString("[Unit]\nDescription=Hosted AO ")
 	if id == "service.gateway" {
@@ -663,7 +751,7 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 		b.WriteString("daemon\nAfter=network-online.target\n")
 	}
 	path := filepath.Join(user.Home, ".local", "bin") + ":" + filepath.Join(user.Home, "bin") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + dataDir + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\nEnvironment=" + systemdQuote("PATH="+path) + "\n")
+	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + dataDir + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\nEnvironment=" + systemdQuote("PATH="+path) + "\nEnvironment=" + systemdQuote("AO_DATA_DIR="+dataDir) + "\nEnvironment=" + systemdQuote("AO_RUN_FILE="+runFile) + "\n")
 	if id == "service.gateway" {
 		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_HTTPS_ADDR=:"+strconv.Itoa(d.PairPort)) + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-cert")) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode")) + "\n")
 		if d.PairPort < 1024 {
@@ -671,7 +759,7 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 		}
 		b.WriteString("ExecStart=" + systemdQuote(binary) + " vm serve\n")
 	} else {
-		b.WriteString("Environment=" + systemdQuote("AO_DATA_DIR="+dataDir) + "\nEnvironment=" + systemdQuote("AO_RUN_FILE="+runFile) + "\nExecStart=" + systemdQuote(binary) + " daemon\n")
+		b.WriteString("ExecStart=" + systemdQuote(binary) + " daemon\n")
 	}
 	b.WriteString("Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
@@ -749,7 +837,10 @@ func systemdInputsSafe(d setupDesired, user UserObservation) bool {
 	if !systemdUserPattern.MatchString(user.Name) {
 		return false
 	}
-	for _, value := range []string{user.Home, d.StateRoot} {
+	for _, value := range []string{user.Home, d.StateRoot, d.DataDir, d.RunFile} {
+		if value == "" {
+			continue
+		}
 		if !pathpkg.IsAbs(value) {
 			return false
 		}
@@ -815,7 +906,7 @@ func validateSetupPlan(plan SetupPlan) error {
 			return fmt.Errorf("step %s has unsupported action schema", step.ID)
 		}
 		variants := 0
-		for _, present := range []bool{a.File != nil, a.Package != nil, a.Artifact != nil, a.Vendor != nil, a.Service != nil} {
+		for _, present := range []bool{a.File != nil, a.Package != nil, a.Artifact != nil, a.Vendor != nil, a.Service != nil, a.Recovery != nil} {
 			if present {
 				variants++
 			}
@@ -829,16 +920,19 @@ func validateSetupPlan(plan SetupPlan) error {
 				return fmt.Errorf("step %s has incomplete file action", step.ID)
 			}
 		case "package-manager":
-			if a.Package == nil || !filepath.IsAbs(a.Package.Executable) || len(a.Package.Argv) == 0 || a.Package.Version == "" || a.Package.Version == "latest" || a.Package.Source == "" || !validSHA256(a.Package.SHA256) || !strings.Contains(a.Package.Source, a.Package.Version) || !strings.Contains(strings.Join(a.Package.Argv, "\x00"), a.Package.Version) {
+			if a.Package == nil || !filepath.IsAbs(a.Package.Executable) || !verifiedPackageArgv(a.Package.Argv, "--yes") || a.Package.Version == "" || a.Package.Version == "latest" || a.Package.Source == "" || !validSHA256(a.Package.SHA256) || !strings.Contains(a.Package.Source, a.Package.Version) {
 				return fmt.Errorf("step %s has mutable package provenance", step.ID)
 			}
 		case "vendor-package":
-			if a.Vendor == nil || !filepath.IsAbs(a.Vendor.Executable) || len(a.Vendor.Argv) == 0 || a.Vendor.Source == "" || a.Vendor.Version == "" || a.Vendor.Version == "latest" || !validSHA256(a.Vendor.SHA256) || !strings.Contains(a.Vendor.Source, a.Vendor.Version) || !strings.Contains(strings.Join(a.Vendor.Argv, "\x00"), "@"+a.Vendor.Version) {
+			if a.Vendor == nil || !filepath.IsAbs(a.Vendor.Executable) || !verifiedPackageArgv(a.Vendor.Argv, "--global") || a.Vendor.Source == "" || a.Vendor.Version == "" || a.Vendor.Version == "latest" || !validSHA256(a.Vendor.SHA256) || !strings.Contains(a.Vendor.Source, a.Vendor.Version) {
 				return fmt.Errorf("step %s has mutable vendor provenance", step.ID)
 			}
 		case "verified-release-artifact":
 			if a.Artifact == nil || !filepath.IsAbs(a.Artifact.Path) || a.Artifact.Version == "" || a.Artifact.Version == "latest" || a.Artifact.Source == "" || !validSHA256(a.Artifact.SHA256) || !strings.Contains(a.Artifact.Source, a.Artifact.Version) || strings.Contains(a.Artifact.Source, "/latest/") {
 				return fmt.Errorf("step %s has incomplete artifact provenance", step.ID)
+			}
+			if (step.Disposition == "create" && (a.Artifact.ExpectedSHA256 != "" || a.Artifact.ExpectedMode != 0)) || (step.Disposition == "update" && (!validSHA256(a.Artifact.ExpectedSHA256) || a.Artifact.ExpectedMode&0o111 == 0 || a.Artifact.ExpectedMode&0o022 != 0)) {
+				return fmt.Errorf("step %s has an invalid artifact precondition", step.ID)
 			}
 		case "service-definition-v1":
 			if a.Service == nil {
@@ -848,14 +942,25 @@ func validateSetupPlan(plan SetupPlan) error {
 			if !filepath.IsAbs(a.Service.Path) || a.Service.Mode != "0644" || a.Service.Version != "1" || a.Service.Content == "" || a.Service.SHA256 != fmt.Sprintf("%x", digest[:]) {
 				return fmt.Errorf("step %s has invalid service definition contract", step.ID)
 			}
+			if (step.Disposition == "create" && a.Service.ExpectedSHA256 != "") || (step.Disposition == "update" && !validSHA256(a.Service.ExpectedSHA256)) {
+				return fmt.Errorf("step %s has an invalid service precondition", step.ID)
+			}
 			if _, err := consumeSystemdDefinition(a.Service.Content); err != nil {
 				return fmt.Errorf("step %s has unusable service definition: %w", step.ID, err)
+			}
+		case "transaction-recovery-v1":
+			if a.Recovery == nil || step.ID != "transaction.recovery" || !validSHA256(a.Recovery.JournalSHA256) {
+				return fmt.Errorf("step %s has an invalid recovery contract", step.ID)
 			}
 		default:
 			return fmt.Errorf("step %s has unsupported action kind %q", step.ID, a.Kind)
 		}
 	}
 	return nil
+}
+
+func verifiedPackageArgv(argv []string, option string) bool {
+	return len(argv) == 3 && argv[0] == "install" && argv[1] == option && argv[2] == "{verified-file}"
 }
 
 // consumeSetupPlanJSON is the shared plan consumer boundary. It strictly
@@ -894,6 +999,8 @@ func consumeSetupPlanJSON(data []byte) ([]string, error) {
 			operations = append(operations, fmt.Sprintf("file kind=%s path=%s mode=%s", a.Kind, a.File.Path, a.File.Mode))
 		case "package-manager":
 			operations = append(operations, fmt.Sprintf("package executable=%s source=%s version=%s sha256=%s argv=%q", a.Package.Executable, a.Package.Source, a.Package.Version, a.Package.SHA256, a.Package.Argv))
+		case "transaction-recovery-v1":
+			operations = append(operations, "recovery journal-sha256="+a.Recovery.JournalSHA256)
 		}
 	}
 	return operations, nil
@@ -966,5 +1073,7 @@ func writeSetupAction(out io.Writer, action *SetupAction) {
 		for _, line := range strings.Split(strings.TrimSuffix(action.Service.Content, "\n"), "\n") {
 			_, _ = fmt.Fprintln(out, "    "+redactedString(line))
 		}
+	case "transaction-recovery-v1":
+		_, _ = fmt.Fprintln(out, "  action: recover transaction journal-sha256="+action.Recovery.JournalSHA256)
 	}
 }

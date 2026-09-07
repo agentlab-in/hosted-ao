@@ -37,6 +37,7 @@ type Deps struct {
 	Err      io.Writer
 	ReadFile func(string) ([]byte, error)
 	StateDir func() (string, error)
+	DataDir  func() (string, error)
 	RunFile  func() (string, error)
 	Observer Observer
 	// TrustedArtifact supplies immutable release metadata from an injected
@@ -49,7 +50,7 @@ type Deps struct {
 
 // DefaultDeps returns the production CLI dependencies.
 func DefaultDeps() Deps {
-	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, TrustedArtifact: trustedBuildArtifact, ExecuteSetup: executeSetupPlan, Timeout: 2 * time.Second, Now: time.Now}
+	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, DataDir: config.ResolveDataDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, TrustedArtifact: trustedBuildArtifact, ExecuteSetup: executeSetupPlan, Timeout: 2 * time.Second, Now: time.Now}
 }
 
 func trustedBuildArtifact(goos, arch, version string) (ArtifactMetadata, bool) {
@@ -78,6 +79,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.StateDir == nil {
 		d.StateDir = defaults.StateDir
+	}
+	if d.DataDir == nil {
+		d.DataDir = defaults.DataDir
 	}
 	if d.RunFile == nil {
 		d.RunFile = defaults.RunFile

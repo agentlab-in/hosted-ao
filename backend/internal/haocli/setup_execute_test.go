@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +87,20 @@ func artifactStep(root string, payload []byte, disposition string) SetupStep {
 	}}}
 }
 
+func setArtifactPrecondition(t *testing.T, step *SetupStep) {
+	t.Helper()
+	digest, err := fileDigest(step.Action.Artifact.Path, maxArtifactSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(step.Action.Artifact.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step.Action.Artifact.ExpectedSHA256 = digest
+	step.Action.Artifact.ExpectedMode = uint32(info.Mode().Perm())
+}
+
 func preparedExecutorRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -133,6 +149,28 @@ func TestSetupExecutorVerifiesArtifactAndReplayIsNoOp(t *testing.T) {
 	}
 }
 
+func TestArtifactRedirectAllowlist(t *testing.T) {
+	origin, _ := http.NewRequest(http.MethodGet, "https://github.com/agentlab-in/hosted-ao/releases/download/v0.14.0/ao-linux-x64", http.NoBody)
+	allowed, _ := http.NewRequest(http.MethodGet, "https://release-assets.githubusercontent.com/github-production-release-asset/file", http.NoBody)
+	if err := allowArtifactRedirect(allowed, []*http.Request{origin}); err != nil {
+		t.Fatalf("release asset redirect rejected: %v", err)
+	}
+	for _, target := range []string{
+		"http://release-assets.githubusercontent.com/file",
+		"https://evil.example/file",
+		"https://release-assets.githubusercontent.com.evil.example/file",
+	} {
+		request, _ := http.NewRequest(http.MethodGet, target, http.NoBody)
+		if err := allowArtifactRedirect(request, []*http.Request{origin}); err == nil {
+			t.Fatalf("untrusted redirect accepted: %s", target)
+		}
+	}
+	mutable, _ := http.NewRequest(http.MethodGet, "https://github.com/agentlab-in/hosted-ao/releases/latest/download/ao", http.NoBody)
+	if err := allowArtifactRedirect(allowed, []*http.Request{mutable}); err == nil {
+		t.Fatal("mutable release redirect accepted")
+	}
+}
+
 func TestSetupExecutorRejectsDigestMismatchAndInterruptedDownloadBeforeReplacement(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -170,7 +208,7 @@ func (r errorAfterReader) Read(p []byte) (int, error) {
 
 func TestSetupExecutorPrivilegeRefusalIsExitThreeBeforeMutation(t *testing.T) {
 	root := preparedExecutorRoot(t)
-	action := &SetupPackageAction{Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "git=1.2.3"}, Version: "1.2.3", Source: "https://packages.example.invalid/git-1.2.3.deb", SHA256: strings.Repeat("a", 64)}
+	action := &SetupPackageAction{Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "{verified-file}"}, Version: "1.2.3", Source: "https://packages.example.invalid/git-1.2.3.deb", SHA256: strings.Repeat("a", 64)}
 	plan := executablePlan(SetupStep{ID: "prerequisite.git", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "system-package"}, Action: &SetupAction{SchemaVersion: 1, Kind: "package-manager", Package: action}})
 	system := &fakeSetupExecutionSystem{privilegeErr: errPrivilegeRefused}
 	result, err := executeSetupPlanWithSystem(context.Background(), plan, root, SetupExecutionOptions{NonInteractive: true}, system)
@@ -180,25 +218,53 @@ func TestSetupExecutorPrivilegeRefusalIsExitThreeBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestSetupRecoveryPrivilegeRefusalIsExitThreeBeforeMutation(t *testing.T) {
+	root := preparedExecutorRoot(t)
+	record := journalRecord{StepID: "service.daemon", Kind: "service-definition-v1", Target: "/etc/systemd/system/ao-daemon.service", Backup: "/etc/systemd/system/.hao-backup-" + strings.Repeat("a", 32), Temporary: "/etc/systemd/system/.hao-service-" + strings.Repeat("b", 32), Reversible: true, BackupReady: true}
+	journal := setupJournal{SchemaVersion: 1, PlanSHA256: strings.Repeat("a", 64), State: "in_progress", Records: []journalRecord{record}}
+	data, _ := json.Marshal(journal)
+	journalPath := filepath.Join(root, ".hao-setup-transaction.json")
+	if err := os.WriteFile(journalPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovery, found, err := planSetupRecovery(root)
+	if err != nil || !found || !recovery.Privilege.Required {
+		t.Fatalf("recovery=%+v found=%v err=%v", recovery, found, err)
+	}
+	system := &fakeSetupExecutionSystem{privilegeErr: errPrivilegeRefused}
+	result, err := executeSetupPlanWithSystem(context.Background(), executablePlan(recovery), root, SetupExecutionOptions{NonInteractive: true}, system)
+	var typed commandError
+	if !errors.As(err, &typed) || typed.ExitStatus != 3 || typed.Code != "privilege_required" || len(result.Completed) != 0 || len(system.calls) != 0 {
+		t.Fatalf("result=%+v error=%+v calls=%+v", result, typed, system.calls)
+	}
+	if _, err := os.Stat(journalPath); err != nil {
+		t.Fatalf("privilege refusal changed recovery journal: %v", err)
+	}
+}
+
 func TestSetupExecutorRunsOnlyAllowlistedStructuredPackageAndVendorArgv(t *testing.T) {
 	root := preparedExecutorRoot(t)
-	digest := strings.Repeat("a", 64)
-	packageAction := &SetupPackageAction{Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "git=1.2.3"}, Version: "1.2.3", Source: "https://packages.example.invalid/git-1.2.3.deb", SHA256: digest}
-	vendorAction := &SetupVendorAction{Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "@anthropic-ai/claude-code@2.3.4"}, Version: "2.3.4", Source: "https://registry.example.invalid/claude-code-2.3.4.tgz", SHA256: digest}
+	payload := []byte("verified package payload")
+	digestBytes := sha256.Sum256(payload)
+	digest := fmt.Sprintf("%x", digestBytes[:])
+	packageAction := &SetupPackageAction{Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "{verified-file}"}, Version: "1.2.3", Source: "https://packages.example.invalid/git-1.2.3.deb", SHA256: digest}
+	vendorAction := &SetupVendorAction{Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "{verified-file}"}, Version: "2.3.4", Source: "https://registry.example.invalid/claude-code-2.3.4.tgz", SHA256: digest}
 	plan := executablePlan(
 		SetupStep{ID: "prerequisite.git", Disposition: "create", Privilege: SetupPrivilege{Required: true, Scope: "system-package"}, Action: &SetupAction{SchemaVersion: 1, Kind: "package-manager", Package: packageAction}},
 		SetupStep{ID: "prerequisite.harness", Disposition: "create", Action: &SetupAction{SchemaVersion: 1, Kind: "vendor-package", Vendor: vendorAction}},
 	)
-	system := &fakeSetupExecutionSystem{}
+	system := &fakeSetupExecutionSystem{payload: payload}
 	if _, err := executeSetupPlanWithSystem(context.Background(), plan, root, SetupExecutionOptions{NonInteractive: true}, system); err != nil {
 		t.Fatal(err)
 	}
-	want := []setupCommandCall{
-		{Privileged: true, Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "git=1.2.3"}},
-		{Privileged: false, Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "@anthropic-ai/claude-code@2.3.4"}},
+	if len(system.calls) != 2 || !system.calls[0].Privileged || system.calls[0].Executable != "/usr/bin/apt-get" || system.calls[1].Privileged || system.calls[1].Executable != "/usr/bin/npm" {
+		t.Fatalf("calls=%+v", system.calls)
 	}
-	if !reflect.DeepEqual(system.calls, want) {
-		t.Fatalf("calls=%+v want=%+v", system.calls, want)
+	for _, call := range system.calls {
+		verifiedPath := call.Argv[len(call.Argv)-1]
+		if !temporaryPathMatches(verifiedPath, filepath.Join(root, "hao"), ".hao-package-") {
+			t.Fatalf("command did not receive verified local package path: %+v", call)
+		}
 	}
 
 	hostile := executablePlan(SetupStep{ID: "bad", Disposition: "create", Action: &SetupAction{SchemaVersion: 1, Kind: "vendor-package", Vendor: &SetupVendorAction{Executable: "/bin/sh", Argv: []string{"-c", "id"}, Version: "1", Source: "https://example.invalid/tool-1", SHA256: digest}}})
@@ -208,6 +274,9 @@ func TestSetupExecutorRunsOnlyAllowlistedStructuredPackageAndVendorArgv(t *testi
 }
 
 func TestSetupExecutorUsesAtomicStructuredServiceDefinitionCommands(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd service definition execution is supported on Linux")
+	}
 	root := preparedExecutorRoot(t)
 	desired := setupDesired{StateRoot: root, PairPort: 443}
 	content := renderSystemdDefinition("service.gateway", desired, UserObservation{Name: "agent", UID: 1000, Home: "/home/agent"})
@@ -292,7 +361,7 @@ func TestSetupExecutorRollsBackArtifactAndRedactsFailure(t *testing.T) {
 	root := preparedExecutorRoot(t)
 	path := filepath.Join(root, "bin", "ao")
 	old := []byte("old artifact")
-	if err := os.WriteFile(path, old, 0o700); err != nil {
+	if err := os.WriteFile(path, old, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	oldDigest := sha256.Sum256(old)
@@ -302,8 +371,10 @@ func TestSetupExecutorRollsBackArtifactAndRedactsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	newPayload := []byte("new artifact")
-	vendor := &SetupVendorAction{Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "@anthropic-ai/claude-code@2.3.4"}, Version: "2.3.4", Source: "https://registry.example.invalid/claude-code-2.3.4.tgz", SHA256: strings.Repeat("a", 64)}
-	plan := executablePlan(artifactStep(root, newPayload, "update"), SetupStep{ID: "prerequisite.harness", Disposition: "create", Action: &SetupAction{SchemaVersion: 1, Kind: "vendor-package", Vendor: vendor}})
+	vendor := &SetupVendorAction{Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "{verified-file}"}, Version: "2.3.4", Source: "https://registry.example.invalid/claude-code-2.3.4.tgz", SHA256: fmt.Sprintf("%x", sha256.Sum256(newPayload))}
+	artifact := artifactStep(root, newPayload, "update")
+	setArtifactPrecondition(t, &artifact)
+	plan := executablePlan(artifact, SetupStep{ID: "prerequisite.harness", Disposition: "create", Action: &SetupAction{SchemaVersion: 1, Kind: "vendor-package", Vendor: vendor}})
 	system := &fakeSetupExecutionSystem{payload: newPayload, runErr: errors.New("token=super-secret installer failed")}
 	result, err := executeSetupPlanWithSystem(context.Background(), plan, root, SetupExecutionOptions{}, system)
 	if err == nil || result.Status != "failed" || len(result.Rollback) == 0 {
@@ -312,6 +383,11 @@ func TestSetupExecutorRollsBackArtifactAndRedactsFailure(t *testing.T) {
 	restored, readErr := os.ReadFile(path)
 	if readErr != nil || !bytes.Equal(restored, old) {
 		t.Fatalf("artifact was not restored: %q err=%v", restored, readErr)
+	}
+	if info, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("artifact mode stat failed: %v", statErr)
+	} else if info.Mode().Perm() != 0o500 {
+		t.Fatalf("artifact mode was not restored: %v", info.Mode().Perm())
 	}
 	var typed commandError
 	if !errors.As(err, &typed) {
@@ -337,12 +413,16 @@ func TestSetupExecutorRecoversInterruptedJournalBeforeRetry(t *testing.T) {
 	if err := os.WriteFile(backup, []byte("old-safe"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	journal := setupJournal{SchemaVersion: 1, PlanSHA256: strings.Repeat("a", 64), State: "in_progress", Records: []journalRecord{{StepID: "artifact.ao", Kind: "verified-release-artifact", Target: target, Backup: backup, ManifestTarget: target + ".hao-manifest.json", Temporary: filepath.Join(root, "bin", ".hao-artifact-"+strings.Repeat("a", 32)), Reversible: true}}}
+	journal := setupJournal{SchemaVersion: 1, PlanSHA256: strings.Repeat("a", 64), State: "in_progress", Records: []journalRecord{{StepID: "artifact.ao", Kind: "verified-release-artifact", Target: target, Backup: backup, ManifestTarget: target + ".hao-manifest.json", Temporary: filepath.Join(root, "bin", ".hao-artifact-"+strings.Repeat("a", 32)), PreviousMode: 0o700, Reversible: true}}}
 	journalBytes, _ := json.Marshal(journal)
 	if err := os.WriteFile(filepath.Join(root, ".hao-setup-transaction.json"), journalBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := executeSetupPlanWithSystem(context.Background(), executablePlan(), root, SetupExecutionOptions{}, &fakeSetupExecutionSystem{})
+	recovery, found, recoveryErr := planSetupRecovery(root)
+	if recoveryErr != nil || !found {
+		t.Fatalf("recovery plan found=%v err=%v", found, recoveryErr)
+	}
+	result, err := executeSetupPlanWithSystem(context.Background(), executablePlan(recovery), root, SetupExecutionOptions{}, &fakeSetupExecutionSystem{})
 	if err != nil || len(result.Recovery) != 1 || len(result.Rollback) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -400,6 +480,68 @@ func TestSetupExecutorRejectsStaleArtifactCreateTarget(t *testing.T) {
 	}
 }
 
+func TestSetupExecutorRejectsStaleArtifactUpdate(t *testing.T) {
+	root := preparedExecutorRoot(t)
+	path := filepath.Join(root, "bin", "ao")
+	if err := os.WriteFile(path, []byte("observed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifact := artifactStep(root, []byte("desired"), "update")
+	setArtifactPrecondition(t, &artifact)
+	if err := os.WriteFile(path, []byte("changed after planning"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	system := &fakeSetupExecutionSystem{payload: []byte("desired")}
+	if _, err := executeSetupPlanWithSystem(context.Background(), executablePlan(artifact), root, SetupExecutionOptions{}, system); err == nil || commandErrorCode(t, err) != "setup_failed" {
+		t.Fatalf("stale artifact update accepted: %v", err)
+	}
+	if system.downloadCalls != 0 {
+		t.Fatalf("stale update downloaded %d artifacts", system.downloadCalls)
+	}
+}
+
+func TestAtomicWriteRejectsLinkedTargetAndAncestor(t *testing.T) {
+	root := preparedExecutorRoot(t)
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "linked-target")
+	if err := os.Symlink(outside, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(target, []byte("hostile"), 0o600); err == nil {
+		t.Fatal("linked target was replaced")
+	}
+	linkedDir := filepath.Join(root, "linked-dir")
+	if err := os.Symlink(filepath.Dir(outside), linkedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(filepath.Join(linkedDir, "child"), []byte("hostile"), 0o600); err == nil {
+		t.Fatal("linked ancestor was traversed")
+	}
+	content, _ := os.ReadFile(outside)
+	if string(content) != "safe" {
+		t.Fatalf("outside file changed: %q", content)
+	}
+}
+
+func TestIncompleteServiceBackupIsNeverRestored(t *testing.T) {
+	system := &fakeSetupExecutionSystem{}
+	e := setupExecutor{system: system, options: SetupExecutionOptions{}, journal: setupJournal{Records: []journalRecord{{
+		StepID: "service.daemon", Kind: "service-definition-v1", Target: "/etc/systemd/system/ao-daemon.service", Backup: "/etc/systemd/system/.hao-backup-" + strings.Repeat("a", 32), Temporary: "/etc/systemd/system/.hao-service-" + strings.Repeat("b", 32), Reversible: true,
+	}}}}
+	results, complete := e.rollback(context.Background())
+	if !complete || len(results) != 1 {
+		t.Fatalf("results=%v complete=%v", results, complete)
+	}
+	for _, call := range system.calls {
+		if call.Executable == "/usr/bin/mv" {
+			t.Fatalf("incomplete backup was restored: %+v", system.calls)
+		}
+	}
+}
+
 func TestSetupExecutorRejectsHostileRecoveryJournalBeforePrivilege(t *testing.T) {
 	root := preparedExecutorRoot(t)
 	journal := setupJournal{SchemaVersion: 1, PlanSHA256: strings.Repeat("a", 64), State: "in_progress", Records: []journalRecord{{
@@ -444,5 +586,12 @@ func TestSetupDryRunAndExecutionUseIdenticalActionSchema(t *testing.T) {
 	}
 	if !reflect.DeepEqual(dry.Steps, executed.Steps) || dry.SchemaVersion != executed.SchemaVersion || !dry.DryRun || executed.DryRun {
 		t.Fatalf("dry-run and execution drifted\ndry=%+v\nexecution=%+v", dry, executed)
+	}
+	var report SetupExecutionReport
+	if err := json.Unmarshal([]byte(execOut), &report); err != nil {
+		t.Fatalf("execution output is not one JSON document: %v\n%s", err, execOut)
+	}
+	if report.SchemaVersion != 1 || report.Result.Status != "completed" || !reflect.DeepEqual(report.Plan, executed) {
+		t.Fatalf("execution report=%+v", report)
 	}
 }

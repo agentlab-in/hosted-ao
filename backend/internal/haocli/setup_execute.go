@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -52,10 +53,11 @@ type setupExecutionSystem interface {
 type systemSetupExecution struct{}
 
 func (systemSetupExecution) Download(ctx context.Context, source string) (io.ReadCloser, error) {
-	if !strings.HasPrefix(source, "https://") {
-		return nil, errors.New("artifact source is not HTTPS")
+	parsed, err := url.Parse(source)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
+		return nil, errors.New("download source is not a valid HTTPS URL")
 	}
-	client := &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Timeout: 10 * time.Minute, CheckRedirect: allowArtifactRedirect}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, http.NoBody)
 	if err != nil {
 		return nil, err
@@ -73,6 +75,16 @@ func (systemSetupExecution) Download(ctx context.Context, source string) (io.Rea
 		return nil, errors.New("artifact download exceeds size limit")
 	}
 	return resp.Body, nil
+}
+
+func allowArtifactRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 3 {
+		return errors.New("artifact download exceeded redirect limit")
+	}
+	if len(via) == 0 || via[0].URL.Scheme != "https" || via[0].URL.Hostname() != "github.com" || !strings.HasPrefix(via[0].URL.EscapedPath(), "/agentlab-in/hosted-ao/releases/download/v") || req.URL.Scheme != "https" || req.URL.Hostname() != "release-assets.githubusercontent.com" {
+		return errors.New("artifact download redirected to an untrusted host")
+	}
+	return nil
 }
 
 func (systemSetupExecution) CheckPrivilege(ctx context.Context, nonInteractive bool, in io.Reader) error {
@@ -149,6 +161,7 @@ type journalRecord struct {
 	Temporary      string `json:"temporary,omitempty"`
 	PreviousMode   uint32 `json:"previousMode,omitempty"`
 	Created        bool   `json:"created,omitempty"`
+	BackupReady    bool   `json:"backupReady,omitempty"`
 	Completed      bool   `json:"completed"`
 	Reversible     bool   `json:"reversible"`
 }
@@ -193,15 +206,22 @@ func executeSetupPlanWithSystem(ctx context.Context, plan SetupPlan, stateRoot s
 			Recovery:  []string{},
 		},
 	}
-	if recovered, recoverErr := e.recover(ctx); recoverErr != nil {
-		return e.result, e.failure("recover interrupted setup", recoverErr)
-	} else if recovered != "" {
-		e.result.Recovery = append(e.result.Recovery, recovered)
-	}
 	if planNeedsPrivilege(plan) {
 		if err := system.CheckPrivilege(ctx, options.NonInteractive, options.Input); err != nil {
 			return e.result, commandError{Code: "privilege_required", Message: "setup requires narrowly scoped administrator privileges", Remediation: "approve the displayed privileged operations, or arrange them manually", Details: map[string]any{"completed": []string{}, "rollback": []string{}, "retry": "hao setup --dry-run"}, ExitStatus: 3, Cause: errPrivilegeRefused}
 		}
+	}
+	expectedRecovery := ""
+	for _, step := range plan.Steps {
+		if step.Action != nil && step.Action.Kind == "transaction-recovery-v1" {
+			expectedRecovery = step.Action.Recovery.JournalSHA256
+		}
+	}
+	if recovered, recoverErr := e.recover(ctx, expectedRecovery); recoverErr != nil {
+		return e.result, e.failure("recover interrupted setup", recoverErr)
+	} else if recovered != "" {
+		e.result.Recovery = append(e.result.Recovery, recovered)
+		e.result.Completed = append(e.result.Completed, "transaction.recovery")
 	}
 	planBytes, err := json.Marshal(plan)
 	if err != nil {
@@ -211,6 +231,9 @@ func executeSetupPlanWithSystem(ctx context.Context, plan SetupPlan, stateRoot s
 	e.backupDir = filepath.Join(stateRoot, "hao", "backups", e.journal.PlanSHA256[:16]+"-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 	for _, step := range plan.Steps {
 		if step.Action == nil {
+			continue
+		}
+		if step.Action.Kind == "transaction-recovery-v1" {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -229,7 +252,7 @@ func executeSetupPlanWithSystem(ctx context.Context, plan SetupPlan, stateRoot s
 		if err := e.cleanupServiceBackups(ctx); err != nil {
 			return e.result, e.failure("clean committed service backups", err)
 		}
-		if err := os.Remove(e.journalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := managedRemove(e.journalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return e.result, e.failure("remove completed setup journal", err)
 		}
 		_ = syncDirectory(filepath.Dir(e.journalPath))
@@ -268,6 +291,9 @@ func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
 			continue
 		}
 		a := step.Action
+		if (a.Kind == "service-definition-v1" || a.Kind == "package-manager") != step.Privilege.Required && a.Kind != "transaction-recovery-v1" {
+			return fmt.Errorf("step %s has incorrect privilege metadata", step.ID)
+		}
 		switch a.Kind {
 		case "directory", "file-mode":
 			expected := managedDirectoryPath(root, step.ID)
@@ -291,6 +317,14 @@ func validateExecutablePlan(plan SetupPlan, stateRoot string) error {
 			if step.ID != "prerequisite.harness" || a.Vendor.Executable != "/usr/bin/npm" || !allowedVendorArgv(a.Vendor.Argv, a.Vendor.Version) {
 				return fmt.Errorf("step %s has a non-allowlisted vendor command", step.ID)
 			}
+		case "transaction-recovery-v1":
+			if step.ID != "transaction.recovery" {
+				return errors.New("recovery action has an invalid step")
+			}
+			expected, found, err := planSetupRecovery(root)
+			if err != nil || !found || expected.Action.Recovery.JournalSHA256 != a.Recovery.JournalSHA256 || expected.Privilege.Required != step.Privilege.Required {
+				return errors.New("recovery action does not match the current interrupted transaction")
+			}
 		}
 	}
 	return nil
@@ -308,16 +342,15 @@ func managedDirectoryPath(root, stepID string) string {
 }
 
 func allowedPackageArgv(stepID string, argv []string, version string) bool {
-	if len(argv) != 3 || argv[0] != "install" || argv[1] != "--yes" {
+	if len(argv) != 3 || argv[0] != "install" || argv[1] != "--yes" || argv[2] != "{verified-file}" {
 		return false
 	}
-	name, pinned, ok := strings.Cut(argv[2], "=")
 	expectedName := map[string]string{"prerequisite.git": "git", "prerequisite.gh": "gh"}[stepID]
-	return ok && expectedName != "" && name == expectedName && pinned == version
+	return expectedName != "" && version != ""
 }
 
 func allowedVendorArgv(argv []string, version string) bool {
-	return len(argv) == 3 && argv[0] == "install" && argv[1] == "--global" && argv[2] == "@anthropic-ai/claude-code@"+version
+	return version != "" && len(argv) == 3 && argv[0] == "install" && argv[1] == "--global" && argv[2] == "{verified-file}"
 }
 
 func planNeedsPrivilege(plan SetupPlan) bool {
@@ -341,9 +374,9 @@ func (e *setupExecutor) apply(ctx context.Context, step SetupStep) error {
 	case "service-definition-v1":
 		return e.installService(ctx, step.ID, step.Disposition, a.Service)
 	case "package-manager":
-		return e.runIrreversible(ctx, step.ID, a.Kind, true, a.Package.Executable, a.Package.Argv)
+		return e.runVerifiedPackage(ctx, step.ID, a.Kind, true, a.Package.Executable, a.Package.Argv, a.Package.Source, a.Package.SHA256)
 	case "vendor-package":
-		return e.runIrreversible(ctx, step.ID, a.Kind, false, a.Vendor.Executable, a.Vendor.Argv)
+		return e.runVerifiedPackage(ctx, step.ID, a.Kind, false, a.Vendor.Executable, a.Vendor.Argv, a.Vendor.Source, a.Vendor.SHA256)
 	default:
 		return fmt.Errorf("unsupported action kind %q", a.Kind)
 	}
@@ -353,7 +386,7 @@ func (e *setupExecutor) createDirectory(stepID string, action *SetupFileAction) 
 	if err := ensureNoSymlinkAncestors(filepath.Dir(action.Path)); err != nil {
 		return err
 	}
-	info, err := os.Lstat(action.Path)
+	info, err := managedLstat(action.Path)
 	if err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("directory target is occupied or linked")
@@ -361,12 +394,12 @@ func (e *setupExecutor) createDirectory(stepID string, action *SetupFileAction) 
 		if stepID == "directory.parent" {
 			return nil
 		}
-		return os.Chmod(action.Path, 0o700) //nolint:gosec // owner-only directories require traversal.
+		return managedChmod(action.Path, 0o700)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Mkdir(action.Path, 0o700); err != nil {
+	if err := managedMkdir(action.Path, 0o700); err != nil {
 		return err
 	}
 	if err := syncDirectory(filepath.Dir(action.Path)); err != nil {
@@ -380,7 +413,7 @@ func (e *setupExecutor) changeMode(stepID string, action *SetupFileAction) error
 	if err := ensureNoSymlinkAncestors(action.Path); err != nil {
 		return err
 	}
-	info, err := os.Lstat(action.Path)
+	info, err := managedLstat(action.Path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("file mode target is unavailable or linked")
 	}
@@ -388,7 +421,7 @@ func (e *setupExecutor) changeMode(stepID string, action *SetupFileAction) error
 	if err := e.record(record); err != nil {
 		return err
 	}
-	if err := os.Chmod(action.Path, 0o700); err != nil { //nolint:gosec // owner-only directories require traversal.
+	if err := managedChmod(action.Path, 0o700); err != nil {
 		return err
 	}
 	return e.completeLastRecord()
@@ -398,20 +431,31 @@ func (e *setupExecutor) installArtifact(ctx context.Context, stepID, disposition
 	if err := ensureNoSymlinkAncestors(action.Path); err != nil {
 		return err
 	}
-	if digest, err := fileDigest(action.Path, maxArtifactSize); err == nil && digest == action.SHA256 {
-		return writeArtifactManifest(action)
+	currentDigest, digestErr := fileDigest(action.Path, maxArtifactSize)
+	binaryMatches := digestErr == nil && currentDigest == action.SHA256
+	if binaryMatches && artifactManifestMatches(action) {
+		return nil
 	}
-	_, targetErr := os.Lstat(action.Path)
-	if disposition == "create" && targetErr == nil {
+	_, targetErr := managedLstat(action.Path)
+	if disposition == "create" && targetErr == nil && !binaryMatches {
 		return errors.New("artifact target appeared after planning; rerun setup")
 	}
 	if disposition == "update" && errors.Is(targetErr, os.ErrNotExist) {
 		return errors.New("artifact target disappeared after planning; rerun setup")
 	}
+	if disposition == "update" && !binaryMatches {
+		if digestErr != nil || currentDigest != action.ExpectedSHA256 {
+			return errors.New("artifact changed after planning; rerun setup")
+		}
+		info, err := managedLstat(action.Path)
+		if err != nil || uint32(info.Mode().Perm()) != action.ExpectedMode {
+			return errors.New("artifact mode changed after planning; rerun setup")
+		}
+	}
 	if targetErr != nil && !errors.Is(targetErr, os.ErrNotExist) {
 		return targetErr
 	}
-	if err := os.MkdirAll(e.backupDir, 0o700); err != nil {
+	if err := managedMkdirAll(e.backupDir, 0o700); err != nil {
 		return err
 	}
 	temporary, err := randomTemporaryPath(filepath.Dir(action.Path), ".hao-artifact-")
@@ -420,14 +464,19 @@ func (e *setupExecutor) installArtifact(ctx context.Context, stepID, disposition
 	}
 	record := journalRecord{StepID: stepID, Kind: "verified-release-artifact", Target: action.Path, ManifestTarget: action.Path + ".hao-manifest.json", Temporary: temporary, Reversible: true}
 	if targetErr == nil {
+		info, err := managedLstat(action.Path)
+		if err != nil {
+			return err
+		}
+		record.PreviousMode = uint32(info.Mode().Perm())
 		record.Backup = filepath.Join(e.backupDir, safeStepName(stepID)+".binary")
-		if err := copyRegularFile(action.Path, record.Backup, 0o700); err != nil {
+		if err := copyRegularFile(action.Path, record.Backup, os.FileMode(record.PreviousMode)); err != nil {
 			return err
 		}
 	} else {
 		record.Created = true
 	}
-	if _, err := os.Lstat(record.ManifestTarget); err == nil {
+	if _, err := managedLstat(record.ManifestTarget); err == nil {
 		record.ManifestBackup = filepath.Join(e.backupDir, safeStepName(stepID)+".manifest")
 		if err := copyRegularFile(record.ManifestTarget, record.ManifestBackup, 0o600); err != nil {
 			return err
@@ -438,8 +487,10 @@ func (e *setupExecutor) installArtifact(ctx context.Context, stepID, disposition
 	if err := e.record(record); err != nil {
 		return err
 	}
-	if err := downloadVerifiedArtifact(ctx, e.system, action, temporary); err != nil {
-		return err
+	if !binaryMatches {
+		if err := downloadVerifiedArtifact(ctx, e.system, action, temporary); err != nil {
+			return err
+		}
 	}
 	if err := writeArtifactManifest(action); err != nil {
 		return err
@@ -448,17 +499,25 @@ func (e *setupExecutor) installArtifact(ctx context.Context, stepID, disposition
 }
 
 func downloadVerifiedArtifact(ctx context.Context, system setupExecutionSystem, action *SetupArtifactAction, tempName string) error {
-	body, err := system.Download(ctx, action.Source)
+	if err := downloadVerifiedFile(ctx, system, action.Source, action.SHA256, tempName, 0o700); err != nil {
+		return err
+	}
+	if err := managedRename(tempName, action.Path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(action.Path))
+}
+
+func downloadVerifiedFile(ctx context.Context, system setupExecutionSystem, source, expectedSHA256, tempName string, mode os.FileMode) error {
+	body, err := system.Download(ctx, source)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = body.Close() }()
-	dir := filepath.Dir(action.Path)
-	temp, err := os.OpenFile(tempName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	temp, err := managedCreateExclusive(tempName, 0o600)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(tempName) }()
 	hash := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(temp, hash), io.LimitReader(body, maxArtifactSize+1))
 	if copyErr != nil {
@@ -470,11 +529,11 @@ func downloadVerifiedArtifact(ctx context.Context, system setupExecutionSystem, 
 		return errors.New("artifact download exceeds size limit")
 	}
 	actual := hex.EncodeToString(hash.Sum(nil))
-	if actual != action.SHA256 {
+	if actual != expectedSHA256 {
 		_ = temp.Close()
-		return fmt.Errorf("artifact digest mismatch: expected %s, received %s", action.SHA256, actual)
+		return fmt.Errorf("artifact digest mismatch: expected %s, received %s", expectedSHA256, actual)
 	}
-	if err := temp.Chmod(0o700); err != nil {
+	if err := temp.Chmod(mode); err != nil {
 		_ = temp.Close()
 		return err
 	}
@@ -485,18 +544,37 @@ func downloadVerifiedArtifact(ctx context.Context, system setupExecutionSystem, 
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempName, action.Path); err != nil {
-		return err
-	}
-	return syncDirectory(dir)
+	return nil
 }
 
 func writeArtifactManifest(action *SetupArtifactAction) error {
-	data, err := json.Marshal(ArtifactMetadata{Version: action.Version, Source: action.Source, SHA256: action.SHA256})
+	data, err := artifactManifestBytes(action)
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(action.Path+".hao-manifest.json", append(data, '\n'), 0o600)
+	return atomicWriteFile(action.Path+".hao-manifest.json", data, 0o600)
+}
+
+func artifactManifestBytes(action *SetupArtifactAction) ([]byte, error) {
+	data, err := json.Marshal(ArtifactMetadata{Version: action.Version, Source: action.Source, SHA256: action.SHA256})
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func artifactManifestMatches(action *SetupArtifactAction) bool {
+	want, err := artifactManifestBytes(action)
+	if err != nil {
+		return false
+	}
+	file, err := openManagedRegular(action.Path+".hao-manifest.json", 1<<20)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	got, err := io.ReadAll(io.LimitReader(file, int64(len(want)+1)))
+	return err == nil && bytes.Equal(got, want)
 }
 
 func (e *setupExecutor) installService(ctx context.Context, stepID, disposition string, action *SetupServiceAction) error {
@@ -504,12 +582,15 @@ func (e *setupExecutor) installService(ctx context.Context, stepID, disposition 
 	if digestErr == nil && digest == action.SHA256 {
 		return nil
 	}
-	info, targetErr := os.Lstat(action.Path)
+	info, targetErr := managedLstat(action.Path)
 	if disposition == "create" && targetErr == nil {
 		return errors.New("service target appeared after planning; rerun setup")
 	}
 	if disposition == "update" && errors.Is(targetErr, os.ErrNotExist) {
 		return errors.New("service target disappeared after planning; rerun setup")
+	}
+	if disposition == "update" && !fileDigestEquals(digest, digestErr, action.ExpectedSHA256) {
+		return errors.New("service definition changed after planning; rerun setup")
 	}
 	if targetErr == nil && (!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
 		return errors.New("service target is not a regular unlinked file")
@@ -537,6 +618,10 @@ func (e *setupExecutor) installService(ctx context.Context, stepID, disposition 
 		if err := e.system.Run(ctx, true, e.options.NonInteractive, e.options.Input, "/usr/bin/cp", "--no-dereference", "--preserve=mode,ownership,timestamps", "--", action.Path, record.Backup); err != nil {
 			return err
 		}
+		e.journal.Records[len(e.journal.Records)-1].BackupReady = true
+		if err := e.writeJournal(); err != nil {
+			return err
+		}
 	}
 	if err := e.system.Run(ctx, true, e.options.NonInteractive, bytes.NewReader([]byte(action.Content)), "/usr/bin/tee", "--", targetTemp); err != nil {
 		return err
@@ -553,12 +638,26 @@ func (e *setupExecutor) installService(ctx context.Context, stepID, disposition 
 	return e.completeLastRecord()
 }
 
-func (e *setupExecutor) runIrreversible(ctx context.Context, stepID, kind string, privileged bool, executable string, argv []string) error {
-	record := journalRecord{StepID: stepID, Kind: kind, Reversible: false}
+func fileDigestEquals(actual string, err error, expected string) bool {
+	return err == nil && actual == expected
+}
+
+func (e *setupExecutor) runVerifiedPackage(ctx context.Context, stepID, kind string, privileged bool, executable string, argv []string, source, sha256Digest string) error {
+	temporary, err := randomTemporaryPath(filepath.Join(e.stateRoot, "hao"), ".hao-package-")
+	if err != nil {
+		return err
+	}
+	record := journalRecord{StepID: stepID, Kind: kind, Temporary: temporary, Reversible: false}
 	if err := e.record(record); err != nil {
 		return err
 	}
-	if err := e.system.Run(ctx, privileged, e.options.NonInteractive, e.options.Input, executable, argv...); err != nil {
+	defer func() { _ = removeManagedIfExists(temporary) }()
+	if err := downloadVerifiedFile(ctx, e.system, source, sha256Digest, temporary, 0o600); err != nil {
+		return err
+	}
+	localArgv := append([]string(nil), argv...)
+	localArgv[len(localArgv)-1] = temporary
+	if err := e.system.Run(ctx, privileged, e.options.NonInteractive, e.options.Input, executable, localArgv...); err != nil {
 		return err
 	}
 	return e.completeLastRecord()
@@ -618,6 +717,9 @@ func (e *setupExecutor) rollback(ctx context.Context) ([]string, bool) {
 	complete := true
 	for i := len(e.journal.Records) - 1; i >= 0; i-- {
 		record := e.journal.Records[i]
+		if (record.Kind == "package-manager" || record.Kind == "vendor-package") && record.Temporary != "" {
+			_ = removeManagedIfExists(record.Temporary)
+		}
 		if !record.Reversible {
 			continue
 		}
@@ -625,13 +727,17 @@ func (e *setupExecutor) rollback(ctx context.Context) ([]string, bool) {
 		switch record.Kind {
 		case "file-mode":
 			if err = ensureNoSymlinkAncestors(record.Target); err == nil {
-				err = os.Chmod(record.Target, os.FileMode(record.PreviousMode))
+				err = managedChmod(record.Target, os.FileMode(record.PreviousMode))
 			}
 		case "verified-release-artifact":
 			if record.Temporary != "" {
-				_ = os.Remove(record.Temporary)
+				_ = removeManagedIfExists(record.Temporary)
 			}
-			err = rollbackManagedFile(record.Target, record.Backup, record.Created, 0o700)
+			mode := os.FileMode(record.PreviousMode)
+			if record.Created {
+				mode = 0o700
+			}
+			err = rollbackManagedFile(record.Target, record.Backup, record.Created, mode)
 			if manifestErr := rollbackManagedFile(record.ManifestTarget, record.ManifestBackup, record.ManifestBackup == "", 0o600); err == nil {
 				err = manifestErr
 			}
@@ -639,8 +745,10 @@ func (e *setupExecutor) rollback(ctx context.Context) ([]string, bool) {
 			if record.Temporary != "" {
 				_ = e.system.Run(ctx, true, e.options.NonInteractive, e.options.Input, "/usr/bin/rm", "--force", "--", record.Temporary)
 			}
-			if record.Backup != "" {
+			if record.Backup != "" && record.BackupReady {
 				err = e.restoreServiceBackup(ctx, record)
+			} else if record.Backup != "" {
+				err = e.system.Run(ctx, true, e.options.NonInteractive, e.options.Input, "/usr/bin/rm", "--force", "--", record.Backup)
 			} else if record.Created {
 				err = e.system.Run(ctx, true, e.options.NonInteractive, e.options.Input, "/usr/bin/rm", "--force", "--", record.Target)
 			}
@@ -666,7 +774,7 @@ func rollbackManagedFile(target, backup string, created bool, mode os.FileMode) 
 		return copyRegularFile(backup, target, mode)
 	}
 	if created {
-		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := managedRemove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return syncDirectory(filepath.Dir(target))
@@ -675,7 +783,7 @@ func rollbackManagedFile(target, backup string, created bool, mode os.FileMode) 
 }
 
 func (e *setupExecutor) restoreServiceBackup(ctx context.Context, record journalRecord) error {
-	if _, err := os.Lstat(record.Backup); errors.Is(err, os.ErrNotExist) {
+	if _, err := managedLstat(record.Backup); errors.Is(err, os.ErrNotExist) {
 		return errors.New("service backup is unavailable")
 	} else if err != nil {
 		return err
@@ -697,29 +805,70 @@ func (e *setupExecutor) cleanupServiceBackups(ctx context.Context) error {
 	return nil
 }
 
-func (e *setupExecutor) recover(ctx context.Context) (string, error) {
-	info, err := os.Lstat(e.journalPath)
+func planSetupRecovery(stateRoot string) (SetupStep, bool, error) {
+	e := setupExecutor{stateRoot: filepath.Clean(stateRoot), journalPath: filepath.Join(stateRoot, ".hao-setup-transaction.json")}
+	journal, digest, found, err := e.readJournal()
+	if err != nil || !found {
+		return SetupStep{}, found, err
+	}
+	e.journal = journal
+	if err := e.validateJournal(); err != nil {
+		return SetupStep{}, true, err
+	}
+	privileged := false
+	for _, record := range journal.Records {
+		privileged = privileged || record.Kind == "service-definition-v1"
+	}
+	return SetupStep{
+		ID: "transaction.recovery", Component: "setup-transaction", Operation: "recover-interrupted-setup", Disposition: "update",
+		Privilege: SetupPrivilege{Required: privileged, Scope: "system-service-definition-recovery"},
+		Reason:    "an interrupted setup transaction must be rolled back before retry", Evidence: "journal sha256 " + digest,
+		Action: &SetupAction{SchemaVersion: 1, Kind: "transaction-recovery-v1", Recovery: &SetupRecoveryAction{JournalSHA256: digest}},
+	}, true, nil
+}
+
+func (e *setupExecutor) readJournal() (setupJournal, string, bool, error) {
+	info, err := managedLstat(e.journalPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return setupJournal{}, "", false, nil
 	}
 	if err != nil {
-		return "", err
+		return setupJournal{}, "", true, err
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", errors.New("setup transaction journal is not a regular file")
+		return setupJournal{}, "", true, errors.New("setup transaction journal is not a regular file")
 	}
 	journalFile, err := openManagedRegular(e.journalPath, 1<<20)
 	if err != nil {
-		return "", err
+		return setupJournal{}, "", true, err
 	}
 	defer func() { _ = journalFile.Close() }()
 	data, err := io.ReadAll(io.LimitReader(journalFile, 1<<20+1))
 	if err != nil || len(data) > 1<<20 {
-		return "", errors.New("setup transaction journal exceeds size limit")
+		return setupJournal{}, "", true, errors.New("setup transaction journal exceeds size limit")
 	}
-	if err := json.Unmarshal(data, &e.journal); err != nil || e.journal.SchemaVersion != setupJournalSchemaVersion {
-		return "", errors.New("setup transaction journal is invalid; inspect it manually before retrying")
+	var journal setupJournal
+	if err := json.Unmarshal(data, &journal); err != nil || journal.SchemaVersion != setupJournalSchemaVersion {
+		return setupJournal{}, "", true, errors.New("setup transaction journal is invalid; inspect it manually before retrying")
 	}
+	return journal, digestBytes(data), true, nil
+}
+
+func (e *setupExecutor) recover(ctx context.Context, expectedDigest string) (string, error) {
+	journal, digest, found, err := e.readJournal()
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		if expectedDigest != "" {
+			return "", errors.New("approved recovery journal disappeared; rerun setup")
+		}
+		return "", nil
+	}
+	if expectedDigest == "" || digest != expectedDigest {
+		return "", errors.New("setup recovery journal changed after planning; rerun setup")
+	}
+	e.journal = journal
 	if err := e.validateJournal(); err != nil {
 		return "", fmt.Errorf("setup transaction journal is unsafe: %w", err)
 	}
@@ -741,7 +890,7 @@ func (e *setupExecutor) recover(ctx context.Context) (string, error) {
 	if err := e.cleanupServiceBackups(ctx); err != nil {
 		return "", err
 	}
-	if err := os.Remove(e.journalPath); err != nil {
+	if err := managedRemove(e.journalPath); err != nil {
 		return "", err
 	}
 	e.journalStarted = false
@@ -764,22 +913,23 @@ func (e *setupExecutor) validateJournal() error {
 			}
 		case "verified-release-artifact":
 			target := filepath.Join(e.stateRoot, "bin", "ao")
-			backupCoherent := (record.Created && record.Backup == "") || (!record.Created && record.Backup != "")
-			if record.StepID != "artifact.ao" || record.Target != target || record.ManifestTarget != target+".hao-manifest.json" || !record.Reversible || !backupCoherent || !temporaryPathMatches(record.Temporary, filepath.Dir(target), ".hao-artifact-") || !optionalPathBelow(record.Backup, filepath.Join(e.stateRoot, "hao", "backups")) || !optionalPathBelow(record.ManifestBackup, filepath.Join(e.stateRoot, "hao", "backups")) {
+			backupCoherent := !record.BackupReady && ((record.Created && record.Backup == "") || (!record.Created && record.Backup != ""))
+			modeCoherent := (record.Created && record.PreviousMode == 0) || (!record.Created && record.PreviousMode&0o111 != 0 && record.PreviousMode&0o022 == 0)
+			if record.StepID != "artifact.ao" || record.Target != target || record.ManifestTarget != target+".hao-manifest.json" || !record.Reversible || !backupCoherent || !modeCoherent || !temporaryPathMatches(record.Temporary, filepath.Dir(target), ".hao-artifact-") || !optionalPathBelow(record.Backup, filepath.Join(e.stateRoot, "hao", "backups")) || !optionalPathBelow(record.ManifestBackup, filepath.Join(e.stateRoot, "hao", "backups")) {
 				return errors.New("artifact record contains an unmanaged path")
 			}
 		case "service-definition-v1":
 			expected := map[string]string{"service.daemon": "/etc/systemd/system/ao-daemon.service", "service.gateway": "/etc/systemd/system/ao-gateway.service"}[record.StepID]
-			backupCoherent := (record.Created && record.Backup == "") || (!record.Created && record.Backup != "")
+			backupCoherent := (record.Created && record.Backup == "" && !record.BackupReady) || (!record.Created && record.Backup != "")
 			if expected == "" || record.Target != expected || !record.Reversible || !backupCoherent || !temporaryPathMatches(record.Temporary, filepath.Dir(expected), ".hao-service-") || (record.Backup != "" && !temporaryPathMatches(record.Backup, filepath.Dir(expected), ".hao-backup-")) {
 				return errors.New("service record contains an unmanaged path")
 			}
 		case "package-manager":
-			if record.Reversible || (record.StepID != "prerequisite.git" && record.StepID != "prerequisite.gh") {
+			if record.Reversible || !temporaryPathMatches(record.Temporary, filepath.Join(e.stateRoot, "hao"), ".hao-package-") || (record.StepID != "prerequisite.git" && record.StepID != "prerequisite.gh") {
 				return errors.New("package record has an invalid step")
 			}
 		case "vendor-package":
-			if record.Reversible || record.StepID != "prerequisite.harness" {
+			if record.Reversible || !temporaryPathMatches(record.Temporary, filepath.Join(e.stateRoot, "hao"), ".hao-package-") || record.StepID != "prerequisite.harness" {
 				return errors.New("vendor record has an invalid step")
 			}
 		default:
@@ -839,12 +989,22 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := ensureNoSymlinkAncestors(filepath.Dir(path)); err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".hao-write-*")
+	if info, err := managedLstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("managed write target is not a regular unlinked file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tempName, err := randomTemporaryPath(filepath.Dir(path), ".hao-write-")
 	if err != nil {
 		return err
 	}
-	tempName := temp.Name()
-	defer func() { _ = os.Remove(tempName) }()
+	temp, err := managedCreateExclusive(tempName, mode)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = removeManagedIfExists(tempName) }()
 	if err := temp.Chmod(mode); err != nil {
 		_ = temp.Close()
 		return err
@@ -860,10 +1020,43 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempName, path); err != nil {
+	if err := managedRename(tempName, path); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
+}
+
+func managedMkdirAll(path string, mode os.FileMode) error {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		return errors.New("managed directory path is not absolute")
+	}
+	current := string(os.PathSeparator)
+	for _, part := range strings.FieldsFunc(strings.TrimPrefix(clean, string(os.PathSeparator)), func(r rune) bool { return r == filepath.Separator }) {
+		current = filepath.Join(current, part)
+		info, err := managedLstat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return errors.New("managed directory path is occupied")
+			}
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := managedMkdir(current, mode); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeManagedIfExists(path string) error {
+	err := managedRemove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func copyRegularFile(source, destination string, mode os.FileMode) error {

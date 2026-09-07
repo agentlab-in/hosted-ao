@@ -536,6 +536,10 @@ func resolveDataDir() (string, error) {
 	return filepath.Join(stateDir, "data"), nil
 }
 
+// ResolveDataDir returns the durable daemon data path without loading unrelated
+// daemon settings or secrets.
+func ResolveDataDir() (string, error) { return resolveDataDir() }
+
 // StateRootSubdir is hosted-ao's own subdirectory of ~/.ao.
 //
 // The upstream agent-orchestrator desktop app writes its running.json, its

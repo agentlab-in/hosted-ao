@@ -23,13 +23,15 @@ func setupDeps(t *testing.T, fixture string, obs *fakeObserver) (Deps, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deps.DataDir = func() (string, error) { return filepath.Join(root, "data"), nil }
+	deps.RunFile = func() (string, error) { return filepath.Join(root, "running.json"), nil }
 	obs.files[filepath.Join(root, "bin", "ao")] = FileObservation{Mode: 0o755, Owner: true}
 	trusted := ArtifactMetadata{Version: "0.14.0", SHA256: strings.Repeat("a", 64), Source: "https://github.com/agentlab-in/hosted-ao/releases/download/v0.14.0/ao-linux-x64"}
 	obs.artifacts[filepath.Join(root, "bin", "ao")] = trusted
 	deps.TrustedArtifact = func(_, _, _ string) (ArtifactMetadata, bool) { return trusted, true }
 	obs.files["/etc/systemd/system/ao-daemon.service"] = FileObservation{Mode: 0o644, UID: 0}
 	obs.files["/etc/systemd/system/ao-gateway.service"] = FileObservation{Mode: 0o644, UID: 0}
-	desired := setupDesired{StateRoot: root, PairPort: 443}
+	desired := setupDesired{StateRoot: root, DataDir: filepath.Join(root, "data"), RunFile: filepath.Join(root, "running.json"), PairPort: 443}
 	obs.readFiles["/etc/systemd/system/ao-daemon.service"] = []byte(renderSystemdDefinition("service.daemon", desired, obs.user))
 	obs.readFiles["/etc/systemd/system/ao-gateway.service"] = []byte(renderSystemdDefinition("service.gateway", desired, obs.user))
 	return deps, root
@@ -611,14 +613,14 @@ func TestImmutableActionJSONRoundTripsThroughNonMutatingConsumer(t *testing.T) {
 	}, {
 		ID: "prerequisite.git", Disposition: "create", Action: &SetupAction{
 			SchemaVersion: 1, Kind: "package-manager", Package: &SetupPackageAction{
-				Executable: "/usr/bin/apt-get", Argv: []string{"install", "git=1.2.3"}, Version: "1.2.3",
+				Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "{verified-file}"}, Version: "1.2.3",
 				Source: "https://packages.example.invalid/git-1.2.3.deb", SHA256: digest,
 			},
 		},
 	}, {
 		ID: "prerequisite.harness", Disposition: "create", Action: &SetupAction{
 			SchemaVersion: 1, Kind: "vendor-package", Vendor: &SetupVendorAction{
-				Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "pkg@1.2.3"}, Version: "1.2.3",
+				Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "{verified-file}"}, Version: "1.2.3",
 				Source: "https://registry.example.invalid/pkg/-/pkg-1.2.3.tgz", SHA256: digest,
 			},
 		},
@@ -633,7 +635,7 @@ func TestImmutableActionJSONRoundTripsThroughNonMutatingConsumer(t *testing.T) {
 	}
 	want := []string{
 		"artifact source=https://releases.example.invalid/v0.14.0/ao-linux-x64 version=0.14.0 sha256=" + digest + " path=/managed/ao",
-		"package executable=/usr/bin/apt-get source=https://packages.example.invalid/git-1.2.3.deb version=1.2.3 sha256=" + digest + ` argv=["install" "git=1.2.3"]`,
+		"package executable=/usr/bin/apt-get source=https://packages.example.invalid/git-1.2.3.deb version=1.2.3 sha256=" + digest + ` argv=["install" "--yes" "{verified-file}"]`,
 		"vendor source=https://registry.example.invalid/pkg/-/pkg-1.2.3.tgz version=1.2.3 sha256=" + digest,
 	}
 	if !reflect.DeepEqual(operations, want) {
@@ -667,6 +669,22 @@ func TestPairSystemdConsumerCarriesPortCapabilitiesAndHarnessPath(t *testing.T) 
 	parsed, err = consumeSystemdDefinition(renderSystemdDefinition("service.gateway", desired, user))
 	if err != nil || !parsed.HasNetBindCapability {
 		t.Fatalf("privileged port consumer capability=%v err=%v", parsed.HasNetBindCapability, err)
+	}
+}
+
+func TestSystemdDefinitionsPreserveExactStateOverrides(t *testing.T) {
+	desired := setupDesired{
+		StateRoot: "/srv/hao/state", DataDir: "/mnt/ao-db", RunFile: "/run/user/1000/hao-running.json", PairPort: 443,
+	}
+	user := UserObservation{Name: "agent", UID: 1000, Home: "/home/agent"}
+	for _, id := range []string{"service.daemon", "service.gateway"} {
+		parsed, err := consumeSystemdDefinition(renderSystemdDefinition(id, desired, user))
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if parsed.Environment["AO_DATA_DIR"] != desired.DataDir || parsed.Environment["AO_RUN_FILE"] != desired.RunFile {
+			t.Fatalf("%s overrides=%v", id, parsed.Environment)
+		}
 	}
 }
 
