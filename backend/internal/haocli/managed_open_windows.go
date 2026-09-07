@@ -169,7 +169,7 @@ func managedCreateExclusive(path string, mode os.FileMode) (*os.File, error) {
 }
 
 func managedCreateExclusiveAt(parent windows.Handle, name, path string, mode os.FileMode) (*os.File, error) {
-	handle, err := openManagedRelative(parent, name, windows.FILE_GENERIC_WRITE|windows.SYNCHRONIZE, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT)
+	handle, err := openManagedRelative(parent, name, windows.FILE_GENERIC_WRITE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT)
 	if err != nil {
 		return nil, normalizeManagedWindowsError(err)
 	}

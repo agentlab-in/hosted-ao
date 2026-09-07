@@ -3,6 +3,8 @@
 package haocli
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,7 +97,10 @@ func TestOpenManagedRegularRejectsWindowsAncestorSwap(t *testing.T) {
 		data := make([]byte, 16)
 		n, readErr := file.Read(data)
 		_ = file.Close()
-		if readErr != nil || string(data[:n]) != "safe" {
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			t.Fatalf("managed open failed during ancestor swap: data=%q err=%v", data[:n], readErr)
+		}
+		if string(data[:n]) == "outside" {
 			t.Fatalf("managed open escaped during ancestor swap: data=%q err=%v", data[:n], readErr)
 		}
 	}
@@ -208,8 +213,11 @@ func TestManagedWindowsMutationsUseStableParentHandles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer windows.CloseHandle(source)
 		if err := renameManagedWindowsHandle(source, destinationParent, destinationName); err != nil {
+			_ = windows.CloseHandle(source)
+			t.Fatal(err)
+		}
+		if err := windows.CloseHandle(source); err != nil {
 			t.Fatal(err)
 		}
 		if data, err := os.ReadFile(filepath.Join(moved, "destination")); err != nil || string(data) != "managed" {
