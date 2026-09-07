@@ -249,11 +249,15 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
             -ldflags "-X ${ao_pkg}.Version=${VERSION} -X ${ao_pkg}.Commit=${COMMIT} -X ${ao_pkg}.Date=${DATE}" \
             -o "$GITHUB_WORKSPACE/dist-cli/ao-linux-arm64" ./cmd/ao
+          ao_x64_hash="$(sha256sum "$GITHUB_WORKSPACE/dist-cli/ao-linux-x64" | awk '{print $1}')"
+          ao_arm64_hash="$(sha256sum "$GITHUB_WORKSPACE/dist-cli/ao-linux-arm64" | awk '{print $1}')"
+          ao_x64_source="https://github.com/agentlab-in/hosted-ao/releases/download/v${VERSION}/ao-linux-x64"
+          ao_arm64_source="https://github.com/agentlab-in/hosted-ao/releases/download/v${VERSION}/ao-linux-arm64"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE}" \
+            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE} -X ${hao_pkg}.AOArtifactVersion=${VERSION} -X ${hao_pkg}.AOArtifactSource=${ao_x64_source} -X ${hao_pkg}.AOArtifactSHA256=${ao_x64_hash}" \
             -o "$GITHUB_WORKSPACE/dist-cli/hao-linux-x64" ./cmd/hao
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
-            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE}" \
+            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE} -X ${hao_pkg}.AOArtifactVersion=${VERSION} -X ${hao_pkg}.AOArtifactSource=${ao_arm64_source} -X ${hao_pkg}.AOArtifactSHA256=${ao_arm64_hash}" \
             -o "$GITHUB_WORKSPACE/dist-cli/hao-linux-arm64" ./cmd/hao
 
       # A green build is not proof: a bad GOARCH would still exit 0 having

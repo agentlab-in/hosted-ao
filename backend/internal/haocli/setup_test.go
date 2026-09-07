@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
@@ -126,6 +125,7 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 			delete(obs.paths, name)
 		}
 		deps, root := setupDeps(t, "pair", obs)
+		deps.TrustedArtifact = nil
 		obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
 		obs.statErr["/etc/systemd/system/ao-daemon.service"] = os.ErrNotExist
 		obs.statErr["/etc/systemd/system/ao-gateway.service"] = os.ErrNotExist
@@ -223,11 +223,11 @@ func TestSetupWrongVersionsPermissionsAndManagerUnknown(t *testing.T) {
 	obs.artifacts[artifact] = ArtifactMetadata{Version: "0.13.9", SHA256: strings.Repeat("b", 64), Source: "old-release"}
 	obs.files[filepath.Join(root, "data")] = FileObservation{Mode: 0o755, Owner: true, IsDir: true}
 	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
-	if code != 1 {
+	if code != 0 {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
 	plan := decodeSetupPlan(t, out)
-	if stepByID(t, plan, "artifact.ao").Disposition != "blocked" || stepByID(t, plan, "directory.data").Disposition != "update" {
+	if stepByID(t, plan, "artifact.ao").Disposition != "update" || stepByID(t, plan, "artifact.ao").Action == nil || stepByID(t, plan, "directory.data").Disposition != "update" {
 		t.Fatalf("plan=%+v", plan)
 	}
 
@@ -266,6 +266,7 @@ func TestSetupUntrustedArtifactProvenanceNeverBecomesExecutableOrNoOp(t *testing
 		obs := healthyObserver()
 		delete(obs.paths, "claude")
 		deps, root := setupDeps(t, "local", obs)
+		deps.TrustedArtifact = nil
 		obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
 		out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run", "--install", "missing")
 		if code != 1 {
@@ -279,6 +280,39 @@ func TestSetupUntrustedArtifactProvenanceNeverBecomesExecutableOrNoOp(t *testing
 			}
 		}
 	})
+}
+
+func TestSetupTrustedArtifactMetadataPlansVerifiedInstall(t *testing.T) {
+	obs := healthyObserver()
+	deps, root := setupDeps(t, "local", obs)
+	obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	step := stepByID(t, decodeSetupPlan(t, out), "artifact.ao")
+	if step.Disposition != "create" || step.Action == nil || step.Action.Artifact == nil || step.Action.Artifact.Version != "0.14.0" || !validSHA256(step.Action.Artifact.SHA256) {
+		t.Fatalf("artifact step=%+v", step)
+	}
+}
+
+func TestTrustedBuildArtifactRequiresExactReleaseTuple(t *testing.T) {
+	restoreVersion, restoreSource, restoreDigest := AOArtifactVersion, AOArtifactSource, AOArtifactSHA256
+	t.Cleanup(func() {
+		AOArtifactVersion, AOArtifactSource, AOArtifactSHA256 = restoreVersion, restoreSource, restoreDigest
+	})
+	AOArtifactVersion = "0.14.0"
+	AOArtifactSource = "https://github.com/agentlab-in/hosted-ao/releases/download/v0.14.0/ao-linux-arm64"
+	AOArtifactSHA256 = strings.Repeat("A", 64)
+	metadata, ok := trustedBuildArtifact("linux", "arm64", "0.14.0")
+	if !ok || metadata.SHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("metadata=%+v ok=%v", metadata, ok)
+	}
+	for _, input := range []struct{ goos, arch, version string }{{"darwin", "arm64", "0.14.0"}, {"linux", "amd64", "0.14.0"}, {"linux", "arm64", "latest"}} {
+		if _, ok := trustedBuildArtifact(input.goos, input.arch, input.version); ok {
+			t.Fatalf("accepted mismatched tuple %+v", input)
+		}
+	}
 }
 
 func TestSetupLocalNeverPlansGatewayAndUnsafeArtifactIsNotExecuted(t *testing.T) {
@@ -750,28 +784,6 @@ func TestSetupNonInteractiveRequiresYesWithExactExitTwo(t *testing.T) {
 	assertEnvelope(t, stderr, code, 2, "invalid_usage", "setup")
 }
 
-type panicObserver struct{}
-
-func (panicObserver) Platform() (string, string)            { panic("platform probe") }
-func (panicObserver) Distribution() (string, error)         { panic("distribution probe") }
-func (panicObserver) CurrentUser() (UserObservation, error) { panic("user probe") }
-func (panicObserver) Stat(string) (FileObservation, error)  { panic("filesystem probe") }
-func (panicObserver) ReadFile(string) ([]byte, error)       { panic("file read") }
-func (panicObserver) InspectArtifact(context.Context, string) (ArtifactMetadata, error) {
-	panic("artifact probe")
-}
-func (panicObserver) Disk(string) (uint64, error)     { panic("disk probe") }
-func (panicObserver) LookPath(string) (string, error) { panic("path probe") }
-func (panicObserver) Run(context.Context, string, ...string) (string, error) {
-	panic("subprocess probe")
-}
-func (panicObserver) ReadRunFile(string) (*runfile.Info, error)   { panic("runfile probe") }
-func (panicObserver) ProcessAlive(int) bool                       { panic("process probe") }
-func (panicObserver) GET(context.Context, string) ([]byte, error) { panic("network probe") }
-func (panicObserver) PortAvailable(context.Context, string, int) (bool, error) {
-	panic("listener probe")
-}
-
 func TestSetupHumanJSONRedactionAndYesSemantics(t *testing.T) {
 	obs := healthyObserver()
 	deps, _ := setupDeps(t, "local", obs)
@@ -781,7 +793,7 @@ func TestSetupHumanJSONRedactionAndYesSemantics(t *testing.T) {
 		if code != 0 || stderr != "" || strings.Contains(out, "setup-secret") || !strings.Contains(out, "[REDACTED]") {
 			t.Fatalf("args=%v code=%d out=%s err=%s", args, code, out, stderr)
 		}
-		if args[0] != "--json" && !strings.Contains(out, "--yes has no mutation effect") {
+		if args[0] != "--json" && !strings.Contains(out, "--yes is ignored during dry-run") {
 			t.Fatalf("missing --yes note: %s", out)
 		}
 	}

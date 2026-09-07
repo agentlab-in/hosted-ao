@@ -45,23 +45,31 @@ surface (`npm run sqlc`, `npm run api`).
   time-bounded tool authentication probes. When the daemon is reachable it
   aggregates the daemon's shared doctor report instead of redefining AO runtime
   or terminal readiness.
-- `hao setup --dry-run` loads the same validated v1 configuration, captures a
-  read-only host snapshot, and emits a deterministic ordered preparation plan.
+- `hao setup` loads the same validated v1 configuration, captures a read-only
+  host snapshot, and emits a deterministic ordered preparation plan before any
+  mutation. Interactive execution requires typed confirmation and unattended
+  execution requires `--non-interactive --yes`.
   Steps are classified as create, update, no-op, or blocked with stable IDs,
   structured privilege/action metadata, dependencies, evidence, and safe
   remediation. Managed paths are inspected through bounded no-follow handles.
   Adjacent AO manifests are observed but are not trusted release authority, so
   artifact or vendor install/no-op steps remain blocked unless immutable trusted
-  version/source/digest provenance is supplied by an injected resolver. The
-  release-metadata resolver and mutation executor are deferred. Canonical
+  version/source/digest provenance is supplied by an injected resolver. Linux
+  release builds inject the exact AO artifact version, immutable release URL,
+  and digest after building and hashing AO. Canonical
   systemd definition content is compared byte-for-byte. Dependency
   installation policy, Ubuntu systemd support, macOS
   desktop supervision, pair prerequisites, and profile-conditional `gh` are
-  planned without executing anything. `--yes` is forward-compatible and has no
-  mutation effect. Setup without `--dry-run` fails closed.
-- Configuration mutation, setup execution, initialization, service lifecycle
-  changes, pairing activation, gateway exposure, authentication flows, and
-  other host mutation are not performed by these commands.
+  planned without executing anything during dry-run. Execution holds a
+  per-state-root lock, verifies bounded downloads before same-filesystem atomic
+  replacement, writes durable transaction journals, retains backups, and rolls
+  reversible file changes back in reverse order. Package and vendor actions use
+  fixed structured argv only when their action metadata is trusted. Service
+  definitions are installed atomically through narrowly scoped privilege and
+  are not enabled or started by setup.
+- Configuration mutation, initialization, service activation, pairing
+  activation, gateway exposure, authentication flows, and other host mutation
+  remain deferred.
 
 ### Backend (Go daemon)
 

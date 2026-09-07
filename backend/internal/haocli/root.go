@@ -22,12 +22,15 @@ import (
 
 // Build metadata. Release tooling overrides these with -ldflags.
 var (
-	Version = "dev"
-	Commit  = ""
-	Date    = ""
+	Version           = "dev"
+	Commit            = ""
+	Date              = ""
+	AOArtifactVersion = ""
+	AOArtifactSource  = ""
+	AOArtifactSHA256  = ""
 )
 
-// Deps is the testable side-effect boundary for the read-only CLI.
+// Deps is the testable observation and mutation boundary for the CLI.
 type Deps struct {
 	In       io.Reader
 	Out      io.Writer
@@ -44,9 +47,19 @@ type Deps struct {
 	Now             func() time.Time
 }
 
-// DefaultDeps returns the production read-only CLI dependencies.
+// DefaultDeps returns the production CLI dependencies.
 func DefaultDeps() Deps {
-	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, ExecuteSetup: executeSetupPlan, Timeout: 2 * time.Second, Now: time.Now}
+	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, TrustedArtifact: trustedBuildArtifact, ExecuteSetup: executeSetupPlan, Timeout: 2 * time.Second, Now: time.Now}
+}
+
+func trustedBuildArtifact(goos, arch, version string) (ArtifactMetadata, bool) {
+	metadata := ArtifactMetadata{Version: AOArtifactVersion, Source: AOArtifactSource, SHA256: strings.ToLower(AOArtifactSHA256)}
+	wantedAsset := map[string]string{"amd64": "ao-linux-x64", "arm64": "ao-linux-arm64"}[arch]
+	wantedSource := "https://github.com/agentlab-in/hosted-ao/releases/download/v" + version + "/" + wantedAsset
+	if goos != "linux" || wantedAsset == "" || version == "" || version == "latest" || metadata.Version != version || metadata.Source != wantedSource || !validSHA256(metadata.SHA256) {
+		return ArtifactMetadata{}, false
+	}
+	return metadata, true
 }
 
 func (d Deps) withDefaults() Deps {
