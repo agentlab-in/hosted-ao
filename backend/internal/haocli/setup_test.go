@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
@@ -32,6 +33,8 @@ func setupDeps(t *testing.T, fixture string, obs *fakeObserver) (Deps, string) {
 	obs.files["/etc/systemd/system/ao-daemon.service"] = FileObservation{Mode: 0o644, UID: 0}
 	obs.files["/etc/systemd/system/ao-gateway.service"] = FileObservation{Mode: 0o644, UID: 0}
 	desired := setupDesired{StateRoot: root, DataDir: filepath.Join(root, "data"), RunFile: filepath.Join(root, "running.json"), PairPort: 443}
+	desired.PairCertDir, _ = vmgateway.DefaultPairCertDir()
+	desired.PairPasscodeDir, _ = vmgateway.DefaultPasscodeDir()
 	obs.readFiles["/etc/systemd/system/ao-daemon.service"] = []byte(renderSystemdDefinition("service.daemon", desired, obs.user))
 	obs.readFiles["/etc/systemd/system/ao-gateway.service"] = []byte(renderSystemdDefinition("service.gateway", desired, obs.user))
 	return deps, root
@@ -685,6 +688,65 @@ func TestSystemdDefinitionsPreserveExactStateOverrides(t *testing.T) {
 		if parsed.Environment["AO_DATA_DIR"] != desired.DataDir || parsed.Environment["AO_RUN_FILE"] != desired.RunFile {
 			t.Fatalf("%s overrides=%v", id, parsed.Environment)
 		}
+	}
+}
+
+func TestPairSystemdIdentityPathsDoNotFollowRuntimeOverrides(t *testing.T) {
+	defaultCertDir, err := vmgateway.DefaultPairCertDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultPasscodeDir, err := vmgateway.DefaultPasscodeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := UserObservation{Name: "agent", UID: 1000, Home: "/home/agent"}
+
+	for _, tc := range []struct {
+		name, dataDir, runFile, certDir, passcodeDir string
+	}{
+		{name: "data only", dataDir: filepath.Join(t.TempDir(), "custom-data")},
+		{name: "run only", runFile: filepath.Join(t.TempDir(), "custom-run", "running.json")},
+		{name: "combined", dataDir: filepath.Join(t.TempDir(), "custom-data"), runFile: filepath.Join(t.TempDir(), "custom-run", "running.json")},
+		{name: "explicit identity", dataDir: filepath.Join(t.TempDir(), "custom-data"), runFile: filepath.Join(t.TempDir(), "custom-run", "running.json"), certDir: filepath.Join(t.TempDir(), "certs"), passcodeDir: filepath.Join(t.TempDir(), "passcode")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_DATA_DIR", tc.dataDir)
+			t.Setenv("AO_RUN_FILE", tc.runFile)
+			t.Setenv("AO_VM_CERT_DIR", tc.certDir)
+			t.Setenv("AO_VM_PASSCODE_DIR", tc.passcodeDir)
+			desired, err := resolveSetupDesired(Deps{
+				StateDir: config.ResolveStateRoot,
+				DataDir:  config.ResolveDataDir,
+				RunFile:  config.ResolveRunFilePath,
+			}, "", map[string]any{"mode": "pair"}, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			desired.PairPort = 443
+			parsed, err := consumeSystemdDefinition(renderSystemdDefinition("service.gateway", desired, user))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := vmgateway.Resolve(vmgateway.Options{
+				Pair: true, HTTPSAddr: parsed.Environment["AO_VM_HTTPS_ADDR"],
+				CertDir: parsed.Environment["AO_VM_CERT_DIR"], PasscodeDir: parsed.Environment["AO_VM_PASSCODE_DIR"],
+				MachineFile: filepath.Join(t.TempDir(), "absent-machine.json"),
+			}, desired.DataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCertDir, wantPasscodeDir := defaultCertDir, defaultPasscodeDir
+			if tc.certDir != "" {
+				wantCertDir = tc.certDir
+			}
+			if tc.passcodeDir != "" {
+				wantPasscodeDir = tc.passcodeDir
+			}
+			if resolved.CertDir != wantCertDir || resolved.PasscodeDir != wantPasscodeDir {
+				t.Fatalf("identity dirs=(%q,%q) want=(%q,%q)", resolved.CertDir, resolved.PasscodeDir, wantCertDir, wantPasscodeDir)
+			}
+		})
 	}
 }
 

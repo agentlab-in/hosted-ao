@@ -321,7 +321,7 @@ func resolvePair(cfg Config, opts Options) (Config, error) {
 
 	cfg.CertDir = firstNonEmpty(opts.CertDir, os.Getenv("AO_VM_CERT_DIR"))
 	if cfg.CertDir == "" {
-		stateDir, err := config.DefaultStateDir()
+		certDir, err := DefaultPairCertDir()
 		if err != nil {
 			return Config{}, fmt.Errorf("resolve pair cert dir: %w", err)
 		}
@@ -333,7 +333,7 @@ func resolvePair(cfg Config, opts Options) (Config, error) {
 		// defaults under the state root rather than the data dir, mirroring
 		// the asymmetry DefaultMachineFilePath's comment explains for the same
 		// reason.
-		cfg.CertDir = filepath.Join(stateDir, "vm-gateway", "pair-cert")
+		cfg.CertDir = certDir
 	}
 
 	cfg.PasscodeDir = firstNonEmpty(opts.PasscodeDir, os.Getenv("AO_VM_PASSCODE_DIR"))
@@ -426,6 +426,17 @@ func DefaultPasscodeDir() (string, error) {
 		return "", fmt.Errorf("resolve pair passcode dir: %w", err)
 	}
 	return filepath.Join(stateDir, "vm-gateway", "pair-passcode"), nil
+}
+
+// DefaultPairCertDir is the persistent pair certificate directory used when
+// AO_VM_CERT_DIR is unset. It intentionally does not follow runtime data or
+// run-file overrides because changing it invalidates client fingerprint pins.
+func DefaultPairCertDir() (string, error) {
+	stateDir, err := config.DefaultStateDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve pair certificate dir: %w", err)
+	}
+	return filepath.Join(stateDir, "vm-gateway", "pair-cert"), nil
 }
 
 // firstNonEmpty returns the first non-empty (after trimming) candidate, or ""

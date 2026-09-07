@@ -18,6 +18,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 const setupPlanSchemaVersion = 1
@@ -137,6 +139,7 @@ type setupDesired struct {
 	ServiceEnabled                                      bool
 	PairPort                                            int
 	StateRoot, DataDir, RunFile, ConfigPath             string
+	PairCertDir, PairPasscodeDir                        string
 	OS, Arch                                            string
 }
 
@@ -336,7 +339,33 @@ func resolveSetupDesired(deps Deps, path string, object map[string]any, install 
 	if err != nil {
 		return setupDesired{}, operationalError("resolve run file", err)
 	}
+	if d.Mode == "pair" {
+		d.PairCertDir, d.PairPasscodeDir, err = resolvePairIdentityDirectories()
+		if err != nil {
+			return setupDesired{}, operationalError("resolve pair identity directories", err)
+		}
+	}
 	return d, nil
+}
+
+func resolvePairIdentityDirectories() (string, string, error) {
+	certDir := os.Getenv("AO_VM_CERT_DIR")
+	if strings.TrimSpace(certDir) == "" {
+		var err error
+		certDir, err = vmgateway.DefaultPairCertDir()
+		if err != nil {
+			return "", "", err
+		}
+	}
+	passcodeDir := os.Getenv("AO_VM_PASSCODE_DIR")
+	if strings.TrimSpace(passcodeDir) == "" {
+		var err error
+		passcodeDir, err = vmgateway.DefaultPasscodeDir()
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return certDir, passcodeDir, nil
 }
 
 func observeSetup(ctx context.Context, deps Deps, desired setupDesired) setupSnapshot {
@@ -755,7 +784,7 @@ func renderSystemdDefinition(id string, d setupDesired, user UserObservation) st
 	path := filepath.Join(user.Home, ".local", "bin") + ":" + filepath.Join(user.Home, "bin") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	b.WriteString("\n[Service]\nType=simple\nUser=" + user.Name + "\nWorkingDirectory=" + dataDir + "\nEnvironment=" + systemdQuote("HOME="+user.Home) + "\nEnvironment=" + systemdQuote("PATH="+path) + "\nEnvironment=" + systemdQuote("AO_DATA_DIR="+dataDir) + "\nEnvironment=" + systemdQuote("AO_RUN_FILE="+runFile) + "\n")
 	if id == "service.gateway" {
-		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_HTTPS_ADDR=:"+strconv.Itoa(d.PairPort)) + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-cert")) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+filepath.Join(d.StateRoot, "vm-gateway", "pair-passcode")) + "\n")
+		b.WriteString("Environment=" + systemdQuote("AO_VM_PAIR=on") + "\nEnvironment=" + systemdQuote("AO_VM_HTTPS_ADDR=:"+strconv.Itoa(d.PairPort)) + "\nEnvironment=" + systemdQuote("AO_VM_CERT_DIR="+d.PairCertDir) + "\nEnvironment=" + systemdQuote("AO_VM_PASSCODE_DIR="+d.PairPasscodeDir) + "\n")
 		if d.PairPort < 1024 {
 			b.WriteString("AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n")
 		}
@@ -839,7 +868,14 @@ func systemdInputsSafe(d setupDesired, user UserObservation) bool {
 	if !systemdUserPattern.MatchString(user.Name) {
 		return false
 	}
-	for _, value := range []string{user.Home, d.StateRoot, d.DataDir, d.RunFile} {
+	paths := []string{user.Home, d.StateRoot, d.DataDir, d.RunFile}
+	if d.Mode == "pair" {
+		if d.PairCertDir == "" || d.PairPasscodeDir == "" {
+			return false
+		}
+		paths = append(paths, d.PairCertDir, d.PairPasscodeDir)
+	}
+	for _, value := range paths {
 		if value == "" {
 			continue
 		}
