@@ -1,6 +1,7 @@
 package haocli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -147,10 +148,6 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 	var dryRun, nonInteractive, yes bool
 	var install string
 	cmd := &cobra.Command{Use: "setup", Short: "Plan machine preparation", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		// This guard intentionally precedes config loading and every observation.
-		if !dryRun {
-			return commandError{Code: "feature_deferred", Message: "hao setup mutation is not yet supported", Remediation: "rerun with --dry-run to inspect the setup plan", ExitStatus: 4}
-		}
 		if install != "" && install != "missing" && install != "none" {
 			return commandError{Code: "invalid_usage", Message: "--install must be missing or none", Remediation: "pass --install missing or --install none", ExitStatus: 2}
 		}
@@ -163,6 +160,7 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 			return err
 		}
 		plan := planSetup(desired, observeSetup(cmd.Context(), deps, desired))
+		plan.DryRun = dryRun
 		serializedPlan, err := json.Marshal(plan)
 		if err != nil {
 			return operationalError("serialize setup plan", err)
@@ -181,13 +179,53 @@ func newSetupCommand(deps Deps, opts *options) *cobra.Command {
 		if plan.Summary.Blocked > 0 {
 			return commandError{Code: "setup_blocked", ExitStatus: 1, Silent: true}
 		}
-		return nil
+		if dryRun {
+			return nil
+		}
+		if nonInteractive && !yes {
+			return commandError{Code: "invalid_usage", Message: "non-interactive setup requires explicit consent", Remediation: "review the dry-run plan, then rerun with --non-interactive --yes", ExitStatus: 2}
+		}
+		if !yes {
+			confirmed, confirmErr := confirmSetup(cmd)
+			if confirmErr != nil {
+				return operationalError("read setup confirmation", confirmErr)
+			}
+			if !confirmed {
+				if !opts.json {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Setup cancelled. No changes were made.")
+				}
+				return nil
+			}
+		}
+		result, executeErr := deps.ExecuteSetup(cmd.Context(), plan, desired.StateRoot, SetupExecutionOptions{NonInteractive: nonInteractive})
+		if executeErr != nil {
+			return executeErr
+		}
+		if opts.json {
+			return writeJSON(cmd.OutOrStdout(), haocontractRedact(result))
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Setup %s. Completed %d action(s).\n", result.Status, len(result.Completed))
+		return err
 	}}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "display the setup plan without changing the machine")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "never prompt for input")
 	cmd.Flags().StringVar(&install, "install", "", "dependency policy: missing or none")
 	cmd.Flags().BoolVar(&yes, "yes", false, "approve the displayed plan for future setup execution")
 	return cmd
+}
+
+func confirmSetup(cmd *cobra.Command) (bool, error) {
+	if _, err := fmt.Fprint(cmd.OutOrStdout(), "Apply this complete setup plan? Type yes to confirm: "); err != nil {
+		return false, err
+	}
+	scanner := bufio.NewScanner(cmd.InOrStdin())
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	return strings.EqualFold(strings.TrimSpace(scanner.Text()), "yes"), nil
 }
 
 func resolveSetupDesired(deps Deps, path string, object map[string]any, install string, nonInteractive bool) (setupDesired, error) {
@@ -341,7 +379,7 @@ func observeServiceManager(deps Deps, goos string) observedItem {
 
 func planSetup(d setupDesired, s setupSnapshot) SetupPlan {
 	d.OS, d.Arch = s.OS, s.Arch
-	p := SetupPlan{SchemaVersion: setupPlanSchemaVersion, DryRun: true, Machine: d.Machine, Mode: d.Mode, Platform: s.OS + "/" + s.Arch, InstallPolicy: d.Install}
+	p := SetupPlan{SchemaVersion: setupPlanSchemaVersion, Machine: d.Machine, Mode: d.Mode, Platform: s.OS + "/" + s.Arch, InstallPolicy: d.Install}
 	add := func(step SetupStep) { p.Steps = append(p.Steps, step) }
 	platformBlocked := ""
 	if s.OS == "linux" && s.DistributionState == "unknown" {
@@ -797,8 +835,8 @@ func consumeSetupPlanJSON(data []byte) ([]string, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("setup plan contains trailing JSON")
 	}
-	if plan.SchemaVersion != setupPlanSchemaVersion || !plan.DryRun {
-		return nil, errors.New("unsupported or executable setup plan")
+	if plan.SchemaVersion != setupPlanSchemaVersion {
+		return nil, errors.New("unsupported setup plan")
 	}
 	if err := validateSetupPlan(plan); err != nil {
 		return nil, err
@@ -839,7 +877,11 @@ func validSHA256(value string) bool {
 
 func writeSetupPlan(cmd *cobra.Command, plan SetupPlan, yes bool) error {
 	out := cmd.OutOrStdout()
-	if _, err := fmt.Fprintf(out, "HAO setup plan (dry-run): %s (%s) on %s\nInstall policy: %s\n", redactedString(plan.Machine), redactedString(plan.Mode), redactedString(plan.Platform), plan.InstallPolicy); err != nil {
+	label := "execution"
+	if plan.DryRun {
+		label = "dry-run"
+	}
+	if _, err := fmt.Fprintf(out, "HAO setup plan (%s): %s (%s) on %s\nInstall policy: %s\n", label, redactedString(plan.Machine), redactedString(plan.Mode), redactedString(plan.Platform), plan.InstallPolicy); err != nil {
 		return err
 	}
 	for _, step := range plan.Steps {
@@ -847,7 +889,7 @@ func writeSetupPlan(cmd *cobra.Command, plan SetupPlan, yes bool) error {
 		if step.Privilege.Required {
 			privilege = " [privileged:" + step.Privilege.Scope + "]"
 		}
-		if _, err := fmt.Fprintf(out, "%-24s %-8s %s%s — %s\n", step.ID+":", step.Disposition, step.Operation, privilege, redactedString(step.Reason)); err != nil {
+		if _, err := fmt.Fprintf(out, "%-24s %-8s %s%s: %s\n", step.ID+":", step.Disposition, step.Operation, privilege, redactedString(step.Reason)); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(out, "  evidence: %s\n", redactedString(step.Evidence)); err != nil {
@@ -862,7 +904,7 @@ func writeSetupPlan(cmd *cobra.Command, plan SetupPlan, yes bool) error {
 	if _, err := fmt.Fprintf(out, "Summary: create=%d update=%d no-op=%d blocked=%d ready=%t\n", plan.Summary.Create, plan.Summary.Update, plan.Summary.NoOp, plan.Summary.Blocked, plan.Summary.Ready); err != nil {
 		return err
 	}
-	if yes {
+	if yes && plan.DryRun {
 		_, err := fmt.Fprintln(out, "Note: --yes has no mutation effect in dry-run; it will approve the displayed plan only when setup execution exists.")
 		return err
 	}

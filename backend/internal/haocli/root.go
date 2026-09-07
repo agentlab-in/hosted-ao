@@ -39,13 +39,14 @@ type Deps struct {
 	// TrustedArtifact supplies immutable release metadata from an injected
 	// authority. Production leaves it nil until the Batch 5 resolver exists.
 	TrustedArtifact func(goos, arch, version string) (ArtifactMetadata, bool)
+	ExecuteSetup    func(context.Context, SetupPlan, string, SetupExecutionOptions) (SetupExecutionResult, error)
 	Timeout         time.Duration
 	Now             func() time.Time
 }
 
 // DefaultDeps returns the production read-only CLI dependencies.
 func DefaultDeps() Deps {
-	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, Timeout: 2 * time.Second, Now: time.Now}
+	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, ExecuteSetup: executeSetupPlan, Timeout: 2 * time.Second, Now: time.Now}
 }
 
 func (d Deps) withDefaults() Deps {
@@ -70,6 +71,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.Observer == nil {
 		d.Observer = defaults.Observer
+	}
+	if d.ExecuteSetup == nil {
+		d.ExecuteSetup = defaults.ExecuteSetup
 	}
 	if d.Timeout <= 0 {
 		d.Timeout = defaults.Timeout

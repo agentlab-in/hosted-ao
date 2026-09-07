@@ -18,7 +18,9 @@ func runCLI(t *testing.T, deps Deps, args ...string) (string, string, int) {
 	var out, stderr bytes.Buffer
 	deps.Out = &out
 	deps.Err = &stderr
-	deps.In = strings.NewReader("")
+	if deps.In == nil {
+		deps.In = strings.NewReader("")
+	}
 	returnOutput := ExecuteArgs(deps, args)
 	return out.String(), stderr.String(), returnOutput
 }

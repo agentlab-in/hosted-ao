@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -711,40 +710,44 @@ func TestSetupPairOrderingAndSetupInitSeparation(t *testing.T) {
 	}
 }
 
-func TestSetupWithoutDryRunFailsBeforeEveryBoundary(t *testing.T) {
-	panicRead := func(string) ([]byte, error) { panic("config read invoked") }
-	panicPath := func() (string, error) { panic("path resolution invoked") }
-	out, stderr, code := runCLI(t, Deps{ReadFile: panicRead, StateDir: panicPath, RunFile: panicPath, Observer: panicObserver{}}, "--json", "setup", "--non-interactive", "--install", "missing", "--yes")
-	if code != 4 || out != "" {
-		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
+func TestSetupExecutionPrintsExactPlanBeforeConsent(t *testing.T) {
+	obs := healthyObserver()
+	deps, root := setupDeps(t, "local", obs)
+	called := false
+	deps.ExecuteSetup = func(_ context.Context, plan SetupPlan, stateRoot string, _ SetupExecutionOptions) (SetupExecutionResult, error) {
+		called = true
+		if plan.DryRun || stateRoot != root {
+			t.Fatalf("executor plan=%+v root=%q", plan, stateRoot)
+		}
+		return SetupExecutionResult{Status: "completed"}, nil
 	}
-	assertEnvelope(t, stderr, code, 4, "feature_deferred", "setup")
+	out, stderr, code := runCLI(t, deps, "--config", fixturePath("valid", "local.yaml"), "setup")
+	if code != 0 || stderr != "" || called {
+		t.Fatalf("refusal code=%d called=%v out=%q stderr=%q", code, called, out, stderr)
+	}
+	if !strings.Contains(out, "HAO setup plan (execution)") || !strings.Contains(out, "Type yes to confirm") || !strings.Contains(out, "Setup cancelled") {
+		t.Fatalf("refusal did not print the complete plan and prompt: %s", out)
+	}
+
+	deps.In = strings.NewReader("yes\n")
+	out, stderr, code = runCLI(t, deps, "--config", fixturePath("valid", "local.yaml"), "setup")
+	if code != 0 || stderr != "" || !called || !strings.Contains(out, "Setup completed") {
+		t.Fatalf("confirmation code=%d called=%v out=%q stderr=%q", code, called, out, stderr)
+	}
 }
 
-func TestSetupWithoutDryRunProcessExitFourHumanAndJSON(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "hao")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/hao")
-	build.Dir = filepath.Join("..", "..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build hao: %v\n%s", err, output)
+func TestSetupNonInteractiveRequiresYesWithExactExitTwo(t *testing.T) {
+	obs := healthyObserver()
+	deps, _ := setupDeps(t, "local", obs)
+	deps.ExecuteSetup = func(context.Context, SetupPlan, string, SetupExecutionOptions) (SetupExecutionResult, error) {
+		t.Fatal("executor ran without non-interactive consent")
+		return SetupExecutionResult{}, nil
 	}
-	for _, tc := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "human", args: []string{"setup"}, want: "hao setup mutation is not yet supported"},
-		{name: "json", args: []string{"--json", "setup"}, want: `"code":"feature_deferred"`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(binary, tc.args...)
-			output, err := cmd.CombinedOutput()
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 4 || !strings.Contains(string(output), tc.want) {
-				t.Fatalf("exit=%v output=%s", err, output)
-			}
-		})
+	out, stderr, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--non-interactive")
+	if code != 2 || out == "" {
+		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
 	}
+	assertEnvelope(t, stderr, code, 2, "invalid_usage", "setup")
 }
 
 type panicObserver struct{}
