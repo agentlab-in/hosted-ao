@@ -40,7 +40,7 @@ type Deps struct {
 	RunFile  func() (string, error)
 	Observer Observer
 	// TrustedArtifact supplies immutable release metadata from an injected
-	// authority. Production leaves it nil until the Batch 5 resolver exists.
+	// authority. Production release builds supply their embedded AO tuple.
 	TrustedArtifact func(goos, arch, version string) (ArtifactMetadata, bool)
 	ExecuteSetup    func(context.Context, SetupPlan, string, SetupExecutionOptions) (SetupExecutionResult, error)
 	Timeout         time.Duration
