@@ -106,8 +106,15 @@ jobs:
           CGO_ENABLED=0 GOOS=linux go build -trimpath \
             -ldflags "-X ${ao_pkg}.Version=${VERSION} -X ${ao_pkg}.Commit=${COMMIT} -X ${ao_pkg}.Date=${DATE}" \
             -o ../dist/ao ./cmd/ao
+          ao_hash="$(sha256sum ../dist/ao | awk '{print $1}')"
+          case "$GOARCH" in
+            amd64) ao_asset="ao-linux-x64" ;;
+            arm64) ao_asset="ao-linux-arm64" ;;
+            *) echo "unsupported GOARCH: $GOARCH"; exit 1 ;;
+          esac
+          ao_source="https://github.com/agentlab-in/hosted-ao/releases/download/v${VERSION}/${ao_asset}"
           CGO_ENABLED=0 GOOS=linux go build -trimpath \
-            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE}" \
+            -ldflags "-X ${hao_pkg}.Version=${VERSION} -X ${hao_pkg}.Commit=${COMMIT} -X ${hao_pkg}.Date=${DATE} -X ${hao_pkg}.AOArtifactVersion=${VERSION} -X ${hao_pkg}.AOArtifactSource=${ao_source} -X ${hao_pkg}.AOArtifactSHA256=${ao_hash}" \
             -o ../dist/hao ./cmd/hao
       # A green build is not proof: `go build` with a bad GOARCH would still
       # exit 0 having produced a host binary. Assert the ELF machine, and on

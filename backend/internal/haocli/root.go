@@ -22,30 +22,45 @@ import (
 
 // Build metadata. Release tooling overrides these with -ldflags.
 var (
-	Version = "dev"
-	Commit  = ""
-	Date    = ""
+	Version           = "dev"
+	Commit            = ""
+	Date              = ""
+	AOArtifactVersion = ""
+	AOArtifactSource  = ""
+	AOArtifactSHA256  = ""
 )
 
-// Deps is the testable side-effect boundary for the read-only CLI.
+// Deps is the testable observation and mutation boundary for the CLI.
 type Deps struct {
 	In       io.Reader
 	Out      io.Writer
 	Err      io.Writer
 	ReadFile func(string) ([]byte, error)
 	StateDir func() (string, error)
+	DataDir  func() (string, error)
 	RunFile  func() (string, error)
 	Observer Observer
 	// TrustedArtifact supplies immutable release metadata from an injected
-	// authority. Production leaves it nil until the Batch 5 resolver exists.
+	// authority. Production release builds supply their embedded AO tuple.
 	TrustedArtifact func(goos, arch, version string) (ArtifactMetadata, bool)
+	ExecuteSetup    func(context.Context, SetupPlan, string, SetupExecutionOptions) (SetupExecutionResult, error)
 	Timeout         time.Duration
 	Now             func() time.Time
 }
 
-// DefaultDeps returns the production read-only CLI dependencies.
+// DefaultDeps returns the production CLI dependencies.
 func DefaultDeps() Deps {
-	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, Timeout: 2 * time.Second, Now: time.Now}
+	return Deps{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, ReadFile: os.ReadFile, StateDir: stateDir, DataDir: config.ResolveDataDir, RunFile: config.ResolveRunFilePath, Observer: systemObserver{}, TrustedArtifact: trustedBuildArtifact, ExecuteSetup: executeSetupPlan, Timeout: 2 * time.Second, Now: time.Now}
+}
+
+func trustedBuildArtifact(goos, arch, version string) (ArtifactMetadata, bool) {
+	metadata := ArtifactMetadata{Version: AOArtifactVersion, Source: AOArtifactSource, SHA256: strings.ToLower(AOArtifactSHA256)}
+	wantedAsset := map[string]string{"amd64": "ao-linux-x64", "arm64": "ao-linux-arm64"}[arch]
+	wantedSource := "https://github.com/agentlab-in/hosted-ao/releases/download/v" + version + "/" + wantedAsset
+	if goos != "linux" || wantedAsset == "" || version == "" || version == "latest" || metadata.Version != version || metadata.Source != wantedSource || !validSHA256(metadata.SHA256) {
+		return ArtifactMetadata{}, false
+	}
+	return metadata, true
 }
 
 func (d Deps) withDefaults() Deps {
@@ -65,11 +80,17 @@ func (d Deps) withDefaults() Deps {
 	if d.StateDir == nil {
 		d.StateDir = defaults.StateDir
 	}
+	if d.DataDir == nil {
+		d.DataDir = defaults.DataDir
+	}
 	if d.RunFile == nil {
 		d.RunFile = defaults.RunFile
 	}
 	if d.Observer == nil {
 		d.Observer = defaults.Observer
+	}
+	if d.ExecuteSetup == nil {
+		d.ExecuteSetup = defaults.ExecuteSetup
 	}
 	if d.Timeout <= 0 {
 		d.Timeout = defaults.Timeout
