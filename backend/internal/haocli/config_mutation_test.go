@@ -1,6 +1,7 @@
 package haocli
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -215,6 +216,34 @@ func TestConfigMutationRecoversBackupAndIgnoresInterruptedTemporary(t *testing.T
 	backup := mustReadConfig(t, path+".bak")
 	if got := configString(backup, "machine", "name"); got != "laptop" {
 		t.Fatalf("post-recovery backup=%q, want original last-known-good", got)
+	}
+}
+
+func TestConfigBackupPlanningAndRejectedEditsAreReadOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "dry-run", args: []string{"machine.name", "preview", "--dry-run"}},
+		{name: "unknown key", args: []string{"pair.passcode", "do-not-store"}},
+		{name: "invalid value", args: []string{"service.enabled", "sometimes"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(resolvedTempDir(t), "config.yaml")
+			copyFixture(t, fixturePath("valid", "local.yaml"), path+".bak")
+			corrupt := []byte("version: [\n")
+			if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			backupBefore, _ := os.ReadFile(path + ".bak")
+			args := append([]string{"--config", path, "config", "set"}, tc.args...)
+			_, _, _ = runCLI(t, Deps{}, args...)
+			primaryAfter, _ := os.ReadFile(path)
+			backupAfter, _ := os.ReadFile(path + ".bak")
+			if !bytes.Equal(primaryAfter, corrupt) || !bytes.Equal(backupAfter, backupBefore) {
+				t.Fatalf("planning mutated recovery files: primary=%q backup changed=%t", primaryAfter, !bytes.Equal(backupAfter, backupBefore))
+			}
+		})
 	}
 }
 

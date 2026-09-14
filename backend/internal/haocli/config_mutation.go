@@ -37,6 +37,11 @@ type configMutationStore struct {
 	beforeCommit func()
 }
 
+type configRevision struct {
+	digest     [sha256.Size]byte
+	fromBackup bool
+}
+
 func newConfigCreateCommand(deps Deps, rootOpts *options) *cobra.Command {
 	opts := &configCreateOptions{}
 	cmd := &cobra.Command{
@@ -224,14 +229,11 @@ var (
 )
 
 func (s configMutationStore) set(path, key, value string, dryRun bool) (map[string]any, bool, error) {
-	before, err := readValidatedConfig(path)
+	before, fromBackup, err := readConfigAuthority(path)
 	if err != nil {
-		before, err = s.recover(path)
-		if err != nil {
-			return nil, false, err
-		}
+		return nil, false, err
 	}
-	expected := sha256.Sum256(before)
+	expected := configRevision{digest: sha256.Sum256(before), fromBackup: fromBackup}
 	object, err := haocontract.ParseConfig(before)
 	if err != nil {
 		return nil, false, err
@@ -254,7 +256,7 @@ func (s configMutationStore) set(path, key, value string, dryRun bool) (map[stri
 	if bytes.Equal(data, canonicalBefore) || dryRun {
 		return validated, !bytes.Equal(data, canonicalBefore), nil
 	}
-	if err := s.replace(path, data, &expected); err != nil {
+	if err := s.replace(path, data, expected); err != nil {
 		return nil, false, err
 	}
 	return validated, true, nil
@@ -328,41 +330,30 @@ func (s configMutationStore) create(path string, data []byte) error {
 	return s.commit(path, data, false)
 }
 
-func (s configMutationStore) replace(path string, data []byte, expected *[sha256.Size]byte) error {
+func (s configMutationStore) replace(path string, data []byte, expected configRevision) error {
 	lock, err := acquireConfigLock(path + ".lock")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = releaseConfigLock(lock) }()
-	current, err := recoverAndReadConfig(path)
+	current, fromBackup, err := readConfigAuthority(path)
 	if err != nil {
 		return err
 	}
-	if expected != nil && sha256.Sum256(current) != *expected {
+	if sha256.Sum256(current) != expected.digest || fromBackup != expected.fromBackup {
 		return errConfigStale
 	}
 	if s.beforeCommit != nil {
 		s.beforeCommit()
 	}
-	if expected != nil {
-		latest, readErr := readValidatedConfig(path)
-		if readErr != nil {
-			return readErr
-		}
-		if sha256.Sum256(latest) != *expected {
-			return errConfigStale
-		}
+	latest, latestFromBackup, readErr := readConfigAuthority(path)
+	if readErr != nil {
+		return readErr
 	}
-	return s.commit(path, data, true)
-}
-
-func (s configMutationStore) recover(path string) ([]byte, error) {
-	lock, err := acquireConfigLock(path + ".lock")
-	if err != nil {
-		return nil, err
+	if sha256.Sum256(latest) != expected.digest || latestFromBackup != expected.fromBackup {
+		return errConfigStale
 	}
-	defer func() { _ = releaseConfigLock(lock) }()
-	return recoverAndReadConfig(path)
+	return s.commit(path, data, !fromBackup)
 }
 
 func (s configMutationStore) commit(path string, data []byte, backup bool) error {
@@ -384,43 +375,31 @@ func (s configMutationStore) commit(path string, data []byte, backup bool) error
 	return durableReplace(path, data, 0o600)
 }
 
-func recoverAndReadConfig(path string) ([]byte, error) {
+func readConfigAuthority(path string) ([]byte, bool, error) {
 	data, err := readManagedFile(path, maxConfigBytes)
 	if err == nil {
 		if _, parseErr := haocontract.ParseConfig(data); parseErr == nil {
-			return data, nil
+			return data, false, nil
 		} else {
 			var unsupported haocontract.UnsupportedVersionError
 			if errors.As(parseErr, &unsupported) {
-				return nil, parseErr
+				return nil, false, parseErr
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, false, err
 	}
 	backup, backupErr := readManagedFile(path+".bak", maxConfigBytes)
 	if backupErr != nil {
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return nil, errors.New("configuration is invalid and no valid backup is available")
+		return nil, false, errors.New("configuration is invalid and no valid backup is available")
 	}
 	if _, backupErr = haocontract.ParseConfig(backup); backupErr != nil {
-		return nil, errors.New("configuration and backup are invalid")
+		return nil, false, errors.New("configuration and backup are invalid")
 	}
-	if replaceErr := durableReplace(path, backup, 0o600); replaceErr != nil {
-		return nil, fmt.Errorf("restore last-known-good backup: %w", replaceErr)
-	}
-	return backup, nil
-}
-
-func readValidatedConfig(path string) ([]byte, error) {
-	data, err := readManagedFile(path, maxConfigBytes)
-	if err != nil {
-		return nil, err
-	}
-	_, err = haocontract.ParseConfig(data)
-	return data, err
+	return backup, true, nil
 }
 
 func readManagedFile(path string, limit int64) ([]byte, error) {
