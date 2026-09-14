@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,16 +21,29 @@ type fakeServiceCommands struct {
 	privilegeErr error
 	fail         map[string]error
 	calls        []serviceCommandCall
+	output       map[string]string
+	afterRun     func(string)
 }
 
 func (f *fakeServiceCommands) CheckPrivilege(context.Context, bool, io.Reader) error {
 	return f.privilegeErr
 }
 
-func (f *fakeServiceCommands) Run(_ context.Context, privileged, _ bool, _ io.Reader, executable string, argv ...string) error {
+func (f *fakeServiceCommands) Run(ctx context.Context, privileged, _ bool, _ io.Reader, executable string, argv ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	call := serviceCommandCall{privileged: privileged, executable: executable, argv: append([]string(nil), argv...)}
 	f.calls = append(f.calls, call)
+	if f.afterRun != nil {
+		f.afterRun(strings.Join(argv, " "))
+	}
 	return f.fail[strings.Join(argv, " ")]
+}
+
+func (f *fakeServiceCommands) Output(_ context.Context, executable string, argv ...string) (string, error) {
+	key := executable + " " + strings.Join(argv, " ")
+	return f.output[key], f.fail[key]
 }
 
 func testServiceManager(obs *fakeObserver, commands *fakeServiceCommands) *haoServiceManager {
@@ -136,6 +150,28 @@ func TestPartialActivationRollsBackOnlyInvocationChanges(t *testing.T) {
 	}
 }
 
+func TestCanceledActivationUsesFreshRollbackContext(t *testing.T) {
+	obs := healthyObserver()
+	for _, component := range []string{"daemon", "gateway"} {
+		obs.runs[serviceStatusKey(component)] = "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\nSubState=dead"
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	commands := &fakeServiceCommands{fail: map[string]error{}}
+	commands.afterRun = func(command string) {
+		if command == "start "+haoDaemonUnit {
+			cancel()
+		}
+	}
+	result, err := testServiceManager(obs, commands).Activate(ctx, []string{"daemon", "gateway"})
+	if err == nil {
+		t.Fatal("canceled activation unexpectedly succeeded")
+	}
+	wantRollback := []ServiceChange{{Component: "daemon", Operation: "stop"}, {Component: "daemon", Operation: "disable"}}
+	if !reflect.DeepEqual(result.Rollback, wantRollback) {
+		t.Fatalf("rollback=%+v want=%+v calls=%v", result.Rollback, wantRollback, commandArgv(commands.calls))
+	}
+}
+
 func TestServiceManagerRejectsUnknownUnitsAndPrivilegeRefusalIsExitThree(t *testing.T) {
 	commands := &fakeServiceCommands{fail: map[string]error{}, privilegeErr: errPrivilegeRefused}
 	manager := testServiceManager(healthyObserver(), commands)
@@ -174,8 +210,8 @@ func TestServiceStatusAndJournalUseBoundedFixedArgv(t *testing.T) {
 	obs := healthyObserver()
 	obs.runs[serviceStatusKey("daemon")] = "LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running"
 	journalKey := "/usr/bin/journalctl --no-pager --lines 25 --output short-iso-precise --unit " + haoDaemonUnit
-	obs.runs[journalKey] = "bounded journal"
-	manager := testServiceManager(obs, &fakeServiceCommands{fail: map[string]error{}})
+	commands := &fakeServiceCommands{fail: map[string]error{}, output: map[string]string{journalKey: "bounded journal"}}
+	manager := testServiceManager(obs, commands)
 
 	states, err := manager.Status(context.Background(), []string{"daemon"})
 	if err != nil || len(states) != 1 || !states[0].Loaded || !states[0].Enabled || !states[0].Active || states[0].SubState != "running" {
@@ -187,6 +223,28 @@ func TestServiceStatusAndJournalUseBoundedFixedArgv(t *testing.T) {
 	}
 	if _, err := manager.Journal(context.Background(), "daemon", maxJournalLines+1); err == nil {
 		t.Fatal("unbounded journal request was accepted")
+	}
+}
+
+func TestJournalReaderPreservesMoreThanDiagnosticOutputLimit(t *testing.T) {
+	if _, err := exec.LookPath("/usr/bin/printf"); err != nil {
+		t.Skip("printf is unavailable")
+	}
+	want := strings.Repeat("journal-entry\n", 40)
+	got, err := (systemServiceCommands{}).Output(context.Background(), "/usr/bin/printf", "%s", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != strings.TrimSpace(want) || len(got) <= 256 {
+		t.Fatalf("journal output length=%d want=%d", len(got), len(strings.TrimSpace(want)))
+	}
+}
+
+func TestRestartPreservesCompletedOperationsOnFailure(t *testing.T) {
+	commands := &fakeServiceCommands{fail: map[string]error{"stop " + haoDaemonUnit: errors.New("stop failed")}}
+	result, err := testServiceManager(healthyObserver(), commands).Restart(context.Background(), []string{"daemon", "gateway"})
+	if err == nil || !reflect.DeepEqual(result.Completed, []ServiceChange{{Component: "gateway", Operation: "stop"}}) {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

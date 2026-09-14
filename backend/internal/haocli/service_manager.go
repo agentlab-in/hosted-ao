@@ -5,15 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	haoDaemonUnit   = "ao-daemon.service"
-	haoGatewayUnit  = "ao-gateway.service"
-	maxJournalLines = 200
+	haoDaemonUnit    = "ao-daemon.service"
+	haoGatewayUnit   = "ao-gateway.service"
+	maxJournalLines  = 200
+	maxJournalOutput = 64 << 10
 )
 
 var canonicalServiceUnits = map[string]string{
@@ -24,6 +26,18 @@ var canonicalServiceUnits = map[string]string{
 type serviceCommandSystem interface {
 	CheckPrivilege(context.Context, bool, io.Reader) error
 	Run(context.Context, bool, bool, io.Reader, string, ...string) error
+	Output(context.Context, string, ...string) (string, error)
+}
+
+type systemServiceCommands struct{ systemSetupExecution }
+
+func (systemServiceCommands) Output(ctx context.Context, executable string, argv ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, executable, argv...)
+	cmd.Stdin = nil
+	output := boundedBuffer{remaining: maxJournalOutput}
+	cmd.Stdout, cmd.Stderr = &output, &output
+	err := cmd.Run()
+	return strings.TrimSpace(output.String()), err
 }
 
 // ServiceManagerSupport describes whether HAO can operate services on this host.
@@ -98,7 +112,7 @@ func discoverServiceManager(ctx context.Context, deps Deps, target UserObservati
 	if path, err := deps.Observer.LookPath("journalctl"); err == nil && path == "/usr/bin/journalctl" {
 		journalctl = path
 	}
-	return &haoServiceManager{observer: deps.Observer, commands: systemSetupExecution{}, timeout: deps.Timeout, targetUser: target, nonInteractive: nonInteractive, input: deps.In, systemctl: systemctl, journalctl: journalctl}, ServiceManagerSupport{Supported: true, Manager: "systemd"}
+	return &haoServiceManager{observer: deps.Observer, commands: systemServiceCommands{}, timeout: deps.Timeout, targetUser: target, nonInteractive: nonInteractive, input: deps.In, systemctl: systemctl, journalctl: journalctl}, ServiceManagerSupport{Supported: true, Manager: "systemd"}
 }
 
 func manualServiceCommands(components []string) []string {
@@ -212,13 +226,13 @@ func (m *haoServiceManager) Activate(ctx context.Context, components []string) (
 		state := states[i]
 		if !state.Enabled {
 			if err := m.mutate(ctx, "enable", component); err != nil {
-				return m.rollback(ctx, result, err)
+				return m.rollback(result, err)
 			}
 			result.Completed = append(result.Completed, ServiceChange{Component: component, Operation: "enable"})
 		}
 		if !state.Active {
 			if err := m.mutate(ctx, "start", component); err != nil {
-				return m.rollback(ctx, result, err)
+				return m.rollback(result, err)
 			}
 			result.Completed = append(result.Completed, ServiceChange{Component: component, Operation: "start"})
 		}
@@ -239,10 +253,14 @@ func (m *haoServiceManager) Disable(ctx context.Context, components []string) (S
 }
 
 func (m *haoServiceManager) Restart(ctx context.Context, components []string) (ServiceOperationResult, error) {
-	if _, err := m.Stop(ctx, components); err != nil {
-		return ServiceOperationResult{}, err
+	result, err := m.Stop(ctx, components)
+	if err != nil {
+		return result, err
 	}
-	return m.applyOrdered(ctx, components, false, "start")
+	started, err := m.applyOrdered(ctx, components, false, "start")
+	result.Completed = append(result.Completed, started.Completed...)
+	result.Rollback = append(result.Rollback, started.Rollback...)
+	return result, err
 }
 
 func (m *haoServiceManager) applyOrdered(ctx context.Context, components []string, reverse bool, operation string) (ServiceOperationResult, error) {
@@ -275,7 +293,7 @@ func (m *haoServiceManager) Journal(ctx context.Context, component string, lines
 	}
 	probeCtx, cancel := boundedContext(ctx, m.timeout)
 	defer cancel()
-	output, err := m.observer.Run(probeCtx, m.journalctl, "--no-pager", "--lines", fmt.Sprintf("%d", lines), "--output", "short-iso-precise", "--unit", canonicalServiceUnits[component])
+	output, err := m.commands.Output(probeCtx, m.journalctl, "--no-pager", "--lines", fmt.Sprintf("%d", lines), "--output", "short-iso-precise", "--unit", canonicalServiceUnits[component])
 	if err != nil {
 		if probeCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
 			return "", fmt.Errorf("journal discovery timed out: %w", context.DeadlineExceeded)
@@ -313,14 +331,14 @@ func (m *haoServiceManager) mutate(ctx context.Context, operation, component str
 	return nil
 }
 
-func (m *haoServiceManager) rollback(ctx context.Context, result ServiceOperationResult, failure error) (ServiceOperationResult, error) {
+func (m *haoServiceManager) rollback(result ServiceOperationResult, failure error) (ServiceOperationResult, error) {
 	for i := len(result.Completed) - 1; i >= 0; i-- {
 		change := result.Completed[i]
 		inverse := map[string]string{"start": "stop", "enable": "disable"}[change.Operation]
 		if inverse == "" {
 			continue
 		}
-		if err := m.mutate(ctx, inverse, change.Component); err != nil {
+		if err := m.mutate(context.Background(), inverse, change.Component); err != nil {
 			return result, commandError{Code: "rollback_required", Message: "service activation failed and rollback was incomplete", Operation: "activate services", Remediation: "inspect service status and logs before retrying", Details: map[string]any{"completed": result.Completed, "rollback": result.Rollback, "diagnostic": safeDiagnostic(err)}, ExitStatus: 1, Cause: failure}
 		}
 		result.Rollback = append(result.Rollback, ServiceChange{Component: change.Component, Operation: inverse})
