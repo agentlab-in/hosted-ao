@@ -68,6 +68,8 @@ type ServiceChange struct {
 	Operation string `json:"operation"`
 }
 
+// ServiceOperationResult reports completed mutations and invocation-owned
+// rollback actions for later HAO lifecycle commands.
 type ServiceOperationResult struct {
 	Completed []ServiceChange `json:"completed"`
 	Rollback  []ServiceChange `json:"rollback"`
