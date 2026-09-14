@@ -251,7 +251,7 @@ func (s configMutationStore) set(path, key, value string, dryRun bool) (map[stri
 	}
 	validated, err := haocontract.ParseConfig(data)
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", errInvalidConfigValue, err)
+		return nil, false, fmt.Errorf("%w: %w", errInvalidConfigValue, err)
 	}
 	if bytes.Equal(data, canonicalBefore) || dryRun {
 		return validated, !bytes.Equal(data, canonicalBefore), nil
@@ -277,9 +277,10 @@ func applyConfigValue(object map[string]any, key, value string) error {
 		return setNested("machine", "name", value)
 	case "mode":
 		object["mode"] = value
-		if value == "local" {
+		switch value {
+		case "local":
 			delete(object, "pair")
-		} else if value == "pair" {
+		case "pair":
 			if _, ok := object["pair"]; !ok {
 				object["pair"] = map[string]any{"listenPort": 443}
 			}
@@ -378,13 +379,13 @@ func (s configMutationStore) commit(path string, data []byte, backup bool) error
 func readConfigAuthority(path string) ([]byte, bool, error) {
 	data, err := readManagedFile(path, maxConfigBytes)
 	if err == nil {
-		if _, parseErr := haocontract.ParseConfig(data); parseErr == nil {
+		_, parseErr := haocontract.ParseConfig(data)
+		if parseErr == nil {
 			return data, false, nil
-		} else {
-			var unsupported haocontract.UnsupportedVersionError
-			if errors.As(parseErr, &unsupported) {
-				return nil, false, parseErr
-			}
+		}
+		var unsupported haocontract.UnsupportedVersionError
+		if errors.As(parseErr, &unsupported) {
+			return nil, false, parseErr
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, false, err

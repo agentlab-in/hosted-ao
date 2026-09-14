@@ -136,10 +136,9 @@ func TestWrittenConfigIsConsumedByStatusDoctorAndSetup(t *testing.T) {
 
 	setup, _ := setupDeps(t, "local", healthyObserver())
 	setup.ReadFile = os.ReadFile
-	out, stderr := "", ""
-	out, stderr, code = runCLI(t, setup, "--json", "--config", path, "setup", "--dry-run")
-	if code != 0 || stderr != "" || !strings.Contains(out, "reader-box") {
-		t.Fatalf("setup did not consume written config: code=%d out=%q err=%q", code, out, stderr)
+	out, setupError, setupCode := runCLI(t, setup, "--json", "--config", path, "setup", "--dry-run")
+	if setupCode != 0 || setupError != "" || !strings.Contains(out, "reader-box") {
+		t.Fatalf("setup did not consume written config: code=%d out=%q err=%q", setupCode, out, setupError)
 	}
 }
 
@@ -178,18 +177,18 @@ func TestConfigMutationBusyStaleAndUnsafePaths(t *testing.T) {
 
 	t.Run("linked ancestor", func(t *testing.T) {
 		root := resolvedTempDir(t)
-		real := filepath.Join(root, "real")
-		if err := os.Mkdir(real, 0o700); err != nil {
+		realDir := filepath.Join(root, "real")
+		if err := os.Mkdir(realDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		link := filepath.Join(root, "linked")
-		if err := os.Symlink(real, link); err != nil {
+		if err := os.Symlink(realDir, link); err != nil {
 			t.Fatal(err)
 		}
 		path := filepath.Join(link, "config.yaml")
 		_, stderr, code := runCLI(t, Deps{}, "--json", "--config", path, "config", "create", "--non-interactive", "--machine", "box", "--mode", "local", "--ao-version", "0.14.0", "--harness", "claude-code", "--install", "none", "--service-enabled", "false")
 		assertEnvelope(t, stderr, code, 1, "operation_failed", "config create")
-		if _, err := os.Stat(filepath.Join(real, "config.yaml")); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(realDir, "config.yaml")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("write escaped through linked ancestor: %v", err)
 		}
 	})
