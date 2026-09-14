@@ -246,6 +246,27 @@ func TestConfigBackupPlanningAndRejectedEditsAreReadOnly(t *testing.T) {
 	}
 }
 
+func TestConfigSetRestoresBackupWhenRequestedValueIsUnchanged(t *testing.T) {
+	for _, primary := range []string{"corrupt", "missing"} {
+		t.Run(primary, func(t *testing.T) {
+			path := filepath.Join(resolvedTempDir(t), "config.yaml")
+			copyFixture(t, fixturePath("valid", "local.yaml"), path+".bak")
+			if primary == "corrupt" {
+				if err := os.WriteFile(path, []byte("version: [\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			object, changed, err := (configMutationStore{}).set(path, "machine.name", "laptop", false)
+			if err != nil || !changed || configString(object, "machine", "name") != "laptop" {
+				t.Fatalf("recovery result: changed=%t object=%v err=%v", changed, object, err)
+			}
+			if got := configString(mustReadConfig(t, path), "machine", "name"); got != "laptop" {
+				t.Fatalf("restored machine name=%q", got)
+			}
+		})
+	}
+}
+
 func copyFixture(t *testing.T, source, target string) {
 	t.Helper()
 	data, err := os.ReadFile(source)

@@ -253,8 +253,9 @@ func (s configMutationStore) set(path, key, value string, dryRun bool) (map[stri
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: %w", errInvalidConfigValue, err)
 	}
-	if bytes.Equal(data, canonicalBefore) || dryRun {
-		return validated, !bytes.Equal(data, canonicalBefore), nil
+	changed := !bytes.Equal(data, canonicalBefore) || fromBackup
+	if dryRun || !changed {
+		return validated, changed, nil
 	}
 	if err := s.replace(path, data, expected); err != nil {
 		return nil, false, err
