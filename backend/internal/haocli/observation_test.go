@@ -2,8 +2,10 @@ package haocli
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,6 +71,16 @@ func (f *fakeObserver) InspectArtifact(_ context.Context, path string) (Artifact
 	}
 	return metadata, nil
 }
+func (f *fakeObserver) FileSHA256(_ context.Context, path string, _ int64) (string, error) {
+	if data, ok := f.readFiles[path]; ok {
+		digest := sha256.Sum256(data)
+		return fmt.Sprintf("%x", digest[:]), nil
+	}
+	if metadata, ok := f.artifacts[path]; ok {
+		return metadata.SHA256, nil
+	}
+	return "", os.ErrNotExist
+}
 func (f *fakeObserver) Stat(path string) (FileObservation, error) {
 	if err := f.statErr[path]; err != nil {
 		return FileObservation{}, err
@@ -125,7 +137,10 @@ func healthyObserver() *fakeObserver {
 
 func observationDeps(t *testing.T, fixture string, obs *fakeObserver) Deps {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	runPath := filepath.Join(root, "custom-discovery.json")
 	path := fixturePath("valid", fixture+".yaml")
 	absPath, err := filepath.Abs(path)

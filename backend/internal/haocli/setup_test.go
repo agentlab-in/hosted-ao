@@ -7,14 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
@@ -25,13 +24,17 @@ func setupDeps(t *testing.T, fixture string, obs *fakeObserver) (Deps, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deps.DataDir = func() (string, error) { return filepath.Join(root, "data"), nil }
+	deps.RunFile = func() (string, error) { return filepath.Join(root, "running.json"), nil }
 	obs.files[filepath.Join(root, "bin", "ao")] = FileObservation{Mode: 0o755, Owner: true}
 	trusted := ArtifactMetadata{Version: "0.14.0", SHA256: strings.Repeat("a", 64), Source: "https://github.com/agentlab-in/hosted-ao/releases/download/v0.14.0/ao-linux-x64"}
 	obs.artifacts[filepath.Join(root, "bin", "ao")] = trusted
 	deps.TrustedArtifact = func(_, _, _ string) (ArtifactMetadata, bool) { return trusted, true }
 	obs.files["/etc/systemd/system/ao-daemon.service"] = FileObservation{Mode: 0o644, UID: 0}
 	obs.files["/etc/systemd/system/ao-gateway.service"] = FileObservation{Mode: 0o644, UID: 0}
-	desired := setupDesired{StateRoot: root, PairPort: 443}
+	desired := setupDesired{StateRoot: root, DataDir: filepath.Join(root, "data"), RunFile: filepath.Join(root, "running.json"), PairPort: 443}
+	desired.PairCertDir, _ = vmgateway.DefaultPairCertDir()
+	desired.PairPasscodeDir, _ = vmgateway.DefaultPasscodeDir()
 	obs.readFiles["/etc/systemd/system/ao-daemon.service"] = []byte(renderSystemdDefinition("service.daemon", desired, obs.user))
 	obs.readFiles["/etc/systemd/system/ao-gateway.service"] = []byte(renderSystemdDefinition("service.gateway", desired, obs.user))
 	return deps, root
@@ -127,6 +130,7 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 			delete(obs.paths, name)
 		}
 		deps, root := setupDeps(t, "pair", obs)
+		deps.TrustedArtifact = nil
 		obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
 		obs.statErr["/etc/systemd/system/ao-daemon.service"] = os.ErrNotExist
 		obs.statErr["/etc/systemd/system/ao-gateway.service"] = os.ErrNotExist
@@ -224,11 +228,11 @@ func TestSetupWrongVersionsPermissionsAndManagerUnknown(t *testing.T) {
 	obs.artifacts[artifact] = ArtifactMetadata{Version: "0.13.9", SHA256: strings.Repeat("b", 64), Source: "old-release"}
 	obs.files[filepath.Join(root, "data")] = FileObservation{Mode: 0o755, Owner: true, IsDir: true}
 	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
-	if code != 1 {
+	if code != 0 {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
 	plan := decodeSetupPlan(t, out)
-	if stepByID(t, plan, "artifact.ao").Disposition != "blocked" || stepByID(t, plan, "directory.data").Disposition != "update" {
+	if stepByID(t, plan, "artifact.ao").Disposition != "update" || stepByID(t, plan, "artifact.ao").Action == nil || stepByID(t, plan, "directory.data").Disposition != "update" {
 		t.Fatalf("plan=%+v", plan)
 	}
 
@@ -267,6 +271,7 @@ func TestSetupUntrustedArtifactProvenanceNeverBecomesExecutableOrNoOp(t *testing
 		obs := healthyObserver()
 		delete(obs.paths, "claude")
 		deps, root := setupDeps(t, "local", obs)
+		deps.TrustedArtifact = nil
 		obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
 		out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run", "--install", "missing")
 		if code != 1 {
@@ -280,6 +285,39 @@ func TestSetupUntrustedArtifactProvenanceNeverBecomesExecutableOrNoOp(t *testing
 			}
 		}
 	})
+}
+
+func TestSetupTrustedArtifactMetadataPlansVerifiedInstall(t *testing.T) {
+	obs := healthyObserver()
+	deps, root := setupDeps(t, "local", obs)
+	obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--dry-run")
+	if code != 0 {
+		t.Fatalf("code=%d out=%s", code, out)
+	}
+	step := stepByID(t, decodeSetupPlan(t, out), "artifact.ao")
+	if step.Disposition != "create" || step.Action == nil || step.Action.Artifact == nil || step.Action.Artifact.Version != "0.14.0" || !validSHA256(step.Action.Artifact.SHA256) {
+		t.Fatalf("artifact step=%+v", step)
+	}
+}
+
+func TestTrustedBuildArtifactRequiresExactReleaseTuple(t *testing.T) {
+	restoreVersion, restoreSource, restoreDigest := AOArtifactVersion, AOArtifactSource, AOArtifactSHA256
+	t.Cleanup(func() {
+		AOArtifactVersion, AOArtifactSource, AOArtifactSHA256 = restoreVersion, restoreSource, restoreDigest
+	})
+	AOArtifactVersion = "0.14.0"
+	AOArtifactSource = "https://github.com/agentlab-in/hosted-ao/releases/download/v0.14.0/ao-linux-arm64"
+	AOArtifactSHA256 = strings.Repeat("A", 64)
+	metadata, ok := trustedBuildArtifact("linux", "arm64", "0.14.0")
+	if !ok || metadata.SHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("metadata=%+v ok=%v", metadata, ok)
+	}
+	for _, input := range []struct{ goos, arch, version string }{{"darwin", "arm64", "0.14.0"}, {"linux", "amd64", "0.14.0"}, {"linux", "arm64", "latest"}} {
+		if _, ok := trustedBuildArtifact(input.goos, input.arch, input.version); ok {
+			t.Fatalf("accepted mismatched tuple %+v", input)
+		}
+	}
 }
 
 func TestSetupLocalNeverPlansGatewayAndUnsafeArtifactIsNotExecuted(t *testing.T) {
@@ -578,14 +616,14 @@ func TestImmutableActionJSONRoundTripsThroughNonMutatingConsumer(t *testing.T) {
 	}, {
 		ID: "prerequisite.git", Disposition: "create", Action: &SetupAction{
 			SchemaVersion: 1, Kind: "package-manager", Package: &SetupPackageAction{
-				Executable: "/usr/bin/apt-get", Argv: []string{"install", "git=1.2.3"}, Version: "1.2.3",
+				Executable: "/usr/bin/apt-get", Argv: []string{"install", "--yes", "{verified-file}"}, Version: "1.2.3",
 				Source: "https://packages.example.invalid/git-1.2.3.deb", SHA256: digest,
 			},
 		},
 	}, {
 		ID: "prerequisite.harness", Disposition: "create", Action: &SetupAction{
 			SchemaVersion: 1, Kind: "vendor-package", Vendor: &SetupVendorAction{
-				Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "pkg@1.2.3"}, Version: "1.2.3",
+				Executable: "/usr/bin/npm", Argv: []string{"install", "--global", "{verified-file}"}, Version: "1.2.3",
 				Source: "https://registry.example.invalid/pkg/-/pkg-1.2.3.tgz", SHA256: digest,
 			},
 		},
@@ -600,7 +638,7 @@ func TestImmutableActionJSONRoundTripsThroughNonMutatingConsumer(t *testing.T) {
 	}
 	want := []string{
 		"artifact source=https://releases.example.invalid/v0.14.0/ao-linux-x64 version=0.14.0 sha256=" + digest + " path=/managed/ao",
-		"package executable=/usr/bin/apt-get source=https://packages.example.invalid/git-1.2.3.deb version=1.2.3 sha256=" + digest + ` argv=["install" "git=1.2.3"]`,
+		"package executable=/usr/bin/apt-get source=https://packages.example.invalid/git-1.2.3.deb version=1.2.3 sha256=" + digest + ` argv=["install" "--yes" "{verified-file}"]`,
 		"vendor source=https://registry.example.invalid/pkg/-/pkg-1.2.3.tgz version=1.2.3 sha256=" + digest,
 	}
 	if !reflect.DeepEqual(operations, want) {
@@ -634,6 +672,81 @@ func TestPairSystemdConsumerCarriesPortCapabilitiesAndHarnessPath(t *testing.T) 
 	parsed, err = consumeSystemdDefinition(renderSystemdDefinition("service.gateway", desired, user))
 	if err != nil || !parsed.HasNetBindCapability {
 		t.Fatalf("privileged port consumer capability=%v err=%v", parsed.HasNetBindCapability, err)
+	}
+}
+
+func TestSystemdDefinitionsPreserveExactStateOverrides(t *testing.T) {
+	desired := setupDesired{
+		StateRoot: "/srv/hao/state", DataDir: "/mnt/ao-db", RunFile: "/run/user/1000/hao-running.json", PairPort: 443,
+	}
+	user := UserObservation{Name: "agent", UID: 1000, Home: "/home/agent"}
+	for _, id := range []string{"service.daemon", "service.gateway"} {
+		parsed, err := consumeSystemdDefinition(renderSystemdDefinition(id, desired, user))
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if parsed.Environment["AO_DATA_DIR"] != desired.DataDir || parsed.Environment["AO_RUN_FILE"] != desired.RunFile {
+			t.Fatalf("%s overrides=%v", id, parsed.Environment)
+		}
+	}
+}
+
+func TestPairSystemdIdentityPathsDoNotFollowRuntimeOverrides(t *testing.T) {
+	defaultCertDir, err := vmgateway.DefaultPairCertDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultPasscodeDir, err := vmgateway.DefaultPasscodeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := UserObservation{Name: "agent", UID: 1000, Home: "/home/agent"}
+
+	for _, tc := range []struct {
+		name, dataDir, runFile, certDir, passcodeDir string
+	}{
+		{name: "data only", dataDir: filepath.Join(t.TempDir(), "custom-data")},
+		{name: "run only", runFile: filepath.Join(t.TempDir(), "custom-run", "running.json")},
+		{name: "combined", dataDir: filepath.Join(t.TempDir(), "custom-data"), runFile: filepath.Join(t.TempDir(), "custom-run", "running.json")},
+		{name: "explicit identity", dataDir: filepath.Join(t.TempDir(), "custom-data"), runFile: filepath.Join(t.TempDir(), "custom-run", "running.json"), certDir: filepath.Join(t.TempDir(), "certs"), passcodeDir: filepath.Join(t.TempDir(), "passcode")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_DATA_DIR", tc.dataDir)
+			t.Setenv("AO_RUN_FILE", tc.runFile)
+			t.Setenv("AO_VM_CERT_DIR", tc.certDir)
+			t.Setenv("AO_VM_PASSCODE_DIR", tc.passcodeDir)
+			desired, err := resolveSetupDesired(Deps{
+				StateDir: config.ResolveStateRoot,
+				DataDir:  config.ResolveDataDir,
+				RunFile:  config.ResolveRunFilePath,
+			}, "", map[string]any{"mode": "pair"}, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			desired.PairPort = 443
+			parsed, err := consumeSystemdDefinition(renderSystemdDefinition("service.gateway", desired, user))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := vmgateway.Resolve(vmgateway.Options{
+				Pair: true, HTTPSAddr: parsed.Environment["AO_VM_HTTPS_ADDR"],
+				CertDir: parsed.Environment["AO_VM_CERT_DIR"], PasscodeDir: parsed.Environment["AO_VM_PASSCODE_DIR"],
+				MachineFile: filepath.Join(t.TempDir(), "absent-machine.json"),
+			}, desired.DataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCertDir, wantPasscodeDir := defaultCertDir, defaultPasscodeDir
+			if tc.certDir != "" {
+				wantCertDir = tc.certDir
+			}
+			if tc.passcodeDir != "" {
+				wantPasscodeDir = tc.passcodeDir
+			}
+			if resolved.CertDir != wantCertDir || resolved.PasscodeDir != wantPasscodeDir {
+				t.Fatalf("identity dirs=(%q,%q) want=(%q,%q)", resolved.CertDir, resolved.PasscodeDir, wantCertDir, wantPasscodeDir)
+			}
+		})
 	}
 }
 
@@ -711,62 +824,44 @@ func TestSetupPairOrderingAndSetupInitSeparation(t *testing.T) {
 	}
 }
 
-func TestSetupWithoutDryRunFailsBeforeEveryBoundary(t *testing.T) {
-	panicRead := func(string) ([]byte, error) { panic("config read invoked") }
-	panicPath := func() (string, error) { panic("path resolution invoked") }
-	out, stderr, code := runCLI(t, Deps{ReadFile: panicRead, StateDir: panicPath, RunFile: panicPath, Observer: panicObserver{}}, "--json", "setup", "--non-interactive", "--install", "missing", "--yes")
-	if code != 4 || out != "" {
+func TestSetupExecutionPrintsExactPlanBeforeConsent(t *testing.T) {
+	obs := healthyObserver()
+	deps, root := setupDeps(t, "local", obs)
+	called := false
+	deps.ExecuteSetup = func(_ context.Context, plan SetupPlan, stateRoot string, _ SetupExecutionOptions) (SetupExecutionResult, error) {
+		called = true
+		if plan.DryRun || stateRoot != root {
+			t.Fatalf("executor plan=%+v root=%q", plan, stateRoot)
+		}
+		return SetupExecutionResult{Status: "completed"}, nil
+	}
+	out, stderr, code := runCLI(t, deps, "--config", fixturePath("valid", "local.yaml"), "setup")
+	if code != 0 || stderr != "" || called {
+		t.Fatalf("refusal code=%d called=%v out=%q stderr=%q", code, called, out, stderr)
+	}
+	if !strings.Contains(out, "HAO setup plan (execution)") || !strings.Contains(out, "Type yes to confirm") || !strings.Contains(out, "Setup cancelled") {
+		t.Fatalf("refusal did not print the complete plan and prompt: %s", out)
+	}
+
+	deps.In = strings.NewReader("yes\n")
+	out, stderr, code = runCLI(t, deps, "--config", fixturePath("valid", "local.yaml"), "setup")
+	if code != 0 || stderr != "" || !called || !strings.Contains(out, "Setup completed") {
+		t.Fatalf("confirmation code=%d called=%v out=%q stderr=%q", code, called, out, stderr)
+	}
+}
+
+func TestSetupNonInteractiveRequiresYesWithExactExitTwo(t *testing.T) {
+	obs := healthyObserver()
+	deps, _ := setupDeps(t, "local", obs)
+	deps.ExecuteSetup = func(context.Context, SetupPlan, string, SetupExecutionOptions) (SetupExecutionResult, error) {
+		t.Fatal("executor ran without non-interactive consent")
+		return SetupExecutionResult{}, nil
+	}
+	out, stderr, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "local.yaml"), "setup", "--non-interactive")
+	if code != 2 || out == "" {
 		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
 	}
-	assertEnvelope(t, stderr, code, 4, "feature_deferred", "setup")
-}
-
-func TestSetupWithoutDryRunProcessExitFourHumanAndJSON(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "hao")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/hao")
-	build.Dir = filepath.Join("..", "..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build hao: %v\n%s", err, output)
-	}
-	for _, tc := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "human", args: []string{"setup"}, want: "hao setup mutation is not yet supported"},
-		{name: "json", args: []string{"--json", "setup"}, want: `"code":"feature_deferred"`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(binary, tc.args...)
-			output, err := cmd.CombinedOutput()
-			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 4 || !strings.Contains(string(output), tc.want) {
-				t.Fatalf("exit=%v output=%s", err, output)
-			}
-		})
-	}
-}
-
-type panicObserver struct{}
-
-func (panicObserver) Platform() (string, string)            { panic("platform probe") }
-func (panicObserver) Distribution() (string, error)         { panic("distribution probe") }
-func (panicObserver) CurrentUser() (UserObservation, error) { panic("user probe") }
-func (panicObserver) Stat(string) (FileObservation, error)  { panic("filesystem probe") }
-func (panicObserver) ReadFile(string) ([]byte, error)       { panic("file read") }
-func (panicObserver) InspectArtifact(context.Context, string) (ArtifactMetadata, error) {
-	panic("artifact probe")
-}
-func (panicObserver) Disk(string) (uint64, error)     { panic("disk probe") }
-func (panicObserver) LookPath(string) (string, error) { panic("path probe") }
-func (panicObserver) Run(context.Context, string, ...string) (string, error) {
-	panic("subprocess probe")
-}
-func (panicObserver) ReadRunFile(string) (*runfile.Info, error)   { panic("runfile probe") }
-func (panicObserver) ProcessAlive(int) bool                       { panic("process probe") }
-func (panicObserver) GET(context.Context, string) ([]byte, error) { panic("network probe") }
-func (panicObserver) PortAvailable(context.Context, string, int) (bool, error) {
-	panic("listener probe")
+	assertEnvelope(t, stderr, code, 2, "invalid_usage", "setup")
 }
 
 func TestSetupHumanJSONRedactionAndYesSemantics(t *testing.T) {
@@ -778,7 +873,7 @@ func TestSetupHumanJSONRedactionAndYesSemantics(t *testing.T) {
 		if code != 0 || stderr != "" || strings.Contains(out, "setup-secret") || !strings.Contains(out, "[REDACTED]") {
 			t.Fatalf("args=%v code=%d out=%s err=%s", args, code, out, stderr)
 		}
-		if args[0] != "--json" && !strings.Contains(out, "--yes has no mutation effect") {
+		if args[0] != "--json" && !strings.Contains(out, "--yes is ignored during dry-run") {
 			t.Fatalf("missing --yes note: %s", out)
 		}
 	}

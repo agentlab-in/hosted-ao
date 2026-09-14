@@ -37,6 +37,7 @@ type Observer interface {
 	CurrentUser() (UserObservation, error)
 	Stat(path string) (FileObservation, error)
 	ReadFile(path string) ([]byte, error)
+	FileSHA256(ctx context.Context, path string, limit int64) (string, error)
 	InspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error)
 	Disk(path string) (uint64, error)
 	LookPath(name string) (string, error)
@@ -120,6 +121,12 @@ func (systemObserver) ReadFile(path string) ([]byte, error) {
 }
 func (systemObserver) InspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error) {
 	return inspectArtifact(ctx, path)
+}
+func (systemObserver) FileSHA256(ctx context.Context, path string, limit int64) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return fileDigest(path, limit)
 }
 
 func inspectArtifact(ctx context.Context, path string) (ArtifactMetadata, error) {
