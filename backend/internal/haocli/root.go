@@ -187,10 +187,12 @@ func newVersionCommand(opts *options) *cobra.Command {
 }
 
 func newConfigCommand(deps Deps, opts *options) *cobra.Command {
-	cmd := &cobra.Command{Use: "config", Short: "Inspect hao configuration", Args: noArgs}
+	cmd := &cobra.Command{Use: "config", Short: "Manage hao configuration", Args: noArgs}
 	cmd.AddCommand(newConfigPathCommand(deps, opts))
 	cmd.AddCommand(newConfigShowCommand(deps, opts))
 	cmd.AddCommand(newConfigValidateCommand(deps, opts))
+	cmd.AddCommand(newConfigCreateCommand(deps, opts))
+	cmd.AddCommand(newConfigSetCommand(deps, opts))
 	return cmd
 }
 
