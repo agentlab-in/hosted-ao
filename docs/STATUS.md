@@ -30,9 +30,13 @@ surface (`npm run sqlc`, `npm run api`).
   Linux CLI artifacts. Its command surface is intentionally isolated from AO
   orchestration commands.
 - `hao version` provides stable human and JSON build information.
-- Read-only `hao config path`, `hao config show`, and `hao config validate`
-  commands resolve configuration under the shared Hosted AO state root, parse
-  YAML v1 configuration, fail closed against the published contract, redact
+- `hao config create` supports interactive and complete non-interactive v1
+  desired-state creation. `hao config set` mutates only known schema keys.
+  Mutations reject linked paths and stale writers, use a per-config lock,
+  durable same-directory atomic replacement, and a last-known-good backup.
+  `hao config path`, `hao config show`, and `hao config validate` resolve
+  configuration under the shared Hosted AO state root, parse YAML v1
+  configuration, fail closed against the published contract, redact
   secret-looking values, and use the published v1 exit/error envelope.
 - Read-only `hao status` reports the validated desired machine state alongside
   bounded observations of the loopback AO daemon, AO-reported readiness, Git,
