@@ -235,7 +235,6 @@ test("renderer: a clone in flight keeps reporting itself rather than freezing @P
 	// While prepare is held, the flow has neither dismissed the dialog nor
 	// advanced to a half-rendered sheet: the dialog stays visible with its
 	// Continue busy, and the sheet's Clone button does not exist yet.
-	const submit = cloneDialog.getByRole("button", { name: "Continue" });
 	await expect(cloneDialog).toBeVisible();
 	await expect(page.getByRole("button", { name: "Clone", exact: true })).toHaveCount(0);
 	await page.waitForTimeout(2000);
