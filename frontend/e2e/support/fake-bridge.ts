@@ -112,6 +112,12 @@ export async function installFakeBridge(
       updateSettings,
     }) => {
       const unsubscribe = () => () => undefined;
+      const updateListeners = new Set<(status: UpdateStatus) => void>();
+      let currentUpdateStatus = updateStatus;
+			const emitUpdateStatus = (next: UpdateStatus) => {
+				currentUpdateStatus = next;
+				for (const listener of updateListeners) listener(next);
+			};
       // This computer is machine zero and stays selectable with no account,
       // which is what the renderer smoke suite sees.
       const signedOutAoMachines = {
@@ -255,6 +261,7 @@ export async function installFakeBridge(
             state: "applied",
             environmentVeto: true,
             durabilitySupported: false,
+            consentRenewalRequired: false,
             reason: "environment_veto",
           }),
           setEventsEnabled: async () => ({
@@ -265,6 +272,7 @@ export async function installFakeBridge(
             state: "applied",
             environmentVeto: true,
             durabilitySupported: false,
+            consentRenewalRequired: false,
             reason: "environment_veto",
           }),
           onPolicy: () => () => false,
@@ -332,6 +340,21 @@ export async function installFakeBridge(
           setAnnotationMode: async () => undefined,
           onAnnotationSubmit: unsubscribe,
           onAnnotationCancel: unsubscribe,
+          historyFavicon: async () => undefined,
+          captureScreenshot: async () => {
+            throw new Error("Desktop app is required to take a browser screenshot.");
+          },
+          downloads: {
+            list: async () => ({ downloads: [] }),
+            action: async () => ({ downloads: [] }),
+            clear: async () => ({ downloads: [] }),
+            onChanged: () => () => undefined,
+          },
+          selectProfile: async () => undefined,
+          completeAnnotation: async () => undefined,
+          discardAnnotations: async () => undefined,
+          annotationAction: async () => undefined,
+          onAnnotationState: () => () => undefined,
           onNavState: unsubscribe,
           onTabsState: unsubscribe,
           onAgentActivity: unsubscribe,
@@ -385,12 +408,18 @@ export async function installFakeBridge(
           setRecording: async () => undefined,
         },
         updates: {
-          getStatus: async () => updateStatus,
+          getStatus: async () => currentUpdateStatus,
           check: async () => undefined,
           returnHome: async () => undefined,
           download: async () => undefined,
           install: async () => undefined,
-          onStatus: unsubscribe,
+          isPostUpdateRelaunch: async () => false,
+          onStatus: (listener: (status: UpdateStatus) => void) => {
+            updateListeners.add(listener);
+            return () => {
+              updateListeners.delete(listener);
+            };
+          },
           onTelemetry: unsubscribe,
         },
         // UpdatesSection calls featureBuilds.getActive() immediately on mount; an
@@ -487,6 +516,9 @@ export async function installFakeBridge(
         },
       } satisfies AoBridge;
       (window as unknown as { ao: unknown }).ao = ao;
+      (window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
+        setStatus: emitUpdateStatus,
+      };
     },
     {
       version,
@@ -544,6 +576,10 @@ export type FakeAgentOptions = {
   platform?: string;
   /** Worker sessions present at first paint. */
   workers?: FakeWorker[];
+	/** Desktop updater state surfaced in Settings > Updates. */
+	updateStatus?: UpdateStatus;
+	/** Persisted automatic-update policy surfaced in Settings > Updates. */
+	updateSettings?: UpdateSettings;
 };
 
 /**
@@ -576,9 +612,11 @@ export type FakeUpdateController = {
 	setStatus: (status: UpdateStatus) => void;
 };
 
+
 declare global {
   interface Window {
     __aoFakeAgent?: FakeAgentController;
+    __aoFakeUpdates?: FakeUpdateController;
   }
 }
 
@@ -591,6 +629,11 @@ export async function installFakeAgent(
   page: Page,
   opts: FakeAgentOptions = {},
 ): Promise<void> {
+  const updateStatus = opts.updateStatus ?? ({ state: "idle" } satisfies UpdateStatus);
+  const updateSettings =
+    opts.updateSettings ??
+    ({ enabled: false, channel: "latest", nightlyAck: false, feature: null } satisfies UpdateSettings);
+  void updateSettings;
   const version = opts.version ?? "9.9.9-test";
   const daemonPort = opts.daemonPort ?? 8080;
   const projectId = opts.projectId ?? "fake-proj";
@@ -599,7 +642,7 @@ export async function installFakeAgent(
   const workers = opts.workers ?? [];
 
   await page.addInitScript(
-    ({ version, daemonPort, projectId, projectName, platform, workers }) => {
+    ({ version, daemonPort, projectId, projectName, platform, workers, updateStatus }) => {
       if (platform) {
         try {
           Object.defineProperty(navigator, "platform", {
@@ -836,6 +879,12 @@ export async function installFakeAgent(
         controller;
 
       const unsubscribe = () => () => undefined;
+      const updateListeners = new Set<(status: UpdateStatus) => void>();
+      let currentUpdateStatus = updateStatus;
+			const emitUpdateStatus = (next: UpdateStatus) => {
+				currentUpdateStatus = next;
+				for (const listener of updateListeners) listener(next);
+			};
       // This computer is machine zero and stays selectable with no account,
       // which is what the renderer smoke suite sees.
       const signedOutAoMachines = {
@@ -876,6 +925,11 @@ export async function installFakeAgent(
           }),
           checkAncestorRepo: async () => undefined,
           getRepositoryBranch: async () => undefined,
+      getGitHubLogin: async () => "",
+      getCachedGitHubOwners: async () => [],
+      refreshGitHubOwners: async () => [],
+      checkGitHubRepositoryAvailability: async () => ({ available: true }),
+      checkGitRepository: async () => true,
           getPathForFile: () => "",
           onOpenFolderPath: () => () => undefined,
           onNewSessionShortcut: unsubscribe,
@@ -883,6 +937,7 @@ export async function installFakeAgent(
           onNewShellTerminalShortcut: unsubscribe,
           onCloseShellTerminalShortcut: unsubscribe,
           setCloseShellTerminalShortcutEnabled: () => undefined,
+    setChatDraftRisk: () => undefined,
           onOpenSettingsShortcut: unsubscribe,
           onPreviousSessionShortcut: unsubscribe,
           onNextSessionShortcut: unsubscribe,
@@ -961,6 +1016,7 @@ export async function installFakeAgent(
             state: "applied",
             environmentVeto: true,
             durabilitySupported: false,
+            consentRenewalRequired: false,
             reason: "environment_veto",
           }),
           setEventsEnabled: async () => ({
@@ -971,6 +1027,7 @@ export async function installFakeAgent(
             state: "applied",
             environmentVeto: true,
             durabilitySupported: false,
+            consentRenewalRequired: false,
             reason: "environment_veto",
           }),
           onPolicy: () => () => false,
@@ -1041,6 +1098,21 @@ export async function installFakeAgent(
           setAnnotationMode: async () => undefined,
           onAnnotationSubmit: unsubscribe,
           onAnnotationCancel: unsubscribe,
+          historyFavicon: async () => undefined,
+          captureScreenshot: async () => {
+            throw new Error("Desktop app is required to take a browser screenshot.");
+          },
+          downloads: {
+            list: async () => ({ downloads: [] }),
+            action: async () => ({ downloads: [] }),
+            clear: async () => ({ downloads: [] }),
+            onChanged: () => () => undefined,
+          },
+          selectProfile: async () => undefined,
+          completeAnnotation: async () => undefined,
+          discardAnnotations: async () => undefined,
+          annotationAction: async () => undefined,
+          onAnnotationState: () => () => undefined,
           onNavState: unsubscribe,
           onTabsState: unsubscribe,
           onAgentActivity: unsubscribe,
@@ -1099,12 +1171,18 @@ export async function installFakeAgent(
           setRecording: async () => undefined,
         },
         updates: {
-          getStatus: async () => ({ state: "idle" }),
+          getStatus: async () => currentUpdateStatus,
           check: async () => undefined,
           returnHome: async () => undefined,
           download: async () => undefined,
           install: async () => undefined,
-          onStatus: unsubscribe,
+          isPostUpdateRelaunch: async () => false,
+          onStatus: (listener: (status: UpdateStatus) => void) => {
+            updateListeners.add(listener);
+            return () => {
+              updateListeners.delete(listener);
+            };
+          },
           onTelemetry: unsubscribe,
         },
         // UpdatesSection calls featureBuilds.getActive() immediately on mount; an
@@ -1165,7 +1243,10 @@ export async function installFakeAgent(
         },
       } satisfies AoBridge;
       (window as unknown as { ao: unknown }).ao = ao;
+      (window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
+        setStatus: emitUpdateStatus,
+      };
     },
-    { version, daemonPort, projectId, projectName, platform, workers },
+    { version, daemonPort, projectId, projectName, platform, workers, updateStatus, updateSettings },
   );
 }
