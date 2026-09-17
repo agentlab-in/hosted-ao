@@ -636,13 +636,17 @@ export async function installFakeAgent(
   void updateSettings;
   const version = opts.version ?? "9.9.9-test";
   const daemonPort = opts.daemonPort ?? 8080;
+  // Hoisted out of the init script on purpose: the fixture's createdAt is the
+  // chat draft scope's incarnation, so it must survive page.reload() with the
+  // same value or every durable draft (queued edits, composer) is orphaned.
+  const nowIso = new Date().toISOString();
   const projectId = opts.projectId ?? "fake-proj";
   const projectName = opts.projectName ?? "fake-proj";
   const platform = opts.platform ?? null;
   const workers = opts.workers ?? [];
 
   await page.addInitScript(
-    ({ version, daemonPort, projectId, projectName, platform, workers, updateStatus }) => {
+    ({ version, daemonPort, projectId, projectName, platform, workers, updateStatus, nowIso }) => {
       if (platform) {
         try {
           Object.defineProperty(navigator, "platform", {
@@ -654,7 +658,6 @@ export async function installFakeAgent(
         }
       }
 
-      const nowIso = new Date().toISOString();
       type Session = Record<string, unknown>;
       const kanbanColumnFor = (status: string): string => {
         switch (status) {
@@ -1247,6 +1250,6 @@ export async function installFakeAgent(
         setStatus: emitUpdateStatus,
       };
     },
-    { version, daemonPort, projectId, projectName, platform, workers, updateStatus, updateSettings },
+    { version, daemonPort, projectId, projectName, platform, workers, updateStatus, updateSettings, nowIso },
   );
 }

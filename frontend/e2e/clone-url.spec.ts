@@ -12,13 +12,14 @@ import { installFakeBridge } from "./support/fake-bridge";
 // envelope turns into on screen. It does NOT exercise a real clone: that
 // boundary is the daemon's, covered by backend tests.
 //
-// Rewritten for the upstream merge (#98): the fork's own "Clone from a Git
-// URL" dialog, its disabled-Continue-on-invalid-URL behavior, and its
-// "Cloning {{url}}..." elapsed-counter progress UI were all replaced or
-// deleted outright. See CloneRepositoryDialog.tsx and
-// CreateProjectAgentSheet.tsx for the current flow;
-// src/renderer/lib/clone-url.ts's cloneErrorPresentation/cloneUrlLabel are
-// now dead code with no callers, so nothing here exercises them.
+// Rewritten again for the 2026-09 upstream intake: the clone flow is now
+// upstream's prepare-clone model. The dialog requires a valid URL AND a
+// destination parent before Continue is enabled; Continue stages the
+// checkout via POST /api/v1/projects/clone/prepare, and the agent sheet's
+// Clone button registers it via POST /api/v1/projects with
+// { path, clonePreparationId }. The fork's old no-destination cloneUrl wire
+// is still supported by _shell.createProject and the daemon, but the UI no
+// longer exercises it (follow-up candidate).
 
 const AGENT_CATALOG = {
 	supported: [{ id: "claude-code", label: "Claude Code" }],
@@ -71,44 +72,111 @@ async function stubRemoteDaemon(page: Page, cloneMs = 0): Promise<{ body: () => 
 	await page.route(`${REMOTE_BASE_URL}/api/v1/agents`, (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AGENT_CATALOG) }),
 	);
+	await page.route(`${REMOTE_BASE_URL}/api/v1/imports/validate`, (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				importKind: "project",
+				isValid: true,
+				blockingErrors: [],
+				nextStep: "continue",
+				root: {
+					repoPath: "/tmp/e2e-checkout",
+					isRepo: true,
+					hasCommit: true,
+					hasOrigin: true,
+					isEmptyFolder: false,
+					needsGitInit: false,
+					requiredActions: [],
+					blockingErrors: [],
+				},
+			}),
+		}),
+	);
+	await page.route(`${REMOTE_BASE_URL}/api/v1/projects/clone/cleanup`, (route) => route.fulfill({ status: 204 }));
 	await page.route(`${REMOTE_BASE_URL}/api/v1/sessions`, (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions: [] }) }),
 	);
+	await page.route(`${REMOTE_BASE_URL}/api/v1/projects/clone/prepare`, async (route) => {
+		if (cloneMs > 0) await new Promise((resolve) => setTimeout(resolve, cloneMs));
+		return route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({ path: "/tmp/e2e-remote/hosted-ao", remoteUrl: "https://github.com/agentlab-in/hosted-ao.git", preparationId: "prep-e2e-remote" }),
+		});
+	});
 	await page.route(`${REMOTE_BASE_URL}/api/v1/projects`, async (route) => {
 		if (route.request().method() !== "POST") {
 			return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
 		}
 		createBody = route.request().postDataJSON();
-		if (cloneMs > 0) await new Promise((resolve) => setTimeout(resolve, cloneMs));
 		return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify(CLONE_AUTH_FAILED) });
 	});
 	return { body: () => createBody };
 }
 
 /** Same shape as stubRemoteDaemon, but for the local daemon's clone wire. */
-async function stubLocalCloneDaemon(page: Page): Promise<{ body: () => unknown }> {
+async function stubLocalCloneDaemon(page: Page): Promise<{ prepareBody: () => unknown; body: () => unknown }> {
 	await stubReadiness(page);
-	let cloneBody: unknown = null;
+	let prepareBody: unknown = null;
+	let createBody: unknown = null;
 	await page.route("**/api/v1/agents", (route) =>
 		route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(AGENT_CATALOG) }),
 	);
-	await page.route("**/api/v1/projects/clone", async (route) => {
-		cloneBody = route.request().postDataJSON();
+	await page.route("**/api/v1/imports/validate", (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				importKind: "project",
+				isValid: true,
+				blockingErrors: [],
+				nextStep: "continue",
+				root: {
+					repoPath: "/tmp/e2e-checkout",
+					isRepo: true,
+					hasCommit: true,
+					hasOrigin: true,
+					isEmptyFolder: false,
+					needsGitInit: false,
+					requiredActions: [],
+					blockingErrors: [],
+				},
+			}),
+		}),
+	);
+	await page.route("**/api/v1/projects/clone/cleanup", (route) => route.fulfill({ status: 204 }));
+	await page.route("**/api/v1/projects/clone/prepare", async (route) => {
+		prepareBody = route.request().postDataJSON();
+		return route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({ path: "/Users/e2e-tester/code/hosted-ao", remoteUrl: (prepareBody as { remoteUrl?: string })?.remoteUrl ?? "", preparationId: "prep-e2e-local" }),
+		});
+	});
+	await page.route("**/api/v1/projects", async (route) => {
+		if (route.request().method() !== "POST") {
+			return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) });
+		}
+		createBody = route.request().postDataJSON();
 		return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify(CLONE_AUTH_FAILED) });
 	});
-	return { body: () => cloneBody };
+	return { prepareBody: () => prepareBody, body: () => createBody };
 }
 
 /** Picker -> clone step -> agent sheet -> submit, the whole clone branch. */
 async function submitClone(page: Page, url: string): Promise<void> {
 	await page.getByRole("button", { name: "New project" }).click();
 	await page.getByRole("button", { name: "Clone from Git" }).click();
-	await page.getByRole("dialog", { name: "Clone a Git repository" }).getByLabel("Repository URL").fill(url);
+	const dialog = page.getByRole("dialog", { name: "Clone a Git repository" });
+	await dialog.getByLabel("Repository URL").fill(url);
+	await dialog.getByPlaceholder("Choose a parent folder").fill("/tmp/e2e-destination");
 	await page.getByRole("button", { name: "Continue" }).click();
 	await page.getByRole("button", { name: "Clone", exact: true }).click();
 }
 
-test("renderer: clone by URL sends only a clone URL and surfaces the daemon's remediation @P0 @CLONE", async ({
+test("renderer: clone registers a prepared checkout by path, never a clone URL @P0 @CLONE", async ({
 	page,
 }) => {
 	await installFakeBridge(page, { daemonPort: 8080, daemonBaseUrl: REMOTE_BASE_URL });
@@ -122,55 +190,62 @@ test("renderer: clone by URL sends only a clone URL and surfaces the daemon's re
 	await expect(cloneDialog).toBeVisible();
 	await shot(page, "clone-field");
 
-	// A URL the daemon would reject never leaves the field. Unlike the fork,
-	// Continue is not disabled on an invalid URL: submitting surfaces an
-	// inline error instead and never advances past this dialog.
+	// The current dialog gates Continue on a parseable URL plus a destination:
+	// an unparseable URL keeps it disabled and never advances the dialog.
 	await cloneDialog.getByLabel("Repository URL").fill("github.com/agentlab-in");
-	await cloneDialog.getByRole("button", { name: "Continue" }).click();
-	await expect(cloneDialog.getByRole("alert")).toContainText("Enter a valid HTTPS, SSH, Git, or file URL.");
-	await expect(cloneDialog.getByLabel("Repository URL")).toHaveValue("github.com/agentlab-in");
+	await expect(cloneDialog.getByRole("button", { name: "Continue" })).toBeDisabled();
 	await expect(page.getByRole("button", { name: "Clone", exact: true })).toHaveCount(0);
 
 	await cloneDialog.getByLabel("Repository URL").fill("https://github.com/agentlab-in/hosted-ao.git");
+	await cloneDialog.getByPlaceholder("Choose a parent folder").fill("/tmp/e2e-destination");
 	await cloneDialog.getByRole("button", { name: "Continue" }).click();
 	await page.getByRole("button", { name: "Clone", exact: true }).click();
 
-	// The daemon's CLONE_AUTH_FAILED envelope surfaces on the agent sheet
-	// (projectSheetError falls through to the generic clone-failed title,
-	// since the code has no dedicated case), with the remediation text intact.
+	// Upstream flattens every clone failure to the generic title on the agent
+	// sheet (the raw daemon text is not surfaced on this path); the stable
+	// code and remediation stay available on the error envelope for callers
+	// that need them.
 	const alert = page.getByRole("alert");
 	await expect(alert).toContainText("Could not clone repository");
-	await expect(alert).toContainText("gh auth login");
 	await shot(page, "clone-error");
 
-	expect(created.body()).toMatchObject({ cloneUrl: "https://github.com/agentlab-in/hosted-ao.git" });
-	expect(created.body()).not.toHaveProperty("path");
+	// Registration carries the prepared checkout's path and preparation id;
+	// the retired cloneUrl wire is never sent.
+	expect(created.body()).toMatchObject({
+		path: "/tmp/e2e-remote/hosted-ao",
+		clonePreparationId: "prep-e2e-remote",
+	});
+	expect(created.body()).not.toHaveProperty("cloneUrl");
 });
 
 test("renderer: a clone in flight keeps reporting itself rather than freezing @P0 @CLONE", async ({ page }) => {
 	await installFakeBridge(page, { daemonPort: 8080, daemonBaseUrl: REMOTE_BASE_URL });
-	// A clone takes as long as it takes; the daemon answers only at the end.
+	// The prepare stage takes as long as it takes; the daemon answers only at
+	// the end.
 	await stubRemoteDaemon(page, 4000);
 	await page.goto("/");
 
-	await submitClone(page, "https://github.com/agentlab-in/hosted-ao.git");
+	await page.getByRole("button", { name: "New project" }).click();
+	await page.getByRole("button", { name: "Clone from Git" }).click();
+	const cloneDialog = page.getByRole("dialog", { name: "Clone a Git repository" });
+	await cloneDialog.getByLabel("Repository URL").fill("https://github.com/agentlab-in/hosted-ao.git");
+	await cloneDialog.getByPlaceholder("Choose a parent folder").fill("/tmp/e2e-destination");
+	await cloneDialog.getByRole("button", { name: "Continue" }).click();
 
-	// The fork's "Cloning {{url}}..." status region with a moving elapsed
-	// counter was dead code the upstream merge deleted outright: no callers,
-	// no elapsed counter anywhere in the new flow. The busy submit label is
-	// now the liveness signal, so a frozen dialog is what this has to catch.
-	const sheet = page.getByRole("dialog", { name: "Set up project" });
-	const submit = page.getByRole("button", { name: "Cloning..." });
-	await expect(submit).toBeVisible();
-	await expect(submit).toBeDisabled();
+	// While prepare is held, the flow has neither dismissed the dialog nor
+	// advanced to a half-rendered sheet: the dialog stays visible with its
+	// Continue busy, and the sheet's Clone button does not exist yet.
+	const submit = cloneDialog.getByRole("button", { name: "Continue" });
+	await expect(cloneDialog).toBeVisible();
+	await expect(page.getByRole("button", { name: "Clone", exact: true })).toHaveCount(0);
+	await page.waitForTimeout(2000);
+	await expect(cloneDialog).toBeVisible();
+	await expect(page.getByRole("button", { name: "Clone", exact: true })).toHaveCount(0);
 	await shot(page, "clone-progress");
 
-	// Still busy partway through the 4s hold: the sheet has not dismissed,
-	// blanked, or otherwise stopped reporting itself.
-	await page.waitForTimeout(2000);
-	await expect(sheet).toBeVisible();
-	await expect(submit).toBeVisible();
-	await expect(submit).toBeDisabled();
+	// Once the daemon answers, the flow settles into the agent sheet with the
+	// Clone action present: it reported the whole way instead of freezing.
+	await expect(page.getByRole("button", { name: "Clone", exact: true })).toBeVisible();
 });
 
 test("renderer: clone with a local destination sends a path, never a clone URL @P0 @CLONE", async ({ page }) => {
@@ -181,18 +256,24 @@ test("renderer: clone with a local destination sends a path, never a clone URL @
 	await page.addInitScript(() => {
 		window.localStorage.setItem("ao.clone.lastDestinationParent", "/Users/e2e-tester/code");
 	});
-	const cloned = await stubLocalCloneDaemon(page);
+	const local = await stubLocalCloneDaemon(page);
 	await page.goto("/");
 
 	await submitClone(page, "https://github.com/agentlab-in/hosted-ao.git");
-	await expect(page.getByRole("alert")).toContainText("gh auth login");
+	await expect(page.getByRole("alert")).toContainText("Could not clone repository");
 
-	// Mirror image of the remote-wire assertion above: a local destination
-	// routes onto POST /api/v1/projects/clone with remoteUrl+destinationParent,
-	// never the cloneUrl the remote wire uses.
-	expect(cloned.body()).toMatchObject({
+	// The staged checkout went to the local daemon's prepare endpoint with the
+	// user's chosen destination parent.
+	expect(local.prepareBody()).toMatchObject({
 		remoteUrl: "https://github.com/agentlab-in/hosted-ao.git",
-		destinationParent: "/Users/e2e-tester/code",
+		destinationParent: "/tmp/e2e-destination",
 	});
-	expect(cloned.body()).not.toHaveProperty("cloneUrl");
+
+	// Registration carries the prepared path plus the preparation id, never
+	// the retired cloneUrl wire.
+	expect(local.body()).toMatchObject({
+		path: "/Users/e2e-tester/code/hosted-ao",
+		clonePreparationId: "prep-e2e-local",
+	});
+	expect(local.body()).not.toHaveProperty("cloneUrl");
 });
