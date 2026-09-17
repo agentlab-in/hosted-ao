@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -126,10 +127,53 @@ type harnessProbe struct {
 	ExpectedVersionPrefix string
 }
 
-var harnesses = []harnessProbe{
-	{Name: "claude-code", BinaryName: ClaudeHarnessName, VersionArg: "--version"},
-	{Name: "codex", BinaryName: "codex", VersionArg: "--version"},
-	{Name: "muse", BinaryName: "muse", VersionArg: "--version", ExpectedVersionPrefix: "Muse Code "},
+var harnesses = harnessProbes()
+
+type harnessProbeSpec struct {
+	BinaryName            string
+	VersionArg            string
+	ExpectedVersionPrefix string
+}
+
+// harnessProbeSpecs overrides per-harness probe settings for agent harnesses whose
+// binary name or version flags differ from the default convention (where BinaryName
+// defaults to the harness ID and VersionArg is empty for PATH-only probing).
+var harnessProbeSpecs = map[string]harnessProbeSpec{
+	"claude-code": {BinaryName: ClaudeHarnessName, VersionArg: "--version"},
+	"codex":       {BinaryName: "codex", VersionArg: "--version"},
+	"opencode":    {BinaryName: "opencode", VersionArg: "--version"},
+	"muse":        {BinaryName: "muse", VersionArg: "--version", ExpectedVersionPrefix: "Muse Code "},
+	"aider":       {BinaryName: "aider", VersionArg: "--version"},
+	"goose":       {BinaryName: "goose", VersionArg: "--version"},
+	"grok":        {BinaryName: "grok", VersionArg: "--version"},
+	"devin":       {BinaryName: "devin", VersionArg: "--version"},
+	"kimi":        {BinaryName: "kimi", VersionArg: "--version"},
+	"kiro":        {BinaryName: "kiro-cli", VersionArg: "--version"},
+	"kilocode":    {BinaryName: "kilocode", VersionArg: "--version"},
+	"omp":         {BinaryName: "omp", VersionArg: "--version"},
+	"cursor":      {BinaryName: "cursor-agent"},
+	"continue":    {BinaryName: "cn"},
+}
+
+// harnessProbes builds the probe list from the shipped agent registry so new
+// harnesses are covered without a manual edit here.
+func harnessProbes() []harnessProbe {
+	out := make([]harnessProbe, 0, len(registry.Harnessed()))
+	for _, ha := range registry.Harnessed() {
+		id := string(ha.Harness)
+		spec := harnessProbeSpecs[id]
+		binaryName := spec.BinaryName
+		if binaryName == "" {
+			binaryName = id
+		}
+		out = append(out, harnessProbe{
+			Name:                  id,
+			BinaryName:            binaryName,
+			VersionArg:            spec.VersionArg,
+			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
+		})
+	}
+	return out
 }
 
 // Deps holds the side effects the checks need, so both callers can inject
@@ -148,6 +192,10 @@ type Deps struct {
 	// file and probes the loopback health endpoints, while the daemon answers
 	// for itself. A nil DaemonCheck omits the check entirely.
 	DaemonCheck func(ctx context.Context) Check
+	// DaemonExecutable is the running daemon's own binary path when one is
+	// reachable. It, not the CLI running the checks, is the `ao` the app
+	// actually uses, so the ao-binary check compares PATH against it when set.
+	DaemonExecutable string
 }
 
 // DefaultDeps returns production dependencies.
@@ -378,9 +426,13 @@ func checkDataDirWritable(dataDir string) Check {
 // failure.
 func (d Deps) checkAOBinary() Check {
 	const name = "ao-binary"
-	self, err := d.Executable()
-	if err != nil {
-		return Check{Level: Warn, Section: SectionTools, Name: name, Message: fmt.Sprintf("could not resolve the running executable: %v", err)}
+	self := d.DaemonExecutable
+	if self == "" {
+		var err error
+		self, err = d.Executable()
+		if err != nil {
+			return Check{Level: Warn, Section: SectionTools, Name: name, Message: fmt.Sprintf("could not resolve the running executable: %v", err)}
+		}
 	}
 	onPath, err := d.LookPath("ao")
 	if err != nil || onPath == "" {

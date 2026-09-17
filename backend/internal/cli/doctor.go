@@ -77,7 +77,13 @@ func writeDoctorText(cmd *cobra.Command, checks []doctor.Check) error {
 }
 
 func (c *commandContext) runDoctor(ctx context.Context) []doctor.Check {
-	return doctor.Run(ctx, c.doctorDeps())
+	deps := c.doctorDeps()
+	// The running daemon's own binary, when one is reachable: it, not the CLI
+	// running this command, is the `ao` the app actually uses.
+	if st, err := c.inspectDaemon(ctx); err == nil {
+		deps.DaemonExecutable = st.ExecutablePath
+	}
+	return doctor.Run(ctx, deps)
 }
 
 // doctorDeps hands the shared check runner the CLI's own injectable side

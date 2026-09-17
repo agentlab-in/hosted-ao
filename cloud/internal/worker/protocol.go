@@ -11,18 +11,21 @@ type BootstrapRequest struct {
 
 // LaunchContext is the durable session context handed to a bootstrapped worker.
 type LaunchContext struct {
-	SessionID      string   `json:"sessionId"`
-	ProjectID      string   `json:"projectId"`
-	Kind           string   `json:"kind"`
-	Harness        string   `json:"harness"`
-	DisplayName    string   `json:"displayName"`
-	Branch         string   `json:"branch"`
-	Prompt         string   `json:"prompt,omitempty"`
-	AgentSessionID string   `json:"agentSessionId,omitempty"`
-	Mode           string   `json:"mode"`
-	DeniedCommands []string `json:"deniedCommands"`
-	RepositoryURL  string   `json:"repositoryUrl"`
-	DefaultBranch  string   `json:"defaultBranch"`
+	SessionID      string `json:"sessionId"`
+	ProjectID      string `json:"projectId"`
+	Kind           string `json:"kind"`
+	Harness        string `json:"harness"`
+	DisplayName    string `json:"displayName"`
+	Branch         string `json:"branch"`
+	Prompt         string `json:"prompt,omitempty"`
+	AgentSessionID string `json:"agentSessionId,omitempty"`
+	// ParentSessionID is the orchestrator that spawned this session; empty for
+	// top-level sessions.
+	ParentSessionID string   `json:"parentSessionId,omitempty"`
+	Mode            string   `json:"mode"`
+	DeniedCommands  []string `json:"deniedCommands"`
+	RepositoryURL   string   `json:"repositoryUrl"`
+	DefaultBranch   string   `json:"defaultBranch"`
 }
 
 // BootstrapResponse is the control plane's answer to a valid bootstrap ticket.
@@ -264,7 +267,21 @@ type TerminalCommand struct {
 	Rows       uint16 `json:"rows,omitempty"`
 }
 
+// TerminalStreamFrame is one message on the persistent duplex terminal
+// stream between a worker and the control plane. "output" carries PTY bytes
+// up with the terminal-local, gap-free ID used for durable replay; "input"
+// pushes user keystrokes down; "error" tells the worker to fall back to the
+// polled transport.
+type TerminalStreamFrame struct {
+	Type     string `json:"type"`
+	Data     []byte `json:"data,omitempty"`
+	ID       int64  `json:"id,omitempty"`
+	Sequence int64  `json:"sequence,omitempty"`
+	Code     string `json:"code,omitempty"`
+}
+
 type TerminalOutputRequest struct {
+	ID   int64  `json:"id,omitempty"`
 	Data []byte `json:"data"`
 }
 

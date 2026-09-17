@@ -164,6 +164,11 @@ export async function installFakeBridge(
           }),
           checkAncestorRepo: async () => undefined,
           getRepositoryBranch: async () => undefined,
+    getGitHubLogin: async () => "",
+    getCachedGitHubOwners: async () => [],
+    refreshGitHubOwners: async () => [],
+    checkGitHubRepositoryAvailability: async () => ({ available: true }),
+    checkGitRepository: async () => true,
           getPathForFile: () => "",
           onOpenFolderPath: () => () => undefined,
           onNewSessionShortcut: unsubscribe,
@@ -171,6 +176,7 @@ export async function installFakeBridge(
           onNewShellTerminalShortcut: unsubscribe,
           onCloseShellTerminalShortcut: unsubscribe,
           setCloseShellTerminalShortcutEnabled: () => undefined,
+    setChatDraftRisk: () => undefined,
           onOpenSettingsShortcut: unsubscribe,
           onPreviousSessionShortcut: unsubscribe,
           onNextSessionShortcut: unsubscribe,
@@ -564,6 +570,10 @@ export type FakeAgentController = {
     body?: string;
     sessionId?: string;
   }) => void;
+};
+
+export type FakeUpdateController = {
+	setStatus: (status: UpdateStatus) => void;
 };
 
 declare global {

@@ -14,6 +14,7 @@ const { deleteMock, postMock, isWindowsMock } = vi.hoisted(() => ({
   postMock: vi.fn(),
   isWindowsMock: vi.fn(() => false),
 }));
+const cloudResumeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api-client")>()),
@@ -26,6 +27,9 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 }));
 
 vi.mock("../lib/platform", () => ({ isWindowsPlatform: isWindowsMock }));
+vi.mock("./useCloudCp", () => ({
+	useCloudCp: () => ({ client: { resumeSession: cloudResumeMock } }),
+}));
 vi.mock("../stores/terminal-shell-store", () => ({
   terminalShellRequestValue: (preference: { kind: string; path?: string }) =>
     preference.kind === "custom"
