@@ -16,6 +16,11 @@ import {
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, Plus, RotateCw } from "lucide-react";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "./ui/tooltip";
+import {
   type WorkspaceSession,
   hasConfiguredOrchestratorAgent,
   newestActiveOrchestrator,
@@ -72,7 +77,6 @@ import {
   BoardSessionCardAdapter,
   sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type SessionsBoardProps = {
   /** When set, the board shows only this project's sessions. */
@@ -414,15 +418,56 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
     <BoardWelcome />
   ) : showProjectEmpty ? (
     <ProjectBoardEmpty
-      hasOrchestrator={orchestrator !== undefined}
-      isSpawning={isSpawning}
-      isProjectRestarting={isProjectRestarting}
-      onNewTask={() => projectId && requestNewTask(projectId)}
-      onOpenOrchestrator={() => void openOrchestrator()}
-      onOpenOrchestratorAsTui={
-        canCreateAsTui ? () => void openOrchestrator("tui") : undefined
+      actions={
+        <>
+          <div className="mt-5 flex items-center gap-2">
+            <TopbarButton
+              aria-label={
+                orchestrator ? t("shell.orchestrator") : t("shell.spawnOrchestrator")
+              }
+              disabled={isSpawning || isProjectRestarting}
+              onClick={() => void openOrchestrator()}
+              variant="primary"
+            >
+              <OrchestratorIcon className="size-icon-md" aria-hidden="true" />
+              {isProjectRestarting
+                ? t("shell.restartingDots")
+                : isSpawning
+                  ? t("shell.spawningDots")
+                  : orchestrator
+                    ? t("shell.orchestrator")
+                    : t("shell.spawnOrchestrator")}
+            </TopbarButton>
+            <TopbarButton
+              aria-label={t("shell.newTask")}
+              disabled={isProjectRestarting}
+              onClick={() => projectId && requestNewTask(projectId)}
+              variant="accent"
+            >
+              <Plus className="size-icon-md" aria-hidden="true" />
+              {t("shell.newTask")}
+            </TopbarButton>
+          </div>
+          {visibleSpawnError && (
+            <div className="mt-3 flex flex-col items-center gap-2">
+              <p
+                className="text-caption leading-body text-error"
+                role="status"
+              >
+                {visibleSpawnError}
+              </p>
+              {canCreateAsTui ? (
+                <TopbarButton
+                  disabled={isSpawning || isProjectRestarting}
+                  onClick={() => void openOrchestrator("tui")}
+                >
+                  {t("newTask.createAsTui")}
+                </TopbarButton>
+              ) : null}
+            </div>
+          )}
+        </>
       }
-      spawnError={visibleSpawnError}
     />
   ) : (
     <SessionsBoardGridView
@@ -431,8 +476,8 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
       labels={boardLabels}
       renderSessionCard={(session) => (
         <BoardSessionCardAdapter
-          onOpenSession={openSession}
-          onTerminateSession={terminateSession.mutate}
+          onOpen={() => openSession(session)}
+          onTerminate={() => terminateSession.mutate(session)}
           session={session}
           usage={usageBySession.get(session.id)}
         />
@@ -517,25 +562,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
             <span className="min-w-0 flex-1">{t("home.folderMissing")}</span>
           </div>
         ) : null}
-        {workspaceStartupState === "error" || workspaceQuery.isError ? (
-          <p className="py-10 text-center text-xs text-passive">
-            {t("shell.couldNotLoadSessions")}
-          </p>
-        ) : showWelcome ? (
-          <BoardWelcome />
-        ) : showProjectEmpty ? (
-          <ProjectBoardEmpty
-            hasOrchestrator={orchestrator !== undefined}
-            isSpawning={isSpawning}
-            isProjectRestarting={isProjectRestarting}
-            onNewTask={() => projectId && requestNewTask(projectId)}
-            onOpenOrchestrator={() => void openOrchestrator()}
-            onOpenOrchestratorAsTui={
-              canCreateAsTui ? () => void openOrchestrator("tui") : undefined
-            }
-            spawnError={visibleSpawnError}
-          />
-        ) : cloudEnabled && !projectId ? (
+        {cloudEnabled && !projectId ? (
           <CloudLocalSections activeBoardContent={boardBody} />
         ) : (
           boardBody
