@@ -44,6 +44,9 @@ type Deps struct {
 	// authority. Production release builds supply their embedded AO tuple.
 	TrustedArtifact func(goos, arch, version string) (ArtifactMetadata, bool)
 	ExecuteSetup    func(context.Context, SetupPlan, string, SetupExecutionOptions) (SetupExecutionResult, error)
+	// ServiceCommands supplies the privileged command boundary for service
+	// management. Nil uses real system commands.
+	ServiceCommands serviceCommandSystem
 	Timeout         time.Duration
 	Now             func() time.Time
 }
@@ -162,6 +165,11 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newStatusCommand(deps, opts))
 	root.AddCommand(newDoctorCommand(deps, opts))
 	root.AddCommand(newSetupCommand(deps, opts))
+	root.AddCommand(newInitCommand(deps, opts))
+	root.AddCommand(newServiceStartCommand(deps, opts))
+	root.AddCommand(newServiceStopCommand(deps, opts))
+	root.AddCommand(newServiceRestartCommand(deps, opts))
+	root.AddCommand(newServiceLogsCommand(deps, opts))
 	return root
 }
 

@@ -88,6 +88,15 @@ type haoServiceManager struct {
 
 func discoverServiceManager(ctx context.Context, deps Deps, target UserObservation, nonInteractive bool) (*haoServiceManager, ServiceManagerSupport) {
 	deps = deps.withDefaults()
+	commands := deps.ServiceCommands
+	if commands == nil {
+		commands = systemServiceCommands{}
+	}
+	return discoverServiceManagerWithSystem(ctx, deps, target, nonInteractive, commands)
+}
+
+func discoverServiceManagerWithSystem(ctx context.Context, deps Deps, target UserObservation, nonInteractive bool, commands serviceCommandSystem) (*haoServiceManager, ServiceManagerSupport) {
+	deps = deps.withDefaults()
 	components := []string{"daemon", "gateway"}
 	manual := manualServiceCommands(components)
 	goos, _ := deps.Observer.Platform()
@@ -114,7 +123,7 @@ func discoverServiceManager(ctx context.Context, deps Deps, target UserObservati
 	if path, err := deps.Observer.LookPath("journalctl"); err == nil && path == "/usr/bin/journalctl" {
 		journalctl = path
 	}
-	return &haoServiceManager{observer: deps.Observer, commands: systemServiceCommands{}, timeout: deps.Timeout, targetUser: target, nonInteractive: nonInteractive, input: deps.In, systemctl: systemctl, journalctl: journalctl}, ServiceManagerSupport{Supported: true, Manager: "systemd"}
+	return &haoServiceManager{observer: deps.Observer, commands: commands, timeout: deps.Timeout, targetUser: target, nonInteractive: nonInteractive, input: deps.In, systemctl: systemctl, journalctl: journalctl}, ServiceManagerSupport{Supported: true, Manager: "systemd"}
 }
 
 func manualServiceCommands(components []string) []string {

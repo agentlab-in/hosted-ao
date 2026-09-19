@@ -46,6 +46,12 @@ type fakeObserver struct {
 	readErr         map[string]error
 	artifacts       map[string]ArtifactMetadata
 	artifactErr     map[string]error
+	tlsLeaf         []byte
+	tlsErr          error
+	httpsStatus     int
+	httpsStatusErr  error
+	httpsTokens     []string
+	tlsAddrs        []string
 }
 
 func (f *fakeObserver) Platform() (string, string)            { return f.platform, f.arch }
@@ -125,6 +131,14 @@ func (f *fakeObserver) GET(_ context.Context, url string) ([]byte, error) {
 }
 func (f *fakeObserver) PortAvailable(context.Context, string, int) (bool, error) {
 	return f.portAvailable, f.portErr
+}
+func (f *fakeObserver) TLSHandshake(_ context.Context, addr string) ([]byte, error) {
+	f.tlsAddrs = append(f.tlsAddrs, addr)
+	return f.tlsLeaf, f.tlsErr
+}
+func (f *fakeObserver) HTTPSGet(_ context.Context, _ string, token string) (int, error) {
+	f.httpsTokens = append(f.httpsTokens, token)
+	return f.httpsStatus, f.httpsStatusErr
 }
 
 func healthyObserver() *fakeObserver {
