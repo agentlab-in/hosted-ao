@@ -184,8 +184,9 @@ always take the full-download path), the version-free aliases `ao start` fetches
 `agent-orchestrator-win32-x64.exe`, `agent-orchestrator-linux-x64.AppImage`,
 and the deb/rpm published under versioned names), the electron-updater
 feeds `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, and the standalone
-Linux `ao` CLI binaries `ao-linux-x64` and `ao-linux-arm64` (plus their
-`.sha256` sidecars) that the curl|sh installer fetches from
+Linux `ao` and `hao` CLI binaries `ao-linux-x64`, `ao-linux-arm64`,
+`hao-linux-x64`, and `hao-linux-arm64` (plus their `.sha256` sidecars) that
+the curl|sh installer fetches from
 `releases/latest`.
 
 **Hosting note:** `install.sh` itself is served from the interim URL

@@ -61,7 +61,7 @@ export AO_INSTALL_SOURCED
 # shellcheck source=/dev/null
 . "$install_sh"
 
-# --- detect_os / detect_arch / asset_name: x86_64 Linux -> ao-linux-x64 ---
+# --- detect_os / detect_arch / asset_name: x86_64 Linux -> <bin>-linux-x64 ---
 # Exported: these are read by detect_os/detect_arch inside the sourced
 # install.sh, not directly in this script.
 AO_INSTALL_OS_OVERRIDE=Linux
@@ -71,13 +71,15 @@ os=$(detect_os)
 arch=$(detect_arch)
 assert_eq "detect_os(Linux) -> linux" "linux" "$os"
 assert_eq "detect_arch(x86_64) -> x64" "x64" "$arch"
-assert_eq "asset_name(linux, x64) -> ao-linux-x64" "ao-linux-x64" "$(asset_name "$os" "$arch")"
+assert_eq "asset_name(ao, linux, x64) -> ao-linux-x64" "ao-linux-x64" "$(asset_name ao "$os" "$arch")"
+assert_eq "asset_name(hao, linux, x64) -> hao-linux-x64" "hao-linux-x64" "$(asset_name hao "$os" "$arch")"
 
-# --- aarch64 -> ao-linux-arm64 ---
+# --- aarch64 -> <bin>-linux-arm64 ---
 AO_INSTALL_ARCH_OVERRIDE=aarch64
 arch=$(detect_arch)
 assert_eq "detect_arch(aarch64) -> arm64" "arm64" "$arch"
-assert_eq "asset_name(linux, arm64) -> ao-linux-arm64" "ao-linux-arm64" "$(asset_name "$os" "$arch")"
+assert_eq "asset_name(ao, linux, arm64) -> ao-linux-arm64" "ao-linux-arm64" "$(asset_name ao "$os" "$arch")"
+assert_eq "asset_name(hao, linux, arm64) -> hao-linux-arm64" "hao-linux-arm64" "$(asset_name hao "$os" "$arch")"
 
 # --- armv7l -> named failure ---
 AO_INSTALL_ARCH_OVERRIDE=armv7l
@@ -120,6 +122,19 @@ if [ -x "$bin_fixture" ]; then
   fail "corrupted download became executable before verification rejected it"
 else
   pass "corrupted download was never chmod +x'd"
+fi
+
+# --- the same sidecar rejection holds for the hao asset name ---
+hao_bin_fixture="$fixture_dir/hao-linux-x64"
+hao_sha_fixture="$fixture_dir/hao-linux-x64.sha256"
+printf 'not a real binary\n' >"$hao_bin_fixture"
+chmod 644 "$hao_bin_fixture"
+echo "0000000000000000000000000000000000000000000000000000000000000000  hao-linux-x64" >"$hao_sha_fixture"
+
+if verify_sha256 "$hao_bin_fixture" "$hao_sha_fixture" 2>/dev/null; then
+  fail "verify_sha256 accepted a mismatched hao checksum"
+else
+  pass "verify_sha256 rejects a mismatched hao checksum"
 fi
 
 printf '\n%s passed, %s failed\n' "$pass_count" "$fail_count"

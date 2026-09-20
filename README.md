@@ -46,14 +46,15 @@ Pair mode uses self-signed TLS, fingerprint pinning, passcode verification, and 
 
 `hao` is the standalone machine-management CLI for Hosted AO. Its boundary is deliberately separate from AO's session orchestration commands and daemon internals.
 
-The current Linux release includes these read-only commands:
+The `hao` CLI includes:
 
 - `hao version` for stable human-readable and JSON build information.
-- `hao config path`, `hao config show`, and `hao config validate` for the versioned Hosted AO machine configuration.
+- `hao config` (`path`, `show`, `validate`, `create`, `set`) for the versioned Hosted AO machine configuration.
 - `hao status` for desired state, bounded host observations, component compatibility, and proven configuration drift.
 - `hao doctor` for host, permissions, disk, package and service manager, port, tool authentication, and daemon health checks.
-
-HAO setup, host mutation, service lifecycle management, pairing migration, gateway changes, and artifact installation are still in flight. Current machine setup continues to use the released `ao` pairing flow below.
+- `hao setup` to reconcile the machine: state tree, version-pinned AO artifact, and systemd definitions, before activation.
+- `hao init [--mode pair]` to apply configuration, provision pair identity, activate services, and print the pairing string.
+- `hao start` / `hao stop` / `hao restart` / `hao logs` for hao-managed service lifecycle.
 
 Read [the HAO machine-management boundary](docs/hao-machine-management-boundary.md) and [the v1 contract baseline](contracts/hao/v1/README.md) for ownership, compatibility, migration, and security details.
 
@@ -73,7 +74,18 @@ On a 64-bit Debian-family Linux machine with systemd, run:
 curl -fsSL https://raw.githubusercontent.com/agentlab-in/hosted-ao/develop/install.sh | sh
 ```
 
-You need root access or passwordless `sudo`. The installer detects the architecture, verifies the released binary checksum, installs `ao`, provisions or reuses pair mode, and prints an `ao-pair://` string.
+You need root access or passwordless `sudo`. The installer detects the architecture, verifies the released binary checksums, installs both `ao` and `hao`, then provisions or reuses pair mode through `hao init --mode pair` and prints an `ao-pair://` string.
+
+`hao` is the HAO-first entry point. Once the binaries are installed you can also drive the flow explicitly:
+
+```bash
+hao setup                    # reconcile state tree, version-pinned AO artifact, and systemd definitions
+hao init --mode pair         # apply config, provision pair identity, start services, print the pairing string
+```
+
+The legacy `ao pair` one-shot path remains available for boxes already provisioned that way.
+
+`get.agentlab.in` does not exist yet, so GitHub releases remain the download source for both `install.sh` and the release assets it fetches. Pointing `get.agentlab.in` at this same script later is a hosting change only, not a script change.
 
 Treat that string as a credential. Paste it into **Add machine** in the desktop app, then clear it from any clipboard or history where it may remain. Rotate the pairing credential if it is disclosed.
 
