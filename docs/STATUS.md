@@ -332,10 +332,11 @@ A second, account-free way to add a machine, on `develop`. Design and history:
   already-pinned address does.
   Reached by bare IP or by domain, local box or cloud VM alike: pairing is the
   default way to add any machine, not just a LAN box.
-- **`install.sh`**: the `curl | sh` installer in `README.md`'s "Add a machine"
-  section. Detects OS/arch, downloads the `ao` binary and its sha256 sidecar,
-  installs it, and execs `ao pair` to provision the box and print the pairing
-  string.
+- **`install.sh`**: the `curl | sh` installer in `README.md`'s "Pair a machine"
+  section. Detects OS/arch, downloads both the `ao` and `hao` binaries and
+  their sha256 sidecars, installs them, and execs `hao init --mode pair` to
+  provision the box and print the pairing string. The legacy `ao pair` path
+  remains as a compatibility fallback.
 
 Three code-review reports covering batches 1 through 4 are preserved in
 [`reviews/`](reviews/), with every finding mapped to the PR that fixed it.
