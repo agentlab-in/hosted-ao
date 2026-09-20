@@ -675,14 +675,17 @@ func planPrerequisite(d setupDesired, s setupSnapshot, id, component string, ite
 	if item.State == "unknown" {
 		return blockedStep(stepID, component, "verify-prerequisite", "prerequisite availability is unknown", item.Evidence, "inspect the prerequisite manually and retry")
 	}
+	if id == "harness" {
+		// The selected harness has no hao-owned allowlisted installer, so hao
+		// never blocks machine preparation on it: it reports vendor
+		// instructions and leaves installation (and authentication) to the
+		// user, per the machine-management boundary. A documented
+		// stranger/pair install must not require a preinstalled harness
+		// binary.
+		return SetupStep{ID: stepID, Component: component, Operation: "manual-install", Disposition: "no-op", Reason: "the selected harness is not installed and installation is vendor-owned", Evidence: item.Evidence, Remediation: "install the selected harness using its vendor documentation, then rerun setup"}
+	}
 	if d.Install == "none" {
 		return blockedStep(stepID, component, "manual-install", "audit-only policy forbids planning installation", item.Evidence, "install "+component+" manually, then rerun setup")
-	}
-	if id == "harness" && d.Harness != "claude-code" {
-		return blockedStep(stepID, component, "manual-install", "selected harness has no allowlisted installer", item.Evidence, "install the selected harness using its vendor documentation")
-	}
-	if id == "harness" {
-		return blockedStep(stepID, component, "manual-install", "trusted immutable vendor package metadata is unavailable", item.Evidence, "install the selected harness from pinned trusted vendor metadata")
 	}
 	if s.PackageManager.State != "present" {
 		return blockedStep(stepID, component, "install-prerequisite", "a supported package manager is not proven usable", s.PackageManager.Evidence, "install the prerequisite manually or restore the supported package manager")

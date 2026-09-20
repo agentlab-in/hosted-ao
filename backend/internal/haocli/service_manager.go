@@ -16,6 +16,12 @@ const (
 	haoGatewayUnit   = "ao-gateway.service"
 	maxJournalLines  = 200
 	maxJournalOutput = 64 << 10
+	// serviceMutationTimeout bounds privileged service mutations (enable,
+	// start, stop, restart) separately from the read-only observation timeout.
+	// `systemctl enable` on a fresh machine triggers a normal daemon-reload
+	// that can exceed the 2s observation deadline, so mutations get a
+	// deliberately generous deadline rather than the probe timeout.
+	serviceMutationTimeout = time.Minute
 )
 
 var canonicalServiceUnits = map[string]string{
@@ -76,14 +82,15 @@ type ServiceOperationResult struct {
 }
 
 type haoServiceManager struct {
-	observer       Observer
-	commands       serviceCommandSystem
-	timeout        time.Duration
-	targetUser     UserObservation
-	nonInteractive bool
-	input          io.Reader
-	systemctl      string
-	journalctl     string
+	observer        Observer
+	commands        serviceCommandSystem
+	timeout         time.Duration
+	mutationTimeout time.Duration
+	targetUser      UserObservation
+	nonInteractive  bool
+	input           io.Reader
+	systemctl       string
+	journalctl      string
 }
 
 func discoverServiceManager(ctx context.Context, deps Deps, target UserObservation, nonInteractive bool) (*haoServiceManager, ServiceManagerSupport) {
@@ -123,7 +130,7 @@ func discoverServiceManagerWithSystem(ctx context.Context, deps Deps, target Use
 	if path, err := deps.Observer.LookPath("journalctl"); err == nil && path == "/usr/bin/journalctl" {
 		journalctl = path
 	}
-	return &haoServiceManager{observer: deps.Observer, commands: commands, timeout: deps.Timeout, targetUser: target, nonInteractive: nonInteractive, input: deps.In, systemctl: systemctl, journalctl: journalctl}, ServiceManagerSupport{Supported: true, Manager: "systemd"}
+	return &haoServiceManager{observer: deps.Observer, commands: commands, timeout: deps.Timeout, mutationTimeout: serviceMutationTimeout, targetUser: target, nonInteractive: nonInteractive, input: deps.In, systemctl: systemctl, journalctl: journalctl}, ServiceManagerSupport{Supported: true, Manager: "systemd"}
 }
 
 func manualServiceCommands(components []string) []string {
@@ -328,7 +335,11 @@ func (m *haoServiceManager) mutate(ctx context.Context, operation, component str
 	if !ok {
 		return errors.New("refusing non-canonical managed service")
 	}
-	mutationCtx, cancel := boundedContext(ctx, m.timeout)
+	deadline := m.mutationTimeout
+	if deadline <= 0 {
+		deadline = serviceMutationTimeout
+	}
+	mutationCtx, cancel := boundedContext(ctx, deadline)
 	defer cancel()
 	if err := m.commands.Run(mutationCtx, true, m.nonInteractive, m.input, m.systemctl, operation, unit); err != nil {
 		if mutationCtx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {

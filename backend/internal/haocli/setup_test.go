@@ -112,11 +112,13 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 			t.Fatalf("code=%d stderr=%q out=%s", code, stderr, out)
 		}
 		plan := decodeSetupPlan(t, out)
-		for _, id := range []string{"prerequisite.git", "prerequisite.harness"} {
-			step := stepByID(t, plan, id)
-			if step.Disposition != "blocked" || step.Operation != "manual-install" || step.Action != nil {
-				t.Fatalf("%s=%+v", id, step)
-			}
+		git := stepByID(t, plan, "prerequisite.git")
+		if git.Disposition != "blocked" || git.Operation != "manual-install" || git.Action != nil {
+			t.Fatalf("prerequisite.git=%+v", git)
+		}
+		harness := stepByID(t, plan, "prerequisite.harness")
+		if harness.Disposition != "no-op" || harness.Operation != "manual-install" || harness.Action != nil || harness.Remediation == "" {
+			t.Fatalf("harness is a blocking install in audit-only policy: %+v", harness)
 		}
 		artifact := stepByID(t, plan, "artifact.ao")
 		if artifact.Disposition != "blocked" || artifact.Action != nil {
@@ -146,7 +148,7 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 			}
 		}
 		harness := stepByID(t, plan, "prerequisite.harness")
-		if harness.Disposition != "blocked" || harness.Privilege.Required || harness.Action != nil {
+		if harness.Disposition != "no-op" || harness.Privilege.Required || harness.Action != nil || harness.Operation != "manual-install" {
 			t.Fatalf("harness=%+v", harness)
 		}
 		if artifact := stepByID(t, plan, "artifact.ao"); artifact.Disposition != "blocked" || artifact.Action != nil {
@@ -278,11 +280,13 @@ func TestSetupUntrustedArtifactProvenanceNeverBecomesExecutableOrNoOp(t *testing
 			t.Fatalf("code=%d out=%s", code, out)
 		}
 		plan := decodeSetupPlan(t, out)
-		for _, id := range []string{"artifact.ao", "prerequisite.harness"} {
-			step := stepByID(t, plan, id)
-			if step.Disposition != "blocked" || step.Action != nil || !strings.Contains(step.Reason, "immutable") {
-				t.Fatalf("%s=%+v", id, step)
-			}
+		artifact := stepByID(t, plan, "artifact.ao")
+		if artifact.Disposition != "blocked" || artifact.Action != nil || !strings.Contains(artifact.Reason, "immutable") {
+			t.Fatalf("artifact=%+v", artifact)
+		}
+		harness := stepByID(t, plan, "prerequisite.harness")
+		if harness.Disposition != "no-op" || harness.Action != nil {
+			t.Fatalf("harness=%+v", harness)
 		}
 	})
 }
@@ -343,17 +347,35 @@ func TestSetupLocalNeverPlansGatewayAndUnsafeArtifactIsNotExecuted(t *testing.T)
 	}
 }
 
+func TestSetupFreshBoxPairDoesNotBlockOnAbsentHarness(t *testing.T) {
+	obs := healthyObserver()
+	delete(obs.paths, "claude") // a fresh Ubuntu box has no preinstalled harness
+	deps, _ := setupDeps(t, "pair", obs)
+	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
+	if code != 0 {
+		t.Fatalf("fresh-box pair setup blocked on an absent harness: code=%d out=%s", code, out)
+	}
+	plan := decodeSetupPlan(t, out)
+	if plan.Summary.Blocked != 0 || !plan.Summary.Ready {
+		t.Fatalf("fresh-box plan is blocked: %+v", plan.Summary)
+	}
+	step := stepByID(t, plan, "prerequisite.harness")
+	if step.Disposition != "no-op" || step.Operation != "manual-install" || step.Action != nil || step.Remediation == "" {
+		t.Fatalf("absent harness step=%+v", step)
+	}
+}
+
 func TestSetupHarnessDoesNotDependOnPackageManager(t *testing.T) {
 	obs := healthyObserver()
 	delete(obs.paths, "claude")
 	delete(obs.paths, "apt-get")
 	deps, _ := setupDeps(t, "pair", obs)
 	out, _, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run")
-	if code != 1 {
+	if code != 0 {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
 	step := stepByID(t, decodeSetupPlan(t, out), "prerequisite.harness")
-	if step.Disposition != "blocked" || step.Action != nil || len(step.Dependencies) != 1 {
+	if step.Disposition != "no-op" || step.Action != nil || len(step.Dependencies) != 1 {
 		t.Fatalf("step=%+v", step)
 	}
 }
