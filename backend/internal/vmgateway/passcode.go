@@ -109,6 +109,18 @@ func GeneratePasscode(dir string) (string, error) {
 	return plaintext, nil
 }
 
+// RemovePasscodeStore deletes the persisted passcode store under dir, if any.
+// It is idempotent: removing an absent store is not an error. Provisioning
+// (hao init) uses it to roll back a passcode minted by a failed run so a retry
+// mints a fresh one and prints its pairing string once, instead of leaving a
+// "Passcode: existing" store whose plaintext was already lost.
+func RemovePasscodeStore(dir string) error {
+	if err := os.Remove(passcodeHashPath(dir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove passcode store: %w", err)
+	}
+	return nil
+}
+
 // newPasscodeHash generates a fresh plaintext passcode and its hash, without
 // touching disk. It reuses mobilebridge.GeneratePassword rather than a
 // second alphanumeric generator: the spec for both is identical (8

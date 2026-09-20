@@ -303,6 +303,19 @@ func TestSetupExecutorUsesAtomicStructuredServiceDefinitionCommands(t *testing.T
 	}
 }
 
+func TestPrivilegedCommandRunSurfacesStderrOnFailure(t *testing.T) {
+	// The privileged command runner must surface the command's stderr on a real
+	// failure instead of discarding it behind a bare exit status, so a systemd
+	// diagnostic like "unit ao-daemon.service does not exist" is visible.
+	err := (systemSetupExecution{}).Run(context.Background(), false, false, strings.NewReader(""), "/bin/sh", "-c", "echo 'unit ao-daemon.service does not exist' >&2; exit 1")
+	if err == nil {
+		t.Fatal("Run: expected an error for a failing command")
+	}
+	if !strings.Contains(err.Error(), "unit ao-daemon.service does not exist") {
+		t.Fatalf("Run error %q did not surface stderr", err)
+	}
+}
+
 func TestSetupExecutorDirectoryAndModeActionsAreIdempotent(t *testing.T) {
 	root := preparedExecutorRoot(t)
 	target := filepath.Join(root, "data")

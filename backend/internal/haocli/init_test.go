@@ -1,6 +1,7 @@
 package haocli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -58,6 +59,35 @@ func provisionedPairEnv(t *testing.T) (certDir string) {
 	t.Setenv("AO_VM_CERT_DIR", certDir)
 	t.Setenv("AO_VM_PASSCODE_DIR", passcodeDir)
 	return certDir
+}
+
+// recordingExecuteSetup captures the setup plans hao init executes, so tests
+// can assert init installs service definitions before it activates services.
+type recordingExecuteSetup struct {
+	plans []SetupPlan
+	seq   *[]string
+}
+
+func (r *recordingExecuteSetup) run(_ context.Context, plan SetupPlan, _ string, _ SetupExecutionOptions) (SetupExecutionResult, error) {
+	r.plans = append(r.plans, plan)
+	if r.seq != nil {
+		*r.seq = append(*r.seq, "setup")
+	}
+	return SetupExecutionResult{Status: "completed"}, nil
+}
+
+// preparedInitSetup configures obs and deps so hao init's embedded setup pass
+// plans a non-blocked machine (absent artifact and service definitions, backed
+// by trusted release metadata) and executes through a recording fake rather
+// than touching the real filesystem.
+func preparedInitSetup(t *testing.T, obs *fakeObserver, root string, deps *Deps, exec *recordingExecuteSetup) {
+	t.Helper()
+	trusted := ArtifactMetadata{Version: "0.14.0", SHA256: strings.Repeat("a", 64), Source: "https://github.com/agentlab-in/hosted-ao/releases/download/v0.14.0/ao-linux-x64"}
+	obs.statErr[filepath.Join(root, "bin", "ao")] = os.ErrNotExist
+	obs.statErr["/etc/systemd/system/ao-daemon.service"] = os.ErrNotExist
+	obs.statErr["/etc/systemd/system/ao-gateway.service"] = os.ErrNotExist
+	deps.TrustedArtifact = func(_, _, _ string) (ArtifactMetadata, bool) { return trusted, true }
+	deps.ExecuteSetup = exec.run
 }
 
 func activeUnits(obs *fakeObserver) {
@@ -119,6 +149,7 @@ func TestInitCreatesLocalConfigAndActivatesServices(t *testing.T) {
 	deps.ServiceCommands = commands
 	configPath := initConfigPath(root)
 	obs.statErr[configPath] = os.ErrNotExist
+	preparedInitSetup(t, obs, root, &deps, &recordingExecuteSetup{})
 
 	out, stderr, code := runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "local")
 	if code != 0 || stderr != "" {
@@ -199,6 +230,7 @@ func TestInitPairProvisionsAndPrintsMintedPairingString(t *testing.T) {
 	deps, root := initDeps(t, obs)
 	deps.ServiceCommands = commands
 	obs.statErr[initConfigPath(root)] = os.ErrNotExist
+	preparedInitSetup(t, obs, root, &deps, &recordingExecuteSetup{})
 
 	out, stderr, code := runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "pair")
 	if code != 0 || stderr != "" {
@@ -251,6 +283,7 @@ func TestInitPairRerunPrintsExistingSecretOnlyOnce(t *testing.T) {
 	deps.ServiceCommands = commands
 	configPath := initConfigPath(root)
 	obs.statErr[configPath] = os.ErrNotExist
+	preparedInitSetup(t, obs, root, &deps, &recordingExecuteSetup{})
 
 	first, stderr, code := runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "pair")
 	if code != 0 || stderr != "" {
@@ -289,6 +322,7 @@ func TestInitVerificationFailureFailsSilentlyWithReportOnStdout(t *testing.T) {
 	deps, root := initDeps(t, obs)
 	deps.ServiceCommands = commands
 	obs.statErr[initConfigPath(root)] = os.ErrNotExist
+	preparedInitSetup(t, obs, root, &deps, &recordingExecuteSetup{})
 
 	out, stderr, code := runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "pair")
 	if code != 1 || stderr != "" || out == "" {
@@ -303,5 +337,98 @@ func TestInitVerificationFailureFailsSilentlyWithReportOnStdout(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("verification=%+v", report.Verification)
+	}
+}
+
+func TestInitInstallsServiceDefinitionsBeforeActivation(t *testing.T) {
+	certDir := provisionedPairEnv(t)
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := healthyObserver()
+	obs.runFile = nil
+	obs.runs[serviceStatusKey("daemon")] = "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\nSubState=dead"
+	obs.runs[serviceStatusKey("gateway")] = "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\nSubState=dead"
+	obs.tlsLeaf = cert.Certificate[0]
+	obs.httpsStatus = 200
+	commands := &fakeServiceCommands{fail: map[string]error{}}
+	seq := []string{}
+	commands.afterRun = func(a string) { seq = append(seq, a) }
+	exec := &recordingExecuteSetup{seq: &seq}
+	deps, root := initDeps(t, obs)
+	deps.ServiceCommands = commands
+	obs.statErr[initConfigPath(root)] = os.ErrNotExist
+	preparedInitSetup(t, obs, root, &deps, exec)
+
+	out, stderr, code := runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "pair")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d err=%q out=%s", code, stderr, out)
+	}
+	if len(seq) == 0 || seq[0] != "setup" {
+		t.Fatalf("setup did not run before service activation: %v", seq)
+	}
+	// The executed setup plan must install both service definitions.
+	var plan SetupPlan
+	for _, p := range exec.plans {
+		plan = p
+	}
+	foundDaemon, foundGateway := false, false
+	for _, step := range plan.Steps {
+		switch step.ID {
+		case "service.daemon":
+			foundDaemon = step.Operation == "install-definition"
+		case "service.gateway":
+			foundGateway = step.Operation == "install-definition"
+		}
+	}
+	if !foundDaemon || !foundGateway {
+		t.Fatalf("setup plan did not install service definitions: %+v", plan.Steps)
+	}
+}
+
+func TestInitFailedActivationRollsBackMintedPasscode(t *testing.T) {
+	certDir := provisionedPairEnv(t)
+	passcodeDir := os.Getenv("AO_VM_PASSCODE_DIR")
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := healthyObserver()
+	obs.runFile = nil
+	obs.runs[serviceStatusKey("daemon")] = "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\nSubState=dead"
+	obs.runs[serviceStatusKey("gateway")] = "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\nSubState=dead"
+	commands := &fakeServiceCommands{fail: map[string]error{"enable " + haoDaemonUnit: errors.New("unit ao-daemon.service does not exist")}}
+	deps, root := initDeps(t, obs)
+	deps.ServiceCommands = commands
+	configPath := initConfigPath(root)
+	obs.statErr[configPath] = os.ErrNotExist
+	preparedInitSetup(t, obs, root, &deps, &recordingExecuteSetup{})
+
+	out, stderr, code := runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "pair")
+	if code != 1 {
+		t.Fatalf("code=%d err=%q out=%s", code, stderr, out)
+	}
+	if _, statErr := os.Stat(filepath.Join(passcodeDir, "passcode.hash")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("passcode store was not rolled back after failed init: %v", statErr)
+	}
+
+	// A retry must mint a fresh passcode and print its pairing string once,
+	// without requiring `hao pair rotate`.
+	commands.fail = map[string]error{}
+	activeUnits(obs)
+	obs.tlsLeaf = cert.Certificate[0]
+	obs.httpsStatus = 200
+	delete(obs.statErr, configPath)
+	out, stderr, code = runCLI(t, deps, "--json", "init", "--non-interactive", "--machine", "box7", "--mode", "pair")
+	if code != 0 || stderr != "" {
+		t.Fatalf("retry: code=%d err=%q out=%s", code, stderr, out)
+	}
+	report := decodeInitReport(t, out)
+	if report.Identity == nil || report.Identity.PasscodeState != "minted" {
+		t.Fatalf("retry did not mint a fresh passcode: %+v", report.Identity)
+	}
+	if report.PairingString == "" || !strings.HasPrefix(report.PairingString, "ao-pair://v1/") {
+		t.Fatalf("retry printed no pairing string: %q", report.PairingString)
 	}
 }

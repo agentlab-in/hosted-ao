@@ -143,10 +143,21 @@ func runInit(ctx context.Context, deps Deps, opts *options, io initOptions) (ini
 	report.Machine, report.Mode, report.ConfigPath = desired.Machine, desired.Mode, desired.Path
 
 	mintedPlaintext := ""
+	// fail rolls back a passcode this run just minted before returning the
+	// failure, so a retry mints a fresh one and prints its pairing string once
+	// instead of reporting "Passcode: existing" with an unrecoverable string.
+	// It never rolls back a passcode the run did not mint.
+	fail := func(err error) (initReport, error) {
+		if mintedPlaintext != "" && !io.DryRun {
+			_ = rollbackFreshPasscode()
+		}
+		return report, err
+	}
+
 	if desired.Mode == "pair" {
-		provision, err := provisionPairIdentity(desired.PairPort, io.DryRun)
-		if err != nil {
-			return report, err
+		provision, provisionErr := provisionPairIdentity(desired.PairPort, io.DryRun)
+		if provisionErr != nil {
+			return report, provisionErr
 		}
 		report.Identity = provision.identity
 		report.PairingString = provision.pairingString
@@ -157,14 +168,23 @@ func runInit(ctx context.Context, deps Deps, opts *options, io initOptions) (ini
 	report.ConfigAction = desired.ConfigAction
 	if configData != nil && !io.DryRun {
 		if err := writeSynthConfig(desired.Path, configData); err != nil {
-			return report, err
+			return fail(err)
 		}
 		report.ConfigAction = "created"
 	}
 
+	// Install the machine-preparation steps (directories, artifact, and
+	// service definitions) before enabling/starting services. The installer
+	// execs `hao init --mode pair` directly without running `hao setup` first,
+	// so a fresh box has no /etc/systemd/system unit files yet and
+	// `systemctl enable` would fail before the unit definitions exist.
+	if err := prepareServiceDefinitions(ctx, deps, opts.configPath, desired, io); err != nil {
+		return fail(err)
+	}
+
 	services, err := initServices(ctx, deps, desired, io)
 	if err != nil {
-		return report, err
+		return fail(err)
 	}
 	report.Services = services
 	if services != nil {
@@ -174,10 +194,69 @@ func runInit(ctx context.Context, deps Deps, opts *options, io initOptions) (ini
 	report.Verification = verifyInit(ctx, deps, desired, services, mintedPlaintext)
 	for _, check := range report.Verification {
 		if check.Status == "error" {
+			// A verification failure keeps the minted passcode: the gateway is
+			// already running against it and the report carries the pairing
+			// string, so rolling it back here would orphan a live credential.
 			return report, commandError{Code: "init_failed", Message: "hao init verification failed", Operation: "initialize", Remediation: "inspect the verification failures above, then rerun hao init", Details: map[string]any{}, ExitStatus: 1, Silent: true}
 		}
 	}
 	return report, nil
+}
+
+// prepareServiceDefinitions runs the hao setup plan and execution for the
+// machine-preparation steps (directories, artifact, and service definitions)
+// that must complete before hao init can enable/start services. The installer
+// execs `hao init --mode pair` directly without running `hao setup` first, so
+// on a fresh box the /etc/systemd/system unit files do not exist yet and
+// `systemctl enable` would fail. Running setup first guarantees the unit
+// definitions (and the artifact they exec) exist before activation.
+//
+// It only runs when a supported service manager is actually in play: on a host
+// without systemd (or with service.enabled=false) initServices reports manual
+// commands instead, and there are no unit definitions to install, so this step
+// is a no-op and must not fail init.
+func prepareServiceDefinitions(ctx context.Context, deps Deps, configPath string, desired initDesired, io initOptions) error {
+	if io.DryRun || !desired.ServiceEnabled {
+		return nil
+	}
+	target, _ := deps.Observer.CurrentUser()
+	_, support := discoverServiceManager(ctx, deps, target, io.NonInteractive)
+	if !support.Supported {
+		return nil
+	}
+	path, object, err := loadConfig(deps, configPath)
+	if err != nil {
+		return err
+	}
+	setupDesired, err := resolveSetupDesired(deps, path, object, "", io.NonInteractive)
+	if err != nil {
+		return err
+	}
+	plan := planSetup(setupDesired, observeSetup(ctx, deps, setupDesired))
+	if recoveryStep, found, recoveryErr := planSetupRecovery(setupDesired.StateRoot, setupDesired.DataDir); recoveryErr != nil {
+		plan.Steps = append([]SetupStep{blockedStep("transaction.recovery", "setup-transaction", "inspect-recovery", "an interrupted setup journal could not be validated safely", safeDiagnostic(recoveryErr), "inspect the transaction journal manually before retrying")}, plan.Steps...)
+		recountSetupPlan(&plan)
+	} else if found {
+		plan.Steps = append([]SetupStep{recoveryStep}, plan.Steps...)
+		recountSetupPlan(&plan)
+	}
+	plan.DryRun = false
+	if plan.Summary.Blocked > 0 {
+		return commandError{Code: "setup_blocked", Message: "hao init could not prepare this machine", Operation: "prepare services", Remediation: "run `hao setup --dry-run` to review the blocked steps, resolve them, then rerun hao init", Details: map[string]any{}, ExitStatus: 1, Silent: true}
+	}
+	_, err = deps.ExecuteSetup(ctx, plan, setupDesired.StateRoot, SetupExecutionOptions{NonInteractive: io.NonInteractive, Input: deps.In, DataDir: setupDesired.DataDir})
+	return err
+}
+
+// rollbackFreshPasscode removes the passcode store so a retry after a failed
+// init mints a fresh passcode and prints its pairing string once, rather than
+// reporting "Passcode: existing" with an unrecoverable plaintext.
+func rollbackFreshPasscode() error {
+	_, passcodeDir, err := resolvePairIdentityDirectories()
+	if err != nil {
+		return err
+	}
+	return vmgateway.RemovePasscodeStore(passcodeDir)
 }
 
 // initMode validates --mode. https remains the one deliberately deferred

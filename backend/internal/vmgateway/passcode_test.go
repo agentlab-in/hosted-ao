@@ -53,6 +53,25 @@ func TestGeneratePasscode_TwoCallsProduceDifferentPasscodes(t *testing.T) {
 	}
 }
 
+func TestRemovePasscodeStore_IsIdempotentAndRemovesMintedStore(t *testing.T) {
+	dir := t.TempDir()
+	if err := RemovePasscodeStore(dir); err != nil {
+		t.Fatalf("RemovePasscodeStore on an empty directory: %v (removing an absent store must not error)", err)
+	}
+	if _, err := GeneratePasscode(dir); err != nil {
+		t.Fatalf("GeneratePasscode: %v", err)
+	}
+	if err := RemovePasscodeStore(dir); err != nil {
+		t.Fatalf("RemovePasscodeStore after GeneratePasscode: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, passcodeFileName)); !os.IsNotExist(err) {
+		t.Fatalf("passcode store still present after RemovePasscodeStore: %v", err)
+	}
+	if _, err := LoadPasscodeStore(dir); err == nil {
+		t.Fatal("LoadPasscodeStore after RemovePasscodeStore: want an error, got nil")
+	}
+}
+
 func TestLoadPasscodeStore_MissingStoreFailsLoudly(t *testing.T) {
 	_, err := LoadPasscodeStore(t.TempDir())
 	if err == nil {

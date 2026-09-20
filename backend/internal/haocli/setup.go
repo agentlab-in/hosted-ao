@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
@@ -463,10 +464,19 @@ func observeServiceFile(obs Observer, path string) observedItem {
 	return item
 }
 
+// isLookPathNotFound reports whether a LookPath error means the executable is
+// simply absent. exec.LookPath returns exec.ErrNotFound for a missing binary,
+// while injected observers and file probes may return os.ErrNotExist; both mean
+// "absent" and must be classified that way so the harness no-op branch (and
+// service-manager discovery) are not misclassified as "unknown" and blocked.
+func isLookPathNotFound(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound)
+}
+
 func observeTool(deps Deps, binary string) observedItem {
 	path, err := deps.Observer.LookPath(binary)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		if !isLookPathNotFound(err) {
 			return observedItem{State: "unknown", Evidence: binary + " path lookup failed: " + safeDiagnostic(err)}
 		}
 		return observedItem{State: "absent", Evidence: binary + " was not found on PATH"}
@@ -495,7 +505,7 @@ func observeServiceManager(deps Deps, goos string) observedItem {
 	}
 	path, err := deps.Observer.LookPath("systemctl")
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		if !isLookPathNotFound(err) {
 			return observedItem{State: "unknown", Evidence: "systemctl path lookup failed: " + safeDiagnostic(err)}
 		}
 		return observedItem{State: "absent", Evidence: "systemctl was not found"}
