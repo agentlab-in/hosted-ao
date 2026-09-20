@@ -497,7 +497,8 @@ func TestPairSummaryAddresses_DisplayListMatchesPairingStringAddresses(t *testin
 	stubUnreachablePublicProbe(t)
 
 	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
-	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "AB12CD34", true)
+	ips := pairCandidateIPs(context.Background(), c.pairHTTPClient())
+	addrs, pairingString := c.pairSummaryAddresses(cert, "AB12CD34", true, ips)
 
 	want := []string{"192.168.1.20", "203.0.113.5"}
 	if !slices.Equal(addrs, want) {
@@ -530,7 +531,8 @@ func TestPairSummaryAddresses_PublicOnlyInterfaceWithFailedProbeStillBuildsAStri
 	stubUnreachablePublicProbe(t)
 
 	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
-	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "AB12CD34", true)
+	ips := pairCandidateIPs(context.Background(), c.pairHTTPClient())
+	addrs, pairingString := c.pairSummaryAddresses(cert, "AB12CD34", true, ips)
 
 	if !slices.Equal(addrs, []string{"203.0.113.5"}) {
 		t.Fatalf("addrs = %v, want [203.0.113.5]", addrs)
@@ -560,7 +562,8 @@ func TestPairSummaryAddresses_NoAddressAtAllReturnsEmptyPairingString(t *testing
 	stubUnreachablePublicProbe(t)
 
 	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
-	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "AB12CD34", true)
+	ips := pairCandidateIPs(context.Background(), c.pairHTTPClient())
+	addrs, pairingString := c.pairSummaryAddresses(cert, "AB12CD34", true, ips)
 	if len(addrs) != 0 {
 		t.Fatalf("addrs = %v, want none", addrs)
 	}
@@ -581,7 +584,8 @@ func TestPairSummaryAddresses_NotGeneratedNeverBuildsAPairingString(t *testing.T
 	stubUnreachablePublicProbe(t)
 
 	c := &commandContext{deps: Deps{HTTPClient: &http.Client{Transport: errRoundTripper{}}}.withDefaults()}
-	addrs, pairingString := c.pairSummaryAddresses(context.Background(), cert, "", false)
+	ips := pairCandidateIPs(context.Background(), c.pairHTTPClient())
+	addrs, pairingString := c.pairSummaryAddresses(cert, "", false, ips)
 	if len(addrs) == 0 {
 		t.Fatal("addrs must still be populated, for the display list, even when not generated")
 	}

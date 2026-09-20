@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 )
@@ -104,6 +106,62 @@ func TestLoadOrCreatePairCertificate_GeneratesOnFirstStart(t *testing.T) {
 	}
 	if !found {
 		t.Error("certificate must be usable for TLS server auth")
+	}
+}
+
+// TestLoadOrCreatePairCertificate_CarriesIPSubjectAlternativeNames pins the
+// Chromium-compatibility fix: a freshly minted pair certificate must carry the
+// address hints as IP Subject Alternative Names, because Chromium rejects a
+// certificate presented for a bare IP unless that IP is in its SAN (curl and
+// OpenSSL do not, which is why the bug only showed up in the desktop app).
+func TestLoadOrCreatePairCertificate_CarriesIPSubjectAlternativeNames(t *testing.T) {
+	dir := t.TempDir()
+	ips := []net.IP{net.ParseIP("192.168.1.20"), net.ParseIP("34.135.59.225")}
+
+	cert, err := LoadOrCreatePairCertificate(dir, ips...)
+	if err != nil {
+		t.Fatalf("LoadOrCreatePairCertificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse generated certificate: %v", err)
+	}
+
+	var got []string
+	for _, ip := range leaf.IPAddresses {
+		got = append(got, ip.String())
+	}
+	want := []string{"192.168.1.20", "34.135.59.225"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("certificate IP SANs = %v, want %v", got, want)
+	}
+}
+
+// TestPairIPsFromAddresses pins the address-hint parsing: bare IPs, IPs with a
+// port, and bracketed IPv6 must all resolve to net.IP, while garbage is
+// skipped rather than made fatal.
+func TestPairIPsFromAddresses(t *testing.T) {
+	got := PairIPsFromAddresses([]string{
+		"192.168.1.20",
+		"34.135.59.225:443",
+		"[2001:db8::1]:443",
+		"2001:db8::2",
+		"not-an-ip",
+		"",
+	})
+	want := []net.IP{
+		net.ParseIP("192.168.1.20"),
+		net.ParseIP("34.135.59.225"),
+		net.ParseIP("2001:db8::1"),
+		net.ParseIP("2001:db8::2"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("PairIPsFromAddresses = %v, want %v", got, want)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Fatalf("PairIPsFromAddresses[%d] = %v, want %v", i, got[i], want[i])
+		}
 	}
 }
 

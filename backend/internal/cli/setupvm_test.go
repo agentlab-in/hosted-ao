@@ -484,7 +484,7 @@ func TestEnsureSetupPairCert_ReRunDoesNotRotate(t *testing.T) {
 	c := &commandContext{deps: DefaultDeps()}
 	dir := t.TempDir()
 
-	first, err := c.ensureSetupPairCert(dir, nil)
+	first, err := c.ensureSetupPairCert(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("first ensureSetupPairCert: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestEnsureSetupPairCert_ReRunDoesNotRotate(t *testing.T) {
 	before := readAllFiles(t, dir)
 
 	for i := 0; i < 3; i++ {
-		again, err := c.ensureSetupPairCert(dir, nil)
+		again, err := c.ensureSetupPairCert(dir, nil, nil)
 		if err != nil {
 			t.Fatalf("re-run %d: %v", i, err)
 		}
