@@ -910,7 +910,13 @@ func (c *commandContext) runSetupVMPair(cmd *cobra.Command, opts setupVMOptions)
 		}
 	}
 
-	cert, err := c.ensureSetupPairCert(plan.PairCertDir, owner)
+	// pairCandidateIPs is enumerated before the certificate is minted so the
+	// fresh certificate can carry the same address hints as IP Subject
+	// Alternative Names (see ensureSetupPairCert); a bare-IP client that
+	// connects at one of these addresses must be able to verify the SAN.
+	pairIPs := pairCandidateIPs(ctx, c.pairHTTPClient())
+
+	cert, err := c.ensureSetupPairCert(plan.PairCertDir, owner, vmgateway.PairIPsFromAddresses(pairIPs))
 	if err != nil {
 		return err
 	}
@@ -934,7 +940,7 @@ func (c *commandContext) runSetupVMPair(cmd *cobra.Command, opts setupVMOptions)
 	// counts for the same run. The full ao-pair:// string can only ever be
 	// built the run that generates the plaintext passcode: every run after
 	// that only has the hash, exactly like the raw-passcode display above it.
-	addrs, pairingString := c.pairSummaryAddresses(ctx, cert, passcode, generated)
+	addrs, pairingString := c.pairSummaryAddresses(cert, passcode, generated, pairIPs)
 	return writeSetupText(out, renderSetupSummaryPair(plan, units, warnings, passcode, generated, pairingString, fingerprint, addrs, pairHTTPSAddr()))
 }
 
@@ -978,15 +984,17 @@ func (c *commandContext) ensureSetupPasscode(dir string, owner *user.User) (plai
 // ensureSetupPairCert loads or creates the pair-mode certificate under dir.
 // vmgateway.LoadOrCreatePairCertificate is already idempotent (it loads the
 // existing certificate rather than generating a new one whenever both files
-// are already present), so re-running this never rotates it either.
-func (c *commandContext) ensureSetupPairCert(dir string, owner *user.User) (tls.Certificate, error) {
+// are already present), so re-running this never rotates it either. ips are
+// the address hints carried as IP Subject Alternative Names so the fresh
+// certificate is Chromium-valid for the bare IPs a paired client connects to.
+func (c *commandContext) ensureSetupPairCert(dir string, owner *user.User, ips []net.IP) (tls.Certificate, error) {
 	// See ensureSetupPasscode: the same snapshot-before-create dance, for
 	// vmgateway.LoadOrCreatePairCertificate's own os.MkdirAll.
 	createdParents, err := setupMissingSetupDirs(dir)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	cert, err := vmgateway.LoadOrCreatePairCertificate(dir)
+	cert, err := vmgateway.LoadOrCreatePairCertificate(dir, ips...)
 	if err != nil {
 		return tls.Certificate{}, err
 	}

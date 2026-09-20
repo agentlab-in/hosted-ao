@@ -411,15 +411,14 @@ func (c *commandContext) buildPairingString(ctx context.Context, cert tls.Certif
 	return buildPairingStringFromIPs(ips, pairHTTPSAddr(), cert, passcode)
 }
 
-// pairSummaryAddresses is `ao setup-vm --pair`'s one enumeration point: the
-// bare candidate IPs its "Addresses:" display is built from, and, when this
-// run generated a fresh passcode, the pairing string built from those exact
-// same IPs. Both come from a single pairCandidateIPs call (one public-IP
-// probe), which is what makes it impossible for the display list and the
-// string's own embedded addresses to show different addresses or counts
-// for the same run.
-func (c *commandContext) pairSummaryAddresses(ctx context.Context, cert tls.Certificate, passcode string, generated bool) (addrs []string, pairingString string) {
-	ips := pairCandidateIPs(ctx, c.pairHTTPClient())
+// pairSummaryAddresses builds `ao setup-vm --pair`'s "Addresses:" display and,
+// when this run generated a fresh passcode, the pairing string, from the
+// already-enumerated ips list the caller produced with one pairCandidateIPs
+// call. That single enumeration point is what makes it impossible for the
+// display list, the pairing string's embedded addresses, and the certificate's
+// IP Subject Alternative Names to disagree about which addresses this box
+// advertises.
+func (c *commandContext) pairSummaryAddresses(cert tls.Certificate, passcode string, generated bool, ips []string) (addrs []string, pairingString string) {
 	if !generated {
 		return ips, ""
 	}

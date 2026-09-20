@@ -331,9 +331,15 @@ func provisionPairIdentity(port int, dryRun bool) (pairProvision, error) {
 	}
 	identity := &pairIdentityReport{CertificatePath: certDir}
 	var leaf *x509.Certificate
+	// Addresses are enumerated before the certificate is minted so the fresh
+	// certificate can carry the same hints as IP Subject Alternative Names: a
+	// bare-IP client that connects at one of these addresses must be able to
+	// verify the SAN (Chromium enforces this where curl/OpenSSL does not).
+	addresses := machineAddresses(port)
+	identity.Addresses = addresses
 	if !dryRun {
 		identity.CertificateCreated = !vmgateway.PairCertExists(certDir)
-		cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+		cert, err := vmgateway.LoadOrCreatePairCertificate(certDir, vmgateway.PairIPsFromAddresses(addresses)...)
 		if err != nil {
 			return pairProvision{}, operationalError("provision pair certificate", err)
 		}
@@ -346,8 +352,6 @@ func provisionPairIdentity(port int, dryRun bool) (pairProvision, error) {
 			return pairProvision{}, operationalError("render pair fingerprint", err)
 		}
 	}
-	addresses := machineAddresses(port)
-	identity.Addresses = addresses
 
 	_, loadErr := vmgateway.LoadPasscodeStore(passcodeDir)
 	if loadErr != nil && !strings.Contains(loadErr.Error(), "no passcode found") {

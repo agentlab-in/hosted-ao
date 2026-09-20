@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,11 +36,32 @@ const (
 	// rotate command) is how this is ever meant to change.
 	pairCertValidity = 10 * 365 * 24 * time.Hour
 
-	// pairCertCommonName labels the certificate; it carries no security
-	// meaning because pair-mode clients pin the certificate's fingerprint
-	// (see PairFingerprint), never a name in it.
+	// pairCertCommonName labels the certificate's Subject; it carries no
+	// security meaning because pair-mode clients pin the certificate's
+	// fingerprint (see PairFingerprint), never a name in it.
 	pairCertCommonName = "ao-pair-gateway"
 )
+
+// PairIPsFromAddresses parses the address hints a pairing string advertises
+// (bare "1.2.3.4" or "1.2.3.4:443", bracketed or not for IPv6) into the
+// []net.IP a freshly generated pair certificate should carry as IP Subject
+// Alternative Names. Malformed or unparsable entries are skipped rather than
+// fatal: the certificate's identity is its fingerprint, not its SANs, so a
+// hint that cannot be turned into an IP SAN is never a reason to refuse
+// provisioning.
+func PairIPsFromAddresses(addrs []string) []net.IP {
+	var ips []net.IP
+	for _, addr := range addrs {
+		host := strings.TrimSpace(addr)
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
 
 // LoadOrCreatePairCertificate returns the pair-mode gateway's TLS
 // certificate, persisted under dir as cert.pem and key.pem. The first call
@@ -47,6 +69,17 @@ const (
 // and persists them. Every subsequent call, including across process
 // restarts and binary upgrades, loads and returns the exact same certificate
 // rather than generating a new one.
+//
+// ips, when non-empty, are carried as the certificate's IP Subject
+// Alternative Names so the certificate is valid for the bare-IP addresses a
+// paired client connects to. Chromium (the Electron desktop app) enforces
+// that a certificate presented for a bare IP has that IP in its SAN, and
+// curl/OpenSSL does not, so a certificate with no IP SANs is exactly the
+// shape that works from curl and fails from the desktop (see
+// docs/adr/0003-pair-mode-gateway.md). The caller that mints the certificate
+// at provisioning time passes the address hints the pairing string
+// advertises; the gateway process itself passes none, because by the time it
+// serves the certificate already exists on disk.
 //
 // That reuse is the whole point: a client that has pinned this certificate's
 // fingerprint (trust-on-first-use, see docs/adr/0003-pair-mode-gateway.md)
@@ -58,7 +91,7 @@ const (
 // situation would be exactly the silent rotation this function exists to
 // prevent, so it fails loudly instead and leaves recovery (deleting both
 // files, which does force a re-pair) to a deliberate operator action.
-func LoadOrCreatePairCertificate(dir string) (tls.Certificate, error) {
+func LoadOrCreatePairCertificate(dir string, ips ...net.IP) (tls.Certificate, error) {
 	certPath := filepath.Join(dir, pairCertFileName)
 	keyPath := filepath.Join(dir, pairKeyFileName)
 	certExists := fileExists(certPath)
@@ -82,7 +115,7 @@ func LoadOrCreatePairCertificate(dir string) (tls.Certificate, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return tls.Certificate{}, fmt.Errorf("create pair cert dir: %w", err)
 	}
-	certDER, keyDER, err := generatePairCertificate()
+	certDER, keyDER, err := generatePairCertificate(ips)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("generate pair certificate: %w", err)
 	}
@@ -103,8 +136,11 @@ func LoadOrCreatePairCertificate(dir string) (tls.Certificate, error) {
 }
 
 // generatePairCertificate creates a new ECDSA P-256 key and a self-signed
-// certificate over it, returning both DER-encoded.
-func generatePairCertificate() (certDER, keyDER []byte, err error) {
+// certificate over it, returning both DER-encoded. ips are the address hints
+// carried as IP Subject Alternative Names (see LoadOrCreatePairCertificate);
+// they make the certificate Chromium-valid for the bare IPs a paired client
+// connects to.
+func generatePairCertificate(ips []net.IP) (certDER, keyDER []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate private key: %w", err)
@@ -125,7 +161,12 @@ func generatePairCertificate() (certDER, keyDER []byte, err error) {
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{pairCertCommonName},
+		// The IP SANs are what make this certificate valid to Chromium for a
+		// bare-IP connection. A bare IP is not a name, so a DNS SAN can never
+		// match it; only an IP SAN can, and Chromium enforces that where
+		// curl/OpenSSL does not. The certificate's identity remains its
+		// fingerprint (PairFingerprint), never a name or address in the SAN.
+		IPAddresses: ips,
 	}
 	certDER, err = x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
