@@ -16,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 type fakeObserver struct {
@@ -279,6 +280,55 @@ func TestStatusUnknownAndConditionalTools(t *testing.T) {
 	if code != 0 || strings.Contains(out, "secret") || !strings.Contains(out, "unknown") || !strings.Contains(out, `"id":"tool.gh","status":"disabled"`) {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
+}
+
+func TestDoctorDoesNotTreatOwnGatewayAsPortConflict(t *testing.T) {
+	certDir := filepath.Join(t.TempDir(), "cert")
+	t.Setenv("AO_VM_CERT_DIR", certDir)
+	t.Setenv("AO_VM_PASSCODE_DIR", filepath.Join(t.TempDir(), "passcode"))
+	cert, err := vmgateway.LoadOrCreatePairCertificate(certDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("own gateway on the configured port passes", func(t *testing.T) {
+		obs := healthyObserver()
+		obs.portAvailable = false
+		obs.tlsLeaf = cert.Certificate[0]
+		out, stderr, code := runCLI(t, observationDeps(t, "pair", obs), "--config", fixturePath("valid", "pair.yaml"), "--json", "doctor")
+		if code != 0 || stderr != "" {
+			t.Fatalf("code=%d stderr=%q out=%s", code, stderr, out)
+		}
+		var report DoctorReport
+		if err := json.Unmarshal([]byte(out), &report); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, check := range report.Checks {
+			if check.ID == "gateway.port" {
+				found = true
+				if check.Status != "pass" {
+					t.Fatalf("gateway.port=%+v", check)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("gateway.port check missing: %+v", report.Checks)
+		}
+	})
+
+	t.Run("foreign listener on the configured port still fails", func(t *testing.T) {
+		obs := healthyObserver()
+		obs.portAvailable = false
+		obs.tlsLeaf = []byte("unexpected-listener-certificate")
+		out, stderr, code := runCLI(t, observationDeps(t, "pair", obs), "--config", fixturePath("valid", "pair.yaml"), "--json", "doctor")
+		if code != 1 || stderr != "" {
+			t.Fatalf("code=%d stderr=%q out=%s", code, stderr, out)
+		}
+		if !strings.Contains(out, `"id":"gateway.port"`) || !strings.Contains(out, `"status":"fail"`) {
+			t.Fatalf("out=%s", out)
+		}
+	})
 }
 
 func TestDoctorPartialFailuresStableIDsAndZeroMutation(t *testing.T) {

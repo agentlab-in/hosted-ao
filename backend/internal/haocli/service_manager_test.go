@@ -23,6 +23,7 @@ type fakeServiceCommands struct {
 	calls        []serviceCommandCall
 	output       map[string]string
 	afterRun     func(string)
+	delay        time.Duration
 }
 
 func (f *fakeServiceCommands) CheckPrivilege(context.Context, bool, io.Reader) error {
@@ -35,6 +36,13 @@ func (f *fakeServiceCommands) Run(ctx context.Context, privileged, _ bool, _ io.
 	}
 	call := serviceCommandCall{privileged: privileged, executable: executable, argv: append([]string(nil), argv...)}
 	f.calls = append(f.calls, call)
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if f.afterRun != nil {
 		f.afterRun(strings.Join(argv, " "))
 	}
@@ -47,7 +55,7 @@ func (f *fakeServiceCommands) Output(_ context.Context, executable string, argv 
 }
 
 func testServiceManager(obs *fakeObserver, commands *fakeServiceCommands) *haoServiceManager {
-	return &haoServiceManager{observer: obs, commands: commands, timeout: 25 * time.Millisecond, targetUser: UserObservation{Name: "ubuntu", UID: 1000, Home: "/home/ubuntu"}, input: strings.NewReader(""), systemctl: "/usr/bin/systemctl", journalctl: "/usr/bin/journalctl"}
+	return &haoServiceManager{observer: obs, commands: commands, timeout: 25 * time.Millisecond, mutationTimeout: time.Second, targetUser: UserObservation{Name: "ubuntu", UID: 1000, Home: "/home/ubuntu"}, input: strings.NewReader(""), systemctl: "/usr/bin/systemctl", journalctl: "/usr/bin/journalctl"}
 }
 
 func serviceStatusKey(component string) string {
@@ -103,6 +111,24 @@ func TestServiceActivationStartsDaemonBeforeGateway(t *testing.T) {
 	want := []string{"enable " + haoDaemonUnit, "start " + haoDaemonUnit, "enable " + haoGatewayUnit, "start " + haoGatewayUnit}
 	if got := commandArgv(commands.calls); !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls=%v want=%v", got, want)
+	}
+}
+
+func TestSlowEnableSurvivesBeyondObservationDeadline(t *testing.T) {
+	obs := healthyObserver()
+	for _, component := range []string{"daemon", "gateway"} {
+		obs.runs[serviceStatusKey(component)] = "LoadState=loaded\nUnitFileState=disabled\nActiveState=inactive\nSubState=dead"
+	}
+	// A normal systemctl enable triggers a daemon-reload that can outlive the
+	// 25ms observation deadline; the dedicated mutation deadline must let it
+	// finish rather than hard-failing at the probe timeout.
+	commands := &fakeServiceCommands{fail: map[string]error{}, delay: 40 * time.Millisecond}
+	result, err := testServiceManager(obs, commands).Activate(context.Background(), []string{"daemon", "gateway"})
+	if err != nil {
+		t.Fatalf("slow enable hard-failed at the observation deadline: %v", err)
+	}
+	if len(result.Completed) != 4 || len(result.Rollback) != 0 {
+		t.Fatalf("result=%+v", result)
 	}
 }
 

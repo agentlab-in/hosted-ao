@@ -5,12 +5,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/vmgateway"
 )
 
 // DiagnosticCheck is one stable, independently executable doctor result.
@@ -179,12 +183,17 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 		probeCtx, cancel := boundedContext(ctx, deps.Timeout)
 		available, portErr := deps.Observer.PortAvailable(probeCtx, "127.0.0.1", port)
 		cancel()
-		if portErr != nil {
+		switch {
+		case portErr != nil:
 			add(errorCheck("gateway.port", "port availability probe failed"))
-		} else if !available {
-			add(DiagnosticCheck{ID: "gateway.port", Severity: "error", Status: "fail", Evidence: fmt.Sprintf("configured port %d is already in use", port), Remediation: "stop the conflicting listener or choose another pair port"})
-		} else {
+		case available:
 			add(passCheck("gateway.port", fmt.Sprintf("configured port %d is available", port)))
+		case gatewayServesOwnPort(ctx, deps, port):
+			// The hao-managed pair gateway is already listening on the
+			// configured port. That is the intended state, not a conflict.
+			add(passCheck("gateway.port", fmt.Sprintf("configured port %d is serving the hao-managed pair gateway", port)))
+		default:
+			add(DiagnosticCheck{ID: "gateway.port", Severity: "error", Status: "fail", Evidence: fmt.Sprintf("configured port %d is already in use", port), Remediation: "stop the conflicting listener or choose another pair port"})
 		}
 	} else {
 		add(DiagnosticCheck{ID: "gateway.port", Severity: "info", Status: "disabled", Evidence: "gateway is disabled in local mode"})
@@ -195,6 +204,29 @@ func buildDoctor(ctx context.Context, deps Deps, explicit string) (DoctorReport,
 
 func supportedPlatform(goos, arch string) bool {
 	return (goos == "linux" || goos == "darwin") && (arch == "amd64" || arch == "arm64")
+}
+
+// gatewayServesOwnPort reports whether the configured pair port is occupied by
+// the hao-managed gateway rather than an unrelated listener. The strongest
+// no-network proof is the pinned pair certificate: if the listener on the
+// configured port presents the certificate hao provisioned, it is HAO's own
+// gateway and must not be reported as a conflicting listener.
+//
+// It is strictly read-only: when no pair certificate has been provisioned yet,
+// nothing can be the hao-managed gateway, so the probe returns false without
+// touching the on-disk identity.
+func gatewayServesOwnPort(ctx context.Context, deps Deps, port int) bool {
+	certDir, _, err := resolvePairIdentityDirectories()
+	if err != nil || !vmgateway.PairCertExists(certDir) {
+		return false
+	}
+	probeCtx, cancel := boundedContext(ctx, deps.Timeout)
+	defer cancel()
+	leaf, err := deps.Observer.TLSHandshake(probeCtx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil || len(leaf) == 0 {
+		return false
+	}
+	return leafMatchesProvisionedCertificate(leaf)
 }
 func passCheck(id, evidence string) DiagnosticCheck {
 	return DiagnosticCheck{ID: id, Severity: "info", Status: "pass", Evidence: evidence}
