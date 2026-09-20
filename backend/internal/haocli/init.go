@@ -548,42 +548,55 @@ func verifyDaemon(ctx context.Context, deps Deps) []verificationCheck {
 
 // machineAddresses lists pairing candidates, loopback first, then private,
 // then public, each sorted, matching the emitter role the pairstring package
-// documents (ordering is the caller's job).
+// documents (ordering is the caller's job). Public addresses no local
+// interface carries — a NATed cloud VM's external address, discovered from
+// cloud metadata and public-IP echo endpoints (see public_address.go) — are
+// appended last: they are the slowest to race and the least direct route, but
+// the only route a remote desktop has to a NATed box.
 func machineAddresses(port int) []string {
 	var addrs []string
 	addrs = append(addrs, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	seen := map[string]bool{"127.0.0.1": true}
 	interfaces, err := net.Interfaces()
-	if err != nil {
-		return addrs
+	if err == nil {
+		var private, public []string
+		for _, iface := range interfaces {
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			list, _ := iface.Addrs()
+			for _, addr := range list {
+				ipNet, ok := addr.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				ip := ipNet.IP.To4()
+				if ip == nil || seen[ip.String()] {
+					continue
+				}
+				seen[ip.String()] = true
+				joined := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+				if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+					private = append(private, joined)
+				} else {
+					public = append(public, joined)
+				}
+			}
+		}
+		sort.Strings(private)
+		sort.Strings(public)
+		addrs = append(addrs, private...)
+		addrs = append(addrs, public...)
 	}
-	var private, public []string
-	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+	for _, ip := range machinePublicIPs() {
+		canonical := validPublicIP(ip)
+		if canonical == "" || seen[canonical] {
 			continue
 		}
-		list, _ := iface.Addrs()
-		for _, addr := range list {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip := ipNet.IP.To4()
-			if ip == nil || seen[ip.String()] {
-				continue
-			}
-			seen[ip.String()] = true
-			joined := net.JoinHostPort(ip.String(), strconv.Itoa(port))
-			if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-				private = append(private, joined)
-			} else {
-				public = append(public, joined)
-			}
-		}
+		seen[canonical] = true
+		addrs = append(addrs, net.JoinHostPort(canonical, strconv.Itoa(port)))
 	}
-	sort.Strings(private)
-	sort.Strings(public)
-	return append(append(addrs, private...), public...)
+	return addrs
 }
 
 func writeInitReport(cmd *cobra.Command, report initReport) error {

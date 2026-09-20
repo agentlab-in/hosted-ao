@@ -35,7 +35,22 @@ func initDeps(t *testing.T, obs *fakeObserver) (Deps, string) {
 		Observer: obs,
 		Timeout:  25 * time.Millisecond,
 	}
+	// No public-address probes in tests: machineAddresses must never depend on
+	// the machine running the suite. Tests that need a detected public address
+	// override this with stubMachinePublicIPs.
+	stubMachinePublicIPs(t, nil)
 	return deps, root
+}
+
+// stubMachinePublicIPs replaces the public-address seam with a fixed result so
+// address-selection tests never probe this machine's network. Call it with nil
+// for the common "no public address" default, or with the bare IPs a specific
+// test wants to exercise.
+func stubMachinePublicIPs(t *testing.T, ips []string) {
+	t.Helper()
+	restore := machinePublicIPs
+	machinePublicIPs = func() []string { return append([]string(nil), ips...) }
+	t.Cleanup(func() { machinePublicIPs = restore })
 }
 
 func initConfigPath(root string) string {
