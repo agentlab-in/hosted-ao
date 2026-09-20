@@ -46,7 +46,7 @@ Pair mode uses self-signed TLS, fingerprint pinning, passcode verification, and 
 
 `hao` is the standalone machine-management CLI for Hosted AO. Its boundary is deliberately separate from AO's session orchestration commands and daemon internals.
 
-The current Linux release includes:
+The `hao` CLI includes:
 
 - `hao version` for stable human-readable and JSON build information.
 - `hao config` (`path`, `show`, `validate`, `create`, `set`) for the versioned Hosted AO machine configuration.
