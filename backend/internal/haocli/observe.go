@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,16 @@ type Observer interface {
 	ProcessAlive(pid int) bool
 	GET(ctx context.Context, url string) ([]byte, error)
 	PortAvailable(ctx context.Context, host string, port int) (bool, error)
+	// TLSHandshake opens a raw TLS connection to addr and returns the leaf
+	// certificate's DER bytes. Pair-mode trust is fingerprint pinning, never
+	// CA verification, so the chain is deliberately left unverified: the
+	// caller compares the leaf against the certificate it provisioned.
+	TLSHandshake(ctx context.Context, addr string) ([]byte, error)
+	// HTTPSGet performs an HTTPS GET of url with an optional Bearer token and
+	// returns the HTTP status. Certificate verification is skipped for the
+	// same reason as TLSHandshake: local gateway probes are pinned by
+	// fingerprint, not by a CA.
+	HTTPSGet(ctx context.Context, url, token string) (int, error)
 }
 
 // FileObservation contains only ownership and permission facts needed by doctor.
@@ -226,6 +237,48 @@ func (systemObserver) PortAvailable(ctx context.Context, host string, port int) 
 		return false, nil
 	}
 	return true, ln.Close()
+}
+
+func (systemObserver) TLSHandshake(ctx context.Context, addr string) ([]byte, error) {
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{},
+		//nolint:gosec // Pair-mode trust is fingerprint pinning (docs/adr/0003), never CA verification.
+		Config: &tls.Config{InsecureSkipVerify: true},
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil, errors.New("TLS dial did not produce a TLS connection")
+	}
+	if len(tlsConn.ConnectionState().PeerCertificates) == 0 {
+		return nil, errors.New("peer presented no certificate")
+	}
+	return tlsConn.ConnectionState().PeerCertificates[0].Raw, nil
+}
+
+func (systemObserver) HTTPSGet(ctx context.Context, url, token string) (int, error) {
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		//nolint:gosec // Local gateway probes are pinned by fingerprint, not by a CA.
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, nil
 }
 
 type daemonProbe struct {
