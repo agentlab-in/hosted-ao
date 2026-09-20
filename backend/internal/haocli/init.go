@@ -373,7 +373,7 @@ func provisionPairIdentity(port int, dryRun bool) (pairProvision, error) {
 			return pairProvision{}, operationalError("build pairing string", err)
 		}
 	} else if !dryRun {
-		pairingHint = "the pairing string was printed when this machine was provisioned; rotate the passcode with `hao vm rotate-passcode` to mint a new one for re-pairing"
+		pairingHint = "the pairing string was printed when this machine was provisioned; mint a fresh one from this same identity with `hao pair rotate`"
 	}
 	return pairProvision{identity: identity, pairingString: pairingString, pairingHint: pairingHint, plaintext: plaintext}, nil
 }
@@ -502,7 +502,7 @@ func verifyInit(ctx context.Context, deps Deps, desired initDesired, services *s
 		return checks
 	}
 	if status == 401 || status == 403 {
-		checks = append(checks, verificationCheck{ID: "gateway.passcode", Status: "error", Evidence: "the gateway rejected the freshly minted passcode", Remediation: "rotate the passcode with `hao vm rotate-passcode` and re-pair"})
+		checks = append(checks, verificationCheck{ID: "gateway.passcode", Status: "error", Evidence: "the gateway rejected the freshly minted passcode", Remediation: "rotate the passcode with `hao pair rotate` and re-pair"})
 		return checks
 	}
 	checks = append(checks, verificationCheck{ID: "gateway.passcode", Status: "pass", Evidence: "the gateway accepted the freshly minted passcode"})

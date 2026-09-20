@@ -166,6 +166,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newDoctorCommand(deps, opts))
 	root.AddCommand(newSetupCommand(deps, opts))
 	root.AddCommand(newInitCommand(deps, opts))
+	root.AddCommand(newPairCommand(deps, opts))
 	root.AddCommand(newServiceStartCommand(deps, opts))
 	root.AddCommand(newServiceStopCommand(deps, opts))
 	root.AddCommand(newServiceRestartCommand(deps, opts))
