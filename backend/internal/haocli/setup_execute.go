@@ -129,11 +129,20 @@ func (systemSetupExecution) Run(ctx context.Context, privileged, nonInteractive 
 	}
 	cmd := exec.CommandContext(ctx, command, argv...)
 	cmd.Stdin = in
-	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	var stderr boundedBuffer
+	stderr.remaining = maxCommandOutput
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
 	if privileged {
 		cmd.Env = []string{"LANG=C", "LC_ALL=C", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 	}
 	if err := cmd.Run(); err != nil {
+		// Surface the command's own stderr so a real systemd failure (for
+		// example "unit file ao-daemon.service does not exist") is visible
+		// instead of being discarded behind a bare exit status.
+		if diagnostic := strings.TrimSpace(stderr.String()); diagnostic != "" {
+			return fmt.Errorf("structured command failed: %w: %s", err, diagnostic)
+		}
 		return fmt.Errorf("structured command failed: %w", err)
 	}
 	return nil

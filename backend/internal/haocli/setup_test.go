@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -155,6 +156,33 @@ func TestSetupInstallPoliciesAndStructuredPrivilege(t *testing.T) {
 			t.Fatalf("artifact=%+v", artifact)
 		}
 	})
+}
+
+func TestObserveToolTreatsExecErrNotFoundAsAbsent(t *testing.T) {
+	obs := healthyObserver()
+	obs.pathErr["claude"] = exec.ErrNotFound
+	item := observeTool(Deps{Observer: obs}, "claude")
+	if item.State != "absent" {
+		t.Fatalf("observeTool state=%q want absent (evidence=%q)", item.State, item.Evidence)
+	}
+}
+
+func TestSetupHarnessNoOpWhenLookPathReturnsErrNotFound(t *testing.T) {
+	obs := healthyObserver()
+	// exec.LookPath reports a missing binary as exec.ErrNotFound, not
+	// os.ErrNotExist. The selected harness must still be a non-blocking
+	// vendor-owned no-op, never the generic "unknown" blocked step.
+	obs.pathErr["claude"] = exec.ErrNotFound
+	deps, _ := setupDeps(t, "pair", obs)
+	out, stderr, code := runCLI(t, deps, "--json", "--config", fixturePath("valid", "pair.yaml"), "setup", "--dry-run", "--install", "missing")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q out=%s", code, stderr, out)
+	}
+	plan := decodeSetupPlan(t, out)
+	harness := stepByID(t, plan, "prerequisite.harness")
+	if harness.Disposition != "no-op" || harness.Operation != "manual-install" || harness.Action != nil {
+		t.Fatalf("harness=%+v, want non-blocking vendor-owned no-op", harness)
+	}
 }
 
 func TestSetupUnknownConflictAndBlockedPropagation(t *testing.T) {
