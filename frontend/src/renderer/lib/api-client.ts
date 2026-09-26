@@ -138,6 +138,9 @@ const ROUTE_TEMPLATES = [
   "/api/v1/sessions/{sessionId}/workspace/file",
   "/api/v1/sessions/{sessionId}/workspace/files",
   "/api/v1/sessions/cleanup",
+  "/api/v1/agents/codex/account-switches/{switchId}",
+  "/api/v1/projects/clone/cleanup",
+  "/api/v1/projects/clone/prepare",
 ] as const;
 
 // Resource collections whose next path segment is an identifier. Only used as a
@@ -513,6 +516,14 @@ export function apiErrorCode(error: unknown): string | undefined {
 }
 
 /** Correlation id from the daemon's stable error envelope. */
+export function apiErrorDetails(error: unknown): Record<string, unknown> | undefined {
+	if (typeof error !== "object" || error === null) return undefined;
+	const details = (error as { details?: unknown }).details;
+	return typeof details === "object" && details !== null && !Array.isArray(details)
+		? (details as Record<string, unknown>)
+		: undefined;
+}
+
 export function apiErrorRequestId(error: unknown): string | undefined {
   if (typeof error === "object" && error !== null) {
     const body = error as { requestId?: unknown };

@@ -25,12 +25,7 @@ vi.mock("./ProjectSettingsForm", () => ({
       type="button"
       onClick={() =>
         onSaveState?.({
-          isPending: true,
-          showSaving: false,
-          validationError: null,
-          mutationError: null,
-          saved: false,
-          replacementError: null,
+          phase: "saving",
         })
       }
     >

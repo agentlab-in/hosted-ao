@@ -45,12 +45,7 @@ import { Button } from "./ui/button";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
   return {
-    isPending: false,
-    showSaving: false,
-    validationError: null,
-    mutationError: null,
-    saved: false,
-    replacementError: null,
+    phase: "idle",
   };
 }
 
@@ -121,7 +116,7 @@ export function SettingsDialog() {
       t("settings.general"));
 
   const closeSettingsDialog = () => {
-    if (isProjectSettings && projectSaveState.isPending) return;
+    if (isProjectSettings && projectSaveState.phase === "saving") return;
     closeSettings();
   };
 
@@ -184,15 +179,13 @@ export function SettingsDialog() {
                     variant="footer-primary"
                     className={cn(
                       "w-full rounded-md",
-                      (projectSaveState.validationError ||
-                        projectSaveState.mutationError) &&
+                      projectSaveState.error &&
                         "border-error bg-error/15 text-error hover:bg-error/20",
                     )}
-                    disabled={projectSaveState.isPending}
+                    disabled={projectSaveState.phase === "saving"}
                     aria-live="polite"
                     title={
-                      projectSaveState.validationError ??
-                      projectSaveState.mutationError ??
+                      projectSaveState.error ??
                       (projectSaveState.replacementError
                         ? t("settings.project.restartFailed", {
                             error: projectSaveState.replacementError,
@@ -200,12 +193,11 @@ export function SettingsDialog() {
                         : undefined)
                     }
                   >
-                    {projectSaveState.showSaving ? (
+                    {projectSaveState.phase === "saving" ? (
                       t("settings.project.saving")
-                    ) : projectSaveState.saved ? (
+                    ) : projectSaveState.phase === "saved" ? (
                       t("settings.project.saved")
-                    ) : projectSaveState.validationError ||
-                      projectSaveState.mutationError ? (
+                    ) : projectSaveState.error ? (
                       <>
                         <TriangleAlert className="size-4" aria-hidden="true" />
                         {t("settings.project.saveFailed")}
@@ -215,9 +207,8 @@ export function SettingsDialog() {
                     )}
                   </Button>
                   <span className="sr-only" role="status" aria-live="polite">
-                    {projectSaveState.validationError ??
-                      projectSaveState.mutationError ??
-                      (projectSaveState.saved
+                    {projectSaveState.error ??
+                      (projectSaveState.phase === "saved"
                         ? t("settings.project.saved")
                         : "")}
                   </span>
@@ -246,7 +237,7 @@ export function SettingsDialog() {
                 <DialogClose
                   aria-label={t("settings.close")}
                   className="settings-close-button border border-transparent transition-colors hover:border-(--color-border-settings-input) hover:bg-[var(--color-bg-settings-input)]"
-                  disabled={isProjectSettings && projectSaveState.isPending}
+                  disabled={isProjectSettings && projectSaveState.phase === "saving"}
                 >
                   <X aria-hidden="true" className="size-4" />
                 </DialogClose>

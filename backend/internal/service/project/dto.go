@@ -17,11 +17,12 @@ type AddInput struct {
 	// CloneURL is a git remote URL (https:// or ssh) to clone before
 	// registering the project. The daemon clones it into a managed directory
 	// under the AO data dir and uses that as the project path.
-	CloneURL    string                `json:"cloneUrl,omitempty"`
-	ProjectID   *string               `json:"projectId,omitempty"`
-	Name        *string               `json:"name,omitempty"`
-	Config      *domain.ProjectConfig `json:"config,omitempty"`
-	AsWorkspace bool                  `json:"asWorkspace,omitempty"`
+	CloneURL           string                `json:"cloneUrl,omitempty"`
+	ProjectID          *string               `json:"projectId,omitempty"`
+	Name               *string               `json:"name,omitempty"`
+	Config             *domain.ProjectConfig `json:"config,omitempty"`
+	AsWorkspace        bool                  `json:"asWorkspace,omitempty"`
+	ClonePreparationID string                `json:"clonePreparationId,omitempty"`
 }
 
 // CloneInput is the body shape for POST /api/v1/projects/clone. The daemon
@@ -33,6 +34,20 @@ type CloneInput struct {
 	ProjectID         *string               `json:"projectId,omitempty"`
 	Name              *string               `json:"name,omitempty"`
 	Config            *domain.ProjectConfig `json:"config,omitempty"`
+}
+
+// ClonePreparationResult is the checkout returned before project registration.
+type ClonePreparationResult struct {
+	Path          string `json:"path"`
+	RemoteURL     string `json:"remoteUrl"`
+	PreparationID string `json:"preparationId"`
+}
+
+// ClonePreparationCleanupInput identifies a checkout created by prepare-clone
+// that the user abandoned before project registration.
+type ClonePreparationCleanupInput struct {
+	Path          string `json:"path" minLength:"1"`
+	PreparationID string `json:"preparationId" minLength:"1"`
 }
 
 // InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.
@@ -62,4 +77,10 @@ type SetConfigInput struct {
 type RemoveResult struct {
 	ProjectID         domain.ProjectID `json:"projectId"`
 	RemovedStorageDir bool             `json:"removedStorageDir"`
+}
+
+// SetPermissionsInput remembers a project-wide policy for future sessions.
+type SetPermissionsInput struct {
+	SourceHarness domain.AgentHarness   `json:"sourceHarness,omitempty"`
+	Permissions   domain.PermissionMode `json:"permissions" enum:"default,accept-edits,auto,bypass-permissions"`
 }
